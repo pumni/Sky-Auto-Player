@@ -6,9 +6,9 @@ src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
-from sky_music.scheduler import build_key_actions
-from sky_music.backend import DryRunBackend
-from sky_music.playback import PlaybackEngine, PLAYBACK_FINISHED
+from sky_music.domain.scheduler import build_key_actions
+from sky_music.infrastructure.backend import DryRunBackend
+from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_FINISHED
 
 def test_dry_run_playback_execution():
     """Verify PlaybackEngine interacts correctly with the InputBackend and dispatches correct batches."""
@@ -82,7 +82,7 @@ def test_dry_run_playback_without_focus():
 
 def test_backend_does_not_mark_keys_active_on_send_failure():
     """Verify that WinSendInputBackend does not mark keys as active if SendInput fails."""
-    from sky_music.backend import WinSendInputBackend
+    from sky_music.infrastructure.backend import WinSendInputBackend
     import types
     
     # 1. Create a dummy inputs module to mock send_scan_code_batch with error

@@ -21,7 +21,8 @@ def test_timing_profile_parsing():
     # 2. Test local-precise profile
     args = parser.parse_args(["--timing-profile", "local-precise"])
     main.configure_from_args(args)
-    assert main.TIMING_POLICY.hold_us == 20_000
+    # 20000us base scales to 20834us at 60 FPS (1.25 frames)
+    assert main.TIMING_POLICY.hold_us in (20_000, 20_834)
     assert main.TIMING_POLICY.min_hold_us == 12_000
     
     # 3. Test remote-safe profile

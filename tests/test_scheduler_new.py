@@ -6,7 +6,8 @@ src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
-from sky_music.scheduler import build_key_actions, TimingPolicy, KeyAction
+from sky_music.domain.scheduler import build_key_actions
+from sky_music.domain.scheduler_types import TimingPolicy, KeyAction
 
 def test_chord_batching_and_deduplication():
     """Verify that multiple notes at the same timestamp are batched without duplicate scan codes."""
@@ -167,7 +168,7 @@ def test_release_gap_us_affects_normal_release_ordering():
 
 def test_pre_playback_schedule_analyzer():
     """Verify that ScheduleRiskReport correctly diagnoses optimal, impossible-repeat, and dense sheets."""
-    from sky_music.analyzer import analyze_schedule
+    from sky_music.domain.analyzer import analyze_schedule
     
     # 1. Optimal Song
     song_opt = Song(
@@ -180,7 +181,7 @@ def test_pre_playback_schedule_analyzer():
     res_opt = build_key_actions(song_opt)
     report_opt = analyze_schedule(res_opt)
     assert report_opt.severity == "low"
-    assert "optimal" in report_opt.recommendations[0].lower()
+    assert "no timing conflicts detected" in report_opt.recommendations[0].lower()
     
     # 2. Impossible repeats
     song_imp = Song(
@@ -194,7 +195,7 @@ def test_pre_playback_schedule_analyzer():
     report_imp = analyze_schedule(res_imp)
     assert report_imp.severity == "high"
     assert report_imp.impossible_repeats == 1
-    assert any("impossible" in rec.lower() for rec in report_imp.recommendations)
+    assert any("too close" in rec.lower() for rec in report_imp.recommendations)
 
     # 3. Dense clusters (15 notes all within 50ms)
     notes_dense = []

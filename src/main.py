@@ -440,6 +440,14 @@ def play_selected_song(
             poll_s=0.025
         )
 
+    if force_fps is not None and force_fps > 0:
+        from sky_music.domain.scheduler_types import FrameTimingPolicy
+        active_policy = FrameTimingPolicy.from_timing_policy(
+            active_policy,
+            fps=force_fps,
+            same_key_conflict_policy=active_policy.same_key_conflict_policy
+        )
+
     import sys
     resolver = None
     if sys.platform == "win32":
@@ -908,6 +916,18 @@ def configure_from_args(args: argparse.Namespace) -> None:
         focus_restore_grace_us=focus_restore_grace_us,
         same_key_conflict_policy=same_key_conflict_policy
     )
+
+    # Upgrade to FrameTimingPolicy when --fps is provided
+    fps_hint = getattr(args, "fps", None)
+    if fps_hint is not None and fps_hint > 0:
+        from sky_music.domain.scheduler_types import FrameTimingPolicy
+        TIMING_POLICY = FrameTimingPolicy.from_timing_policy(
+            TIMING_POLICY,
+            fps=fps_hint,
+            same_key_conflict_policy=same_key_conflict_policy,
+        )
+        # Reflect fps-aware hold_us back so post-run report shows correct profile
+        TIMING_PROFILE_NAME = f"{args.timing_profile}@{fps_hint}fps"
 
     SLEEP_POLICY = SleepPolicy(
         spin_threshold_us=spin_threshold_us,

@@ -7,9 +7,9 @@ src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
-from sky_music.scheduler import build_key_actions
-from sky_music.backend import WinSendInputBackend, DryRunBackend
-from sky_music.playback import PlaybackEngine, PLAYBACK_FINISHED
+from sky_music.domain.scheduler import build_key_actions
+from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
+from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_FINISHED
 
 def generate_random_song(num_notes: int = 100) -> Song:
     """Helper to generate a random song with diverse chord sizes and overlapping notes."""

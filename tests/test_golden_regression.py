@@ -8,7 +8,7 @@ src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sky_music.scheduler import build_key_actions
+from sky_music.domain.scheduler import build_key_actions
 from generate_snapshots import get_golden_songs
 
 def test_golden_schedules_regression():

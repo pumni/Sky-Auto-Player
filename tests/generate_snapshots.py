@@ -7,7 +7,7 @@ src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
-from sky_music.scheduler import build_key_actions
+from sky_music.domain.scheduler import build_key_actions
 
 def get_golden_songs():
     songs = {}
