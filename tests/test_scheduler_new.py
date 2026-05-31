@@ -166,8 +166,8 @@ def test_analyzer_detects_dense_clusters():
 def test_repeat_release_gap_scales_at_30fps():
     base = TimingPolicy.from_dict({"repeat_release_gap_us": 2000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. 10% = 3,333us.
-    assert frame_policy.repeat_release_gap_us == 3333
+    # 30fps = 33,333us. 50% = 16,666us.
+    assert frame_policy.repeat_release_gap_us == 16666
 
 
 def test_release_collision_delay_separates_up_from_conflicting_down():
@@ -190,7 +190,8 @@ def test_release_collision_delay_separates_up_from_conflicting_down():
 def test_min_hold_scales_at_30fps():
     base = TimingPolicy.from_dict({"min_hold_us": 16000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert frame_policy.min_hold_us == 24_999
+    # 30fps = 33,333us. 60% = 19,999us.
+    assert frame_policy.min_hold_us == 19_999
 
 
 def test_strict_policy_rejects_impossible_repeat():
@@ -286,7 +287,7 @@ def test_none_frame_align_preserves_exact_down_time():
 def test_timing_policy_from_dict_defaults():
     policy = TimingPolicy.from_dict({})
     assert policy.hold_us == 24000
-    assert policy.min_hold_us == 16000
+    assert policy.min_hold_us == 14000
 
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")

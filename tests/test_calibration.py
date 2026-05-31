@@ -22,8 +22,8 @@ def test_timing_profile_parsing():
     args = parser.parse_args(["--timing-profile", "balanced"])
     main.configure_from_args(args, AppConfig())
     assert main.TIMING_POLICY.hold_us == 24_000
-    assert main.TIMING_POLICY.min_hold_us == 16_000
-    assert main.TIMING_POLICY.release_gap_us == 5_000
+    assert main.TIMING_POLICY.min_hold_us == 14_000
+    assert main.TIMING_POLICY.release_gap_us == 4_000
 
 
 def test_local_precise_profile_from_builtin_defaults():

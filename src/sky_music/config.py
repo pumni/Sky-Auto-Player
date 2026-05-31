@@ -46,8 +46,8 @@ class FrameTimingDefaults:
     chord_merge_max_frame_ratio: float = 0.25
     input_lead_min_frame_ratio: float = 0.5
     release_gap_min_frame_ratio: float = 0.15
-    repeat_release_gap_min_frame_ratio: float = 0.10
-    min_hold_min_frame_ratio: float = 0.5
+    repeat_release_gap_min_frame_ratio: float = 0.50
+    min_hold_min_frame_ratio: float = 0.60
     frame_align: FrameAlignMode = "none"
 
     @classmethod
@@ -64,8 +64,8 @@ class FrameTimingDefaults:
             chord_merge_max_frame_ratio=ratio("chord_merge_max_frame_ratio", 0.25),
             input_lead_min_frame_ratio=ratio("input_lead_min_frame_ratio", 0.5),
             release_gap_min_frame_ratio=ratio("release_gap_min_frame_ratio", 0.15),
-            repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 0.10),
-            min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 0.5),
+            repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 0.50),
+            min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 0.60),
             frame_align=normalize_frame_align(str(raw.get("frame_align", "none"))),
         )
 
@@ -83,42 +83,42 @@ class FrameTimingDefaults:
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         "hold_us": 20000,
-        "min_hold_us": 16000,
-        "release_gap_us": 5000,
-        "repeat_release_gap_us": 5000,
+        "min_hold_us": 12000,
+        "release_gap_us": 3000,
+        "repeat_release_gap_us": 6000,
         "min_scheduled_hold_us": 500,
         "input_lead_us": 3000,
-        "chord_merge_window_us": 3000,
+        "chord_merge_window_us": 2000,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000
     },
     "balanced": {
         "hold_us": 24000,
-        "min_hold_us": 16000,
-        "release_gap_us": 5000,
-        "repeat_release_gap_us": 5000,
+        "min_hold_us": 14000,
+        "release_gap_us": 4000,
+        "repeat_release_gap_us": 7000,
         "min_scheduled_hold_us": 500,
         "input_lead_us": 6000,
-        "chord_merge_window_us": 4000,
+        "chord_merge_window_us": 3000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000
     },
     "remote_safe": {
         "hold_us": 35000,
-        "min_hold_us": 21000,
+        "min_hold_us": 20000,
         "release_gap_us": 8000,
-        "repeat_release_gap_us": 10000,
+        "repeat_release_gap_us": 15000,
         "min_scheduled_hold_us": 500,
         "input_lead_us": 14000,
-        "chord_merge_window_us": 4000,
+        "chord_merge_window_us": 5000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000
     },
     "dense_safe": {
-        "hold_us": 24000,
-        "min_hold_us": 16000,
+        "hold_us": 20000,
+        "min_hold_us": 10000,
         "release_gap_us": 5000,
-        "repeat_release_gap_us": 6000,
+        "repeat_release_gap_us": 8000,
         "min_scheduled_hold_us": 500,
         "input_lead_us": 6000,
         "chord_merge_window_us": 3000,

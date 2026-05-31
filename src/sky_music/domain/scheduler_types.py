@@ -125,8 +125,8 @@ class FrameTimingPolicy:
         same_key_conflict_policy: Literal["degraded", "strict"] | None = None,
         input_lead_min_frame_ratio: float = 0.5,
         release_gap_min_frame_ratio: float = 0.15,
-        repeat_release_gap_min_frame_ratio: float = 0.10,
-        min_hold_min_frame_ratio: float = 0.75,
+        repeat_release_gap_min_frame_ratio: float = 0.50,
+        min_hold_min_frame_ratio: float = 0.60,
         frame_align: FrameAlignMode = "none",
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
