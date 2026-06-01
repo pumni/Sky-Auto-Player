@@ -112,8 +112,16 @@ def build_key_actions(
     for draft in drafts:
         snapped = False
         target_snapped_time = draft.source_time_us
-        
+
         if policy.chord_merge_window_us > 0:
+            # Keep the active chord-group window small even when many notes snap
+            # into existing groups. Previously stale groups were only pruned when
+            # creating a new group, which made dense songs do extra linear scans.
+            current_groups = [
+                group
+                for group in current_groups
+                if draft.source_time_us <= group[0] + policy.chord_merge_window_us
+            ]
             for g_time_us, scan_codes_in_group in current_groups:
                 if draft.source_time_us <= g_time_us + policy.chord_merge_window_us:
                     if draft.scan_code not in scan_codes_in_group:
@@ -121,12 +129,11 @@ def build_key_actions(
                         scan_codes_in_group.add(draft.scan_code)
                         snapped = True
                         break
-                        
+
         if not snapped:
             g_time_us = draft.source_time_us
             target_snapped_time = g_time_us
             current_groups.append((g_time_us, {draft.scan_code}))
-            current_groups = [g for g in current_groups if draft.source_time_us <= g[0] + policy.chord_merge_window_us]
             
         # Recreate frozen draft with the computed snapped and shifted times
         shifted_time_us = max(0, target_snapped_time - policy.input_lead_us)

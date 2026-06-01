@@ -1,6 +1,36 @@
 import unicodedata
 from typing import Any
 
+try:
+    from prompt_toolkit.utils import get_cwidth as _get_cwidth
+except Exception:  # pragma: no cover - fallback for non prompt_toolkit callers
+    _get_cwidth = None
+
+
+def display_width(text: str) -> int:
+    """Terminal cell width, not Python len()."""
+    if not text:
+        return 0
+    if _get_cwidth is not None:
+        return max(0, _get_cwidth(text))
+
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        east_asian_width = unicodedata.east_asian_width(char)
+        width += 2 if east_asian_width in {"F", "W"} else 1
+    return width
+
+
+def pad_text(text: str, width: int, align: str = "left") -> str:
+    """Pad by terminal cell width so emoji/box chars don't shift columns."""
+    text_width = display_width(text)
+    padding = max(0, width - text_width)
+    if align == "right":
+        return " " * padding + text
+    return text + " " * padding
+
 THEME_PRESETS: dict[str, dict[str, Any]] = {
     "aurora": {
         "pointer": "❯",
@@ -130,7 +160,12 @@ def remove_accents(input_str: str) -> str:
     res = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
     return res.replace('đ', 'd').replace('Đ', 'D')
 
+_normalization_cache: dict[str, tuple[str, list[int]]] = {}
+
 def normalized_index_map(text: str) -> tuple[str, list[int]]:
+    if text in _normalization_cache:
+        return _normalization_cache[text]
+    
     normalized_chars = []
     index_map = []
     for original_index, char in enumerate(text):
@@ -138,7 +173,13 @@ def normalized_index_map(text: str) -> tuple[str, list[int]]:
         for normalized_char in normalized:
             normalized_chars.append(normalized_char)
             index_map.append(original_index)
-    return "".join(normalized_chars), index_map
+    
+    res = ("".join(normalized_chars), index_map)
+    # Keep cache size reasonable
+    if len(_normalization_cache) > 2000:
+        _normalization_cache.clear()
+    _normalization_cache[text] = res
+    return res
 
 def get_match_span(text: str, normalized_query: str) -> tuple[int, int] | None:
     if not normalized_query:
@@ -166,8 +207,20 @@ def append_highlighted_song_name(lines: list[tuple[str, str]], song_name: str, n
     lines.append(("class:unselected", song_name[end:]))
 
 def truncate_text(text: str, max_width: int) -> str:
-    if max_width <= 1:
+    if max_width <= 0:
+        return ""
+    if max_width == 1:
         return "…"
-    if len(text) <= max_width:
+    if display_width(text) <= max_width:
         return text
-    return text[: max_width - 1] + "…"
+
+    result: list[str] = []
+    used_width = 0
+    target_width = max_width - 1
+    for char in text:
+        char_width = display_width(char)
+        if used_width + char_width > target_width:
+            break
+        result.append(char)
+        used_width += char_width
+    return "".join(result) + "…"

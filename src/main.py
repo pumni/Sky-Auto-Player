@@ -1353,4 +1353,11 @@ def main() -> int:
         disable_high_precision_timers()
 
 if __name__ == '__main__':
+    # Required for safe ProcessPoolExecutor startup on Windows and harmless
+    # for normal `uv run python src/main.py` execution.
+    try:
+        import multiprocessing
+        multiprocessing.freeze_support()
+    except Exception:
+        pass
     raise SystemExit(main())

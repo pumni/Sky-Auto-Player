@@ -40,3 +40,8 @@ dist/
 # Packaging Metadata
 *.egg-info/
 
+# Antigravity CLI Local Data (caches timing profiles and user settings, should not be committed)
+.antigravitycli/
+
+# Cache Files
+.cache/

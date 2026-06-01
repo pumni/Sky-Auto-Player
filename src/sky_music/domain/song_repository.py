@@ -21,6 +21,7 @@ class SongRepository:
 
     def __init__(self) -> None:
         self._cache: dict[SongFileIdentity, Song] = {}
+        self._identity_cache: dict[tuple[Path, int], SongFileIdentity] = {}
 
     def load(self, song_path: Path, profile: InstrumentProfile | None = None) -> Song:
         resolved_profile = profile or SKY_15_KEY_PROFILE
@@ -43,24 +44,30 @@ class SongRepository:
 
     def clear(self) -> None:
         self._cache.clear()
+        self._identity_cache.clear()
 
     def cache_key(self, song_path: Path, profile: InstrumentProfile | None = None) -> tuple[Any, ...]:
         identity = self._identity(song_path, profile or SKY_15_KEY_PROFILE)
         return (identity.path, identity.mtime_ns, identity.size, identity.profile_id)
 
-    @staticmethod
-    def _identity(song_path: Path, profile: InstrumentProfile) -> SongFileIdentity:
-        path = song_path.resolve()
+    def _identity(self, song_path: Path, profile: InstrumentProfile) -> SongFileIdentity:
+        cache_key = (song_path, id(profile))
+        if cache_key in self._identity_cache:
+            return self._identity_cache[cache_key]
+
         try:
-            stat = path.stat()
+            stat = song_path.stat()
         except FileNotFoundError as exc:
             raise SongParseError(f"File not found: {song_path}") from exc
-        return SongFileIdentity(
-            path=path,
+        
+        identity = SongFileIdentity(
+            path=song_path,
             mtime_ns=stat.st_mtime_ns,
             size=stat.st_size,
             profile_id=id(profile),
         )
+        self._identity_cache[cache_key] = identity
+        return identity
 
 
 _shared_song_repository = SongRepository()

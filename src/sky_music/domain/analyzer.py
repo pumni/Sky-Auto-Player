@@ -58,9 +58,21 @@ def _find_dense_clusters(down_events: list[Any]) -> list[DenseCluster]:
                 ))
     return dense_clusters_list
 
-def _compute_min_gaps(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None) -> tuple[int | None, int | None]:
-    """Compute minimum gap between ANY two notes and SAME physical key."""
-    down_events = sorted([action for action in res.actions if action.kind == "down"], key=lambda a: a.at_us)
+def _compute_min_gaps(
+    res: ScheduleMetadata,
+    raw_notes: tuple[Any, ...] | None,
+    down_events: list[Any] | None = None,
+) -> tuple[int | None, int | None]:
+    """Compute minimum gap between ANY two notes and SAME physical key.
+
+    ``analyze_schedule`` already creates a sorted down-event list, so accept it
+    here to avoid sorting the same schedule twice for every UI metadata render.
+    """
+    if down_events is None:
+        down_events = sorted(
+            [action for action in res.actions if action.kind == "down"],
+            key=lambda a: a.at_us,
+        )
     n = len(down_events)
     
     # Post-scheduler fallback
@@ -72,12 +84,11 @@ def _compute_min_gaps(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None) 
     key_last_down = {}
     same_key_gaps = []
     
-    for action in res.actions:
-        if action.kind == "down":
-            for sc in action.scan_codes:
-                if sc in key_last_down:
-                    same_key_gaps.append(action.at_us - key_last_down[sc])
-                key_last_down[sc] = action.at_us
+    for action in down_events:
+        for sc in action.scan_codes:
+            if sc in key_last_down:
+                same_key_gaps.append(action.at_us - key_last_down[sc])
+            key_last_down[sc] = action.at_us
                 
     if same_key_gaps:
         min_same_key_gap_us = min(same_key_gaps)
@@ -88,7 +99,7 @@ def _compute_min_gaps(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None) 
     
     if raw_notes:
         sorted_notes = sorted(raw_notes, key=lambda note: note.time_ms)
-        onsets = sorted(list(set(note.time_ms for note in sorted_notes)))
+        onsets = sorted({note.time_ms for note in sorted_notes})
         if len(onsets) > 1:
             raw_min_any_note_gap_us = min(onsets[i] - onsets[i-1] for i in range(1, len(onsets))) * 1000
             
@@ -167,7 +178,7 @@ def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None = 
     down_events = sorted([action for action in res.actions if action.kind == "down"], key=lambda a: a.at_us)
     
     dense_clusters_list = _find_dense_clusters(down_events)
-    raw_min_any_note_gap_us, raw_min_same_key_gap_us = _compute_min_gaps(res, raw_notes)
+    raw_min_any_note_gap_us, raw_min_same_key_gap_us = _compute_min_gaps(res, raw_notes, down_events)
 
     # Compute note density metrics
     duration_sec = res.source_duration_us / 1_000_000

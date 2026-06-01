@@ -58,8 +58,8 @@ Choose one of the options below to get started:
 2. **Launch the player** using one of the options above.
 3. **Select a song**:
    - Type the song number, name, or a search keyword.
-   - Type `r` or `refresh` to reload the `songs/` folder without restarting.
-   - In the interactive picker, press `C` to review and save the latest telemetry calibration.
+   - Press `/` to open the **Command Palette** to adjust settings (Tempo, FPS, Profile, etc.).
+   - Press `Enter` to play or `Space` for quick play.
    - Type `q` or `Esc` to quit.
 
 ### ➕ Adding More Songs
