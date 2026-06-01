@@ -38,19 +38,19 @@ def test_saved_profile_restored_with_fps_config():
     """Profile must survive restart when game_fps is set (no @fps suffix in storage)."""
     from sky_music.config import canonical_profile_name
 
-    cfg = AppConfig(default_timing_profile="remote-safe", default_tempo_scale=0.95, game_fps=60)
+    cfg = AppConfig(default_timing_profile="audience-safe", default_tempo_scale=0.95, game_fps=60)
     parser = main.build_arg_parser()
     args = parser.parse_args([])
     main.apply_config_defaults(args, cfg)
-    assert args.timing_profile == "remote-safe"
+    assert args.timing_profile == "audience-safe"
     assert args.fps == 60
 
     main.configure_from_args(args, cfg)
-    assert main.TIMING_PROFILE_NAME == "remote-safe@60fps"
-    assert canonical_profile_name(main.TIMING_PROFILE_NAME) == "remote-safe"
+    assert main.TIMING_PROFILE_NAME == "audience-safe@60fps"
+    assert canonical_profile_name(main.TIMING_PROFILE_NAME) == "audience-safe"
 
     # Simulate picker init on next launch
-    assert canonical_profile_name(cfg.default_timing_profile) == "remote-safe"
+    assert canonical_profile_name(cfg.default_timing_profile) == "audience-safe"
 
 
 def test_picker_metadata_loads_song_stats():
@@ -85,13 +85,13 @@ def test_picker_metadata_marks_invalid_song_as_error(tmp_path):
 def test_display_profile_name_no_double_fps_suffix():
     from sky_music.config import display_profile_name
 
-    assert display_profile_name("remote-safe@120fps", 120) == "remote-safe@120fps"
+    assert display_profile_name("audience-safe@120fps", 120) == "audience-safe@120fps"
 
 
 def test_canonical_profile_name_strips_fps_suffix():
     from sky_music.config import canonical_profile_name
 
-    assert canonical_profile_name("remote-safe@60fps") == "remote-safe"
+    assert canonical_profile_name("remote-safe@60fps") == "audience-safe"
     assert canonical_profile_name("local_precise") == "local-precise"
     assert canonical_profile_name("dense-safe@120fps") == "dense-safe"
 
@@ -102,7 +102,7 @@ def test_load_config_sanitizes_corrupted_profile_with_fps_suffix(tmp_path, monke
     config_file = tmp_path / "config.json"
     config_file.write_text(
         json.dumps({
-            "default_timing_profile": "remote-safe@60fps",
+            "default_timing_profile": "audience-safe@60fps",
             "default_tempo_scale": 0.95,
             "game_fps": 60,
         }),
@@ -111,7 +111,7 @@ def test_load_config_sanitizes_corrupted_profile_with_fps_suffix(tmp_path, monke
     monkeypatch.setattr("sky_music.config.CONFIG_PATH", config_file)
     clear_config_cache()
     cfg = load_config(force_reload=True)
-    assert cfg.default_timing_profile == "remote-safe"
+    assert cfg.default_timing_profile == "audience-safe"
     assert cfg.game_fps == 60
 
 
@@ -399,4 +399,4 @@ def test_apply_calibration_uses_explicit_summary_path(tmp_path, monkeypatch):
     assert main._apply_calibration_from_telemetry(AppConfig(), summary_path=explicit) is True
     assert main.PLAYBACK_SESSION is not None
     assert main.PLAYBACK_SESSION.fps == 30
-    assert main.PLAYBACK_SESSION.profile_name == "remote-safe"
+    assert main.PLAYBACK_SESSION.profile_name == "audience-safe"

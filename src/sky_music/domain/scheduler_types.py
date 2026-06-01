@@ -83,8 +83,8 @@ class TimingPolicy:
         return cls.from_profile_name("local_precise")
 
     @classmethod
-    def remote_safe(cls) -> "TimingPolicy":
-        return cls.from_profile_name("remote_safe")
+    def audience_safe(cls) -> "TimingPolicy":
+        return cls.from_profile_name("audience_safe")
 
     @classmethod
     def dense_safe(cls) -> "TimingPolicy":
@@ -204,8 +204,8 @@ class FrameTimingPolicy:
         return cls.from_profile_name("local_precise", **kwargs)
 
     @classmethod
-    def remote_safe(cls, **kwargs) -> "FrameTimingPolicy":
-        return cls.from_profile_name("remote_safe", **kwargs)
+    def audience_safe(cls, **kwargs) -> "FrameTimingPolicy":
+        return cls.from_profile_name("audience_safe", **kwargs)
 
     @classmethod
     def dense_safe(cls, **kwargs) -> "FrameTimingPolicy":

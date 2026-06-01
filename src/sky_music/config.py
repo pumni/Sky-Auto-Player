@@ -113,20 +113,20 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000
     },
-    "remote_safe": {
-        "hold_us": 35000,
+    "audience_safe": {
+        "hold_us": 34000,
         "min_hold_us": 20000,
         "release_gap_us": 8000,
-        "repeat_release_gap_us": 15000,
+        "repeat_release_gap_us": 14000,
         "min_scheduled_hold_us": 500,
         "input_lead_us": 14000,
-        "chord_merge_window_us": 5000,
+        "chord_merge_window_us": 6000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000
     },
     "dense_safe": {
         "hold_us": 20000,
-        "min_hold_us": 10000,
+        "min_hold_us": 12000,
         "release_gap_us": 5000,
         "repeat_release_gap_us": 8000,
         "min_scheduled_hold_us": 500,
@@ -134,6 +134,17 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "chord_merge_window_us": 3000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000
+    },
+    "high_fps_precise": {
+        "hold_us": 18000,
+        "min_hold_us": 10000,
+        "release_gap_us": 3000,
+        "repeat_release_gap_us": 6000,
+        "min_scheduled_hold_us": 500,
+        "input_lead_us": 3000,
+        "chord_merge_window_us": 2000,
+        "spin_threshold_us": 500,
+        "focus_restore_grace_us": 50000
     }
 }
 
@@ -174,21 +185,26 @@ def clear_config_cache() -> None:
 
 
 def normalize_profile_name(name: str) -> str:
-    return name.lower().replace("-", "_")
+    n = name.lower().replace("-", "_")
+    if n in ("remote_safe", "audience_safe", "online_audible_safe", "online_audible"):
+        return "audience_safe"
+    return n
 
 
 CLI_PROFILE_NAMES: tuple[str, ...] = (
     "balanced",
     "local-precise",
-    "remote-safe",
+    "audience-safe",
     "dense-safe",
+    "high-fps-precise",
 )
 
 _PROFILE_KEY_TO_CLI: dict[str, str] = {
     "balanced": "balanced",
     "local_precise": "local-precise",
-    "remote_safe": "remote-safe",
+    "audience_safe": "audience-safe",
     "dense_safe": "dense-safe",
+    "high_fps_precise": "high-fps-precise",
 }
 
 def canonical_profile_name(name: str) -> str:

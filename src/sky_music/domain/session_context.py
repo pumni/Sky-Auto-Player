@@ -160,12 +160,27 @@ class PlaybackSessionContext:
     def resolve_effective_policy(self, cfg: AppConfig | None = None) -> FrameTimingPolicy:
         """Profile dict + CLI overrides + frame-aware scaling (single entry point)."""
         cfg = cfg or load_config()
-        base = self._base_timing_policy(cfg)
+        
+        # Static Safety Guard:
+        # Nếu profile được cấu hình là high-fps-precise nhưng FPS < 100,
+        # tự động hạ cấp tĩnh xuống local-precise để tránh sụt giảm note lặp.
+        from sky_music.config import normalize_profile_name
+        norm_name = normalize_profile_name(self.profile_name)
+        effective_self = self
+        
+        if norm_name == "high_fps_precise":
+            if self.fps is None or self.fps < 100:
+                fallback_profile = "local-precise"
+                print(f"\n[Warning] Profile '{self.profile_name}' requires configured game FPS >= 100.")
+                print(f"          Current FPS: {self.fps if self.fps is not None else 'None'}. Safely falling back to '{fallback_profile}'.\n")
+                effective_self = self.with_profile(fallback_profile)
+                
+        base = effective_self._base_timing_policy(cfg)
         return FrameTimingPolicy.from_timing_policy(
             base,
-            fps=self.fps,
-            same_key_conflict_policy=self.same_key_conflict_policy,
-            frame_align=self.resolved_frame_align(cfg),
+            fps=effective_self.fps,
+            same_key_conflict_policy=effective_self.same_key_conflict_policy,
+            frame_align=effective_self.resolved_frame_align(cfg),
             **cfg.frame_timing.as_policy_kwargs(),
         )
 

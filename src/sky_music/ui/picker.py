@@ -125,11 +125,17 @@ class SongPickerResult:
     telemetry_enabled: bool | None = None
 
 PROFILES_INFO = [
-    ("local-precise", "Best local timing, less safe for remote listeners"),
-    ("balanced", "Default balanced setting"),
-    ("remote-safe", "Safe for remote/cloud streaming (e.g. Parsec/Moonlight)"),
-    ("dense-safe", "Safer for fast repeats and dense songs"),
+    ("local-precise", "Local Precise: sharp local play, less safe for remote listeners"),
+    ("balanced", "Balanced: default setting for local or online play"),
+    ("audience-safe", "Audience Safe: helps online players hear notes clearly"),
+    ("dense-safe", "Dense Safe: safer for fast repeats and dense songs"),
 ]
+
+def get_profiles_info(fps: int | None) -> list[tuple[str, str]]:
+    lst = list(PROFILES_INFO)
+    if fps is not None and fps >= 90:
+        lst.append(("high-fps-precise", "High-FPS Precise: for verified 90+ FPS setups"))
+    return lst
 
 TEMPO_OPTIONS = [
     (0.90, "safer for listeners"),
@@ -437,7 +443,7 @@ def choose_song_interactively(
         elif state.current_view in {"profile_select", "tempo_select", "fps_select", "theme_select", "calibration", "commands", "help"}:
             overhead = 8
             available = max(0, term_height - overhead)
-            if state.current_view == "profile_select": return min(len(PROFILES_INFO) + 2, available), 0
+            if state.current_view == "profile_select": return min(len(get_profiles_info(state.current_fps)) + 2, available), 0
             if state.current_view == "tempo_select": return min(len(TEMPO_OPTIONS) + 4, available), 0
             if state.current_view == "fps_select": return min(len(FPS_OPTIONS) + 4, available), 0
             if state.current_view == "theme_select": return min(len(theme_names) + 4, available), 0
@@ -555,7 +561,7 @@ def choose_song_interactively(
             
         elif state.current_view == "profile_select":
             content = []
-            for name, desc in PROFILES_INFO:
+            for name, desc in get_profiles_info(state.current_fps):
                 bullet = "●" if name == state.current_profile else "○"
                 row = f"{bullet} {name:<15}   {desc}"
                 content.append([("class:selected" if name == state.temp_profile else "class:unselected", f" {'➜' if name == state.temp_profile else ' '} {row}")])
@@ -1103,7 +1109,7 @@ def choose_song_interactively(
         elif state.current_view == "commands":
             state.selected_command_index = (state.selected_command_index - 1) % len(commands)
         elif state.current_view == "profile_select":
-            profiles = [p[0] for p in PROFILES_INFO]
+            profiles = [p[0] for p in get_profiles_info(state.current_fps)]
             state.temp_profile = profiles[(profiles.index(state.temp_profile) - 1) % len(profiles)]
         elif state.current_view == "tempo_select":
             presets = [t[0] for t in TEMPO_OPTIONS]
@@ -1124,7 +1130,7 @@ def choose_song_interactively(
         elif state.current_view == "commands":
             state.selected_command_index = (state.selected_command_index + 1) % len(commands)
         elif state.current_view == "profile_select":
-            profiles = [p[0] for p in PROFILES_INFO]
+            profiles = [p[0] for p in get_profiles_info(state.current_fps)]
             state.temp_profile = profiles[(profiles.index(state.temp_profile) + 1) % len(profiles)]
         elif state.current_view == "tempo_select":
             presets = [t[0] for t in TEMPO_OPTIONS]
@@ -1284,6 +1290,13 @@ def choose_song_interactively(
                 pass
         elif state.current_view == "fps_select":
             state.current_fps, state.current_view = state.temp_fps, "picker"
+            if state.current_profile == "high-fps-precise" and (state.current_fps is None or state.current_fps < 100):
+                state.current_profile = "local-precise"
+                try:
+                    from sky_music.config import persist_default_profile
+                    persist_default_profile(load_config(), state.current_profile)
+                except Exception:
+                    pass
             try:
                 persist_default_fps(load_config(), state.current_fps)
             except Exception:

@@ -291,8 +291,8 @@ def test_timing_policy_from_dict_defaults():
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
     assert policy.hold_us == 20000
-    policy_2 = TimingPolicy.from_profile_name("remote-safe")
-    assert policy_2.hold_us == 35000
+    policy_2 = TimingPolicy.from_profile_name("audience-safe")
+    assert policy_2.hold_us == 32000
 
 def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
@@ -313,7 +313,7 @@ def test_high_fps_chord_merge_protection():
     p_local = FrameTimingPolicy.from_profile_name("balanced", fps=240)
     assert p_local.chord_merge_window_us == 3000
 
-    p_remote = FrameTimingPolicy.from_profile_name("remote-safe", fps=240)
+    p_remote = FrameTimingPolicy.from_profile_name("audience-safe", fps=240)
     assert p_remote.chord_merge_window_us == 5000
 
 
@@ -346,6 +346,31 @@ def test_cycle_rule_safety_margin_clamp():
     # deficit = 35000 - 6668 = 28332
     # eff_repeat_release_gap_us should be increased by deficit: 3334 + 28332 = 31666
     assert p_custom.min_hold_us == 3334
-    assert p_custom.repeat_release_gap_us == 31666
     assert p_custom.min_hold_us + p_custom.repeat_release_gap_us == 35000
+
+
+def test_timing_profile_validators():
+    from sky_music.domain.validation import (
+        validate_timing_profile,
+        validate_audience_safe_profile,
+    )
+    from sky_music.config import DEFAULT_TIMING_PROFILES
+
+    # Verify all built-in profiles pass validate_timing_profile
+    for name, p in DEFAULT_TIMING_PROFILES.items():
+        fps = 90 if name == "high_fps_precise" else 60
+        validate_timing_profile(p, fps=fps)
+
+    # Verify audience_safe passes audience safe checks
+    validate_audience_safe_profile(DEFAULT_TIMING_PROFILES["audience_safe"])
+
+    # Test failure case
+    unsafe = {
+        "min_hold_us": 5000,
+        "repeat_release_gap_us": 5000,
+        "input_lead_us": 0,
+        "chord_merge_window_us": 0,
+    }
+    with pytest.raises(ValueError, match="Unsafe cycle"):
+        validate_timing_profile(unsafe, fps=60)
 

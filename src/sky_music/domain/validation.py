@@ -175,3 +175,55 @@ def validate_key_actions(
             active_keys_poly.difference_update(action.scan_codes)
             
     return tuple(violations)
+
+
+def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
+    frame_us = 1_000_000 / fps
+    cycle_us = profile["min_hold_us"] + profile["repeat_release_gap_us"]
+
+    if cycle_us <= frame_us:
+        raise ValueError(
+            f"Unsafe cycle: {cycle_us:.0f}us <= one frame {frame_us:.0f}us"
+        )
+
+    if fps == 60 and cycle_us < 18_000:
+        raise ValueError(
+            f"60 FPS profile has too little margin: {cycle_us:.0f}us < 18000us"
+        )
+
+    if profile["min_hold_us"] < 10_000:
+        raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
+
+    if profile["repeat_release_gap_us"] < 6_000:
+        raise ValueError(
+            "repeat_release_gap_us below 6000us is not allowed for built-ins"
+        )
+
+    if profile["input_lead_us"] < 0:
+        raise ValueError("input_lead_us must be non-negative")
+
+    if profile["chord_merge_window_us"] < 0:
+        raise ValueError("chord_merge_window_us must be non-negative")
+
+
+def validate_audience_safe_profile(profile: dict[str, int]) -> None:
+    cycle_us = profile["min_hold_us"] + profile["repeat_release_gap_us"]
+
+    if cycle_us < 28_000:
+        raise ValueError("audience-safe profile should have cycle_us >= 28000us")
+
+    if profile["min_hold_us"] < 17_000:
+        raise ValueError("audience-safe profile requires min_hold_us >= 17000us")
+
+    if profile["repeat_release_gap_us"] < 12_000:
+        raise ValueError(
+            "audience-safe profile requires repeat_release_gap_us >= 12000us"
+        )
+
+    if profile["input_lead_us"] < 10_000:
+        raise ValueError("audience-safe profile requires input_lead_us >= 10000us")
+
+    if profile["chord_merge_window_us"] < 5_000:
+        raise ValueError(
+            "audience-safe profile requires chord_merge_window_us >= 5000us"
+        )

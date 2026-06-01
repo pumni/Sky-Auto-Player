@@ -39,8 +39,8 @@ def test_with_profile_preserves_fps():
     session = PlaybackSessionContext(
         profile_name="balanced",
         fps=60,
-    ).with_profile("remote-safe")
-    assert session.profile_name == "remote-safe"
+    ).with_profile("audience-safe")
+    assert session.profile_name == "audience-safe"
     assert session.fps == 60
 
 
@@ -136,3 +136,44 @@ def test_from_cli_args_applies_hold_override():
     policy = session.resolve_effective_policy(AppConfig())
     assert session.fps == 60
     assert policy.hold_us >= 30_000
+
+
+def test_static_safety_guard_fallback():
+    session = PlaybackSessionContext(profile_name="high-fps-precise", fps=60)
+    policy = session.resolve_effective_policy(AppConfig())
+    # Should fall back to local-precise timing parameters
+    assert policy.hold_us == 20000
+    assert policy.min_hold_us == 12000
+    assert policy.chord_merge_window_us == 2000
+
+
+def test_static_safety_guard_normalizes_hyphenated_high_fps_profile():
+    # Test that hyphenated and differently-cased names normalize and trigger fallback correctly
+    session = PlaybackSessionContext(profile_name="HIGH-fps-PRECISE", fps=None)
+    policy = session.resolve_effective_policy(AppConfig())
+    assert policy.hold_us == 20000
+    assert policy.min_hold_us == 12000
+
+
+def test_high_fps_precise_intact_at_120fps():
+    session = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
+    policy = session.resolve_effective_policy(AppConfig())
+    # Should keep original high-fps-precise timing parameters
+    assert policy.hold_us == 18000
+    assert policy.min_hold_us == 10000
+    assert policy.chord_merge_window_us == 2000
+
+
+def test_picker_hides_high_fps_precise_when_low_fps():
+    from sky_music.ui.picker import get_profiles_info
+    profiles_60 = get_profiles_info(60)
+    assert "high-fps-precise" not in [p[0] for p in profiles_60]
+    
+    profiles_none = get_profiles_info(None)
+    assert "high-fps-precise" not in [p[0] for p in profiles_none]
+
+
+def test_picker_shows_high_fps_precise_when_high_fps():
+    from sky_music.ui.picker import get_profiles_info
+    profiles_120 = get_profiles_info(120)
+    assert "high-fps-precise" in [p[0] for p in profiles_120]

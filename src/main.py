@@ -19,6 +19,7 @@ from sky_music.config import (
     sky_process_names_csv,
     canonical_profile_name,
     display_profile_name,
+    CLI_PROFILE_NAMES,
 )
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
@@ -98,10 +99,10 @@ def _recommended_profile(severity: str, has_same_key_repeats: bool, high_polypho
     if severity == "high":
         if has_same_key_repeats:
             return "dense-safe"
-        return "remote-safe"
+        return "audience-safe"
     if severity == "medium":
         if high_polyphony:
-            return "remote-safe"
+            return "audience-safe"
         return "balanced"
     return "balanced"
 
@@ -813,15 +814,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     timing = parser.add_argument_group("Playback timing")
     timing.add_argument(
         "--timing-profile",
-        choices=[
-            "balanced", "local-precise", "remote-safe", "dense-safe"
-        ],
+        choices=list(CLI_PROFILE_NAMES),
         default="balanced",
         help=(
             "Timing profile: "
             "local-precise (low latency), "
-            "remote-safe (remote/cloud streaming), "
+            "audience-safe (online play / audience audibility), "
             "dense-safe (many chords/repeats), "
+            "high-fps-precise (experimental 100+ FPS), "
             "balanced (default)"
         ),
     )

@@ -29,7 +29,7 @@ def _reset():
 
 
 def test_configure_and_session_resolve_same_policy():
-    cfg = AppConfig(default_timing_profile="remote-safe", game_fps=60)
+    cfg = AppConfig(default_timing_profile="audience-safe", game_fps=60)
     parser = main.build_arg_parser()
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
@@ -93,13 +93,13 @@ def test_strict_policy_aborts_build():
 
 
 def test_saved_profile_name_has_no_fps_suffix():
-    cfg = AppConfig(default_timing_profile="remote-safe@60fps", game_fps=60)
+    cfg = AppConfig(default_timing_profile="audience-safe@60fps", game_fps=60)
     parser = main.build_arg_parser()
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert canonical_profile_name(main.PLAYBACK_SESSION.profile_name) == "remote-safe"
-    assert main.TIMING_PROFILE_NAME == "remote-safe@60fps"
+    assert canonical_profile_name(main.PLAYBACK_SESSION.profile_name) == "audience-safe"
+    assert main.TIMING_PROFILE_NAME == "audience-safe@60fps"
 
 
 def test_calibration_hold_matches_resolve_path():
