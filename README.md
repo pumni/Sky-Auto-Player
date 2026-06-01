@@ -128,15 +128,6 @@ python src/main.py --save-calibration --calibration-summary logs/run.summary.jso
 
 ---
 
-## 📚 Technical Documentation
-
-For developers, advanced users, or anyone interested in the mathematical principles behind the precision engine, please refer to the project's documentation:
-
-- **[System Architecture & Calibration](docs/architecture.md):** Detailed explanation of the 4-layer DDD architecture, the pure microsecond scheduling pipeline, the hybrid sleeper, and how the telemetry/calibration system works.
-- **[The Golden Principles of Timing Profiles](docs/timing-principles.md):** The definitive guide and mathematical formulas (e.g., The Cycle Rule) governing how keystroke durations and gaps must be configured to successfully bypass the game engine's frame-polling logic.
-
----
-
 ## ⚙️ CLI Configuration Options
 
 Customize your experience by passing arguments:
