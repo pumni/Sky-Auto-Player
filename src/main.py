@@ -820,7 +820,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Timing profile: "
             "local-precise (low latency), "
-            "remote-safe (listener quality), "
+            "remote-safe (remote/cloud streaming), "
             "dense-safe (many chords/repeats), "
             "balanced (default)"
         ),

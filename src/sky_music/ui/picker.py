@@ -1,4 +1,3 @@
-
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -74,7 +73,7 @@ class PickerState:
     selected_index: int = 0
     filtered_songs: list[Path] = None  # type: ignore
     
-    current_view: Literal["picker", "preview", "profile_select", "tempo_select", "fps_select", "calibration", "commands", "help"] = "picker"
+    current_view: Literal["picker", "preview", "profile_select", "tempo_select", "fps_select", "theme_select", "calibration", "commands", "help"] = "picker"
     previous_view: Literal["picker", "preview"] = "picker"
     
     selected_command_index: int = 0
@@ -106,6 +105,7 @@ class PickerState:
     temp_profile: str = "balanced"
     temp_tempo: float = 1.0
     temp_fps: int | None = None
+    temp_theme: str = ""
 
     def __post_init__(self):
         if self.filtered_songs is None:
@@ -127,7 +127,7 @@ class SongPickerResult:
 PROFILES_INFO = [
     ("local-precise", "Best local timing, less safe for remote listeners"),
     ("balanced", "Default balanced setting"),
-    ("remote-safe", "Better clarity for other players"),
+    ("remote-safe", "Safe for remote/cloud streaming (e.g. Parsec/Moonlight)"),
     ("dense-safe", "Safer for fast repeats and dense songs"),
 ]
 
@@ -434,12 +434,13 @@ def choose_song_interactively(
                 return 10, 3
             else:
                 return max(3, available), 0
-        elif state.current_view in {"profile_select", "tempo_select", "fps_select", "calibration", "commands", "help"}:
+        elif state.current_view in {"profile_select", "tempo_select", "fps_select", "theme_select", "calibration", "commands", "help"}:
             overhead = 8
             available = max(0, term_height - overhead)
             if state.current_view == "profile_select": return min(len(PROFILES_INFO) + 2, available), 0
-            if state.current_view == "tempo_select": return min(len(TEMPO_OPTIONS) + 3, available), 0
-            if state.current_view == "fps_select": return min(len(FPS_OPTIONS) + 3, available), 0
+            if state.current_view == "tempo_select": return min(len(TEMPO_OPTIONS) + 4, available), 0
+            if state.current_view == "fps_select": return min(len(FPS_OPTIONS) + 4, available), 0
+            if state.current_view == "theme_select": return min(len(theme_names) + 4, available), 0
             if state.current_view == "calibration": return min(10, available), 0
             if state.current_view == "commands": return min(len(commands) + 2, available), 0
             if state.current_view == "help": return min(17, available), 0
@@ -577,6 +578,14 @@ def choose_song_interactively(
                 content.append([("class:selected" if val == state.temp_fps else "class:unselected", f" {'➜' if val == state.temp_fps else ' '} {row}")])
             return build_box("FPS Sync Selection", content, width=terminal_width)
 
+        elif state.current_view == "theme_select":
+            content = [f"Current: {current_theme_name}", ""]
+            for name in theme_names:
+                bullet = "●" if name == current_theme_name else "○"
+                row = f"{bullet} {name}"
+                content.append([("class:selected" if name == state.temp_theme else "class:unselected", f" {'➜' if name == state.temp_theme else ' '} {row}")])
+            return build_box("Select Theme", content, width=terminal_width)
+
         elif state.current_view == "calibration":
             summary = load_latest_telemetry_summary()
             if summary is None:
@@ -609,9 +618,15 @@ def choose_song_interactively(
         elif state.current_view == "help":
             help_lines = [
                 ("/", "Open Command Palette"),
-                ("Enter", "Play selected song"), ("Space", "Quick Play"),
-                ("Arrow keys", "Navigate lists"), ("Esc", "Back / Quit"),
-                ("F2/F3", "Toggle HUD / Telemetry"), ("Ctrl+R", "Reload songs"), ("Ctrl+T", "Change theme"),
+                ("Enter", "Play selected song or Confirm selection"),
+                ("Up/Down", "Navigate lists"),
+                ("Esc", "Back to Picker or Quit"),
+                ("F1 or ?", "Show this Help Guide"),
+                ("F2", "Toggle verbose HUD in game"),
+                ("F3", "Toggle telemetry logging"),
+                ("Ctrl+R", "Reload songs from disk"),
+                ("Ctrl+T", "Cycle through themes"),
+                ("Ctrl+C", "Force Quit"),
             ]
             content = [[("class:key", f"  {k:<12}"), ("class:detail", d)] for k, d in help_lines]
             return build_box("Keyboard Shortcuts", content, width=terminal_width)
@@ -678,7 +693,6 @@ def choose_song_interactively(
             
             actions = [
                 ActionHint("Enter", "play", "play", "play"),
-                ActionHint("Space", "quick play", "quick", "sp"),
                 ActionHint("/", "commands", "cmd", "/"),
                 ActionHint("F2", "HUD", "hud", "h2"),
                 ActionHint("F3", "telemetry", "telem", "h3"),
@@ -1098,6 +1112,8 @@ def choose_song_interactively(
         elif state.current_view == "fps_select":
             fps = [f[0] for f in FPS_OPTIONS]
             state.temp_fps = fps[(fps.index(state.temp_fps) - 1) % len(fps)]
+        elif state.current_view == "theme_select":
+            state.temp_theme = theme_names[(theme_names.index(state.temp_theme) - 1) % len(theme_names)]
         update_ui()
 
     @kb.add("down")
@@ -1117,6 +1133,8 @@ def choose_song_interactively(
         elif state.current_view == "fps_select":
             fps = [f[0] for f in FPS_OPTIONS]
             state.temp_fps = fps[(fps.index(state.temp_fps) + 1) % len(fps)]
+        elif state.current_view == "theme_select":
+            state.temp_theme = theme_names[(theme_names.index(state.temp_theme) + 1) % len(theme_names)]
         update_ui()
 
     @kb.add("/")
@@ -1127,11 +1145,6 @@ def choose_song_interactively(
             update_ui()
         else:
             event.app.current_buffer.insert_text("/")
-
-    @kb.add("space")
-    def _(event):
-        if state.current_view in {"picker", "preview"} and state.filtered_songs:
-            safe_exit(event.app, build_picker_result())
 
     @kb.add("c-r")
     def _(event):
@@ -1210,6 +1223,8 @@ def choose_song_interactively(
 
     @kb.add("enter")
     def _(event):
+        global ACTIVE_THEME
+        nonlocal active_theme_name, current_theme_name, style_dict, style, pointer, song_icon, empty_icon
         if state.current_view in {"picker", "preview"}:
             if state.filtered_songs:
                 safe_exit(event.app, build_picker_result())
@@ -1251,21 +1266,7 @@ def choose_song_interactively(
                 state.scroll_offset = 0
                 state.current_view = "picker"
             elif cmd_id == "theme":
-                # Handle theme change logic (simplified from c-t)
-                global ACTIVE_THEME
-                next_theme = theme_names[(theme_names.index(current_theme_name) + 1) % len(theme_names)]
-                ACTIVE_THEME = next_theme
-                save_theme(next_theme)
-                active_theme_name, next_theme_data = get_theme(next_theme)
-                current_theme_name = active_theme_name
-                style_dict = next_theme_data["style"]
-                style = Style.from_dict(style_dict)
-                pointer = next_theme_data["pointer"]
-                song_icon = next_theme_data["song_icon"]
-                empty_icon = next_theme_data["empty_icon"]
-                try: event.app.style = style
-                except Exception: pass
-                state.current_view = "picker"
+                state.previous_view, state.current_view, state.temp_theme = "picker", "theme_select", current_theme_name
             elif cmd_id == "help":
                 state.previous_view, state.current_view = "picker", "help"
             update_ui()
@@ -1287,6 +1288,20 @@ def choose_song_interactively(
                 persist_default_fps(load_config(), state.current_fps)
             except Exception:
                 pass
+        elif state.current_view == "theme_select":
+            next_theme = state.temp_theme
+            ACTIVE_THEME = next_theme
+            save_theme(next_theme)
+            active_theme_name, next_theme_data = get_theme(next_theme)
+            current_theme_name = active_theme_name
+            style_dict = next_theme_data["style"]
+            style = Style.from_dict(style_dict)
+            pointer = next_theme_data["pointer"]
+            song_icon = next_theme_data["song_icon"]
+            empty_icon = next_theme_data["empty_icon"]
+            try: event.app.style = style
+            except Exception: pass
+            state.current_view = "picker"
         elif state.current_view == "calibration":
             summary = load_latest_telemetry_summary()
             if summary is not None:

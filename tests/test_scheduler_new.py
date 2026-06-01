@@ -111,25 +111,24 @@ def test_release_gap_us_at_30fps():
     """Verify that FrameTimingPolicy scales release gaps correctly for low refresh rates."""
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     base = TimingPolicy.from_dict({"release_gap_us": 3000})
-    # 30fps = 33,333us per frame. 15% of frame = 4999us.
-    # Policy says max(3000, 4999) = 4999.
+    # 30fps = 33,333us per frame. 15% of frame = 5000us (ceiled).
+    # Policy says max(3000, 5000) = 5000.
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert frame_policy.release_gap_us == 4999
-
+    assert frame_policy.release_gap_us == 5000
+ 
 def test_frame_timing_policy_scales_lead_at_30fps():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     base = TimingPolicy.from_dict({"input_lead_us": 6000})
-    # 30fps = 33,333us. 50% = 16,666us.
+    # 30fps = 33,333us. 50% = 16,667us (ceiled).
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert frame_policy.input_lead_us == 16666
+    assert frame_policy.input_lead_us == 16667
 
 def test_chord_merge_clamping_at_120fps():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     base = TimingPolicy.from_dict({"chord_merge_window_us": 5000})
-    # 120fps = 8,333us. 25% = 2083us.
-    # Policy says min(5000, 2083) = 2083.
+    # 120fps >= 60, so the original chord_merge_window_us is kept intact without scaling down.
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=120)
-    assert frame_policy.chord_merge_window_us == 2083
+    assert frame_policy.chord_merge_window_us == 5000
 
 def test_pre_playback_schedule_analyzer():
     from sky_music.domain.analyzer import analyze_schedule
@@ -166,10 +165,10 @@ def test_analyzer_detects_dense_clusters():
 def test_repeat_release_gap_scales_at_30fps():
     base = TimingPolicy.from_dict({"repeat_release_gap_us": 2000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. 50% = 16,666us.
-    assert frame_policy.repeat_release_gap_us == 16666
-
-
+    # 30fps = 33,333us. 50% = 16,667us (ceiled).
+    assert frame_policy.repeat_release_gap_us == 16667
+ 
+ 
 def test_release_collision_delay_separates_up_from_conflicting_down():
     """When a key release coincides with another key's down, release is deferred."""
     song = Song(
@@ -185,13 +184,13 @@ def test_release_collision_delay_separates_up_from_conflicting_down():
     key1_down = next(a for a in res.actions if a.kind == "down" and 0x16 in a.scan_codes)
     assert key1_down.at_us == 1_024_000
     assert key0_up.at_us == 1_024_000 + 3_000
-
-
+ 
+ 
 def test_min_hold_scales_at_30fps():
     base = TimingPolicy.from_dict({"min_hold_us": 16000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. 60% = 19,999us.
-    assert frame_policy.min_hold_us == 19_999
+    # 30fps = 33,333us. 60% = 20,000us (ceiled).
+    assert frame_policy.min_hold_us == 20000
 
 
 def test_strict_policy_rejects_impossible_repeat():
@@ -306,3 +305,47 @@ def test_playback_overrides_dataclass():
     o = PlaybackOverrides(dry_run=True, fps=120)
     assert o.dry_run is True
     assert o.fps == 120
+
+
+def test_high_fps_chord_merge_protection():
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    # At 240fps (>= 60), original profile values are kept intact.
+    p_local = FrameTimingPolicy.from_profile_name("balanced", fps=240)
+    assert p_local.chord_merge_window_us == 3000
+
+    p_remote = FrameTimingPolicy.from_profile_name("remote-safe", fps=240)
+    assert p_remote.chord_merge_window_us == 5000
+
+
+def test_cycle_rule_safety_margin_clamp():
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    # Create a base policy that has very low values
+    base = TimingPolicy.from_dict({
+        "min_hold_us": 1000,
+        "repeat_release_gap_us": 1000,
+    })
+    # at 30fps (low-fps upscale triggers), frame_us = 33333
+    p = FrameTimingPolicy.from_timing_policy(base, fps=30)
+    # safety margin = max(1000, ceil(33333 * 0.05)) = 1667
+    # required cycle = 33333 + 1667 = 35000
+    # minimum min_hold_us = ceil(33333 * 0.60) = 20000
+    # minimum repeat_release_gap_us = ceil(33333 * 0.50) = 16667
+    # sum = 36667, which is already >= 35000.
+    assert p.min_hold_us + p.repeat_release_gap_us >= 35000
+
+    # Let's force a scenario where deficit is triggered by using custom ratios or base
+    # (using extremely low ratios)
+    p_custom = FrameTimingPolicy.from_timing_policy(
+        base, fps=30, min_hold_min_frame_ratio=0.1, repeat_release_gap_min_frame_ratio=0.1
+    )
+    # frame_us = 33333
+    # min_hold = ceil(33333 * 0.1) = 3334
+    # repeat_gap = ceil(33333 * 0.1) = 3334
+    # current sum = 6668
+    # required cycle = 33333 + 1667 = 35000
+    # deficit = 35000 - 6668 = 28332
+    # eff_repeat_release_gap_us should be increased by deficit: 3334 + 28332 = 31666
+    assert p_custom.min_hold_us == 3334
+    assert p_custom.repeat_release_gap_us == 31666
+    assert p_custom.min_hold_us + p_custom.repeat_release_gap_us == 35000
+

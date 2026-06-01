@@ -59,9 +59,9 @@ def test_play_fallback_uses_game_fps_when_no_session():
 
 def test_profile_switch_preserves_fps_and_changes_repeat_gap():
     cfg = AppConfig()
-    balanced = PlaybackSessionContext.balanced(fps=30)
+    balanced = PlaybackSessionContext.balanced(fps=120)
     dense = balanced.with_profile("dense-safe")
-    assert dense.fps == 30
+    assert dense.fps == 120
     p_bal = balanced.resolve_effective_policy(cfg)
     p_dense = dense.resolve_effective_policy(cfg)
     assert p_bal.repeat_release_gap_us != p_dense.repeat_release_gap_us

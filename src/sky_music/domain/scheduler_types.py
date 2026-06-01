@@ -131,14 +131,37 @@ class FrameTimingPolicy:
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
             frame_us = Microseconds(round(1_000_000 / fps))
-            eff_hold_us = Microseconds(max(policy.hold_us, math.ceil(frame_us * min_visible_hold_frames)))
-            eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.floor(frame_us * min_hold_min_frame_ratio)))
-            eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, math.floor(frame_us * chord_merge_max_frame_ratio)))
-            eff_input_lead_us = Microseconds(max(policy.input_lead_us, math.floor(frame_us * input_lead_min_frame_ratio)))
-            eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.floor(frame_us * release_gap_min_frame_ratio)))
-            eff_repeat_release_gap_us = Microseconds(
-                max(policy.repeat_release_gap_us, math.floor(frame_us * repeat_release_gap_min_frame_ratio))
-            )
+            if fps < 60:
+                # low-fps upscale only
+                eff_hold_us = Microseconds(max(policy.hold_us, math.ceil(frame_us * min_visible_hold_frames)))
+                eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.ceil(frame_us * min_hold_min_frame_ratio)))
+                eff_input_lead_us = Microseconds(max(policy.input_lead_us, math.ceil(frame_us * input_lead_min_frame_ratio)))
+                eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.ceil(frame_us * release_gap_min_frame_ratio)))
+                eff_repeat_release_gap_us = Microseconds(
+                    max(policy.repeat_release_gap_us, math.ceil(frame_us * repeat_release_gap_min_frame_ratio))
+                )
+
+                # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin)
+                safety_margin_us = max(1000, math.ceil(frame_us * 0.05))
+                required_cycle_us = frame_us + safety_margin_us
+                current_cycle = eff_min_hold_us + eff_repeat_release_gap_us
+                if current_cycle < required_cycle_us:
+                    deficit = required_cycle_us - current_cycle
+                    eff_repeat_release_gap_us = Microseconds(eff_repeat_release_gap_us + deficit)
+
+                # Prevent chord merge window from collapsing too small at low FPS.
+                is_remote_like = policy.repeat_release_gap_us >= 15000 or policy.input_lead_us >= 12000
+                min_chord_merge_us = 4000 if is_remote_like else 2000
+                scaled_chord_merge = math.floor(frame_us * chord_merge_max_frame_ratio)
+                eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, max(min_chord_merge_us, scaled_chord_merge)))
+            else:
+                # fps >= 60: keep original profile values
+                eff_hold_us = policy.hold_us
+                eff_min_hold_us = policy.min_hold_us
+                eff_input_lead_us = policy.input_lead_us
+                eff_release_gap_us = policy.release_gap_us
+                eff_repeat_release_gap_us = policy.repeat_release_gap_us
+                eff_chord_merge = policy.chord_merge_window_us
         else:
             frame_us = Microseconds(0)
             eff_hold_us = policy.hold_us

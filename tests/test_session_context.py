@@ -78,13 +78,13 @@ def test_metadata_uses_session_fps_for_schedule():
 def test_repeat_release_gap_scales_with_fps():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    assert policy.repeat_release_gap_us == 3_333
+    assert policy.repeat_release_gap_us == 16_667
 
 
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    assert policy.min_hold_us == 16_666
+    assert policy.min_hold_us == 20_000
 
 
 def test_frame_timing_config_overrides_ratios():
@@ -94,7 +94,7 @@ def test_frame_timing_config_overrides_ratios():
             min_hold_min_frame_ratio=0.25,
         )
     )
-    session = PlaybackSessionContext.balanced(fps=30)
+    session = PlaybackSessionContext(profile_name="local-precise", fps=30)
     policy = session.resolve_effective_policy(cfg)
     assert policy.hold_us == 66_666
     assert policy.min_hold_us == 12_000
