@@ -608,7 +608,8 @@ lower `hold_floor_us` and `min_hold_floor_us` values when FPS is known:
 
 | Profile class                         | hold/min floor | Why                                                        |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
-| balanced, local_precise, dense_safe   | 11000 us       | sharper local holds at high FPS while staying above 144 FPS frame visibility |
+| local_precise, dense_safe             | 11000 us       | sharper local/dense holds at high FPS while staying above 144 FPS frame visibility |
+| balanced                              | 14000 us       | default profile keeps extra high-FPS margin over local-precise |
 | high_fps_precise                      | 10000 us       | experimental sharp local profile, still gated to >100 FPS  |
 | audience_safe                         | unchanged      | online reliability depends on absolute remote survivability |
 

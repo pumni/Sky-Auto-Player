@@ -225,8 +225,10 @@ default) is byte-for-byte preserved. Exact-equality tests keep their current exp
 The representation refactor above did **not** change behaviour. A separate behaviour-changing
 tuning was then applied to make local holds sharper when FPS is known:
 
-- `balanced`, `local_precise`, and `dense_safe`: `hold_floor_us = 11000`,
+- `local_precise` and `dense_safe`: `hold_floor_us = 11000`,
   `min_hold_floor_us = 11000`.
+- `balanced`: `hold_floor_us = 14000`, `min_hold_floor_us = 14000` so the default profile
+  keeps extra high-FPS margin over local-precise.
 - `high_fps_precise`: `hold_floor_us = 10000`, `min_hold_floor_us = 10000`.
 - `audience_safe`: unchanged; online reliability remains governed by absolute floors.
 

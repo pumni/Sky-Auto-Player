@@ -107,7 +107,7 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
         ("dense-safe", 144, 11000, 11000, 18000),
         ("balanced", 30, 41667, 41667, 50000),
         ("balanced", 60, 20834, 20834, 25001),
-        ("balanced", 144, 11000, 11000, 18000),
+        ("balanced", 144, 14000, 14000, 18000),
         ("audience-safe", 30, 41667, 41667, 50000),
         ("audience-safe", 60, 34000, 25000, 33000),
         ("audience-safe", 144, 34000, 25000, 33000),
@@ -128,3 +128,15 @@ def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
     assert policy.frame_us == 0
     assert policy.hold_us == 26000
     assert policy.min_hold_us == 17000
+
+
+def test_high_fps_local_profiles_have_distinct_hold_intents():
+    cfg = AppConfig()
+    local = PlaybackSessionContext(profile_name="local-precise", fps=144).resolve_effective_policy(cfg)
+    balanced = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
+    dense = PlaybackSessionContext(profile_name="dense-safe", fps=144).resolve_effective_policy(cfg)
+    precise = PlaybackSessionContext(profile_name="high-fps-precise", fps=144).resolve_effective_policy(cfg)
+
+    assert precise.hold_us == 10000
+    assert local.hold_us == dense.hold_us == 11000
+    assert balanced.hold_us == 14000
