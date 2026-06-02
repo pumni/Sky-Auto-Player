@@ -603,6 +603,18 @@ physics caps same-key reliability identically for all of them at low/normal FPS,
 differentiate through `hold_floor_us`, `input_lead_us` and
 `chord_merge_window_us` instead.
 
+As a follow-up tuning after the frame/floor representation landed, local profiles now use
+lower `hold_floor_us` and `min_hold_floor_us` values when FPS is known:
+
+| Profile class                         | hold/min floor | Why                                                        |
+| ------------------------------------- | -------------- | ---------------------------------------------------------- |
+| balanced, local_precise, dense_safe   | 11000 us       | sharper local holds at high FPS while staying above 144 FPS frame visibility |
+| high_fps_precise                      | 10000 us       | experimental sharp local profile, still gated to >100 FPS  |
+| audience_safe                         | unchanged      | online reliability depends on absolute remote survivability |
+
+Built-ins keep conservative `*_unframed_us` fallback values so the no-FPS/experiment path
+does not silently inherit the sharper local floors.
+
 > Caveat: the audience values are extrapolated from LOCAL measurements plus the principles
 > in this document. They have not yet been validated in a populated online room; that
 > validation is the remaining open item for the audience profile.

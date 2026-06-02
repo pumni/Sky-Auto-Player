@@ -145,9 +145,8 @@ def test_from_cli_args_applies_hold_override():
 def test_static_safety_guard_fallback():
     session = PlaybackSessionContext(profile_name="high-fps-precise", fps=60)
     policy = session.resolve_effective_policy(AppConfig())
-    # Should fall back to local-precise timing parameters (min_hold lifted to the 60fps
-    # visibility floor: max(13000, ceil(16667*1.25)=20834) = 20834).
-    assert policy.hold_us == 22000
+    # Should fall back to local-precise timing parameters, now frame-relative at 60fps.
+    assert policy.hold_us == 20834
     assert policy.min_hold_us == 20834
     assert policy.chord_merge_window_us == 2500
 
@@ -163,8 +162,8 @@ def test_static_safety_guard_normalizes_hyphenated_high_fps_profile():
 def test_high_fps_precise_intact_at_120fps():
     session = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
     policy = session.resolve_effective_policy(AppConfig())
-    # Keeps base hold; min_hold uses the profile-local 1.0 frame margin.
-    assert policy.hold_us == 18000
+    # Uses a sharp frame-relative hold while keeping min_hold at the 10ms absolute wall.
+    assert policy.hold_us == 10417
     assert policy.min_hold_us == 10000
     assert policy.chord_merge_window_us == 2000
 

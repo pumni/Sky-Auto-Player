@@ -106,12 +106,15 @@ class TimingPolicy:
             value_key: str,
             frames_key: str,
             floor_key: str,
+            unframed_key: str,
             default_frames: float,
         ) -> tuple[Microseconds, float, Microseconds, Microseconds | None, bool]:
             base_value = int(base.get(floor_key, base.get(value_key, 0)))
+            base_unframed_value = int(base.get(unframed_key, base_value))
             has_frame_model = frames_key in p_dict or floor_key in p_dict
             floor = int_value(floor_key, base_value) if has_frame_model else int_value(value_key, base_value)
-            value = int_value(value_key, floor)
+            default_value = floor if has_frame_model else base_unframed_value
+            value = int_value(value_key, int_value(unframed_key, default_value))
             override = Microseconds(value) if has_frame_model and value_key in p_dict else None
             return Microseconds(value), float_value(frames_key, default_frames), Microseconds(floor), override, has_frame_model
 
@@ -119,18 +122,21 @@ class TimingPolicy:
             value_key="hold_us",
             frames_key="hold_frames",
             floor_key="hold_floor_us",
+            unframed_key="hold_unframed_us",
             default_frames=1.25,
         )
         min_hold_us, min_hold_frames, min_hold_floor_us, min_hold_override_us, min_hold_uses_frame_model = frame_coupled(
             value_key="min_hold_us",
             frames_key="min_hold_frames",
             floor_key="min_hold_floor_us",
+            unframed_key="min_hold_unframed_us",
             default_frames=1.25,
         )
         repeat_gap_us, repeat_gap_frames, repeat_gap_floor_us, repeat_gap_override_us, repeat_gap_uses_frame_model = frame_coupled(
             value_key="repeat_release_gap_us",
             frames_key="repeat_release_gap_frames",
             floor_key="repeat_release_gap_floor_us",
+            unframed_key="repeat_release_gap_unframed_us",
             default_frames=1.5,
         )
         

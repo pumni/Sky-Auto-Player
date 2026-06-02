@@ -67,13 +67,14 @@ def test_fps_none_keeps_raw_base_for_experiments():
     assert p.hold_us == 2000
 
 
-def test_builtin_bases_are_60fps_safe_when_frame_aware_disabled():
-    # Frame-model built-ins carry explicit absolute floors for their 60fps safety intent.
+def test_builtin_unframed_fallbacks_remain_60fps_safe():
+    # Local hold floors can be sharper with FPS set, but the no-FPS escape hatch keeps
+    # conservative raw values for existing CLI/config behavior.
     from sky_music.config import DEFAULT_TIMING_PROFILES
 
     for name in ("balanced", "local_precise", "dense_safe", "audience_safe"):
         prof = DEFAULT_TIMING_PROFILES[name]
-        assert prof["min_hold_floor_us"] >= 16667, name
+        assert prof.get("min_hold_unframed_us", prof["min_hold_floor_us"]) >= 16667, name
         assert prof["repeat_release_gap_floor_us"] >= 18000, name
 
 
@@ -99,24 +100,31 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
     ("profile", "fps", "hold", "min_hold", "repeat_gap"),
     [
         ("local-precise", 30, 41667, 41667, 50000),
-        ("local-precise", 60, 22000, 20834, 25001),
-        ("local-precise", 144, 22000, 17000, 18000),
+        ("local-precise", 60, 20834, 20834, 25001),
+        ("local-precise", 144, 11000, 11000, 18000),
         ("dense-safe", 30, 41667, 41667, 50000),
-        ("dense-safe", 60, 22000, 20834, 25001),
-        ("dense-safe", 144, 22000, 17000, 18000),
+        ("dense-safe", 60, 20834, 20834, 25001),
+        ("dense-safe", 144, 11000, 11000, 18000),
         ("balanced", 30, 41667, 41667, 50000),
-        ("balanced", 60, 26000, 20834, 25001),
-        ("balanced", 144, 26000, 17000, 18000),
+        ("balanced", 60, 20834, 20834, 25001),
+        ("balanced", 144, 11000, 11000, 18000),
         ("audience-safe", 30, 41667, 41667, 50000),
         ("audience-safe", 60, 34000, 25000, 33000),
         ("audience-safe", 144, 34000, 25000, 33000),
-        ("high-fps-precise", 144, 18000, 10000, 18000),
+        ("high-fps-precise", 144, 10000, 10000, 18000),
     ],
 )
-def test_builtin_frame_profile_materialisation_matches_existing_behavior(
+def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
     profile, fps, hold, min_hold, repeat_gap
 ):
     policy = PlaybackSessionContext(profile_name=profile, fps=fps).resolve_effective_policy(AppConfig())
     assert policy.hold_us == hold
     assert policy.min_hold_us == min_hold
     assert policy.repeat_release_gap_us == repeat_gap
+
+
+def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
+    policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())
+    assert policy.frame_us == 0
+    assert policy.hold_us == 26000
+    assert policy.min_hold_us == 17000

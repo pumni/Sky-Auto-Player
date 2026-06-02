@@ -220,20 +220,23 @@ default) is byte-for-byte preserved. Exact-equality tests keep their current exp
 5. **Proceed with §12**, with the §13 equivalence gate (built-in parity at 30/60/144,
    `audience_safe` especially) as a hard pre-merge acceptance criterion.
 
-## 16. Separated follow-up: frame-relative local holds (optional, needs validation)
+## 16. Follow-up tuning: sharper frame-relative local holds
 
-The refactor above does **not** change behaviour. A *separate, later* tuning it enables:
-lower the **local** profiles' `hold_floor_us` toward 0 so their holds become genuinely
-frame-relative and **sharper at high FPS** (today balanced holds 26 ms even at 144 FPS = 3.7
-frames; a frame-relative hold would be ~1.25–1.5 frames ≈ 11 ms). This is justified because
-hold is a *visibility* concern — Sky notes ring independently of hold duration (Exp2) — so a
-long fixed hold at high FPS is wasted key-occupancy that lowers the max note rate for no
-audible gain.
+The representation refactor above did **not** change behaviour. A separate behaviour-changing
+tuning was then applied to make local holds sharper when FPS is known:
 
-It is kept out of this refactor because (a) it is a behaviour change that should be validated
-in-game, and (b) it must avoid the low-FPS inversion (a local profile's frame term must not
-exceed `audience_safe`'s effective hold). Do it only after the representation lands and with
-its own measurements; `audience_safe`'s absolute floors must remain untouched (online).
+- `balanced`, `local_precise`, and `dense_safe`: `hold_floor_us = 11000`,
+  `min_hold_floor_us = 11000`.
+- `high_fps_precise`: `hold_floor_us = 10000`, `min_hold_floor_us = 10000`.
+- `audience_safe`: unchanged; online reliability remains governed by absolute floors.
+
+This makes high-FPS local playback closer to the measured visibility model. At 144 FPS,
+local holds now materialise to about 11 ms instead of 17–26 ms, while 30 FPS still materialises
+to the same 41.667 ms frame floor as `audience_safe`, avoiding low-FPS inversion.
+
+The floors were not lowered all the way to 0 because the existing no-FPS/experiment path still
+needs conservative raw timings. Built-ins therefore carry `*_unframed_us` fallback values for
+that path; FPS-aware playback uses `*_frames` + `*_floor_us`.
 
 ## 17. Appendix — equivalence verification (runnable gate)
 

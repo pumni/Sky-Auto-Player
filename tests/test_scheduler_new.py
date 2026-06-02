@@ -298,7 +298,7 @@ def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     p = FrameTimingPolicy.from_profile_name("balanced", fps=60)
     assert p.fps == 60
-    assert p.hold_us == 26000
+    assert p.hold_us == 20834
 
 def test_playback_overrides_dataclass():
     from main import PlaybackOverrides
