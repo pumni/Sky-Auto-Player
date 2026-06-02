@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Literal
 from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
 
@@ -187,6 +188,62 @@ def validate_key_actions(
     return tuple(violations)
 
 
+def _has_frame_model(profile: dict, stem: str) -> bool:
+    return f"{stem}_frames" in profile or f"{stem}_floor_us" in profile
+
+
+def _frame_coupled_us(
+    profile: dict,
+    *,
+    stem: str,
+    legacy_key: str,
+    default_frames: float,
+    fps: int,
+) -> int:
+    if legacy_key in profile and _has_frame_model(profile, stem):
+        return int(profile[legacy_key])
+    if _has_frame_model(profile, stem):
+        frame_us = round(1_000_000 / fps)
+        frames = float(profile.get(f"{stem}_frames", default_frames))
+        floor = int(profile.get(f"{stem}_floor_us", profile.get(legacy_key, 0)))
+        return max(math.ceil(frames * frame_us), floor)
+    return int(profile[legacy_key])
+
+
+def _hold_us(profile: dict, *, fps: int = 60) -> int | None:
+    if "hold_us" not in profile and not _has_frame_model(profile, "hold"):
+        return None
+    return _frame_coupled_us(
+        profile,
+        stem="hold",
+        legacy_key="hold_us",
+        default_frames=1.25,
+        fps=fps,
+    )
+
+
+def _min_hold_us(profile: dict, *, fps: int = 60) -> int | None:
+    if "min_hold_us" not in profile and not _has_frame_model(profile, "min_hold"):
+        return None
+    return _frame_coupled_us(
+        profile,
+        stem="min_hold",
+        legacy_key="min_hold_us",
+        default_frames=1.25,
+        fps=fps,
+    )
+
+
+def _repeat_gap_us(profile: dict, *, fps: int = 60) -> int:
+    return _frame_coupled_us(
+        profile,
+        stem="repeat_release_gap",
+        legacy_key="repeat_release_gap_us",
+        default_frames=1.5,
+        fps=fps,
+    )
+
+
 def validate_hold_ordering(profile: dict[str, int]) -> None:
     """Single source of truth for the hold-duration ordering invariant.
 
@@ -197,8 +254,8 @@ def validate_hold_ordering(profile: dict[str, int]) -> None:
     its own floor (e.g. ``hold_us: 1``). The absolute lower bound for any scheduled hold
     is the module constant ``ABSOLUTE_MIN_HOLD_US`` (no longer a per-profile field).
     """
-    min_hold = profile.get("min_hold_us")
-    hold = profile.get("hold_us")
+    min_hold = _min_hold_us(profile)
+    hold = _hold_us(profile)
 
     if min_hold is not None and min_hold <= 0:
         raise ValueError("min_hold_us must be > 0")
@@ -213,7 +270,37 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
 
     validate_hold_ordering(profile)
 
-    cycle_us = profile["min_hold_us"] + profile["repeat_release_gap_us"]
+    hold_frames = profile.get("hold_frames")
+    min_hold_frames = profile.get("min_hold_frames")
+    if hold_frames is not None and float(hold_frames) <= 0:
+        raise ValueError("hold_frames must be > 0")
+    if min_hold_frames is not None:
+        if float(min_hold_frames) < 1.0:
+            raise ValueError("min_hold_frames must be >= 1.0")
+        if hold_frames is not None and float(min_hold_frames) > float(hold_frames):
+            raise ValueError("min_hold_frames must be <= hold_frames")
+
+    hold_floor = profile.get("hold_floor_us")
+    min_hold_floor = profile.get("min_hold_floor_us")
+    if hold_floor is not None and int(hold_floor) < 0:
+        raise ValueError("hold_floor_us must be >= 0")
+    if min_hold_floor is not None and int(min_hold_floor) < 0:
+        raise ValueError("min_hold_floor_us must be >= 0")
+    if hold_floor is not None and min_hold_floor is not None and int(min_hold_floor) > int(hold_floor):
+        raise ValueError("min_hold_floor_us must be <= hold_floor_us")
+
+    repeat_frames = profile.get("repeat_release_gap_frames")
+    repeat_floor = profile.get("repeat_release_gap_floor_us")
+    if repeat_frames is not None and float(repeat_frames) <= 0:
+        raise ValueError("repeat_release_gap_frames must be > 0")
+    if repeat_floor is not None and int(repeat_floor) < 0:
+        raise ValueError("repeat_release_gap_floor_us must be >= 0")
+
+    min_hold_us = _min_hold_us(profile, fps=fps)
+    if min_hold_us is None:
+        raise ValueError("min_hold_us must be present")
+    repeat_release_gap_us = _repeat_gap_us(profile, fps=fps)
+    cycle_us = min_hold_us + repeat_release_gap_us
 
     if cycle_us <= frame_us:
         raise ValueError(
@@ -225,10 +312,10 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
             f"60 FPS profile has too little margin: {cycle_us:.0f}us < 18000us"
         )
 
-    if profile["min_hold_us"] < 10_000:
+    if min_hold_us < 10_000:
         raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
 
-    if profile["repeat_release_gap_us"] < 6_000:
+    if repeat_release_gap_us < 6_000:
         raise ValueError(
             "repeat_release_gap_us below 6000us is not allowed for built-ins"
         )
@@ -241,17 +328,30 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
 
 
 def validate_audience_safe_profile(profile: dict[str, int]) -> None:
-    cycle_us = profile["min_hold_us"] + profile["repeat_release_gap_us"]
+    hold_floor_us = int(profile.get("hold_floor_us", profile.get("hold_us", 0)))
+    min_hold_floor_us = int(profile.get("min_hold_floor_us", profile.get("min_hold_us", 0)))
+    repeat_gap_floor_us = int(
+        profile.get("repeat_release_gap_floor_us", profile.get("repeat_release_gap_us", 0))
+    )
+    effective_hold_floor_us = int(profile.get("hold_us", hold_floor_us))
+    effective_min_hold_floor_us = int(profile.get("min_hold_us", min_hold_floor_us))
+    effective_repeat_gap_floor_us = int(
+        profile.get("repeat_release_gap_us", repeat_gap_floor_us)
+    )
+    cycle_us = min_hold_floor_us + repeat_gap_floor_us
 
     if cycle_us < 28_000:
         raise ValueError("audience-safe profile should have cycle_us >= 28000us")
 
-    if profile["min_hold_us"] < 17_000:
+    if min(hold_floor_us, effective_hold_floor_us) < 28_000:
+        raise ValueError("audience-safe profile requires hold_floor_us >= 28000us")
+
+    if min(min_hold_floor_us, effective_min_hold_floor_us) < 17_000:
         raise ValueError("audience-safe profile requires min_hold_us >= 17000us")
 
-    if profile["repeat_release_gap_us"] < 12_000:
+    if min(repeat_gap_floor_us, effective_repeat_gap_floor_us) < 28_000:
         raise ValueError(
-            "audience-safe profile requires repeat_release_gap_us >= 12000us"
+            "audience-safe profile requires repeat_release_gap_us >= 28000us"
         )
 
     if profile["input_lead_us"] < 10_000:

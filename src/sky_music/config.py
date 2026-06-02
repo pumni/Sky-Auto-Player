@@ -99,20 +99,26 @@ class FrameTimingDefaults:
 # ==============================================================================
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
-        "hold_us": 22000,
-        "min_hold_us": 17000,
+        "hold_frames": 1.25,
+        "hold_floor_us": 22000,
+        "min_hold_frames": 1.25,
+        "min_hold_floor_us": 17000,
         "release_gap_us": 3500,
-        "repeat_release_gap_us": 18000,
+        "repeat_release_gap_frames": 1.5,
+        "repeat_release_gap_floor_us": 18000,
         "input_lead_us": 4000,
         "chord_merge_window_us": 2500,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
     },
     "balanced": {
-        "hold_us": 26000,
-        "min_hold_us": 17000,
+        "hold_frames": 1.25,
+        "hold_floor_us": 26000,
+        "min_hold_frames": 1.25,
+        "min_hold_floor_us": 17000,
         "release_gap_us": 4000,
-        "repeat_release_gap_us": 18000,
+        "repeat_release_gap_frames": 1.5,
+        "repeat_release_gap_floor_us": 18000,
         "input_lead_us": 6000,
         "chord_merge_window_us": 3000,
         "spin_threshold_us": 500,
@@ -125,30 +131,39 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         # See docs/timing-principles.md Appendix A.9. These online targets are extrapolated
         # from LOCAL measurements + the document's principles and should be validated in a
         # populated online room.
-        "hold_us": 34000,             # ~2.0 frame @60fps (large visible hold)
-        "min_hold_us": 25000,         # 1.5 frame: compressed notes survive multi-frame online
+        "hold_frames": 1.25,
+        "hold_floor_us": 34000,       # ~2.0 frame @60fps (large visible hold)
+        "min_hold_frames": 1.25,
+        "min_hold_floor_us": 25000,   # 1.5 frame: compressed notes survive multi-frame online
         "release_gap_us": 9000,
-        "repeat_release_gap_us": 33000,  # ~2.0 frame: above the 1.5-frame local floor (25001@60)
+        "repeat_release_gap_frames": 1.5,
+        "repeat_release_gap_floor_us": 33000,  # ~2.0 frame: above the 1.5-frame local floor (25001@60)
         "input_lead_us": 14500,
         "chord_merge_window_us": 6500,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
     },
     "dense_safe": {
-        "hold_us": 22000,
-        "min_hold_us": 17000,
+        "hold_frames": 1.25,
+        "hold_floor_us": 22000,
+        "min_hold_frames": 1.25,
+        "min_hold_floor_us": 17000,
         "release_gap_us": 5000,
-        "repeat_release_gap_us": 18000,
+        "repeat_release_gap_frames": 1.5,
+        "repeat_release_gap_floor_us": 18000,
         "input_lead_us": 7000,
         "chord_merge_window_us": 4000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
     "high_fps_precise": {
-        "hold_us": 18000,
-        "min_hold_us": 10000,
+        "hold_frames": 1.25,
+        "hold_floor_us": 18000,
+        "min_hold_frames": 1.0,
+        "min_hold_floor_us": 10000,
         "release_gap_us": 3000,
-        "repeat_release_gap_us": 6500,
+        "repeat_release_gap_frames": 1.5,
+        "repeat_release_gap_floor_us": 18000,
         "input_lead_us": 3000,
         "chord_merge_window_us": 2000,
         "spin_threshold_us": 500,
@@ -234,7 +249,13 @@ def display_profile_name(base: str, fps: int | None = None) -> str:
 
 def merged_timing_profiles(cfg: AppConfig) -> dict[str, dict[str, Any]]:
     """Built-in profiles with user overrides from config.json."""
-    return {**DEFAULT_TIMING_PROFILES, **cfg.timing_profiles}
+    merged = {name: dict(profile) for name, profile in DEFAULT_TIMING_PROFILES.items()}
+    for raw_name, override in cfg.timing_profiles.items():
+        name = normalize_profile_name(str(raw_name))
+        base = dict(merged.get(name, {}))
+        base.update(override)
+        merged[name] = base
+    return merged
 
 
 def profile_dict_for(cfg: AppConfig, profile_name: str) -> dict[str, Any]:
@@ -309,8 +330,7 @@ def persist_calibration_defaults(
         raise ValueError("tempo_scale must be > 0")
     canonical = canonical_profile_name(profile_name)
     profile_key = normalize_profile_name(canonical)
-    base_profile = dict(DEFAULT_TIMING_PROFILES.get(profile_key, DEFAULT_TIMING_PROFILES["balanced"]))
-    base_profile.update(cfg.timing_profiles.get(profile_key, {}))
+    base_profile = dict(profile_dict_for(cfg, profile_key))
     base_profile["input_lead_us"] = int(input_lead_us)
 
     cfg.default_timing_profile = canonical

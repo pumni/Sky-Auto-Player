@@ -98,9 +98,10 @@ def test_frame_timing_config_overrides_ratios():
     )
     session = PlaybackSessionContext(profile_name="local-precise", fps=30)
     policy = session.resolve_effective_policy(cfg)
-    assert policy.hold_us == 66_666
-    # local-precise base min_hold (17000) dominates the lowered 0.25 ratio floor (8334).
-    assert policy.min_hold_us == 17_000
+    # Built-in frame-model profiles declare their own frame margins; global frame_timing
+    # ratios are retained only for legacy _us-only policies.
+    assert policy.hold_us == 41_667
+    assert policy.min_hold_us == 41_667
 
 
 def test_apply_recommendation_to_context_updates_session():
@@ -162,10 +163,9 @@ def test_static_safety_guard_normalizes_hyphenated_high_fps_profile():
 def test_high_fps_precise_intact_at_120fps():
     session = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
     policy = session.resolve_effective_policy(AppConfig())
-    # Keeps base hold; min_hold lifted to the 120fps visibility floor
-    # (max(10000, ceil(8333*1.25)=10417) = 10417).
+    # Keeps base hold; min_hold uses the profile-local 1.0 frame margin.
     assert policy.hold_us == 18000
-    assert policy.min_hold_us == 10417
+    assert policy.min_hold_us == 10000
     assert policy.chord_merge_window_us == 2000
 
 

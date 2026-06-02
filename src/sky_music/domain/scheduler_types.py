@@ -77,25 +77,88 @@ class TimingPolicy:
     focus_restore_grace_us: Microseconds = Microseconds(100_000) # Default is overridden in from_dict
 
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
+    hold_frames: float = 1.25
+    hold_floor_us: Microseconds | None = None
+    min_hold_frames: float = 1.25
+    min_hold_floor_us: Microseconds | None = None
+    repeat_release_gap_frames: float = 1.5
+    repeat_release_gap_floor_us: Microseconds | None = None
+    hold_override_us: Microseconds | None = None
+    min_hold_override_us: Microseconds | None = None
+    repeat_release_gap_override_us: Microseconds | None = None
+    hold_uses_frame_model: bool = False
+    min_hold_uses_frame_model: bool = False
+    repeat_release_gap_uses_frame_model: bool = False
 
     @classmethod
     def from_dict(cls, p_dict: dict, **kwargs) -> "TimingPolicy":
         from sky_music.config import DEFAULT_TIMING_PROFILES
         base = DEFAULT_TIMING_PROFILES["balanced"]
+
+        def int_value(key: str, default: int) -> int:
+            return int(p_dict.get(key, default))
+
+        def float_value(key: str, default: float) -> float:
+            return float(p_dict.get(key, default))
+
+        def frame_coupled(
+            *,
+            value_key: str,
+            frames_key: str,
+            floor_key: str,
+            default_frames: float,
+        ) -> tuple[Microseconds, float, Microseconds, Microseconds | None, bool]:
+            base_value = int(base.get(floor_key, base.get(value_key, 0)))
+            has_frame_model = frames_key in p_dict or floor_key in p_dict
+            floor = int_value(floor_key, base_value) if has_frame_model else int_value(value_key, base_value)
+            value = int_value(value_key, floor)
+            override = Microseconds(value) if has_frame_model and value_key in p_dict else None
+            return Microseconds(value), float_value(frames_key, default_frames), Microseconds(floor), override, has_frame_model
+
+        hold_us, hold_frames, hold_floor_us, hold_override_us, hold_uses_frame_model = frame_coupled(
+            value_key="hold_us",
+            frames_key="hold_frames",
+            floor_key="hold_floor_us",
+            default_frames=1.25,
+        )
+        min_hold_us, min_hold_frames, min_hold_floor_us, min_hold_override_us, min_hold_uses_frame_model = frame_coupled(
+            value_key="min_hold_us",
+            frames_key="min_hold_frames",
+            floor_key="min_hold_floor_us",
+            default_frames=1.25,
+        )
+        repeat_gap_us, repeat_gap_frames, repeat_gap_floor_us, repeat_gap_override_us, repeat_gap_uses_frame_model = frame_coupled(
+            value_key="repeat_release_gap_us",
+            frames_key="repeat_release_gap_frames",
+            floor_key="repeat_release_gap_floor_us",
+            default_frames=1.5,
+        )
         
         return cls(
-            hold_us=Microseconds(p_dict.get("hold_us", base["hold_us"])),
-            min_hold_us=Microseconds(p_dict.get("min_hold_us", base["min_hold_us"])),
-            release_gap_us=Microseconds(p_dict.get("release_gap_us", base["release_gap_us"])),
-            repeat_release_gap_us=Microseconds(p_dict.get("repeat_release_gap_us", base["repeat_release_gap_us"])),
-            input_lead_us=Microseconds(p_dict.get("input_lead_us", base["input_lead_us"])),
-            chord_merge_window_us=Microseconds(p_dict.get("chord_merge_window_us", base["chord_merge_window_us"])),
-            focus_restore_grace_us=Microseconds(p_dict.get("focus_restore_grace_us", base["focus_restore_grace_us"])),
+            hold_us=hold_us,
+            min_hold_us=min_hold_us,
+            release_gap_us=Microseconds(int_value("release_gap_us", int(base["release_gap_us"]))),
+            repeat_release_gap_us=repeat_gap_us,
+            input_lead_us=Microseconds(int_value("input_lead_us", int(base["input_lead_us"]))),
+            chord_merge_window_us=Microseconds(int_value("chord_merge_window_us", int(base["chord_merge_window_us"]))),
+            focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
                 if p_dict.get("same_key_conflict_policy", "degraded") in ("degraded", "strict")
                 else "degraded"
             ),
+            hold_frames=hold_frames,
+            hold_floor_us=hold_floor_us,
+            min_hold_frames=min_hold_frames,
+            min_hold_floor_us=min_hold_floor_us,
+            repeat_release_gap_frames=repeat_gap_frames,
+            repeat_release_gap_floor_us=repeat_gap_floor_us,
+            hold_override_us=hold_override_us,
+            min_hold_override_us=min_hold_override_us,
+            repeat_release_gap_override_us=repeat_gap_override_us,
+            hold_uses_frame_model=hold_uses_frame_model,
+            min_hold_uses_frame_model=min_hold_uses_frame_model,
+            repeat_release_gap_uses_frame_model=repeat_gap_uses_frame_model,
             **kwargs
         )
 
@@ -145,6 +208,10 @@ class FrameTimingPolicy:
     base_input_lead_us: int | None = None
     phase_compensated: bool = False
 
+    @staticmethod
+    def materialise_frame_floor(frames: float, floor_us: int, frame_us: int) -> Microseconds:
+        return Microseconds(max(math.ceil(frames * frame_us), floor_us))
+
     @classmethod
     def from_timing_policy(
         cls,
@@ -165,22 +232,41 @@ class FrameTimingPolicy:
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
             frame_us = Microseconds(round(1_000_000 / fps))
+            hold_frames = policy.hold_frames if policy.hold_uses_frame_model else min_visible_hold_frames
+            min_hold_frames = (
+                policy.min_hold_frames
+                if policy.min_hold_uses_frame_model
+                else min_hold_min_frame_ratio
+            )
+            repeat_gap_frames = (
+                policy.repeat_release_gap_frames
+                if policy.repeat_release_gap_uses_frame_model
+                else repeat_release_gap_min_frame_ratio
+            )
+            repeat_gap_floor_us = (
+                int(policy.repeat_release_gap_floor_us)
+                if policy.repeat_release_gap_uses_frame_model and policy.repeat_release_gap_floor_us is not None
+                else max(int(policy.repeat_release_gap_us), repeat_release_gap_floor_us)
+            )
+            eff_hold_us = cls.materialise_frame_floor(
+                hold_frames,
+                int(policy.hold_floor_us if policy.hold_floor_us is not None else policy.hold_us),
+                int(frame_us),
+            )
+            eff_min_hold_us = cls.materialise_frame_floor(
+                min_hold_frames,
+                int(policy.min_hold_floor_us if policy.min_hold_floor_us is not None else policy.min_hold_us),
+                int(frame_us),
+            )
+            eff_repeat_release_gap_us = cls.materialise_frame_floor(
+                repeat_gap_frames,
+                repeat_gap_floor_us,
+                int(frame_us),
+            )
+
             if fps < 60:
-                # low-fps upscale only
-                eff_hold_us = Microseconds(max(policy.hold_us, math.ceil(frame_us * min_visible_hold_frames)))
-                eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.ceil(frame_us * min_hold_min_frame_ratio)))
                 eff_input_lead_us = Microseconds(max(policy.input_lead_us, math.ceil(frame_us * input_lead_min_frame_ratio)))
                 eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.ceil(frame_us * release_gap_min_frame_ratio)))
-                # Empirical same-key release floor (Exp2): reliable repeats need a gap of
-                # max(~1.5 frame, ~17ms fixed). The fixed floor dominates at high FPS where
-                # one frame is tiny; the frame term dominates at low FPS.
-                eff_repeat_release_gap_us = Microseconds(
-                    max(
-                        policy.repeat_release_gap_us,
-                        math.ceil(frame_us * repeat_release_gap_min_frame_ratio),
-                        repeat_release_gap_floor_us,
-                    )
-                )
 
                 # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin).
                 # Now largely superseded by the repeat-gap floor above (which alone keeps the
@@ -198,13 +284,6 @@ class FrameTimingPolicy:
                 scaled_chord_merge = math.floor(frame_us * chord_merge_max_frame_ratio)
                 eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, max(min_chord_merge_us, scaled_chord_merge)))
             else:
-                # fps >= 60: keep base safety durations, but still apply the visibility
-                # floor (Exp1: every key-down needs >= 1 frame). At >=60 the base values
-                # usually dominate, but flooring here keeps the model uniform across all FPS
-                # and protects low custom holds at exactly 60 FPS.
-                eff_hold_us = Microseconds(max(policy.hold_us, math.ceil(frame_us * min_visible_hold_frames)))
-                eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.ceil(frame_us * min_hold_min_frame_ratio)))
-
                 # Phase offset high-fps compensation for audience_safe
                 if phase_compensate_input_lead and is_audience_safe_profile_name(profile_name) and fps > 75:
                     eff_input_lead_us = Microseconds(
@@ -220,17 +299,14 @@ class FrameTimingPolicy:
                     eff_input_lead_us = policy.input_lead_us
                     
                 eff_release_gap_us = policy.release_gap_us
-                # Apply the same empirical same-key release floor at >=60 FPS. The fixed
-                # ~17ms floor (Exp2) is a hard physical limit independent of render FPS, so
-                # high-FPS profiles must respect it rather than keeping a smaller base gap.
-                eff_repeat_release_gap_us = Microseconds(
-                    max(
-                        policy.repeat_release_gap_us,
-                        math.ceil(frame_us * repeat_release_gap_min_frame_ratio),
-                        repeat_release_gap_floor_us,
-                    )
-                )
                 eff_chord_merge = policy.chord_merge_window_us
+
+            if policy.hold_override_us is not None:
+                eff_hold_us = policy.hold_override_us
+            if policy.min_hold_override_us is not None:
+                eff_min_hold_us = policy.min_hold_override_us
+            if policy.repeat_release_gap_override_us is not None:
+                eff_repeat_release_gap_us = policy.repeat_release_gap_override_us
         else:
             frame_us = Microseconds(0)
             eff_hold_us = policy.hold_us

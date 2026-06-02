@@ -158,11 +158,13 @@ class PlaybackSessionContext:
         from sky_music.domain.validation import validate_builtin_timing_profile
         profile_fields = {
             "hold_us", "min_hold_us", "release_gap_us",
-            "repeat_release_gap_us", "input_lead_us", "chord_merge_window_us"
+            "repeat_release_gap_us", "input_lead_us", "chord_merge_window_us",
+            "hold_frames", "hold_floor_us", "min_hold_frames", "min_hold_floor_us",
+            "repeat_release_gap_frames", "repeat_release_gap_floor_us",
         }
         validate_builtin_timing_profile(
             self.profile_name,
-            {k: int(v) for k, v in p_dict.items() if k in profile_fields},
+            {k: v for k, v in p_dict.items() if k in profile_fields},
             selected_fps=self.fps if self.fps is not None else 60,
         )
 

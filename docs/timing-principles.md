@@ -30,10 +30,16 @@ All timing values are expressed in microseconds.
 
 | Term                  | Meaning                                                                                               |
 | --------------------- | ----------------------------------------------------------------------------------------------------- |
-| hold_us               | Preferred key-down duration for a normal note before compression.                                     |
-| min_hold_us           | Minimum allowed key-down duration after compression. This is the visible down-state floor.            |
+| hold_us               | Effective key-down duration for a normal note after profile materialisation and overrides.            |
+| hold_frames           | Local frame-visibility margin for normal holds.                                                       |
+| hold_floor_us         | Absolute lower wall/target for normal holds.                                                          |
+| min_hold_us           | Effective minimum key-down duration after compression.                                                |
+| min_hold_frames       | Local frame-visibility margin for compressed holds.                                                   |
+| min_hold_floor_us     | Absolute lower wall/target for compressed holds.                                                      |
 | release_gap_us        | Minimum gap after a key is released before general scheduling continues.                              |
-| repeat_release_gap_us | Minimum up-time before pressing the same key again. This is the critical same-key repeat gap.         |
+| repeat_release_gap_us | Effective up-time before pressing the same key again. This is the critical same-key repeat gap.       |
+| repeat_release_gap_frames | Local frame margin for same-key repeat up-time.                                                  |
+| repeat_release_gap_floor_us | Absolute lower wall/target for same-key repeat up-time.                                      |
 | input_lead_us         | How early input is sent relative to the musical timestamp.                                            |
 | chord_merge_window_us | Window used to snap nearby notes into the same chord.                                                 |
 | cycle_us              | min_hold_us plus repeat_release_gap_us. This is the critical same-key repeat cycle.                   |
@@ -298,21 +304,29 @@ Online mode should not silently use a local-only profile when the user expects o
 
 ## 14. Principle 10 — Frame-Aware Scaling Should Raise Safety, Not Hide Risk
 
-Frame-aware scaling adapts timing floors to the configured game FPS.
+Frame-aware materialisation adapts local visibility margins to the configured game FPS.
+For frame-coupled parameters, profiles declare both pieces together:
+
+```
+effective_us = max(ceil(frames * frame_us), floor_us)
+```
+
+The frame term protects local frame-boundary sampling. The floor term preserves absolute
+timing intent such as the same-key wall and online survivability margins.
 
 It should be used to improve stability, not to hide unsafe profile design.
 
 Important rules:
 
 1. If game_fps is 0 or unknown, frame-aware scaling is disabled.
-2. Frame-aware scaling may raise safety floors when needed.
-3. Scaled timing values should not be persisted as profile defaults.
+2. Built-in profiles should declare frame-coupled timing as `*_frames` plus `*_floor_us`.
+3. Absolute `_us` values are overrides for CLI, calibration, legacy profiles, and targeted experiments.
 4. Persist the base profile, calibrated FPS, tempo scale, and calibration values separately.
 5. A blocked or experimental profile should not become selectable only because scaling exists.
 6. Higher FPS may reduce frame boundary delay, but it does not automatically make all short hold or release values safe.
 7. Safety durations should not be reduced just because FPS is higher unless that behavior has been validated in gameplay.
 
-Frame-aware scaling should protect users from unstable timing, not encourage fragile timing.
+Frame-aware materialisation should protect users from unstable timing, not encourage fragile timing.
 
 ---
 
@@ -551,35 +565,42 @@ licence for arbitrarily fast repeated notes.
   ~46 ms reliable gap there.
 - Onset counts are noisy (±1–2); thresholds above are read as trends, not exact values.
 
-### A.9 Profile differentiation lives ABOVE the floors
+### A.9 Profile differentiation lives in explicit floors and frame margins
 
-A direct consequence of the frame-aware floors (A.3, A.4): when `game_fps` is set, the
-floors **dominate** the base `min_hold_us` and `repeat_release_gap_us`. At 60 FPS every
-profile is floored to at least `min_hold = 20834` and `repeat_gap = 25001`. Therefore a
-base value at or below those floors does **not** differentiate a profile — it is simply
-replaced by the floor.
+A direct consequence of the measured floors (A.3, A.4): frame-coupled profile values are
+materialised as the larger of a local frame term and an absolute floor:
+
+```
+effective_us = max(ceil(frames * frame_us), floor_us)
+```
+
+At 60 FPS the shared local margins materialise to at least `min_hold = 20834` and
+`repeat_gap = 25001`. Therefore a profile whose absolute floor is at or below those values
+does not differentiate that parameter at 60 FPS; the frame term wins.
 
 For a profile to be genuinely *more conservative* than the local minimum (which is the
-entire purpose of `audience_safe`), its base `min_hold`/`repeat_gap` must be set **above**
-the local floors. Otherwise it silently collapses to the same timing as `balanced`.
+entire purpose of `audience_safe`), its `min_hold_floor_us`/`repeat_release_gap_floor_us`
+must be set **above** the local materialised values. Otherwise it intentionally converges
+with the local profiles for that parameter.
 
 `audience_safe` is therefore tuned with this in mind (it is intended to become the default
 profile):
 
-| Value                 | audience_safe | In frames @60 | Rationale                                              |
-| --------------------- | ------------- | ------------- | ------------------------------------------------------ |
-| hold_us               | 34000         | ~2.0          | large visible hold for remote capture                  |
-| min_hold_us           | 25000         | 1.5           | compressed notes survive multiple frames online        |
-| repeat_release_gap_us | 33000         | ~2.0          | above the 1.5-frame local floor → real online margin   |
+| Value                       | audience_safe | In frames @60 | Rationale                                              |
+| --------------------------- | ------------- | ------------- | ------------------------------------------------------ |
+| hold_floor_us               | 34000         | ~2.0          | large visible hold for remote capture                  |
+| min_hold_floor_us           | 25000         | 1.5           | compressed notes survive multiple frames online        |
+| repeat_release_gap_floor_us | 33000         | ~2.0          | above the 1.5-frame local floor -> real online margin  |
 
 This gives a same-key cycle of ~58 ms (~3.5 frames at 60 FPS), versus the local minimum
 of ~2.75 frames. Because online reliability depends on absolute time (network jitter,
-replication, remote frame sampling) rather than the local frame, `repeat_release_gap_us`
-is held as a fixed ~33 ms regardless of the local FPS.
+replication, remote frame sampling) rather than the local frame,
+`repeat_release_gap_floor_us` is held as a fixed ~33 ms regardless of the local FPS.
 
 The local profiles (`balanced`, `local_precise`, `dense_safe`) intentionally leave
-`min_hold`/`repeat_gap` at or below the floors — physics caps same-key reliability
-identically for all of them, so they differentiate through `hold_us`, `input_lead_us` and
+`min_hold_floor_us`/`repeat_release_gap_floor_us` at or below the shared local floors;
+physics caps same-key reliability identically for all of them at low/normal FPS, so they
+differentiate through `hold_floor_us`, `input_lead_us` and
 `chord_merge_window_us` instead.
 
 > Caveat: the audience values are extrapolated from LOCAL measurements plus the principles

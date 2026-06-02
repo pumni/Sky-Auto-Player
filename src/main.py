@@ -349,12 +349,16 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
     cfg = cfg or load_config()
     profiles = merged_timing_profiles(cfg)
 
+    def frame_coupled_ms(data: dict, *, value_key: str, floor_key: str) -> str:
+        value = data.get(value_key, data.get(floor_key, 0))
+        return f"{int(value) // 1000}"
+
     COLS = [
         ("Profile",              lambda n, d: n),
-        ("hold_ms",              lambda n, d: f"{d.get('hold_us', 0) // 1000}"),
-        ("min_hold_ms",          lambda n, d: f"{d.get('min_hold_us', 0) // 1000}"),
+        ("hold_ms",              lambda n, d: frame_coupled_ms(d, value_key="hold_us", floor_key="hold_floor_us")),
+        ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", floor_key="min_hold_floor_us")),
         ("release_gap_ms",       lambda n, d: f"{d.get('release_gap_us', 0) // 1000}"),
-        ("repeat_gap_ms",        lambda n, d: f"{d.get('repeat_release_gap_us', 0) // 1000}"),
+        ("repeat_gap_ms",        lambda n, d: frame_coupled_ms(d, value_key="repeat_release_gap_us", floor_key="repeat_release_gap_floor_us")),
         ("input_lead_ms",        lambda n, d: f"{d.get('input_lead_us', 0) // 1000}"),
         ("chord_merge_ms",       lambda n, d: f"{d.get('chord_merge_window_us', 0) // 1000}"),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),

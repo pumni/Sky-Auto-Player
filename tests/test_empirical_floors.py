@@ -68,16 +68,16 @@ def test_fps_none_keeps_raw_base_for_experiments():
 
 
 def test_builtin_bases_are_60fps_safe_when_frame_aware_disabled():
-    # docs Non-Negotiable Rule 6: a 60fps-general profile must stay safe with scaling off.
+    # Frame-model built-ins carry explicit absolute floors for their 60fps safety intent.
     from sky_music.config import DEFAULT_TIMING_PROFILES
 
     for name in ("balanced", "local_precise", "dense_safe", "audience_safe"):
         prof = DEFAULT_TIMING_PROFILES[name]
-        assert prof["min_hold_us"] >= 16667, name      # >= one 60fps frame
-        assert prof["repeat_release_gap_us"] >= 18000, name
+        assert prof["min_hold_floor_us"] >= 16667, name
+        assert prof["repeat_release_gap_floor_us"] >= 18000, name
 
 
-def test_repeat_release_gap_floor_config_roundtrips(tmp_path, monkeypatch):
+def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         '{"frame_timing": {"repeat_release_gap_floor_us": 20000}}', encoding="utf-8"
@@ -87,9 +87,36 @@ def test_repeat_release_gap_floor_config_roundtrips(tmp_path, monkeypatch):
     try:
         cfg = load_config(force_reload=True)
         assert cfg.frame_timing.repeat_release_gap_floor_us == 20000
-        # The configured floor must flow all the way through resolve_effective_policy.
         p = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
-        # 144fps: 1.5*frame = 10416 < configured 20000 -> the configured fixed floor wins.
-        assert p.repeat_release_gap_us == 20000
+        # Built-in profiles declare their own frame/floor repeat gap; global frame_timing is
+        # retained only as fallback for legacy _us-only policies.
+        assert p.repeat_release_gap_us == 18000
     finally:
         clear_config_cache()
+
+
+@pytest.mark.parametrize(
+    ("profile", "fps", "hold", "min_hold", "repeat_gap"),
+    [
+        ("local-precise", 30, 41667, 41667, 50000),
+        ("local-precise", 60, 22000, 20834, 25001),
+        ("local-precise", 144, 22000, 17000, 18000),
+        ("dense-safe", 30, 41667, 41667, 50000),
+        ("dense-safe", 60, 22000, 20834, 25001),
+        ("dense-safe", 144, 22000, 17000, 18000),
+        ("balanced", 30, 41667, 41667, 50000),
+        ("balanced", 60, 26000, 20834, 25001),
+        ("balanced", 144, 26000, 17000, 18000),
+        ("audience-safe", 30, 41667, 41667, 50000),
+        ("audience-safe", 60, 34000, 25000, 33000),
+        ("audience-safe", 144, 34000, 25000, 33000),
+        ("high-fps-precise", 144, 18000, 10000, 18000),
+    ],
+)
+def test_builtin_frame_profile_materialisation_matches_existing_behavior(
+    profile, fps, hold, min_hold, repeat_gap
+):
+    policy = PlaybackSessionContext(profile_name=profile, fps=fps).resolve_effective_policy(AppConfig())
+    assert policy.hold_us == hold
+    assert policy.min_hold_us == min_hold
+    assert policy.repeat_release_gap_us == repeat_gap
