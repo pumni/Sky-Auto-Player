@@ -78,13 +78,15 @@ def test_metadata_uses_session_fps_for_schedule():
 def test_repeat_release_gap_scales_with_fps():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    assert policy.repeat_release_gap_us == 16_667
+    # Empirical floor (Exp2): max(base 8000, 1.5*frame=50000, fixed 18000) = 50000 at 30fps.
+    assert policy.repeat_release_gap_us == 50_000
 
 
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    assert policy.min_hold_us == 20_000
+    # Visibility floor (Exp1) = max(base 15000, 1.25*frame=41667) = 41667 at 30fps.
+    assert policy.min_hold_us == 41_667
 
 
 def test_frame_timing_config_overrides_ratios():
@@ -97,7 +99,8 @@ def test_frame_timing_config_overrides_ratios():
     session = PlaybackSessionContext(profile_name="local-precise", fps=30)
     policy = session.resolve_effective_policy(cfg)
     assert policy.hold_us == 66_666
-    assert policy.min_hold_us == 12_000
+    # local-precise base min_hold (17000) dominates the lowered 0.25 ratio floor (8334).
+    assert policy.min_hold_us == 17_000
 
 
 def test_apply_recommendation_to_context_updates_session():
@@ -141,26 +144,28 @@ def test_from_cli_args_applies_hold_override():
 def test_static_safety_guard_fallback():
     session = PlaybackSessionContext(profile_name="high-fps-precise", fps=60)
     policy = session.resolve_effective_policy(AppConfig())
-    # Should fall back to local-precise timing parameters
-    assert policy.hold_us == 20000
-    assert policy.min_hold_us == 12000
-    assert policy.chord_merge_window_us == 2000
+    # Should fall back to local-precise timing parameters (min_hold lifted to the 60fps
+    # visibility floor: max(13000, ceil(16667*1.25)=20834) = 20834).
+    assert policy.hold_us == 22000
+    assert policy.min_hold_us == 20834
+    assert policy.chord_merge_window_us == 2500
 
 
 def test_static_safety_guard_normalizes_hyphenated_high_fps_profile():
     # Test that hyphenated and differently-cased names normalize and trigger fallback correctly
     session = PlaybackSessionContext(profile_name="HIGH-fps-PRECISE", fps=None)
     policy = session.resolve_effective_policy(AppConfig())
-    assert policy.hold_us == 20000
-    assert policy.min_hold_us == 12000
+    assert policy.hold_us == 22000
+    assert policy.min_hold_us == 17000
 
 
 def test_high_fps_precise_intact_at_120fps():
     session = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
     policy = session.resolve_effective_policy(AppConfig())
-    # Should keep original high-fps-precise timing parameters
+    # Keeps base hold; min_hold lifted to the 120fps visibility floor
+    # (max(10000, ceil(8333*1.25)=10417) = 10417).
     assert policy.hold_us == 18000
-    assert policy.min_hold_us == 10000
+    assert policy.min_hold_us == 10417
     assert policy.chord_merge_window_us == 2000
 
 
@@ -177,3 +182,41 @@ def test_picker_shows_high_fps_precise_when_high_fps():
     from sky_music.ui.picker import get_profiles_info
     profiles_120 = get_profiles_info(120)
     assert "high-fps-precise" in [p[0] for p in profiles_120]
+
+
+def test_strict_timing_profile_validation_enforcement():
+    # 1. Test general 60fps limit override
+    cfg_unsafe = AppConfig(
+        timing_profiles={
+            "balanced": {
+                "hold_us": 10000,
+                "min_hold_us": 8000,
+                "release_gap_us": 2000,
+                "repeat_release_gap_us": 4000,
+                "input_lead_us": 3000,
+                "chord_merge_window_us": 2000,
+            }
+        }
+    )
+    # Trying to resolve "balanced" at 60 FPS should fail validation due to min_hold_us < 10000us or unsafe cycle
+    session = PlaybackSessionContext(profile_name="balanced", fps=60)
+    with pytest.raises(ValueError, match="Unsafe cycle|min_hold_us below 10000us"):
+        session.resolve_effective_policy(cfg_unsafe)
+
+    # 2. Test audience-safe overrides strict limit
+    cfg_unsafe_audience = AppConfig(
+        timing_profiles={
+            "audience_safe": {
+                "hold_us": 34000,
+                "min_hold_us": 15000,  # Below the 17000us limit for audience-safe!
+                "release_gap_us": 8000,
+                "repeat_release_gap_us": 14000,
+                "input_lead_us": 14000,
+                "chord_merge_window_us": 6000,
+            }
+        }
+    )
+    session_audience = PlaybackSessionContext(profile_name="audience-safe", fps=60)
+    with pytest.raises(ValueError, match="audience-safe profile requires min_hold_us >= 17000us"):
+        session_audience.resolve_effective_policy(cfg_unsafe_audience)
+

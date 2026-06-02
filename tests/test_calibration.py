@@ -21,8 +21,8 @@ def test_timing_profile_parsing():
     # 1. Test balanced profile (default)
     args = parser.parse_args(["--timing-profile", "balanced"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 24_000
-    assert main.TIMING_POLICY.min_hold_us == 14_000
+    assert main.TIMING_POLICY.hold_us == 26_000
+    assert main.TIMING_POLICY.min_hold_us == 17_000
     assert main.TIMING_POLICY.release_gap_us == 4_000
 
 
@@ -30,7 +30,7 @@ def test_local_precise_profile_from_builtin_defaults():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--timing-profile", "local-precise"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 20_000
+    assert main.TIMING_POLICY.hold_us == 22_000
     assert main.SLEEP_POLICY.spin_threshold_us == 800
 
 
@@ -205,7 +205,7 @@ def test_no_fps_config_or_cli_stays_unframed():
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
     assert main.TIMING_POLICY.fps == 0
-    assert main.TIMING_POLICY.hold_us == 24_000
+    assert main.TIMING_POLICY.hold_us == 26_000
 
 def test_hotkeys_default_from_config():
     cfg = AppConfig(hotkeys=HotkeyDefaults(pause="f7", skip="f11"))

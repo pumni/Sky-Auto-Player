@@ -2,6 +2,12 @@ from dataclasses import dataclass
 from typing import Literal
 from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
 
+# Absolute hard floor for any scheduled key-down, used by the schedule validator as a
+# backstop when frame-aware sizing is unavailable. This was previously a per-profile
+# field (min_scheduled_hold_us, identical = 500 everywhere); it is a global constant, not
+# a tuning knob. The real per-profile floor is min_hold_us (frame-aware).
+ABSOLUTE_MIN_HOLD_US: int = 500
+
 class SongParseError(Exception):
     """Raised when the file format is corrupt, unparseable, or invalid JSON."""
     pass
@@ -130,10 +136,14 @@ def validate_key_actions(
                         severity="warning"
                     ))
                 else:
-                    # Check hold duration
+                    # Check hold duration against the visibility floor (Appendix A): a hold
+                    # shorter than one frame can fall between the game's per-frame input
+                    # samples. When frame-aware, require >= one frame; otherwise fall back to
+                    # the absolute scheduled-hold floor.
                     down_at, down_idx = active_downs[sc]
                     hold = action.at_us - down_at
-                    min_req = policy.min_scheduled_hold_us
+                    frame_floor = int(policy.frame_us) if getattr(policy, "frame_us", 0) else 0
+                    min_req = max(ABSOLUTE_MIN_HOLD_US, frame_floor)
                     if hold < min_req:
                         severity = "fatal" if policy.same_key_conflict_policy == "strict" else "warning"
                         violations.append(ScheduleInvariantViolation(
@@ -177,8 +187,32 @@ def validate_key_actions(
     return tuple(violations)
 
 
+def validate_hold_ordering(profile: dict[str, int]) -> None:
+    """Single source of truth for the hold-duration ordering invariant.
+
+    Enforces ``0 < min_hold_us <= hold_us`` for whichever of those keys are present.
+    ``hold_us`` is the preferred (ceiling) duration and must never sit below
+    ``min_hold_us`` (the visible-down floor); previously this relationship was assumed
+    everywhere but never validated, so a profile could silently ship ``hold_us`` below
+    its own floor (e.g. ``hold_us: 1``). The absolute lower bound for any scheduled hold
+    is the module constant ``ABSOLUTE_MIN_HOLD_US`` (no longer a per-profile field).
+    """
+    min_hold = profile.get("min_hold_us")
+    hold = profile.get("hold_us")
+
+    if min_hold is not None and min_hold <= 0:
+        raise ValueError("min_hold_us must be > 0")
+    if hold is not None and min_hold is not None and hold < min_hold:
+        raise ValueError(
+            f"hold_us ({hold}us) must be >= min_hold_us ({min_hold}us)"
+        )
+
+
 def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
     frame_us = 1_000_000 / fps
+
+    validate_hold_ordering(profile)
+
     cycle_us = profile["min_hold_us"] + profile["repeat_release_gap_us"]
 
     if cycle_us <= frame_us:
@@ -227,3 +261,62 @@ def validate_audience_safe_profile(profile: dict[str, int]) -> None:
         raise ValueError(
             "audience-safe profile requires chord_merge_window_us >= 5000us"
         )
+
+
+validate_audience_safe_base_profile = validate_audience_safe_profile
+
+
+def validate_audience_safe_runtime_policy(
+    policy: FrameTimingPolicy,
+    *,
+    reference_profile: dict[str, int],
+) -> None:
+    cycle_us = int(policy.min_hold_us) + int(policy.repeat_release_gap_us)
+
+    if cycle_us < 28_000:
+        raise ValueError(
+            f"runtime audience_safe cycle_us {cycle_us}us below 28000us"
+        )
+
+    if int(policy.min_hold_us) < 17_000:
+        raise ValueError(
+            f"runtime audience_safe min_hold_us {policy.min_hold_us}us below 17000us"
+        )
+
+    if int(policy.repeat_release_gap_us) < 12_000:
+        raise ValueError(
+            f"runtime audience_safe repeat_release_gap_us {policy.repeat_release_gap_us}us below 12000us"
+        )
+
+    if int(policy.input_lead_us) < 8_000:
+        raise ValueError(
+            f"runtime audience_safe input_lead_us {policy.input_lead_us}us below 8000us"
+        )
+
+    if int(policy.input_lead_us) > reference_profile["input_lead_us"]:
+        raise ValueError("runtime compensated lead should not exceed base lead")
+
+    if int(policy.chord_merge_window_us) < 5_000:
+        raise ValueError(
+            f"runtime audience_safe chord_merge_window_us {policy.chord_merge_window_us}us below 5000us"
+        )
+
+
+def validate_builtin_timing_profile(
+    name: str,
+    profile: dict[str, int],
+    *,
+    selected_fps: int = 60,
+) -> None:
+    normalized = name.lower().replace("-", "_")
+
+    if normalized == "high_fps_precise":
+        if selected_fps <= 100:
+            raise ValueError("high_fps_precise requires selected_fps > 100")
+        validate_timing_profile(profile, fps=selected_fps)
+        return
+
+    validate_timing_profile(profile, fps=60)
+
+    if normalized == "audience_safe":
+        validate_audience_safe_profile(profile)

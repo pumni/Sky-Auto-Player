@@ -46,8 +46,14 @@ class FrameTimingDefaults:
     chord_merge_max_frame_ratio: float = 0.25
     input_lead_min_frame_ratio: float = 0.5
     release_gap_min_frame_ratio: float = 0.15
-    repeat_release_gap_min_frame_ratio: float = 0.50
-    min_hold_min_frame_ratio: float = 0.60
+    # Same-key release floor, empirically measured (Exp2): reliable repeats need a gap of
+    # max(~1.5 frame, ~17ms fixed). The fixed floor dominates at high FPS.
+    repeat_release_gap_min_frame_ratio: float = 1.5
+    repeat_release_gap_floor_us: int = 18000
+    # Compression floor for the key-down (visibility): empirically every key-down, even a
+    # compressed one, needs >= 1 frame to register (Exp1). 1.25 = one frame + ~25% margin,
+    # matching the hold target, and applied at all FPS (not just <60).
+    min_hold_min_frame_ratio: float = 1.25
     frame_align: FrameAlignMode = "none"
 
     @classmethod
@@ -64,8 +70,9 @@ class FrameTimingDefaults:
             chord_merge_max_frame_ratio=ratio("chord_merge_max_frame_ratio", 0.25),
             input_lead_min_frame_ratio=ratio("input_lead_min_frame_ratio", 0.5),
             release_gap_min_frame_ratio=ratio("release_gap_min_frame_ratio", 0.15),
-            repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 0.50),
-            min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 0.60),
+            repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 1.5),
+            repeat_release_gap_floor_us=int(ratio("repeat_release_gap_floor_us", 18000)),
+            min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 1.25),
             frame_align=normalize_frame_align(str(raw.get("frame_align", "none"))),
         )
 
@@ -76,6 +83,7 @@ class FrameTimingDefaults:
             "input_lead_min_frame_ratio": self.input_lead_min_frame_ratio,
             "release_gap_min_frame_ratio": self.release_gap_min_frame_ratio,
             "repeat_release_gap_min_frame_ratio": self.repeat_release_gap_min_frame_ratio,
+            "repeat_release_gap_floor_us": self.repeat_release_gap_floor_us,
             "min_hold_min_frame_ratio": self.min_hold_min_frame_ratio,
         }
 
@@ -89,63 +97,63 @@ class FrameTimingDefaults:
 #   The Cycle Rule: (min_hold_us + repeat_release_gap_us) MUST be > 16667 us.
 #   Failure to meet this will cause dropped note repeats (squashed frames).
 # ==============================================================================
-
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
-        "hold_us": 20000,
-        "min_hold_us": 12000,
-        "release_gap_us": 3000,
-        "repeat_release_gap_us": 6000,
-        "min_scheduled_hold_us": 500,
-        "input_lead_us": 3000,
-        "chord_merge_window_us": 2000,
+        "hold_us": 22000,
+        "min_hold_us": 17000,
+        "release_gap_us": 3500,
+        "repeat_release_gap_us": 18000,
+        "input_lead_us": 4000,
+        "chord_merge_window_us": 2500,
         "spin_threshold_us": 800,
-        "focus_restore_grace_us": 50000
+        "focus_restore_grace_us": 50000,
     },
     "balanced": {
-        "hold_us": 24000,
-        "min_hold_us": 14000,
+        "hold_us": 26000,
+        "min_hold_us": 17000,
         "release_gap_us": 4000,
-        "repeat_release_gap_us": 7000,
-        "min_scheduled_hold_us": 500,
+        "repeat_release_gap_us": 18000,
         "input_lead_us": 6000,
         "chord_merge_window_us": 3000,
         "spin_threshold_us": 500,
-        "focus_restore_grace_us": 100000
+        "focus_restore_grace_us": 100000,
     },
     "audience_safe": {
-        "hold_us": 34000,
-        "min_hold_us": 20000,
-        "release_gap_us": 8000,
-        "repeat_release_gap_us": 14000,
-        "min_scheduled_hold_us": 500,
-        "input_lead_us": 14000,
-        "chord_merge_window_us": 6000,
+        # Online audience profile (future default). Unlike local profiles, its min_hold and
+        # repeat gap are set ABOVE the local frame-aware floors so it actually carries extra
+        # multi-frame margin for remote listeners (network jitter + remote frame sampling).
+        # See docs/timing-principles.md Appendix A.9. These online targets are extrapolated
+        # from LOCAL measurements + the document's principles and should be validated in a
+        # populated online room.
+        "hold_us": 34000,             # ~2.0 frame @60fps (large visible hold)
+        "min_hold_us": 25000,         # 1.5 frame: compressed notes survive multi-frame online
+        "release_gap_us": 9000,
+        "repeat_release_gap_us": 33000,  # ~2.0 frame: above the 1.5-frame local floor (25001@60)
+        "input_lead_us": 14500,
+        "chord_merge_window_us": 6500,
         "spin_threshold_us": 500,
-        "focus_restore_grace_us": 150000
+        "focus_restore_grace_us": 150000,
     },
     "dense_safe": {
-        "hold_us": 20000,
-        "min_hold_us": 12000,
+        "hold_us": 22000,
+        "min_hold_us": 17000,
         "release_gap_us": 5000,
-        "repeat_release_gap_us": 8000,
-        "min_scheduled_hold_us": 500,
-        "input_lead_us": 6000,
-        "chord_merge_window_us": 3000,
+        "repeat_release_gap_us": 18000,
+        "input_lead_us": 7000,
+        "chord_merge_window_us": 4000,
         "spin_threshold_us": 500,
-        "focus_restore_grace_us": 100000
+        "focus_restore_grace_us": 100000,
     },
     "high_fps_precise": {
         "hold_us": 18000,
         "min_hold_us": 10000,
         "release_gap_us": 3000,
-        "repeat_release_gap_us": 6000,
-        "min_scheduled_hold_us": 500,
+        "repeat_release_gap_us": 6500,
         "input_lead_us": 3000,
         "chord_merge_window_us": 2000,
         "spin_threshold_us": 500,
-        "focus_restore_grace_us": 50000
-    }
+        "focus_restore_grace_us": 50000,
+    },
 }
 
 
@@ -444,6 +452,7 @@ def save_config(cfg: AppConfig) -> None:
         "input_lead_min_frame_ratio": cfg.frame_timing.input_lead_min_frame_ratio,
         "release_gap_min_frame_ratio": cfg.frame_timing.release_gap_min_frame_ratio,
         "repeat_release_gap_min_frame_ratio": cfg.frame_timing.repeat_release_gap_min_frame_ratio,
+        "repeat_release_gap_floor_us": cfg.frame_timing.repeat_release_gap_floor_us,
         "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
         "frame_align": cfg.frame_timing.frame_align,
     }

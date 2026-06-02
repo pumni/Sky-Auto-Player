@@ -53,5 +53,18 @@ class DefaultNoteResolver(NoteResolver):
             return 0
         if mode == "physical":
             return PHYSICAL_SCAN_CODES.get(char, 0)
-        else:
-            return VK_CODES.get(char, 0)
+        # "mapped" mode: translate the virtual key to a scan code for the OS keyboard
+        # layout via MapVirtualKey, falling back to the fixed physical scan code when it is
+        # unavailable (non-Windows / test environments). Previously this lived in a separate
+        # Win32NoteResolver; consolidated here so there is a single resolver everywhere.
+        vk = VK_CODES.get(char)
+        if vk is not None:
+            try:
+                import ctypes
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                sc = user32.MapVirtualKeyW(vk, 0)
+                if sc:
+                    return int(sc)
+            except (AttributeError, OSError):
+                pass
+        return PHYSICAL_SCAN_CODES.get(char, 0)

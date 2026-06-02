@@ -95,8 +95,6 @@ class PlaybackSessionContext:
             overrides.append(("chord_merge_window_us", args.chord_merge_window_ms * 1000))
         if getattr(args, "focus_restore_grace_ms", None) is not None:
             overrides.append(("focus_restore_grace_us", args.focus_restore_grace_ms * 1000))
-        if getattr(args, "min_scheduled_hold_ms", None) is not None:
-            overrides.append(("min_scheduled_hold_us", args.min_scheduled_hold_ms * 1000))
 
         return cls(
             profile_name=profile,
@@ -148,8 +146,29 @@ class PlaybackSessionContext:
     def _base_timing_policy(self, cfg: AppConfig | None = None) -> TimingPolicy:
         cfg = cfg or load_config()
         p_dict = dict(profile_dict_for(cfg, self.profile_name))
+
+        # Strict enforcement of timing invariants on the base profile (built-ins +
+        # config.json). This catches structurally-broken shipped values such as a
+        # profile whose hold_us sits below its own min_hold_us (validate_hold_ordering).
+        # CLI/calibration overrides below are an intentional expert escape hatch and are
+        # deliberately NOT subjected to the conservative built-in floors, so timing
+        # experiments (e.g. --hold-ms 1 to probe the in-game visibility floor) stay
+        # possible. The schedule-level validator (validate_key_actions) still flags any
+        # resulting risk at playback time.
+        from sky_music.domain.validation import validate_builtin_timing_profile
+        profile_fields = {
+            "hold_us", "min_hold_us", "release_gap_us",
+            "repeat_release_gap_us", "input_lead_us", "chord_merge_window_us"
+        }
+        validate_builtin_timing_profile(
+            self.profile_name,
+            {k: int(v) for k, v in p_dict.items() if k in profile_fields},
+            selected_fps=self.fps if self.fps is not None else 60,
+        )
+
         for key, value in self.policy_overrides:
             p_dict[key] = value
+
         policy = TimingPolicy.from_dict(p_dict)
         if self.same_key_conflict_policy != policy.same_key_conflict_policy:
             return TimingPolicy.from_dict(
@@ -157,30 +176,48 @@ class PlaybackSessionContext:
             )
         return policy
 
-    def resolve_effective_policy(self, cfg: AppConfig | None = None) -> FrameTimingPolicy:
-        """Profile dict + CLI overrides + frame-aware scaling (single entry point)."""
-        cfg = cfg or load_config()
-        
-        # Static Safety Guard:
-        # Nếu profile được cấu hình là high-fps-precise nhưng FPS < 100,
-        # tự động hạ cấp tĩnh xuống local-precise để tránh sụt giảm note lặp.
+    def high_fps_fallback_profile(self) -> str | None:
+        """Static safety guard (pure, no I/O).
+
+        ``high_fps_precise`` is only safe above 100 FPS; if selected at <=100 FPS (or with
+        FPS unknown) it must fall back to ``local-precise`` to avoid dropped note repeats.
+        Returns the fallback profile name when the guard applies, else None. Callers that
+        want to inform the user (e.g. main playback setup) should emit a warning once and
+        normalize the session; ``resolve_effective_policy`` applies the same fallback
+        silently so every call site stays safe.
+        """
         from sky_music.config import normalize_profile_name
-        norm_name = normalize_profile_name(self.profile_name)
-        effective_self = self
-        
-        if norm_name == "high_fps_precise":
-            if self.fps is None or self.fps < 100:
-                fallback_profile = "local-precise"
-                print(f"\n[Warning] Profile '{self.profile_name}' requires configured game FPS >= 100.")
-                print(f"          Current FPS: {self.fps if self.fps is not None else 'None'}. Safely falling back to '{fallback_profile}'.\n")
-                effective_self = self.with_profile(fallback_profile)
-                
+        if normalize_profile_name(self.profile_name) == "high_fps_precise" and (
+            self.fps is None or self.fps <= 100
+        ):
+            return "local-precise"
+        return None
+
+    def resolve_effective_policy(self, cfg: AppConfig | None = None) -> FrameTimingPolicy:
+        """Profile dict + CLI overrides + frame-aware scaling (single entry point).
+
+        Pure: no console output. The high-FPS static safety guard is applied silently here;
+        user-facing warning is emitted once by the playback setup (see main.play_song).
+        """
+        cfg = cfg or load_config()
+
+        fallback = self.high_fps_fallback_profile()
+        effective_self = self.with_profile(fallback) if fallback else self
+
         base = effective_self._base_timing_policy(cfg)
+        
+        has_manual_input_lead_override = any(
+            key == "input_lead_us"
+            for key, _ in effective_self.policy_overrides
+        )
+
         return FrameTimingPolicy.from_timing_policy(
             base,
             fps=effective_self.fps,
             same_key_conflict_policy=effective_self.same_key_conflict_policy,
             frame_align=effective_self.resolved_frame_align(cfg),
+            profile_name=effective_self.profile_name,
+            phase_compensate_input_lead=not has_manual_input_lead_override,
             **cfg.frame_timing.as_policy_kwargs(),
         )
 

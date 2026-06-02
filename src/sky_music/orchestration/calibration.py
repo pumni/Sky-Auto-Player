@@ -134,6 +134,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     effective = FrameTimingPolicy.from_timing_policy(
         base,
         fps=inp.fps if inp.fps > 0 else None,
+        profile_name=rec_profile,
         **cfg.frame_timing.as_policy_kwargs(),
     )
     recommended_hold = effective.hold_us

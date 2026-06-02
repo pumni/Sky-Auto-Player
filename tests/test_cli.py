@@ -70,3 +70,37 @@ def test_cli_calibration_summary_argument():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--calibration-summary", "logs/run.summary.json"])
     assert args.calibration_summary == Path("logs/run.summary.json")
+
+
+def test_dynamic_fps_resolution(monkeypatch):
+    # Case 1: --fps is NOT in sys.argv (standard launch)
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    user_cfg = AppConfig(game_fps=144)
+    parser = main.build_arg_parser()
+    args = parser.parse_args([])
+    main.apply_config_defaults(args, user_cfg)
+    
+    cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
+    resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+    assert resolved_fps == 144
+    
+    # Simulate user changing FPS to 120 (picker persists this to user_cfg in memory):
+    user_cfg.game_fps = 120
+    resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+    assert resolved_fps == 120
+    
+    # Case 2: --fps is explicitly in sys.argv (CLI override)
+    monkeypatch.setattr(sys, "argv", ["main.py", "--fps", "60"])
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--fps", "60"])
+    main.apply_config_defaults(args, user_cfg)
+    
+    cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
+    resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+    assert resolved_fps == 60
+    
+    # Even if user config changes, the explicit CLI override wins:
+    user_cfg.game_fps = 120
+    resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+    assert resolved_fps == 60
+

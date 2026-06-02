@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
-from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic, align_frame_down_us
+from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic, align_frame_down_us, is_audience_safe_profile_name
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""
@@ -223,13 +223,16 @@ def build_key_actions(
                 risky_same_key_repeats += 1
                 risk = "moderate"
                 
-        # Determine actual hold duration
-        if max_hold is not None:
-            actual_hold = max(policy.min_hold_us, min(policy.hold_us, max_hold))
-            if actual_hold < policy.hold_us:
-                compressed_holds += 1
-        else:
-            actual_hold = policy.hold_us
+        # Determine actual hold duration — one clamp for EVERY note (repeat or not):
+        #   floor   = policy.min_hold_us  (visible key-down floor, always applied)
+        #   ceiling = policy.hold_us, further capped by same-key max_hold when present
+        # The invariant min_hold_us <= hold_us (enforced at policy build) guarantees a
+        # non-repeat note resolves to exactly hold_us, so behaviour is unchanged for
+        # valid profiles while removing the old two-path inconsistency.
+        ceiling = policy.hold_us if max_hold is None else min(policy.hold_us, max_hold)
+        actual_hold = max(policy.min_hold_us, ceiling)
+        if actual_hold < policy.hold_us:
+            compressed_holds += 1
             
         up_at_us = shifted_us + actual_hold
         
@@ -306,6 +309,14 @@ def build_key_actions(
     playback_duration_us = duration_us
     source_duration_us = Microseconds(max((d.source_time_us for d in merged_drafts), default=0) + policy.hold_us)
 
+    # Resolve base and runtime timing parameters for telemetry/reporting directly from policy
+    base_lead = (
+        policy.base_input_lead_us
+        if policy.base_input_lead_us is not None
+        else int(policy.input_lead_us)
+    )
+    phase_comp = policy.phase_compensated
+
     return ScheduleMetadata(
         actions=tuple(key_actions_list),
         compressed_holds=compressed_holds,
@@ -320,5 +331,10 @@ def build_key_actions(
         playback_duration_us=playback_duration_us,
         diagnostics=tuple(diagnostics),
         frame_us=policy.frame_us,
-        fps=policy.fps
+        fps=policy.fps,
+        base_input_lead_us=base_lead,
+        runtime_input_lead_us=int(policy.input_lead_us),
+        phase_compensated=phase_comp,
+        chord_merge_window_us=int(policy.chord_merge_window_us),
+        frame_align=policy.frame_align,
     )

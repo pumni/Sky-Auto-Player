@@ -22,6 +22,41 @@ def align_frame_down_us(at_us: int, frame_us: int, mode: FrameAlignMode) -> int:
     return max(0, round(at_us / frame_us) * frame_us)
 
 
+def frame_us_for(fps: int) -> float:
+    if fps <= 0:
+        raise ValueError("fps must be > 0")
+    return 1_000_000 / fps
+
+
+def compensated_input_lead_us(
+    *,
+    base_input_lead_us: int,
+    reference_fps: int,
+    runtime_fps: int,
+    min_lead_us: int,
+    max_lead_us: int,
+) -> int:
+    reference_frame_us = frame_us_for(reference_fps)
+    runtime_frame_us = frame_us_for(runtime_fps)
+
+    reference_effective_lead = base_input_lead_us - reference_frame_us / 2
+    runtime_lead = reference_effective_lead + runtime_frame_us / 2
+
+    return int(round(max(min_lead_us, min(runtime_lead, max_lead_us))))
+
+
+def is_audience_safe_profile_name(name: str | None) -> bool:
+    if name is None:
+        return False
+    normalized = name.lower().replace("-", "_")
+    return normalized in {
+        "audience_safe",
+        "remote_safe",
+        "online_audible_safe",
+        "online_audible",
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class KeyAction:
     kind: ActionKind
@@ -36,12 +71,6 @@ class TimingPolicy:
     min_hold_us: Microseconds
     release_gap_us: Microseconds
     repeat_release_gap_us: Microseconds
-    min_scheduled_hold_us: Microseconds
-
-    @property
-    def _default_grace(self) -> Microseconds:
-        from sky_music.config import DEFAULT_TIMING_PROFILES
-        return Microseconds(DEFAULT_TIMING_PROFILES["balanced"]["focus_restore_grace_us"])
 
     input_lead_us: Microseconds = Microseconds(0)
     chord_merge_window_us: Microseconds = Microseconds(0)
@@ -59,7 +88,6 @@ class TimingPolicy:
             min_hold_us=Microseconds(p_dict.get("min_hold_us", base["min_hold_us"])),
             release_gap_us=Microseconds(p_dict.get("release_gap_us", base["release_gap_us"])),
             repeat_release_gap_us=Microseconds(p_dict.get("repeat_release_gap_us", base["repeat_release_gap_us"])),
-            min_scheduled_hold_us=Microseconds(p_dict.get("min_scheduled_hold_us", base["min_scheduled_hold_us"])),
             input_lead_us=Microseconds(p_dict.get("input_lead_us", base["input_lead_us"])),
             chord_merge_window_us=Microseconds(p_dict.get("chord_merge_window_us", base["chord_merge_window_us"])),
             focus_restore_grace_us=Microseconds(p_dict.get("focus_restore_grace_us", base["focus_restore_grace_us"])),
@@ -104,7 +132,6 @@ class FrameTimingPolicy:
     min_hold_us: Microseconds
     release_gap_us: Microseconds
     repeat_release_gap_us: Microseconds
-    min_scheduled_hold_us: Microseconds
 
     input_lead_us: Microseconds
     chord_merge_window_us: Microseconds
@@ -114,6 +141,9 @@ class FrameTimingPolicy:
     chord_merge_max_frame_ratio: float = 0.25
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
     frame_align: FrameAlignMode = "none"
+    profile_name: str | None = None
+    base_input_lead_us: int | None = None
+    phase_compensated: bool = False
 
     @classmethod
     def from_timing_policy(
@@ -125,9 +155,13 @@ class FrameTimingPolicy:
         same_key_conflict_policy: Literal["degraded", "strict"] | None = None,
         input_lead_min_frame_ratio: float = 0.5,
         release_gap_min_frame_ratio: float = 0.15,
-        repeat_release_gap_min_frame_ratio: float = 0.50,
-        min_hold_min_frame_ratio: float = 0.60,
+        repeat_release_gap_min_frame_ratio: float = 1.5,
+        repeat_release_gap_floor_us: int = 18000,
+        min_hold_min_frame_ratio: float = 1.25,
         frame_align: FrameAlignMode = "none",
+        *,
+        profile_name: str | None = None,
+        phase_compensate_input_lead: bool = True,
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
             frame_us = Microseconds(round(1_000_000 / fps))
@@ -137,11 +171,20 @@ class FrameTimingPolicy:
                 eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.ceil(frame_us * min_hold_min_frame_ratio)))
                 eff_input_lead_us = Microseconds(max(policy.input_lead_us, math.ceil(frame_us * input_lead_min_frame_ratio)))
                 eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.ceil(frame_us * release_gap_min_frame_ratio)))
+                # Empirical same-key release floor (Exp2): reliable repeats need a gap of
+                # max(~1.5 frame, ~17ms fixed). The fixed floor dominates at high FPS where
+                # one frame is tiny; the frame term dominates at low FPS.
                 eff_repeat_release_gap_us = Microseconds(
-                    max(policy.repeat_release_gap_us, math.ceil(frame_us * repeat_release_gap_min_frame_ratio))
+                    max(
+                        policy.repeat_release_gap_us,
+                        math.ceil(frame_us * repeat_release_gap_min_frame_ratio),
+                        repeat_release_gap_floor_us,
+                    )
                 )
 
-                # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin)
+                # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin).
+                # Now largely superseded by the repeat-gap floor above (which alone keeps the
+                # cycle >= ~2.1 frame), but kept as a harmless backstop for unusual custom ratios.
                 safety_margin_us = max(1000, math.ceil(frame_us * 0.05))
                 required_cycle_us = frame_us + safety_margin_us
                 current_cycle = eff_min_hold_us + eff_repeat_release_gap_us
@@ -155,12 +198,38 @@ class FrameTimingPolicy:
                 scaled_chord_merge = math.floor(frame_us * chord_merge_max_frame_ratio)
                 eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, max(min_chord_merge_us, scaled_chord_merge)))
             else:
-                # fps >= 60: keep original profile values
-                eff_hold_us = policy.hold_us
-                eff_min_hold_us = policy.min_hold_us
-                eff_input_lead_us = policy.input_lead_us
+                # fps >= 60: keep base safety durations, but still apply the visibility
+                # floor (Exp1: every key-down needs >= 1 frame). At >=60 the base values
+                # usually dominate, but flooring here keeps the model uniform across all FPS
+                # and protects low custom holds at exactly 60 FPS.
+                eff_hold_us = Microseconds(max(policy.hold_us, math.ceil(frame_us * min_visible_hold_frames)))
+                eff_min_hold_us = Microseconds(max(policy.min_hold_us, math.ceil(frame_us * min_hold_min_frame_ratio)))
+
+                # Phase offset high-fps compensation for audience_safe
+                if phase_compensate_input_lead and is_audience_safe_profile_name(profile_name) and fps > 75:
+                    eff_input_lead_us = Microseconds(
+                        compensated_input_lead_us(
+                            base_input_lead_us=int(policy.input_lead_us),
+                            reference_fps=60,
+                            runtime_fps=fps,
+                            min_lead_us=8000,
+                            max_lead_us=int(policy.input_lead_us),
+                        )
+                    )
+                else:
+                    eff_input_lead_us = policy.input_lead_us
+                    
                 eff_release_gap_us = policy.release_gap_us
-                eff_repeat_release_gap_us = policy.repeat_release_gap_us
+                # Apply the same empirical same-key release floor at >=60 FPS. The fixed
+                # ~17ms floor (Exp2) is a hard physical limit independent of render FPS, so
+                # high-FPS profiles must respect it rather than keeping a smaller base gap.
+                eff_repeat_release_gap_us = Microseconds(
+                    max(
+                        policy.repeat_release_gap_us,
+                        math.ceil(frame_us * repeat_release_gap_min_frame_ratio),
+                        repeat_release_gap_floor_us,
+                    )
+                )
                 eff_chord_merge = policy.chord_merge_window_us
         else:
             frame_us = Microseconds(0)
@@ -176,6 +245,14 @@ class FrameTimingPolicy:
             conflict_policy = "degraded"
 
         align_mode: FrameAlignMode = frame_align if frame_align in ("none", "down_only") else "none"
+        
+        is_comp = (
+            phase_compensate_input_lead
+            and is_audience_safe_profile_name(profile_name)
+            and fps is not None
+            and fps > 75
+            and int(eff_input_lead_us) != int(policy.input_lead_us)
+        )
             
         return cls(
             fps=fps if fps is not None else 0,
@@ -184,7 +261,6 @@ class FrameTimingPolicy:
             min_hold_us=eff_min_hold_us,
             release_gap_us=eff_release_gap_us,
             repeat_release_gap_us=eff_repeat_release_gap_us,
-            min_scheduled_hold_us=policy.min_scheduled_hold_us,
             input_lead_us=eff_input_lead_us,
             chord_merge_window_us=eff_chord_merge,
             focus_restore_grace_us=policy.focus_restore_grace_us,
@@ -192,12 +268,15 @@ class FrameTimingPolicy:
             chord_merge_max_frame_ratio=chord_merge_max_frame_ratio,
             same_key_conflict_policy=conflict_policy,
             frame_align=align_mode,
+            profile_name=profile_name,
+            base_input_lead_us=int(policy.input_lead_us),
+            phase_compensated=is_comp,
         )
 
     @classmethod
     def from_profile_name(cls, name: str, fps: int | None = None, **kwargs) -> "FrameTimingPolicy":
         policy = TimingPolicy.from_profile_name(name)
-        return cls.from_timing_policy(policy, fps=fps, **kwargs)
+        return cls.from_timing_policy(policy, fps=fps, profile_name=name, **kwargs)
 
     @classmethod
     def local_precise(cls, **kwargs) -> "FrameTimingPolicy":
@@ -243,3 +322,8 @@ class ScheduleMetadata:
     recommended_tempo_scale: float | None = None
     frame_us: Microseconds | None = None
     fps: int | None = None
+    base_input_lead_us: int | None = None
+    runtime_input_lead_us: int | None = None
+    phase_compensated: bool | None = None
+    chord_merge_window_us: int | None = None
+    frame_align: str | None = None

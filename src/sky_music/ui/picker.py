@@ -149,8 +149,11 @@ FPS_OPTIONS = [
     (None, "Auto (No forced sync)"),
     (30, "30 FPS (Mobile/Emulator)"),
     (60, "60 FPS (Standard)"),
+    (90, "90 FPS (High Performance)"),
     (120, "120 FPS (High Refresh)"),
     (144, "144 FPS (High Refresh)"),
+    (165, "165 FPS (High Refresh)"),
+    (240, "240 FPS (Ultra Refresh)"),
 ]
 
 
@@ -577,11 +580,19 @@ def choose_song_interactively(
 
         elif state.current_view == "fps_select":
             content = [f"Target: {state.temp_fps if state.temp_fps else 'Auto'}", ""]
-            for val, desc in FPS_OPTIONS:
+            fps_vals = [f[0] for f in FPS_OPTIONS]
+            if state.temp_fps in fps_vals:
+                hover_idx = fps_vals.index(state.temp_fps)
+            else:
+                temp_val = state.temp_fps if state.temp_fps is not None else 60
+                hover_idx = min(range(len(fps_vals)), key=lambda i: abs((fps_vals[i] if fps_vals[i] is not None else 60) - temp_val))
+            
+            for i, (val, desc) in enumerate(FPS_OPTIONS):
                 bullet = "●" if val == state.current_fps else "○"
                 val_str = str(val) if val else "Auto"
                 row = f"{bullet} {val_str:<4}   {desc}"
-                content.append([("class:selected" if val == state.temp_fps else "class:unselected", f" {'➜' if val == state.temp_fps else ' '} {row}")])
+                is_hover = (i == hover_idx)
+                content.append([("class:selected" if is_hover else "class:unselected", f" {'➜' if is_hover else ' '} {row}")])
             return build_box("FPS Sync Selection", content, width=terminal_width)
 
         elif state.current_view == "theme_select":
@@ -1110,16 +1121,23 @@ def choose_song_interactively(
             state.selected_command_index = (state.selected_command_index - 1) % len(commands)
         elif state.current_view == "profile_select":
             profiles = [p[0] for p in get_profiles_info(state.current_fps)]
-            state.temp_profile = profiles[(profiles.index(state.temp_profile) - 1) % len(profiles)]
+            idx = profiles.index(state.temp_profile) if state.temp_profile in profiles else 0
+            state.temp_profile = profiles[(idx - 1) % len(profiles)]
         elif state.current_view == "tempo_select":
             presets = [t[0] for t in TEMPO_OPTIONS]
             idx = min(range(len(presets)), key=lambda i: abs(presets[i] - state.temp_tempo))
             state.temp_tempo = presets[(idx - 1) % len(presets)]
         elif state.current_view == "fps_select":
             fps = [f[0] for f in FPS_OPTIONS]
-            state.temp_fps = fps[(fps.index(state.temp_fps) - 1) % len(fps)]
+            if state.temp_fps in fps:
+                idx = fps.index(state.temp_fps)
+            else:
+                temp_val = state.temp_fps if state.temp_fps is not None else 60
+                idx = min(range(len(fps)), key=lambda i: abs((fps[i] if fps[i] is not None else 60) - temp_val))
+            state.temp_fps = fps[(idx - 1) % len(fps)]
         elif state.current_view == "theme_select":
-            state.temp_theme = theme_names[(theme_names.index(state.temp_theme) - 1) % len(theme_names)]
+            idx = theme_names.index(state.temp_theme) if state.temp_theme in theme_names else 0
+            state.temp_theme = theme_names[(idx - 1) % len(theme_names)]
         update_ui()
 
     @kb.add("down")
@@ -1131,16 +1149,23 @@ def choose_song_interactively(
             state.selected_command_index = (state.selected_command_index + 1) % len(commands)
         elif state.current_view == "profile_select":
             profiles = [p[0] for p in get_profiles_info(state.current_fps)]
-            state.temp_profile = profiles[(profiles.index(state.temp_profile) + 1) % len(profiles)]
+            idx = profiles.index(state.temp_profile) if state.temp_profile in profiles else 0
+            state.temp_profile = profiles[(idx + 1) % len(profiles)]
         elif state.current_view == "tempo_select":
             presets = [t[0] for t in TEMPO_OPTIONS]
             idx = min(range(len(presets)), key=lambda i: abs(presets[i] - state.temp_tempo))
             state.temp_tempo = presets[(idx + 1) % len(presets)]
         elif state.current_view == "fps_select":
             fps = [f[0] for f in FPS_OPTIONS]
-            state.temp_fps = fps[(fps.index(state.temp_fps) + 1) % len(fps)]
+            if state.temp_fps in fps:
+                idx = fps.index(state.temp_fps)
+            else:
+                temp_val = state.temp_fps if state.temp_fps is not None else 60
+                idx = min(range(len(fps)), key=lambda i: abs((fps[i] if fps[i] is not None else 60) - temp_val))
+            state.temp_fps = fps[(idx + 1) % len(fps)]
         elif state.current_view == "theme_select":
-            state.temp_theme = theme_names[(theme_names.index(state.temp_theme) + 1) % len(theme_names)]
+            idx = theme_names.index(state.temp_theme) if state.temp_theme in theme_names else 0
+            state.temp_theme = theme_names[(idx + 1) % len(theme_names)]
         update_ui()
 
     @kb.add("/")

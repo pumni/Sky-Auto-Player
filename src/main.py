@@ -94,19 +94,6 @@ def flush_debug_log() -> None:
 # Kết nối hàm debug_log của main.py sang inputs.py để đồng bộ logging
 inputs._debug_log_callback = debug_log
 
-def _recommended_profile(severity: str, has_same_key_repeats: bool, high_polyphony: bool) -> str:
-    """Suggest a timing profile name based on risk characteristics."""
-    if severity == "high":
-        if has_same_key_repeats:
-            return "dense-safe"
-        return "audience-safe"
-    if severity == "medium":
-        if high_polyphony:
-            return "audience-safe"
-        return "balanced"
-    return "balanced"
-
-
 def _handle_risk_analysis(report, song, is_dry_run: bool, controls, policy_override_fn=None) -> tuple[bool, str | None, float | None]:
     """Display risk analysis, prompt user for action if severity is medium/high.
 
@@ -114,11 +101,9 @@ def _handle_risk_analysis(report, song, is_dry_run: bool, controls, policy_overr
     """
 
     severity = report.severity.upper()
-    recommended = _recommended_profile(
-        report.severity,
-        has_same_key_repeats=report.impossible_same_key_repeats > 0,
-        high_polyphony=report.max_polyphony >= 5,
-    )
+    # Single source of truth for the profile recommendation: the analyzer already computed
+    # report.suggested_profile from the same risk signals (was duplicated by _recommended_profile).
+    recommended = report.suggested_profile
 
     print()
     print(f"  ┌─ Schedule Risk: {severity} " + "─" * max(0, 38 - len(severity)))
@@ -609,6 +594,17 @@ def play_selected_song(
         fps=force_fps,
     )
 
+    # High-FPS static safety guard: warn once here (resolve_effective_policy applies the
+    # same fallback silently). Normalizing the session keeps the HUD label and timing consistent.
+    _fallback_profile = session.high_fps_fallback_profile()
+    if _fallback_profile is not None:
+        print(
+            f"\n[Warning] Profile '{session.profile_name}' requires configured game FPS > 100. "
+            f"Current FPS: {session.fps if session.fps is not None else 'None'}. "
+            f"Safely falling back to '{_fallback_profile}'.\n"
+        )
+        session = session.with_profile(_fallback_profile)
+
     is_dry_run = DRY_RUN_MODE or force_dry_run
     current_profile = session.display_profile_label()
     current_tempo = session.tempo_scale
@@ -616,12 +612,9 @@ def play_selected_song(
     active_policy = session.resolve_effective_policy(user_cfg)
     active_sleep_policy = session.resolve_sleep_policy(user_cfg)
 
-    import sys
+    # build_key_actions builds DefaultNoteResolver(profile) when resolver is None; that
+    # single resolver now handles both physical and mapped scan-code modes.
     resolver = None
-    if sys.platform == "win32":
-        from sky_music.platform.win32.keycodes import Win32NoteResolver
-        from sky_music.layouts import SKY_15_KEY_PROFILE
-        resolver = Win32NoteResolver(SKY_15_KEY_PROFILE)
 
     def check_and_abort_violations(violations_tuple, is_dry_run_flag) -> bool:
         if not violations_tuple:
@@ -750,6 +743,7 @@ def play_selected_song(
         profile_name=current_profile,
         tempo_scale=current_tempo,
     )
+    renderer.active_policy = active_policy
 
     # Clear preflight/countdown output so the live HUD starts on a clean terminal.
     # ProgressRenderer only erases its own previously-rendered lines; static print()
@@ -840,11 +834,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--min-hold-ms",
         type=int,
         help="Override minimum key hold duration in ms (overrides profile)",
-    )
-    timing.add_argument(
-        "--min-scheduled-hold-ms",
-        type=int,
-        help="Override minimum scheduled hold duration in ms (overrides profile)",
     )
     timing.add_argument(
         "--release-gap-ms",
@@ -1288,11 +1277,15 @@ def main() -> int:
             return 0
 
         while True:
+            # Resolve initial FPS prioritizing active CLI overrides, then persistent config defaults
+            cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
+            resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+
             picker_result = prompt_song_selection(
                 profile=canonical_profile_name(user_cfg.default_timing_profile),
                 tempo=TEMPO_SCALE,
                 dry_run=DRY_RUN_MODE,
-                fps=getattr(args, "fps", None),
+                fps=resolved_fps,
                 scan_code_mode=CURRENT_SCAN_CODE_MODE,
             )
             if picker_result is None:

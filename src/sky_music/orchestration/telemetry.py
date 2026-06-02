@@ -83,6 +83,13 @@ class TelemetryLogger:
             "max_polyphony": int(getattr(metadata, "max_polyphony", 0)),
             "note_count": int(getattr(metadata, "note_count", 0)),
             "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),
+            "frame_us": getattr(metadata, "frame_us", None),
+            "fps": getattr(metadata, "fps", None),
+            "base_input_lead_us": getattr(metadata, "base_input_lead_us", None),
+            "runtime_input_lead_us": getattr(metadata, "runtime_input_lead_us", None),
+            "phase_compensated": getattr(metadata, "phase_compensated", None),
+            "chord_merge_window_us": getattr(metadata, "chord_merge_window_us", None),
+            "frame_align": getattr(metadata, "frame_align", None),
         }
 
     def get_summary(self) -> dict | None:

@@ -57,14 +57,17 @@ def test_play_fallback_uses_game_fps_when_no_session():
     assert fallback.fps == 120
 
 
-def test_profile_switch_preserves_fps_and_changes_repeat_gap():
+def test_profile_switch_preserves_fps():
     cfg = AppConfig()
     balanced = PlaybackSessionContext.balanced(fps=120)
     dense = balanced.with_profile("dense-safe")
     assert dense.fps == 120
     p_bal = balanced.resolve_effective_policy(cfg)
     p_dense = dense.resolve_effective_policy(cfg)
-    assert p_bal.repeat_release_gap_us != p_dense.repeat_release_gap_us
+    # At a fixed FPS the same-key release gap is governed by the universal empirical floor
+    # (Exp2), so different profiles converge to the same value rather than differing.
+    assert p_bal.repeat_release_gap_us == p_dense.repeat_release_gap_us
+    assert p_bal.repeat_release_gap_us >= 18000
 
 
 def test_no_orphan_timing_policy_wrap_in_src():

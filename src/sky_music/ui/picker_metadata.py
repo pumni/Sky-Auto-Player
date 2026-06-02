@@ -49,7 +49,6 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "min_hold_us",
     "release_gap_us",
     "repeat_release_gap_us",
-    "min_scheduled_hold_us",
     "input_lead_us",
     "chord_merge_window_us",
     "spin_threshold_us",
@@ -423,11 +422,8 @@ def get_song_ui_metadata(
         from sky_music.domain.scheduler import build_key_actions
         from sky_music.domain.analyzer import analyze_schedule
 
+        # build_key_actions builds the (now unified) DefaultNoteResolver when resolver is None.
         resolver = None
-        if sys.platform == "win32":
-            from sky_music.platform.win32.keycodes import Win32NoteResolver
-            from sky_music.layouts import SKY_15_KEY_PROFILE
-            resolver = Win32NoteResolver(SKY_15_KEY_PROFILE)
 
         song = _song_repository.load(song_path)
         policy = session.resolve_effective_policy(cfg)

@@ -1,757 +1,587 @@
 # Timing Principles for Sky Music Player
 
-This document is the engineering source of truth for designing, reviewing, and
-calibrating timing profiles for Sky Music Player.
+This document is the engineering source of truth for designing, reviewing, and calibrating timing profiles for Sky Music Player.
 
-It defines:
+It is intentionally a principles document, not an implementation document. It should describe what timing profiles must guarantee, why those guarantees matter, and how future changes should be evaluated before they are exposed to users.
 
-- the timing vocabulary used by the scheduler;
-- the mathematical constraints that prevent dropped or merged notes;
-- the difference between general 60 FPS-safe profiles and FPS-gated profiles;
-- the expected behavior for local playback, dense MIDI playback, and online
-  audience playback;
-- validation rules that future profiles must pass before they are exposed in the
-  UI or CLI.
-
-The numbers in this document are conservative engineering defaults. They model a
-game client that samples input on frame boundaries and an online environment where
-remote listeners may be less forgiving than local self-hearing. They should be
-validated with real gameplay, but profile changes must start from these rules.
+The goal is not to make playback appear fast in logs. The goal is reliable note registration inside the game and, when playing online, reliable audibility for other players.
 
 ---
 
-## 1. Core Terms
+## 1. Scope
+
+This document defines the timing principles for:
+
+- local playback on the same machine;
+- dense song playback with high note pressure;
+- online room playback where other players need to hear the notes correctly;
+- frame-aware timing behavior;
+- profile review and calibration rules.
+
+The values used by actual profiles are conservative engineering defaults. They are starting points, not universal truths. Any change to a profile must still be validated through real gameplay.
+
+Sky Music Player should assume that the game samples input on frame boundaries and that online playback is less forgiving than local playback. A timing profile that sounds correct locally may still be too aggressive for remote listeners.
+
+---
+
+## 2. Core Terms
 
 All timing values are expressed in microseconds.
 
-| Term                    | Meaning                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `hold_us`               | Preferred key-down duration for normal notes before compression.                              |
-| `min_hold_us`           | Minimum allowed key-down duration after compression. This is the visible down-state floor.    |
-| `release_gap_us`        | Minimum gap after releasing a key before general scheduling continues.                        |
-| `repeat_release_gap_us` | Minimum up-time before pressing the same key again. This is the critical same-key repeat gap. |
-| `input_lead_us`         | How early input is sent relative to the musical timestamp.                                    |
-| `chord_merge_window_us` | Window used to snap nearby notes into the same chord.                                         |
-| `cycle_us`              | `min_hold_us + repeat_release_gap_us`; the critical same-key repeat cycle.                    |
-| `frame_us`              | Duration of one game frame: `1_000_000 / fps`.                                                |
-| `game_fps`              | The FPS value selected or calibrated by the user. `0` disables frame-aware scaling.           |
-| `tempo_scale`           | Playback speed multiplier. Values above `1.0` increase scheduling pressure.                   |
+| Term                  | Meaning                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| hold_us               | Preferred key-down duration for a normal note before compression.                                     |
+| min_hold_us           | Minimum allowed key-down duration after compression. This is the visible down-state floor.            |
+| release_gap_us        | Minimum gap after a key is released before general scheduling continues.                              |
+| repeat_release_gap_us | Minimum up-time before pressing the same key again. This is the critical same-key repeat gap.         |
+| input_lead_us         | How early input is sent relative to the musical timestamp.                                            |
+| chord_merge_window_us | Window used to snap nearby notes into the same chord.                                                 |
+| cycle_us              | min_hold_us plus repeat_release_gap_us. This is the critical same-key repeat cycle.                   |
+| frame_us              | Duration of one game frame. At 60 FPS, one frame is about 16.67 ms.                                   |
+| game_fps              | The FPS value selected or calibrated by the user. A value of 0 means frame-aware scaling is disabled. |
+| tempo_scale           | Playback speed multiplier. Values above 1.0 increase scheduling pressure.                             |
 
 ---
 
-## 2. Profile Classes
+## 3. Design Assumptions
 
-Profiles are not all validated with the same assumptions.
+> Note: As of June 2026 the central assumption below — that the game samples input
+> on frame boundaries — is no longer just an assumption. It has been confirmed by
+> controlled in-game measurement, together with concrete timing floors. See
+> **Appendix A — Empirical Validation** for the method, results, and the floors that
+> now govern profile design. Where a measured floor differs from an earlier
+> rule-of-thumb in this document, the measured value governs.
 
-### 2.1 General 60 FPS-safe profiles
+Sky Music Player timing should be designed around these assumptions:
 
-These profiles may be used at normal 60 FPS and must remain safe when
-frame-aware scaling is disabled:
-
-- `local_precise`
-- `balanced`
-- `dense_safe`
-- `audience_safe`
-
-They must satisfy the 60 FPS cycle rule:
-
-```text
-min_hold_us + repeat_release_gap_us > 16667
-```
-
-For production defaults, prefer:
-
-```text
-min_hold_us + repeat_release_gap_us >= 18000
-```
-
-### 2.2 FPS-gated high-FPS profiles
-
-`high_fps_precise` is not a general 60 FPS-safe profile. It is a gated local-only
-profile and must only be selectable when:
-
-```text
-game_fps > 100
-```
-
-If `game_fps <= 100`, the UI/CLI must refuse `high_fps_precise` or fall back to a
-safe profile such as `balanced`.
-
-The current `high_fps_precise` profile has:
-
-```text
-cycle_us = 10000 + 6000 = 16000
-```
-
-That is intentionally below the preferred 60 FPS production margin, but it is
-valid for the gated high-FPS use case:
-
-| FPS | `frame_us` | `high_fps_precise` cycle | Status                                               |
-| --: | ---------: | -----------------------: | ---------------------------------------------------- |
-|  60 |   16.67 ms |                 16.00 ms | Invalid; must not be selectable.                     |
-| 100 |   10.00 ms |                 16.00 ms | Still blocked by policy because the gate is `> 100`. |
-| 101 |    9.90 ms |                 16.00 ms | Valid if FPS is stable.                              |
-| 120 |    8.33 ms |                 16.00 ms | Valid if FPS is stable.                              |
-| 144 |    6.94 ms |                 16.00 ms | Valid if FPS is stable.                              |
-
-This profile should not be used for online audience playback.
-
-### 2.3 Online audience-safe profiles
-
-Online audience playback optimizes for what other players hear, not only what the
-local machine hears. It should use larger holds, larger same-key release gaps,
-larger chord merge windows, and more input lead.
-
-`audience_safe` is the default online/audience profile. Aliases such as
-`remote_safe`, `online_audible_safe`, and `online_audible` should resolve to
-`audience_safe` unless a separate remote/cloud transport profile is implemented.
+1. The game may not observe every injected input event immediately.
+2. The game may sample input state only once per frame.
+3. A note can be logged by the scheduler but still fail to appear in-game if the down or up state is too short.
+4. Same-key repeats are more fragile than different-key transitions.
+5. Online listeners are less forgiving than the local player because remote audibility may depend on replication timing, network jitter, client-side batching, and frame sampling on another machine.
+6. Dense songs create scheduling pressure and may require safer timing rather than shorter timing.
+7. Safety floors should be raised when reliability is poor; they should not be lowered just to make playback faster.
 
 ---
 
-## 3. Principle 1 — The Cycle Rule
+## 4. Profile Classes
+
+Profiles are not all validated under the same assumptions. A profile must clearly state what kind of playback it is meant for.
+
+### 4.1 General 60 FPS-Safe Profiles
+
+A general 60 FPS-safe profile may be used at normal 60 FPS and must remain safe when frame-aware scaling is disabled.
+
+These profiles prioritize reliable local capture while keeping playback responsive.
+
+Examples:
+
+- local_precise
+- balanced
+- dense_safe
+- audience_safe
+
+A general 60 FPS-safe profile must satisfy the 60 FPS cycle rule:
+
+min_hold_us plus repeat_release_gap_us must be greater than one 60 FPS frame.
+
+At 60 FPS, one frame is approximately 16.67 ms. For production defaults, the practical cycle should usually be at least 18–22 ms, depending on the profile’s purpose.
+
+### 4.2 Local Precise Profiles
+
+Local precise profiles optimize for sharper local playback.
+
+They may use shorter holds and smaller gaps than audience profiles, but they must still preserve reliable local note registration.
+
+A local precise profile is not automatically suitable for online rooms. If a profile is tuned mainly by what the local player hears, it should be treated as local-first.
+
+### 4.3 Dense Playback Profiles
+
+Dense playback profiles are designed for songs with high scheduling pressure.
+
+They should reduce collapse and missed notes by balancing:
+
+- sufficient same-key release time;
+- reasonable visible hold duration;
+- slightly larger chord merge windows;
+- enough input lead to compensate for scheduling and frame delay.
+
+Dense playback should not be solved by blindly lowering min_hold_us. If density causes misses, safer spacing is usually better than shorter spacing.
+
+### 4.4 Online Audience Profiles
+
+Online audience profiles optimize for what other players hear, not only what the local player hears.
+
+Online audience playback should use:
+
+- larger visible holds;
+- larger same-key release gaps;
+- larger chord merge windows;
+- more conservative input lead;
+- stronger protection against dense timing collapse.
+
+audience_safe is the recommended profile class for online rooms.
+
+If local playback sounds correct but other players miss notes, the timing should be treated as insufficient for online audience playback.
+
+### 4.5 Experimental High-FPS Profiles
+
+High-FPS precise profiles are experimental and local-only while under development.
+
+They should not be used as the baseline for judging 60 FPS safety. They should not be used as the baseline for online audience playback.
+
+Until fully validated, high-FPS precise profiles should be considered development profiles. They may be useful for future tuning, but they are not part of the core reliability model.
+
+---
+
+## 5. Principle 1 — Frame Capture Matters More Than Scheduler Logs
+
+A scheduler log can show that a key was pressed and released correctly, while the game still fails to observe the state change.
+
+This happens because the game may only sample input state at frame boundaries. If the key-down or key-up state exists for too short a time, it can fall between samples.
+
+Therefore, timing profiles must be judged by in-game behavior, not by logs alone.
+
+Reliable playback requires that important state transitions survive long enough to be observed by the game.
+
+---
+
+## 6. Principle 2 — The Cycle Rule
 
 Same-key repeats require a complete state transition:
 
-```text
-DOWN -> visible hold -> UP -> visible release -> DOWN again
-```
+DOWN, visible hold, UP, visible release, DOWN again.
 
 The critical cycle is:
 
-```text
-cycle_us = min_hold_us + repeat_release_gap_us
-```
+cycle_us equals min_hold_us plus repeat_release_gap_us.
 
-A same-key repeat can be dropped or merged if the game client does not observe a
-complete down/up/down sequence across its input sampling frames.
-
-### 3.1 General rule
+A same-key repeat can be dropped, merged, or heard as incomplete if the game does not observe a complete down-up-down sequence.
 
 For any profile that may be selected at the current FPS:
 
-```text
-cycle_us > frame_us
-```
+cycle_us must be greater than frame_us.
 
 For profiles exposed as generally safe at 60 FPS:
 
-```text
-cycle_us > 16667
-```
+cycle_us must be greater than 16.67 ms.
 
-Recommended practical minimums:
+For production defaults at 60 FPS, prefer a practical cycle of at least 18–22 ms.
 
-| Target FPS | Frame duration | Practical minimum cycle |
-| ---------: | -------------: | ----------------------: |
-|     30 FPS |       33.33 ms |                36–40 ms |
-|     60 FPS |       16.67 ms |                18–22 ms |
-|     90 FPS |       11.11 ms |                13–16 ms |
-|   101+ FPS |     <= 9.90 ms |                14–18 ms |
-|    120 FPS |        8.33 ms |                10–16 ms |
-
-### 3.2 Why `repeat_release_gap_us` matters more than `release_gap_us`
-
-`release_gap_us` protects general scheduling after a key-up event.
-
-`repeat_release_gap_us` protects repeated notes on the same key. It must be large
-enough for the game, OS input layer, and possible online replication path to see
-the key as released before the next press.
-
-For repeat-heavy songs, tune `repeat_release_gap_us` before reducing
-`min_hold_us`.
+For online audience playback, the cycle should usually be more conservative than the local minimum. Online reliability should target multi-frame survivability, not merely one-frame local capture.
 
 ---
 
-## 4. Principle 2 — The Visibility Rule
+## 7. Principle 3 — The Visibility Rule
 
-`min_hold_us` must be long enough for the game client to observe the key as down.
-A short hold can look correct in scheduler logs but still fail in the game.
+min_hold_us must be long enough for the game client to observe the key as down.
 
-Recommended ranges:
+A short hold may feel attractive for dense songs, but it can make notes vanish if the game does not sample the down state in time.
 
-| Mode                                   | Recommended `min_hold_us` |
-| -------------------------------------- | ------------------------: |
-| Gated high-FPS local, `game_fps > 100` |                  10–12 ms |
-| Sharp local 60 FPS                     |                  12–14 ms |
-| Balanced local 60 FPS                  |                  14–16 ms |
-| Dense local MIDI                       |                  12–16 ms |
-| Online audience-safe                   |                  17–21 ms |
-| Remote/cloud input transport           |                  20–24 ms |
+Do not lower min_hold_us only to make dense songs faster.
 
-Do not lower `min_hold_us` only to make dense songs faster. If density causes
-misses, first try:
+If notes vanish, first consider:
 
-1. increasing `repeat_release_gap_us`;
-2. increasing `chord_merge_window_us` slightly;
-3. using `dense_safe` or `audience_safe`;
-4. reducing `tempo_scale`.
+1. increasing min_hold_us;
+2. increasing repeat_release_gap_us;
+3. using a safer profile;
+4. reducing tempo_scale;
+5. increasing chord_merge_window_us slightly if the issue is chord spread.
+
+For online audience playback, min_hold_us should be more conservative than local-only playback.
 
 ---
 
-## 5. Principle 3 — The Same-Key Release Rule
+## 8. Principle 4 — Same-Key Release Is Critical
 
-`repeat_release_gap_us` is the most important value for same-key repeated notes.
+repeat_release_gap_us is the most important value for repeated notes on the same key.
 
-Recommended ranges:
+Same-key repeats are fragile because the game must see the key return to an up state before it can treat the next down state as a new note.
 
-| Mode                                   | Recommended `repeat_release_gap_us` |
-| -------------------------------------- | ----------------------------------: |
-| Gated high-FPS local, `game_fps > 100` |                              6–7 ms |
-| Sharp local 60 FPS                     |                              6–7 ms |
-| Balanced local 60 FPS                  |                              7–8 ms |
-| Dense local MIDI                       |                             8–10 ms |
-| Online audience-safe                   |                            12–16 ms |
-| Remote/cloud input transport           |                            15–20 ms |
+release_gap_us is not enough protection for same-key repeats. Same-key repeats must use repeat_release_gap_us.
 
-Rules:
+If repeated notes drop locally, increase repeat_release_gap_us before lowering min_hold_us.
 
-- Same-key repeats should never use `release_gap_us` as their only protection.
-- Online audience playback should not use tiny same-key release gaps.
-- If local playback sounds fine but remote listeners miss repeated notes,
-  increase `repeat_release_gap_us` or switch to `audience_safe`.
+If repeated notes sound correct locally but are missed by other players, switch to an online audience-safe profile or increase repeat_release_gap_us.
 
 ---
 
-## 6. Principle 4 — The Chord Batching Rule
+## 9. Principle 5 — General Release Gap Still Matters
 
-`chord_merge_window_us` controls how nearby notes are snapped into one chord.
+release_gap_us protects general scheduling after a key-up event.
 
-Recommended ranges:
+It is less critical than repeat_release_gap_us for same-key repeats, but it still helps avoid overly compressed event streams.
 
-| Mode                         | Recommended `chord_merge_window_us` |
-| ---------------------------- | ----------------------------------: |
-| Expressive local play        |                              2–3 ms |
-| Balanced local play          |                                3 ms |
-| Dense MIDI local play        |                              3–4 ms |
-| Online audience-safe         |                              5–7 ms |
-| Remote/cloud input transport |                              6–8 ms |
+A release gap that is too small can make playback more fragile under load, especially in dense songs or online rooms.
 
-Small windows preserve intentional strums and MIDI imperfections. Larger windows
-reduce scheduling pressure and make chords more coherent for remote listeners.
-
-Do not make this too large for local expressive play. Excessive batching can turn
-intended arpeggios into flat chords.
+release_gap_us should be tuned for general stability, while repeat_release_gap_us should be tuned for same-key reliability.
 
 ---
 
-## 7. Principle 5 — The Input Lead Rule
+## 10. Principle 6 — Chord Batching Reduces Pressure
 
-`input_lead_us` sends input slightly before the musical timestamp.
+chord_merge_window_us controls how nearby notes are grouped into a chord.
 
-Recommended ranges:
+Small windows preserve expressive timing, strums, and intentional offsets.
 
-| Mode                         | Recommended `input_lead_us` |
-| ---------------------------- | --------------------------: |
-| Strong local PC              |                      3–4 ms |
-| Normal local PC              |                      4–6 ms |
-| Dense local playback         |                      5–8 ms |
-| Online audience-safe         |                    10–14 ms |
-| Remote/cloud input transport |                    12–18 ms |
+Larger windows reduce scheduling pressure and can make chords more coherent for remote listeners.
 
-Input lead compensates for scheduler delay, driver/input injection delay, frame
-boundary delay, and extra perceived delay in online rooms.
+The window should not be too large. Excessive batching can flatten intended arpeggios and make expressive passages sound unnatural.
 
-Rules:
+For local expressive playback, use smaller chord merge windows.
 
-- Increase gradually; too much lead can make local playback feel early.
-- Prefer calibrating `input_lead_us` over changing hold/gap values when the only
-  symptom is consistent lateness.
-- For online audience playback, use `audience_safe` before manually increasing
-  lead beyond the recommended range.
+For dense or online audience playback, slightly larger chord merge windows are usually safer.
 
 ---
 
-## 8. Frame-Aware Scaling
+## 11. Principle 7 — Input Lead Compensates for Delay
+
+input_lead_us sends input before the musical timestamp.
+
+It compensates for:
+
+- scheduler delay;
+- input injection delay;
+- OS-level timing variation;
+- frame boundary delay;
+- online perceived delay.
+
+Input lead should be adjusted gradually.
+
+Too little lead makes playback sound late.
+
+Too much lead makes playback feel early, especially for the local player.
+
+When the only symptom is consistent lateness, prefer calibrating input_lead_us before changing hold or gap values.
+
+For online audience playback, prefer using an audience-safe profile before manually pushing input lead too far.
+
+---
+
+## 12. Principle 8 — Tempo Scale Increases Timing Pressure
+
+tempo_scale affects how much timing pressure the scheduler must handle.
+
+Values above 1.0 make notes closer together. This increases the risk of:
+
+- missed notes;
+- dropped same-key repeats;
+- collapsed dense passages;
+- incomplete remote audibility.
+
+If a song becomes unreliable at a higher tempo scale, do not immediately lower safety floors.
+
+First try a safer profile or reduce tempo_scale.
+
+A profile that is stable at tempo_scale 1.0 may not remain stable at higher speed.
+
+---
+
+## 13. Principle 9 — Online Reliability Wins Over Local Sharpness
+
+Online audience playback must prioritize remote audibility over local sharpness.
+
+A locally sharp profile can still be too aggressive for online rooms.
+
+Symptoms of insufficient online timing include:
+
+- other players missing notes that sound correct locally;
+- repeated notes sounding incomplete to other players;
+- chords sounding rattly, broken, or uneven remotely;
+- dense passages collapsing for listeners while local playback appears acceptable.
+
+When online reliability is the goal, choose audience_safe before trying to manually optimize a sharper local profile.
+
+Online mode should not silently use a local-only profile when the user expects other players to hear the music clearly.
+
+---
+
+## 14. Principle 10 — Frame-Aware Scaling Should Raise Safety, Not Hide Risk
 
 Frame-aware scaling adapts timing floors to the configured game FPS.
 
+It should be used to improve stability, not to hide unsafe profile design.
+
 Important rules:
 
-1. If `game_fps <= 0`, frame-aware scaling is disabled.
-2. Do not persist already-scaled profile values.
-3. Persist the base profile, calibrated FPS, tempo scale, and input lead
-   separately.
-4. Profile selection guards run before playback. `high_fps_precise` must be
-   rejected unless `game_fps > 100`.
-5. Scaling may raise floors for stability, but it should not silently make a
-   blocked profile selectable.
-6. Frame alignment must be conservative. Aligning press-down events can improve
-   capture consistency, but aggressive alignment can increase latency and harm
-   musical timing.
+1. If game_fps is 0 or unknown, frame-aware scaling is disabled.
+2. Frame-aware scaling may raise safety floors when needed.
+3. Scaled timing values should not be persisted as profile defaults.
+4. Persist the base profile, calibrated FPS, tempo scale, and calibration values separately.
+5. A blocked or experimental profile should not become selectable only because scaling exists.
+6. Higher FPS may reduce frame boundary delay, but it does not automatically make all short hold or release values safe.
+7. Safety durations should not be reduced just because FPS is higher unless that behavior has been validated in gameplay.
 
-Suggested frame policy floors:
-
-```text
-min_visible_hold_frames >= 1.25
-input_lead_min_frame_ratio >= 0.50
-release_gap_min_frame_ratio >= 0.15
-repeat_release_gap_min_frame_ratio >= 0.50
-min_hold_min_frame_ratio >= 0.60
-```
-
-These are floors, not targets. Profile-specific values may intentionally be
-larger.
-
-### 8.1 Frame alignment
-
-Supported values:
-
-| Value       | Meaning                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------ |
-| `none`      | Do not align events to frame boundaries. Best default.                                           |
-| `down_only` | Align press-down events conservatively. Can improve capture consistency but may add timing bias. |
-
-`down_only` should be opt-in, calibrated, and easy to disable.
+Frame-aware scaling should protect users from unstable timing, not encourage fragile timing.
 
 ---
 
-## 9. Recommended Built-In Profiles
+## 15. Principle 11 — Frame Alignment Must Be Conservative
 
-The following profiles should match `DEFAULT_TIMING_PROFILES`.
+Frame alignment can improve capture consistency by placing events closer to expected frame boundaries.
 
-### 9.1 `local_precise`
+However, aggressive alignment can add timing bias and make playback feel late or uneven.
 
-Sharp local playback on a stable PC.
+The safest default is no frame alignment.
 
-Eligibility:
+Down-only alignment may be useful as an opt-in calibration mode, but it should be easy to disable.
 
-- local playback;
-- not optimized for online audience audibility;
-- general 60 FPS-safe.
-
-```python
-"local_precise": {
-    "hold_us": 20000,
-    "min_hold_us": 12000,
-    "release_gap_us": 3000,
-    "repeat_release_gap_us": 6000,
-    "min_scheduled_hold_us": 500,
-    "input_lead_us": 3000,
-    "chord_merge_window_us": 2000,
-    "spin_threshold_us": 800,
-    "focus_restore_grace_us": 50000
-}
-```
-
-Derived values:
-
-```text
-cycle_us = 12000 + 6000 = 18000
-```
+Frame alignment should never be used as a substitute for adequate hold and release durations.
 
 ---
 
-### 9.2 `balanced`
+## 16. Recommended Profile Intent
 
-Recommended default.
+| Profile          | Intended Use                            | Online Audience Use | Notes                                                                    |
+| ---------------- | --------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
+| balanced         | General default playback                | Limited             | Good default for normal use at 60 FPS.                                   |
+| local_precise    | Sharp local playback                    | No                  | Better for local feel than remote safety.                                |
+| dense_safe       | Dense local playback                    | Limited             | Safer for high note pressure, but still not the main online profile.     |
+| audience_safe    | Online room playback                    | Yes                 | Recommended when other players need to hear notes reliably.              |
+| high_fps_precise | Experimental high-FPS local development | No                  | Not a baseline for 60 FPS or online reliability while under development. |
 
-Eligibility:
+balanced should remain the general default profile.
 
-- normal local playback;
-- safe default when the user has not calibrated anything;
-- general 60 FPS-safe.
+audience_safe should be the recommended profile for online audience playback.
 
-```python
-"balanced": {
-    "hold_us": 24000,
-    "min_hold_us": 14000,
-    "release_gap_us": 4000,
-    "repeat_release_gap_us": 7000,
-    "min_scheduled_hold_us": 500,
-    "input_lead_us": 6000,
-    "chord_merge_window_us": 3000,
-    "spin_threshold_us": 500,
-    "focus_restore_grace_us": 100000
-}
-```
+dense_safe should be used when density causes collapse but online audience safety is not the main requirement.
 
-Derived values:
+local_precise should be used only when local responsiveness matters more than remote reliability.
 
-```text
-cycle_us = 14000 + 7000 = 21000
-```
+high_fps_precise should remain experimental until validated separately.
 
 ---
 
-### 9.3 `dense_safe`
+## 17. Symptom-Based Tuning
 
-Dense local MIDI playback.
-
-Eligibility:
-
-- dense songs;
-- local-first playback;
-- general 60 FPS-safe;
-- not the first choice for online audience sessions.
-
-```python
-"dense_safe": {
-    "hold_us": 20000,
-    "min_hold_us": 12000,
-    "release_gap_us": 5000,
-    "repeat_release_gap_us": 8000,
-    "min_scheduled_hold_us": 500,
-    "input_lead_us": 6000,
-    "chord_merge_window_us": 3000,
-    "spin_threshold_us": 500,
-    "focus_restore_grace_us": 100000
-}
-```
-
-Derived values:
-
-```text
-cycle_us = 12000 + 8000 = 20000
-```
+| Symptom                                                  | Likely Cause                                        | First Adjustment                                          |
+| -------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------- |
+| Same-key repeats drop locally                            | Same-key cycle is too short                         | Increase repeat_release_gap_us.                           |
+| Notes vanish locally                                     | Hold is too short or FPS is lower than expected     | Increase min_hold_us or use balanced.                     |
+| Local playback sounds fine, but other players miss notes | Online timing is too aggressive                     | Use audience_safe.                                        |
+| Other players hear repeated notes as incomplete          | Same-key release is too short for online audibility | Increase repeat_release_gap_us or use audience_safe.      |
+| Other players hear chords as broken or rattly            | Chord events are too spread out                     | Increase chord_merge_window_us slightly.                  |
+| Playback sounds consistently late                        | Input lead is too small                             | Increase input_lead_us gradually.                         |
+| Playback sounds early locally                            | Input lead is too large                             | Decrease input_lead_us.                                   |
+| Dense passages collapse                                  | Scheduling pressure is too high                     | Use dense_safe, use audience_safe, or reduce tempo_scale. |
+| Local playback feels too soft or mushy                   | Holds or gaps are too large for the use case        | Use balanced or local_precise.                            |
 
 ---
 
-### 9.4 `audience_safe`
-
-> [!NOTE]
-> The `audience_safe` profile replaces and consolidates the legacy `remote_safe` profile (along with other legacy aliases like `online_audible_safe` and `online_audible`) to maintain strict timing and naming consistency across the codebase.
-
-Optimized for online room sessions where other players must hear the notes
-reliably.
-
-Eligibility:
-
-- online/audience playback;
-- remote audibility first;
-- repeated-note safety first;
-- general 60 FPS-safe.
-
-```python
-"audience_safe": {
-    "hold_us": 32000,
-    "min_hold_us": 18000,
-    "release_gap_us": 7000,
-    "repeat_release_gap_us": 13000,
-    "min_scheduled_hold_us": 500,
-    "input_lead_us": 13000,
-    "chord_merge_window_us": 5000,
-    "spin_threshold_us": 500,
-    "focus_restore_grace_us": 150000
-}
-```
-
-Derived values:
-
-```text
-cycle_us = 18000 + 13000 = 31000
-```
-
----
-
-### 9.5 `high_fps_precise`
-
-Verified high-FPS local playback.
-
-Eligibility:
-
-- local-only playback;
-- `game_fps > 100` is required;
-- FPS must be stable and not frequently dipping below the configured value;
-- not safe as a 60 FPS general profile;
-- not recommended for online audience playback.
-
-```python
-"high_fps_precise": {
-    "hold_us": 18000,
-    "min_hold_us": 10000,
-    "release_gap_us": 3000,
-    "repeat_release_gap_us": 6000,
-    "min_scheduled_hold_us": 500,
-    "input_lead_us": 3000,
-    "chord_merge_window_us": 2000,
-    "spin_threshold_us": 500,
-    "focus_restore_grace_us": 50000
-}
-```
-
-Derived values:
-
-```text
-cycle_us = 10000 + 6000 = 16000
-```
-
-This profile is valid because selection is gated by `game_fps > 100`. If that
-guard is removed, this profile becomes unsafe for normal 60 FPS assumptions and
-must be changed or hidden.
-
----
-
-## 10. Profile Selection Policy
-
-Selection must be explicit, predictable, and safe by default.
-
-Recommended policy:
-
-```python
-GENERAL_60FPS_SAFE_PROFILES: set[str] = {
-    "local_precise",
-    "balanced",
-    "dense_safe",
-    "audience_safe",
-}
-
-FPS_GATED_PROFILES: dict[str, int] = {
-    # Strictly greater than this FPS.
-    "high_fps_precise": 100,
-}
-
-ONLINE_AUDIENCE_PROFILE = "audience_safe"
-DEFAULT_PROFILE = "balanced"
-```
-
-Profile resolution:
-
-```python
-def resolve_profile(
-    requested_profile: str,
-    *,
-    game_fps: int,
-    online_audience_mode: bool,
-) -> str:
-    profile = requested_profile.lower().replace("-", "_")
-
-    if profile in {"remote_safe", "online_audible_safe", "online_audible"}:
-        profile = "audience_safe"
-
-    if online_audience_mode:
-        return "audience_safe"
-
-    if profile == "high_fps_precise" and game_fps <= 100:
-        raise ValueError("high_fps_precise requires game_fps > 100")
-
-    if profile not in GENERAL_60FPS_SAFE_PROFILES and profile not in FPS_GATED_PROFILES:
-        return DEFAULT_PROFILE
-
-    return profile
-```
-
-Do not silently run `high_fps_precise` at 60 FPS. Either block it with a clear
-message or fall back to `balanced` with a visible warning.
-
----
-
-## 11. Symptom-Based Tuning
-
-| Symptom                                        | Likely cause                                                                      | First adjustment                                                            |
-| ---------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Same-key repeats drop locally                  | Cycle too short                                                                   | Increase `repeat_release_gap_us`.                                           |
-| Notes randomly vanish locally                  | Hold too short or FPS lower than expected                                         | Increase `min_hold_us` or use `balanced`.                                   |
-| `high_fps_precise` fails intermittently        | FPS is not stable above 100, or game/input layer is sampling slower than expected | Use `balanced` or `local_precise`; do not lower gaps further.               |
-| Local sounds fine, other players miss notes    | Online replication/audience path is not surviving dense timing                    | Use `audience_safe`.                                                        |
-| Other players hear incomplete repeated notes   | Same-key release too short for online audibility                                  | Increase `repeat_release_gap_us` or use `audience_safe`.                    |
-| Other players hear chords as rattly/incomplete | Chord events are too spread out                                                   | Increase `chord_merge_window_us`.                                           |
-| Playback sounds late locally and remotely      | Lead too small                                                                    | Increase `input_lead_us` gradually.                                         |
-| Playback sounds early locally                  | Lead too large                                                                    | Decrease `input_lead_us`.                                                   |
-| Dense song collapses                           | Too much scheduling pressure                                                      | Use `dense_safe`, use `audience_safe`, or reduce `tempo_scale`.             |
-| Local play feels mushy                         | Hold/gaps too large                                                               | Use `balanced`, `local_precise`, or gated `high_fps_precise` when eligible. |
-
----
-
-## 12. Validation Rules for Future Profiles
-
-Every new profile must declare its class:
-
-- general 60 FPS-safe;
-- FPS-gated local-only;
-- online/audience-safe;
-- experimental hidden profile.
-
-Do not validate all classes with the same assumptions.
-
-### 12.1 Typed validation helpers
-
-```python
-from typing import Final, Literal, TypedDict
-
-ProfileClass = Literal["general_60fps", "fps_gated", "audience_safe", "experimental"]
-
-class TimingProfile(TypedDict):
-    hold_us: int
-    min_hold_us: int
-    release_gap_us: int
-    repeat_release_gap_us: int
-    min_scheduled_hold_us: int
-    input_lead_us: int
-    chord_merge_window_us: int
-    spin_threshold_us: int
-    focus_restore_grace_us: int
-
-GENERAL_60FPS_SAFE_PROFILES: Final[set[str]] = {
-    "local_precise",
-    "balanced",
-    "dense_safe",
-    "audience_safe",
-}
-
-FPS_GATED_MIN_EXCLUSIVE_FPS: Final[dict[str, int]] = {
-    "high_fps_precise": 100,
-}
-
-AUDIENCE_SAFE_PROFILES: Final[set[str]] = {"audience_safe"}
-
-
-def frame_us_for(fps: int) -> float:
-    if fps <= 0:
-        raise ValueError("fps must be > 0")
-    return 1_000_000 / fps
-
-
-def cycle_us(profile: TimingProfile) -> int:
-    return profile["min_hold_us"] + profile["repeat_release_gap_us"]
-```
-
-### 12.2 General profile validation
-
-```python
-def validate_general_60fps_profile(name: str, profile: TimingProfile) -> None:
-    cycle = cycle_us(profile)
-
-    if cycle <= 16_667:
-        raise ValueError(f"{name}: cycle_us must be > 16667us for 60 FPS safety")
-
-    if cycle < 18_000:
-        raise ValueError(f"{name}: cycle_us should be >= 18000us for production margin")
-
-    if profile["min_hold_us"] < 10_000:
-        raise ValueError(f"{name}: min_hold_us below 10000us is not allowed")
-
-    if profile["repeat_release_gap_us"] < 6_000:
-        raise ValueError(f"{name}: repeat_release_gap_us below 6000us is not allowed")
-
-    if profile["input_lead_us"] < 0:
-        raise ValueError(f"{name}: input_lead_us must be non-negative")
-
-    if profile["chord_merge_window_us"] < 0:
-        raise ValueError(f"{name}: chord_merge_window_us must be non-negative")
-```
-
-### 12.3 FPS-gated profile validation
-
-```python
-def validate_fps_gated_profile(
-    name: str,
-    profile: TimingProfile,
-    *,
-    selected_fps: int,
-) -> None:
-    min_exclusive_fps = FPS_GATED_MIN_EXCLUSIVE_FPS[name]
-
-    if selected_fps <= min_exclusive_fps:
-        raise ValueError(f"{name}: requires selected_fps > {min_exclusive_fps}")
-
-    frame_us = frame_us_for(selected_fps)
-    cycle = cycle_us(profile)
-
-    if cycle <= frame_us:
-        raise ValueError(
-            f"{name}: unsafe cycle {cycle}us <= frame {frame_us:.0f}us at {selected_fps} FPS"
-        )
-
-    if profile["min_hold_us"] < 10_000:
-        raise ValueError(f"{name}: min_hold_us below 10000us is not allowed")
-
-    if profile["repeat_release_gap_us"] < 6_000:
-        raise ValueError(f"{name}: repeat_release_gap_us below 6000us is not allowed")
-
-    if profile["input_lead_us"] < 0:
-        raise ValueError(f"{name}: input_lead_us must be non-negative")
-
-    if profile["chord_merge_window_us"] < 0:
-        raise ValueError(f"{name}: chord_merge_window_us must be non-negative")
-```
-
-### 12.4 Audience-safe validation
-
-```python
-def validate_audience_safe_profile(name: str, profile: TimingProfile) -> None:
-    cycle = cycle_us(profile)
-
-    if cycle < 28_000:
-        raise ValueError(f"{name}: audience-safe cycle_us should be >= 28000us")
-
-    if profile["min_hold_us"] < 17_000:
-        raise ValueError(f"{name}: audience-safe min_hold_us must be >= 17000us")
-
-    if profile["repeat_release_gap_us"] < 12_000:
-        raise ValueError(f"{name}: audience-safe repeat_release_gap_us must be >= 12000us")
-
-    if profile["input_lead_us"] < 10_000:
-        raise ValueError(f"{name}: audience-safe input_lead_us must be >= 10000us")
-
-    if profile["chord_merge_window_us"] < 5_000:
-        raise ValueError(f"{name}: audience-safe chord_merge_window_us must be >= 5000us")
-```
-
-### 12.5 Dispatcher
-
-```python
-def validate_timing_profile(
-    name: str,
-    profile: TimingProfile,
-    *,
-    selected_fps: int | None = None,
-) -> None:
-    if name in FPS_GATED_MIN_EXCLUSIVE_FPS:
-        if selected_fps is None:
-            raise ValueError(f"{name}: selected_fps is required for FPS-gated profiles")
-        validate_fps_gated_profile(name, profile, selected_fps=selected_fps)
-        return
-
-    validate_general_60fps_profile(name, profile)
-
-    if name in AUDIENCE_SAFE_PROFILES:
-        validate_audience_safe_profile(name, profile)
-```
-
----
-
-## 13. Current Profile Matrix
-
-| Profile            | Class                | `cycle_us` | 60 FPS general-safe | Online audience-safe | Notes                                   |
-| ------------------ | -------------------- | ---------: | ------------------- | -------------------- | --------------------------------------- |
-| `local_precise`    | general 60 FPS-safe  |      18 ms | Yes                 | No                   | Sharp local playback.                   |
-| `balanced`         | general 60 FPS-safe  |      21 ms | Yes                 | Limited              | Recommended default.                    |
-| `dense_safe`       | general 60 FPS-safe  |      20 ms | Yes                 | Limited              | Dense local playback.                   |
-| `audience_safe`    | audience-safe        |      31 ms | Yes                 | Yes                  | Best built-in profile for online rooms. |
-| `high_fps_precise` | FPS-gated local-only |      16 ms | No                  | No                   | Valid only when `game_fps > 100`.       |
-
----
-
-## 14. Tuning Order
+## 18. Tuning Order
 
 When playback is unreliable, tune in this order:
 
-1. Confirm the correct profile class.
-2. Confirm the configured FPS and whether FPS is stable.
-3. Confirm `tempo_scale` is not creating unrealistic density.
-4. For dropped same-key repeats, increase `repeat_release_gap_us`.
-5. For vanished notes, increase `min_hold_us`.
-6. For remote/audience misses, switch to `audience_safe`.
-7. For rattly chords, increase `chord_merge_window_us` slightly.
-8. For consistent lateness, adjust `input_lead_us`.
-9. Only after those steps, consider changing `hold_us` or adding a new profile.
+1. Confirm the playback intent: local, dense, or online audience.
+2. Confirm the selected profile matches that intent.
+3. Confirm the configured FPS and whether FPS is stable.
+4. Confirm tempo_scale is not creating unrealistic density.
+5. For dropped same-key repeats, increase repeat_release_gap_us.
+6. For vanished notes, increase min_hold_us.
+7. For online audience misses, switch to audience_safe.
+8. For broken or rattly chords, increase chord_merge_window_us slightly.
+9. For consistent lateness, adjust input_lead_us.
+10. Only after those steps, consider changing hold_us or defining a new profile.
 
-Do not reduce safety floors to make logs look faster. The goal is reliable
-registration in the game and, when online, reliable audibility for other players.
+Do not reduce safety floors to make playback appear faster.
+
+The priority is reliable registration in the game and reliable audibility for listeners.
 
 ---
 
-## 15. Non-Negotiable Rules
+## 19. Validation Rules for Profile Changes
 
-1. `balanced` remains the default profile.
-2. `audience_safe` is the recommended online/audience profile.
-3. `high_fps_precise` must require `game_fps > 100`.
-4. `high_fps_precise` must not be auto-selected for online audience playback.
-5. Same-key repeats must use `repeat_release_gap_us`, not only `release_gap_us`.
-6. Frame-aware scaling must not persist already-scaled hold/gap values.
-7. Future profiles must state their class and validation assumptions.
-8. Any profile exposed at normal 60 FPS must satisfy the 60 FPS cycle rule.
-9. Any change that lowers `min_hold_us` or `repeat_release_gap_us` must include a
-   gameplay reason and a validation plan.
-10. Online reliability wins over local sharpness when the selected mode is
-    audience playback.
+Any profile change must be reviewed against these questions:
+
+1. What playback intent is this profile for?
+2. Is it local-only, dense-safe, general default, or online audience-safe?
+3. Does it remain safe at the FPS values where it can be selected?
+4. Does it preserve same-key repeat reliability?
+5. Does it preserve visible key-down capture?
+6. Does it avoid excessive chord flattening?
+7. Does it avoid excessive input lead?
+8. Does it behave acceptably at tempo_scale 1.0?
+9. Does it remain reasonable when tempo_scale is increased?
+10. Has it been tested in real gameplay, not only scheduler logs?
+11. If it is meant for online rooms, have remote listeners confirmed reliability?
+
+A profile should not be exposed as production-ready until these questions have acceptable answers.
+
+---
+
+## 20. Non-Negotiable Rules
+
+1. balanced remains the general default profile.
+2. audience_safe is the recommended online audience profile.
+3. Online reliability wins over local sharpness when the selected intent is audience playback.
+4. Same-key repeats must be protected by repeat_release_gap_us.
+5. release_gap_us must not be treated as sufficient protection for same-key repeats.
+6. Any profile exposed at normal 60 FPS must satisfy the 60 FPS cycle rule.
+7. Frame-aware scaling must not persist already-scaled hold or gap values as profile defaults.
+8. Future profiles must state their class and validation assumptions.
+9. Any change that lowers min_hold_us or repeat_release_gap_us must include a gameplay reason and a validation plan.
+10. Logs are not enough. Real in-game behavior is the source of truth.
+11. A profile that sounds correct locally is not automatically safe for online audience playback.
+12. Experimental high-FPS profiles must not be used as the baseline for 60 FPS or online audience reliability.
+
+---
+
+## 21. Final Principle
+
+Timing profiles should be conservative where the game is fragile and precise only where reliability has already been proven.
+
+For local playback, responsiveness matters.
+
+For dense playback, pressure control matters.
+
+For online playback, audibility for other players matters most.
+
+When in doubt, choose the profile that makes the game and the audience receive the notes reliably, not the profile that makes the scheduler look fastest.
+
+---
+
+## Appendix A — Empirical Validation (Measured In-Game Behavior)
+
+This appendix records controlled in-game measurements (June 2026) that upgrade the
+frame-sampling model from assumption (Sections 3, 5, 6) to measured fact, and that
+fix concrete timing floors. Where a measured floor differs from an earlier
+rule-of-thumb in this document, **the measured value governs**.
+
+### A.1 Method
+
+- The player sends scan codes; it cannot observe whether the game registered a note.
+  Therefore the ground truth is the **recorded game audio**, not the scheduler logs.
+- Telemetry (`--debug-csv`) verifies the *sent-side* hold/gap; **onset counting on the
+  recorded WAV** verifies *registration*. The two together separate "tool failed to
+  produce the timing" from "game rejected the input".
+- Test material: staircase song files — isolated single notes (for the hold/visibility
+  floor) and same-key repeats with a stepped gap (for the release floor) — analysed by
+  counting attack onsets per block.
+- Critical controls:
+  - **Lock the game FPS externally** (VSync / frame limiter) and verify with an overlay.
+  - **Do not pass the player's `--fps` during measurement** — frame-aware scaling would
+    rescale the swept values and mask the result.
+  - Keep the hold **≥ 1 frame at the test FPS** when measuring the gap, so visibility
+    failure does not confound the gap variable.
+  - Use a short-decay/percussive instrument and count **onsets**, not loudness — a
+    same-pitch sustained note blurs into one continuous band and cannot be counted by
+    spectrogram or volume.
+
+### A.2 Result 1 — The game samples input once per render frame (confirmed)
+
+The minimum hold needed for reliable single-note registration scales **linearly with
+the frame period**: about one frame at every FPS tested.
+
+| Game FPS | One frame | Measured hold floor |
+| -------- | --------- | ------------------- |
+| 30       | 33.3 ms   | ≈ 33 ms             |
+| 60       | 16.7 ms   | ≈ 17 ms             |
+| 144      | 6.9 ms    | ≈ 7 ms              |
+
+Sub-frame holds register **probabilistically** (e.g. a 0.72-frame hold registered
+about 72% of notes), exactly as a per-frame rising-edge sampler predicts. Conclusion:
+the game reads key **state** on frame boundaries. Frame-aware timing is therefore
+correct in principle, not merely a useful heuristic.
+
+### A.3 Result 2 — Visibility floor (hold) = one frame, purely frame-relative
+
+Reliable key-down capture requires `hold ≥ 1 frame`. No fixed-millisecond component
+was observed (7 ms suffices at 144 FPS). Encoded standard: `min_visible_hold_frames =
+1.25` (one frame plus ~25% phase margin). This value is kept.
+
+### A.4 Result 3 — Same-key release-gap floor = max(~1.4 frame, ~17 ms fixed)
+
+The smallest same-key release gap that still re-triggers the note **100% of the time**:
+
+| Game FPS | One frame | Measured 100%-reliable gap | In frames |
+| -------- | --------- | -------------------------- | --------- |
+| 60       | 16.7 ms   | ≈ 22–24 ms                 | ~1.3–1.4  |
+| 144      | 6.9 ms    | ≈ 14–17 ms                 | ~2–2.5    |
+
+The floor is **neither constant in milliseconds nor constant in frames**. It fits a
+"larger of the two" model: `gap ≥ max(~1.4 × frame, ~16 ms fixed)`. At high FPS a
+**fixed ~17 ms wall** dominates (plausibly a fixed internal note/animation tick near
+60 Hz, independent of render FPS — hypothesised, not proven). At a gap of exactly one
+frame, reliability is only ~80% (phase-dependent), so margin is mandatory.
+
+Encoded standard: `repeat_release_gap ≥ max(1.5 × frame, 18000 µs)`. (The previous
+`0.5 × frame` with no fixed floor was too low on both counts and dropped fast same-key
+repeats.)
+
+### A.5 The asymmetry between hold and gap
+
+- **Hold (visibility)** floor is a *pure frame multiple* — no fixed component.
+- **Repeat gap** floor is a frame multiple **plus** a fixed ~17 ms wall.
+
+Practical consequence: higher FPS sharpens single-note capture without bound, but does
+**not** let same-key repeats go below ~17 ms of release. High-FPS profiles are not a
+licence for arbitrarily fast repeated notes.
+
+### A.6 How the standard is currently enforced
+
+- `repeat_release_gap_min_frame_ratio`: `0.5 → 1.5`; added `repeat_release_gap_floor_us
+  = 18000`; applied at **all** FPS when frame-aware is enabled (`game_fps > 0`).
+  When `game_fps = 0` (frame-aware disabled), raw profile values are kept — this is the
+  intentional expert/experiment escape hatch.
+- `dense_safe.repeat_release_gap_us`: `9000 → 18000` (its base sat below the physical
+  floor).
+- Consequence: at any fixed FPS, the same-key release gap is governed by this universal
+  floor, so different profiles **converge** on it (raw → base; 30 FPS → 50000 µs;
+  60 FPS → 25001 µs; 144 FPS → 18000 µs). Profiles still differ in hold, input lead and
+  chord-merge — but not in this floor.
+- Some built-in base gaps remain below ~17 ms (e.g. `balanced` 8 ms, `local_precise`
+  6.5 ms). The scaling floor corrects them whenever `game_fps` is set, but they remain
+  under-spec when frame-aware is disabled; raising those bases is a pending tuning call.
+
+### A.7 Measurement pitfalls (recorded so they are not repeated)
+
+- **Spectrogram / loudness counting of same-pitch sustained repeats is useless** — the
+  tails overlap into one band. Count attack onsets instead.
+- **A hold shorter than one frame at the test FPS confounds the gap test** — visibility
+  failures then mask the gap variable (e.g. a 24 ms hold is invalid at 30 FPS, where one
+  frame is 33 ms; every block drops notes regardless of gap).
+- **The player's `--fps` must be off during measurement**, or frame-aware scaling
+  rescales the swept values.
+
+### A.8 Open / unconfirmed
+
+- The mechanism of the fixed ~17 ms repeat wall (hypothesised ~60 Hz internal tick) is
+  not proven.
+- A clean 30 FPS gap point (hold ≥ 42 ms) has not yet been taken; the model predicts a
+  ~46 ms reliable gap there.
+- Onset counts are noisy (±1–2); thresholds above are read as trends, not exact values.
+
+### A.9 Profile differentiation lives ABOVE the floors
+
+A direct consequence of the frame-aware floors (A.3, A.4): when `game_fps` is set, the
+floors **dominate** the base `min_hold_us` and `repeat_release_gap_us`. At 60 FPS every
+profile is floored to at least `min_hold = 20834` and `repeat_gap = 25001`. Therefore a
+base value at or below those floors does **not** differentiate a profile — it is simply
+replaced by the floor.
+
+For a profile to be genuinely *more conservative* than the local minimum (which is the
+entire purpose of `audience_safe`), its base `min_hold`/`repeat_gap` must be set **above**
+the local floors. Otherwise it silently collapses to the same timing as `balanced`.
+
+`audience_safe` is therefore tuned with this in mind (it is intended to become the default
+profile):
+
+| Value                 | audience_safe | In frames @60 | Rationale                                              |
+| --------------------- | ------------- | ------------- | ------------------------------------------------------ |
+| hold_us               | 34000         | ~2.0          | large visible hold for remote capture                  |
+| min_hold_us           | 25000         | 1.5           | compressed notes survive multiple frames online        |
+| repeat_release_gap_us | 33000         | ~2.0          | above the 1.5-frame local floor → real online margin   |
+
+This gives a same-key cycle of ~58 ms (~3.5 frames at 60 FPS), versus the local minimum
+of ~2.75 frames. Because online reliability depends on absolute time (network jitter,
+replication, remote frame sampling) rather than the local frame, `repeat_release_gap_us`
+is held as a fixed ~33 ms regardless of the local FPS.
+
+The local profiles (`balanced`, `local_precise`, `dense_safe`) intentionally leave
+`min_hold`/`repeat_gap` at or below the floors — physics caps same-key reliability
+identically for all of them, so they differentiate through `hold_us`, `input_lead_us` and
+`chord_merge_window_us` instead.
+
+> Caveat: the audience values are extrapolated from LOCAL measurements plus the principles
+> in this document. They have not yet been validated in a populated online room; that
+> validation is the remaining open item for the audience profile.

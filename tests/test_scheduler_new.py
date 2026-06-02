@@ -165,8 +165,8 @@ def test_analyzer_detects_dense_clusters():
 def test_repeat_release_gap_scales_at_30fps():
     base = TimingPolicy.from_dict({"repeat_release_gap_us": 2000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. 50% = 16,667us (ceiled).
-    assert frame_policy.repeat_release_gap_us == 16667
+    # 30fps = 33,333us. Empirical floor (Exp2) = max(base 2000, 1.5*frame=50000, 18000) = 50000.
+    assert frame_policy.repeat_release_gap_us == 50000
  
  
 def test_release_collision_delay_separates_up_from_conflicting_down():
@@ -189,8 +189,8 @@ def test_release_collision_delay_separates_up_from_conflicting_down():
 def test_min_hold_scales_at_30fps():
     base = TimingPolicy.from_dict({"min_hold_us": 16000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. 60% = 20,000us (ceiled).
-    assert frame_policy.min_hold_us == 20000
+    # 30fps = 33,333us. Visibility floor (Exp1) = max(base 16000, 1.25*frame=41667) = 41667.
+    assert frame_policy.min_hold_us == 41667
 
 
 def test_strict_policy_rejects_impossible_repeat():
@@ -285,20 +285,20 @@ def test_none_frame_align_preserves_exact_down_time():
 
 def test_timing_policy_from_dict_defaults():
     policy = TimingPolicy.from_dict({})
-    assert policy.hold_us == 24000
-    assert policy.min_hold_us == 14000
+    assert policy.hold_us == 26000
+    assert policy.min_hold_us == 17000
 
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
-    assert policy.hold_us == 20000
+    assert policy.hold_us == 22000
     policy_2 = TimingPolicy.from_profile_name("audience-safe")
-    assert policy_2.hold_us == 32000
+    assert policy_2.hold_us == 34000
 
 def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     p = FrameTimingPolicy.from_profile_name("balanced", fps=60)
     assert p.fps == 60
-    assert p.hold_us == 24000
+    assert p.hold_us == 26000
 
 def test_playback_overrides_dataclass():
     from main import PlaybackOverrides
@@ -314,7 +314,7 @@ def test_high_fps_chord_merge_protection():
     assert p_local.chord_merge_window_us == 3000
 
     p_remote = FrameTimingPolicy.from_profile_name("audience-safe", fps=240)
-    assert p_remote.chord_merge_window_us == 5000
+    assert p_remote.chord_merge_window_us == 6500
 
 
 def test_cycle_rule_safety_margin_clamp():
@@ -352,17 +352,14 @@ def test_cycle_rule_safety_margin_clamp():
 def test_timing_profile_validators():
     from sky_music.domain.validation import (
         validate_timing_profile,
-        validate_audience_safe_profile,
+        validate_builtin_timing_profile,
     )
     from sky_music.config import DEFAULT_TIMING_PROFILES
 
-    # Verify all built-in profiles pass validate_timing_profile
+    # Verify all built-in profiles pass validate_builtin_timing_profile
     for name, p in DEFAULT_TIMING_PROFILES.items():
-        fps = 90 if name == "high_fps_precise" else 60
-        validate_timing_profile(p, fps=fps)
-
-    # Verify audience_safe passes audience safe checks
-    validate_audience_safe_profile(DEFAULT_TIMING_PROFILES["audience_safe"])
+        fps = 101 if name == "high_fps_precise" else 60
+        validate_builtin_timing_profile(name, p, selected_fps=fps)
 
     # Test failure case
     unsafe = {
@@ -373,4 +370,126 @@ def test_timing_profile_validators():
     }
     with pytest.raises(ValueError, match="Unsafe cycle"):
         validate_timing_profile(unsafe, fps=60)
+
+
+def test_hold_ordering_invariant_rejects_hold_below_min_hold():
+    """Regression: a profile whose hold_us is below its min_hold_us must be rejected.
+
+    Previously hold_us was never validated, so e.g. audience_safe with hold_us=1
+    sailed through every check while silently breaking the hold semantics.
+    """
+    from sky_music.domain.validation import validate_hold_ordering, validate_timing_profile
+
+    with pytest.raises(ValueError, match="hold_us"):
+        validate_hold_ordering({"hold_us": 1, "min_hold_us": 22000})
+
+    with pytest.raises(ValueError, match="min_hold_us must be > 0"):
+        validate_hold_ordering({"min_hold_us": 0, "hold_us": 26000})
+
+    # A structurally valid ordering must pass.
+    validate_hold_ordering({"min_hold_us": 15000, "hold_us": 26000})
+
+    # And the invariant is reachable through the full profile validator too.
+    bad = {
+        "hold_us": 1, "min_hold_us": 22000, "repeat_release_gap_us": 18000,
+        "input_lead_us": 14000, "chord_merge_window_us": 6000,
+    }
+    with pytest.raises(ValueError, match="hold_us"):
+        validate_timing_profile(bad, fps=60)
+
+
+def test_audience_safe_high_fps_keeps_safety_durations():
+    p60 = FrameTimingPolicy.from_profile_name("audience-safe", fps=60)
+    p144 = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
+
+    assert p144.hold_us == p60.hold_us
+    assert p144.min_hold_us == p60.min_hold_us
+    assert p144.release_gap_us == p60.release_gap_us
+    # audience_safe sets its repeat gap (33000) above every local frame-aware floor, so it is
+    # a constant absolute online margin independent of local FPS (Appendix A.9), not the
+    # generic 1.5-frame local floor that other profiles fall back to.
+    assert p144.repeat_release_gap_us == 33000
+    assert p60.repeat_release_gap_us == 33000
+
+
+def test_audience_safe_144fps_compensates_input_lead():
+    p = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
+    assert p.input_lead_us == 9639
+
+
+@pytest.mark.parametrize(
+    ("fps", "expected_min", "expected_max"),
+    [
+        (60, 14500, 14500),
+        (90, 11722, 11722),
+        (120, 10333, 10333),
+        (144, 9639, 9639),
+        (165, 9197, 9197),
+        (240, 8250, 8250),
+    ],
+)
+def test_audience_safe_input_lead_is_phase_compensated(fps, expected_min, expected_max):
+    p = FrameTimingPolicy.from_profile_name("audience-safe", fps=fps)
+    assert expected_min <= p.input_lead_us <= expected_max
+
+
+@pytest.mark.parametrize("profile", ["balanced", "local-precise", "dense-safe"])
+def test_non_audience_profiles_do_not_use_audience_phase_compensation(profile):
+    p60 = FrameTimingPolicy.from_profile_name(profile, fps=60)
+    p144 = FrameTimingPolicy.from_profile_name(profile, fps=144)
+
+    assert p144.input_lead_us == p60.input_lead_us
+
+
+def test_audience_safe_runtime_validation():
+    from sky_music.domain.validation import validate_audience_safe_runtime_policy
+    from sky_music.config import DEFAULT_TIMING_PROFILES
+
+    # 144 FPS policy: runtime lead drops below 10,000us (to 9139us), which is valid under runtime validation
+    policy = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
+    ref_profile = DEFAULT_TIMING_PROFILES["audience_safe"]
+    
+    # This should pass without raising ValueError
+    validate_audience_safe_runtime_policy(policy, reference_profile=ref_profile)
+
+    # Let's test a policy that violates runtime limits (e.g. min_hold_us too small)
+    invalid_policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"min_hold_us": 10000, "repeat_release_gap_us": 19000}),
+        fps=144,
+        profile_name="audience-safe",
+    )
+    with pytest.raises(ValueError, match="min_hold_us"):
+        validate_audience_safe_runtime_policy(invalid_policy, reference_profile=ref_profile)
+
+
+def test_high_fps_precise_rejected_at_100fps_or_lower():
+    from sky_music.domain.session_context import PlaybackSessionContext
+    # 100 FPS should fallback to local-precise
+    ctx = PlaybackSessionContext(profile_name="high-fps-precise", fps=100)
+    policy = ctx.resolve_effective_policy()
+    assert policy.profile_name == "local-precise"
+
+    # 101 FPS should remain high-fps-precise
+    ctx2 = PlaybackSessionContext(profile_name="high-fps-precise", fps=101)
+    policy2 = ctx2.resolve_effective_policy()
+    assert policy2.profile_name == "high-fps-precise"
+
+
+def test_manual_input_lead_override_bypasses_compensation():
+    from sky_music.domain.session_context import PlaybackSessionContext
+    # With override, p.input_lead_us should be exactly the override value (e.g. 10000us)
+    ctx = PlaybackSessionContext(
+        profile_name="audience-safe",
+        fps=144,
+        policy_overrides=(("input_lead_us", 10000),),
+    )
+    policy = ctx.resolve_effective_policy()
+    assert policy.input_lead_us == 10000
+    assert policy.phase_compensated is False
+
+    # Without override, p.input_lead_us is compensated (to 9639us)
+    ctx2 = PlaybackSessionContext(profile_name="audience-safe", fps=144)
+    policy2 = ctx2.resolve_effective_policy()
+    assert policy2.input_lead_us == 9639
+    assert policy2.phase_compensated is True
 
