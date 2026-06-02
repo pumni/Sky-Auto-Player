@@ -6,6 +6,9 @@ It is intentionally a principles document, not an implementation document. It sh
 
 The goal is not to make playback appear fast in logs. The goal is reliable note registration inside the game and, when playing online, reliable audibility for other players.
 
+**Related docs:** `timing-experiments.md` (the experiments that prove Appendix A and the open
+calibration work) and `timing-profile-frame-model.md` (the frame-relative representation in code).
+
 ---
 
 ## 1. Scope
@@ -130,13 +133,19 @@ audience_safe is the recommended profile class for online rooms.
 
 If local playback sounds correct but other players miss notes, the timing should be treated as insufficient for online audience playback.
 
-### 4.5 Experimental High-FPS Profiles
+### 4.5 Why there is no dedicated high-FPS profile
 
-High-FPS precise profiles are experimental and local-only while under development.
+An earlier experimental `high_fps_precise` profile assumed that higher render FPS lets timing
+go uniformly sharper (shorter holds, shorter gaps, sub-frame margins). Measurement disproved
+that premise (Appendix A.10 / EXP-2): higher render FPS sharpens **single-note visibility
+only**; onset cadence and same-key repeats are capped by a fixed ~60 Hz internal tick that
+does not scale with render FPS. A separate high-FPS profile therefore bought nothing the frame
+model does not already provide, and was removed.
 
-They should not be used as the baseline for judging 60 FPS safety. They should not be used as the baseline for online audience playback.
-
-Until fully validated, high-FPS precise profiles should be considered development profiles. They may be useful for future tuning, but they are not part of the core reliability model.
+High-FPS users are served by the normal profiles: every profile is frame-aware, so its
+visibility holds already shorten with FPS via the `*_frames` term, while the fixed floors
+(same-key wall, audience remote margin) correctly stay constant. `local_precise` in
+particular is pure frame-relative (zero hold floor) and is the sharpest option at high FPS.
 
 ---
 
@@ -346,13 +355,14 @@ Frame alignment should never be used as a substitute for adequate hold and relea
 
 ## 16. Recommended Profile Intent
 
+The project ships exactly four profiles:
+
 | Profile          | Intended Use                            | Online Audience Use | Notes                                                                    |
 | ---------------- | --------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| balanced         | General default playback                | Limited             | Good default for normal use at 60 FPS.                                   |
-| local_precise    | Sharp local playback                    | No                  | Better for local feel than remote safety.                                |
-| dense_safe       | Dense local playback                    | Limited             | Safer for high note pressure, but still not the main online profile.     |
-| audience_safe    | Online room playback                    | Yes                 | Recommended when other players need to hear notes reliably.              |
-| high_fps_precise | Experimental high-FPS local development | No                  | Not a baseline for 60 FPS or online reliability while under development. |
+| local_precise    | Sharp local playback                    | No                  | Reference profile = the measured floors themselves; pure frame-relative holds. |
+| balanced         | General default playback                | Limited             | local_precise + a little body/lead. Good default for normal use.        |
+| dense_safe       | Dense local playback                    | Limited             | Body like balanced + larger chord merge / release gap for note pressure. |
+| audience_safe    | Online room playback                    | Yes                 | A little above balanced for remote audibility; carried mainly by input lead. |
 
 balanced should remain the general default profile.
 
@@ -361,8 +371,6 @@ audience_safe should be the recommended profile for online audience playback.
 dense_safe should be used when density causes collapse but online audience safety is not the main requirement.
 
 local_precise should be used only when local responsiveness matters more than remote reliability.
-
-high_fps_precise should remain experimental until validated separately.
 
 ---
 
@@ -436,7 +444,7 @@ A profile should not be exposed as production-ready until these questions have a
 9. Any change that lowers min_hold_us or repeat_release_gap_us must include a gameplay reason and a validation plan.
 10. Logs are not enough. Real in-game behavior is the source of truth.
 11. A profile that sounds correct locally is not automatically safe for online audience playback.
-12. Experimental high-FPS profiles must not be used as the baseline for 60 FPS or online audience reliability.
+12. Render FPS sharpens single-note visibility only; it does not speed up onset cadence or same-key repeats (fixed ~60 Hz tick), so no profile may assume higher FPS makes short holds/gaps safe.
 
 ---
 
@@ -463,23 +471,11 @@ rule-of-thumb in this document, **the measured value governs**.
 
 ### A.1 Method
 
-- The player sends scan codes; it cannot observe whether the game registered a note.
-  Therefore the ground truth is the **recorded game audio**, not the scheduler logs.
-- Telemetry (`--debug-csv`) verifies the *sent-side* hold/gap; **onset counting on the
-  recorded WAV** verifies *registration*. The two together separate "tool failed to
-  produce the timing" from "game rejected the input".
-- Test material: staircase song files — isolated single notes (for the hold/visibility
-  floor) and same-key repeats with a stepped gap (for the release floor) — analysed by
-  counting attack onsets per block.
-- Critical controls:
-  - **Lock the game FPS externally** (VSync / frame limiter) and verify with an overlay.
-  - **Do not pass the player's `--fps` during measurement** — frame-aware scaling would
-    rescale the swept values and mask the result.
-  - Keep the hold **≥ 1 frame at the test FPS** when measuring the gap, so visibility
-    failure does not confound the gap variable.
-  - Use a short-decay/percussive instrument and count **onsets**, not loudness — a
-    same-pitch sustained note blurs into one continuous band and cannot be counted by
-    spectrogram or volume.
+Ground truth is the **recorded game audio**, not the scheduler log: `--debug-csv` verifies the
+*sent* side, onset counting on the WAV verifies *registration*. The full method, tooling
+(`tests/make_test_song.py`, `tests/analyze_onsets.py`), and critical controls (lock FPS
+externally, `--fps` off when measuring game intrinsics, percussive instrument, count onsets) are
+documented in **`timing-experiments.md` §0**, which also proves each result below (Part 1).
 
 ### A.2 Result 1 — The game samples input once per render frame (confirmed)
 
@@ -528,39 +524,30 @@ repeats.)
 - **Repeat gap** floor is a frame multiple **plus** a fixed ~17 ms wall.
 
 Practical consequence: higher FPS sharpens single-note capture without bound, but does
-**not** let same-key repeats go below ~17 ms of release. High-FPS profiles are not a
+**not** let same-key repeats go below ~17 ms of release. Higher render FPS is not a
 licence for arbitrarily fast repeated notes.
 
 ### A.6 How the standard is currently enforced
 
-- `repeat_release_gap_min_frame_ratio`: `0.5 → 1.5`; added `repeat_release_gap_floor_us
-  = 18000`; applied at **all** FPS when frame-aware is enabled (`game_fps > 0`).
-  When `game_fps = 0` (frame-aware disabled), raw profile values are kept — this is the
-  intentional expert/experiment escape hatch.
-- `dense_safe.repeat_release_gap_us`: `9000 → 18000` (its base sat below the physical
-  floor).
-- Consequence: at any fixed FPS, the same-key release gap is governed by this universal
-  floor, so different profiles **converge** on it (raw → base; 30 FPS → 50000 µs;
-  60 FPS → 25001 µs; 144 FPS → 18000 µs). Profiles still differ in hold, input lead and
-  chord-merge — but not in this floor.
-- Some built-in base gaps remain below ~17 ms (e.g. `balanced` 8 ms, `local_precise`
-  6.5 ms). The scaling floor corrects them whenever `game_fps` is set, but they remain
-  under-spec when frame-aware is disabled; raising those bases is a pending tuning call.
+- Frame-coupled values materialise as `max(ceil(frames × frame_us), floor_us)` whenever
+  `game_fps > 0`; when `game_fps = 0` the raw `*_unframed_us` values are kept (the intentional
+  expert/experiment escape hatch).
+- The same-key gap uses `repeat_release_gap_frames = 1.5` + `repeat_release_gap_floor_us = 18000`
+  on **all** profiles, so they converge on this floor at a given FPS (30 → 50000 µs, 60 → 25001 µs,
+  144 → 18000 µs) and differentiate through hold, input lead, and chord merge instead.
 
-### A.7 Measurement pitfalls (recorded so they are not repeated)
+### A.7 Measurement pitfalls
 
-- **Spectrogram / loudness counting of same-pitch sustained repeats is useless** — the
-  tails overlap into one band. Count attack onsets instead.
-- **A hold shorter than one frame at the test FPS confounds the gap test** — visibility
-  failures then mask the gap variable (e.g. a 24 ms hold is invalid at 30 FPS, where one
-  frame is 33 ms; every block drops notes regardless of gap).
-- **The player's `--fps` must be off during measurement**, or frame-aware scaling
-  rescales the swept values.
+Recorded in `timing-experiments.md` §0 (count onsets not loudness; keep hold ≥ 1 frame when
+sweeping the gap; `--fps` off during intrinsic measurement). Kept there so they live next to the
+experiment procedures.
 
 ### A.8 Open / unconfirmed
 
-- The mechanism of the fixed ~17 ms repeat wall (hypothesised ~60 Hz internal tick) is
-  not proven.
+- The exact mechanism of the fixed ~17 ms wall (hypothesised ~60 Hz internal tick) is
+  still not proven. However, A.10 (Result 4) now shows the same fixed cadence governs
+  single-note **onset phase** as well, not just same-key repeats — so the fixed-tick model
+  is observed at two independent measurement points, not one.
 - A clean 30 FPS gap point (hold ≥ 42 ms) has not yet been taken; the model predicts a
   ~46 ms reliable gap there.
 - Onset counts are noisy (±1–2); thresholds above are read as trends, not exact values.
@@ -578,24 +565,32 @@ At 60 FPS the shared local margins materialise to at least `min_hold = 20834` an
 `repeat_gap = 25001`. Therefore a profile whose absolute floor is at or below those values
 does not differentiate that parameter at 60 FPS; the frame term wins.
 
-For a profile to be genuinely *more conservative* than the local minimum (which is the
-entire purpose of `audience_safe`), its `min_hold_floor_us`/`repeat_release_gap_floor_us`
-must be set **above** the local materialised values. Otherwise it intentionally converges
-with the local profiles for that parameter.
+A profile *could* be made more conservative than the local minimum by setting its
+`min_hold_floor_us`/`repeat_release_gap_floor_us` **above** the local materialised values.
+The earlier `audience_safe` did exactly that (≈2-frame floors). **As of the EXP-4 review
+(June 2026) it no longer does**: a wide hold/gap was found to trade away articulation,
+repeat speed, and chord expressiveness *without* a demonstrated remote benefit (frame-test
+with the floors removed was on par with the floored profile for a remote listener). The
+audience margin is therefore carried mainly by `input_lead_us` — which compensates remote
+perceived delay as a harmless uniform shift — and a modest `chord_merge_window_us`, while the
+hold/min/repeat floors sit just above the registration floor a typical remote (~60 FPS)
+client needs:
 
-`audience_safe` is therefore tuned with this in mind (it is intended to become the default
-profile):
+| Value                       | audience_safe | In frames @60 | Rationale                                                  |
+| --------------------------- | ------------- | ------------- | ---------------------------------------------------------- |
+| hold_floor_us               | 20000         | ~1.2          | visible hold for a remote ~60fps client; no wide 2-frame margin |
+| min_hold_floor_us           | 18000         | ~1.1          | compressed notes survive ~1 remote frame                   |
+| repeat_release_gap_floor_us | 24000         | ~1.4          | top of the measured 100%-reliable @60 band (A.4) + remote jitter margin |
+| input_lead_us               | 10000         | —             | remote perceived-delay compensation (uniform shift; the real audience lever) — still by-ear, see timing-experiments.md O1 |
+| chord_merge_window_us       | 5000          | —             | chord coherence for listeners without flattening arpeggios |
 
-| Value                       | audience_safe | In frames @60 | Rationale                                              |
-| --------------------------- | ------------- | ------------- | ------------------------------------------------------ |
-| hold_floor_us               | 34000         | ~2.0          | large visible hold for remote capture                  |
-| min_hold_floor_us           | 25000         | 1.5           | compressed notes survive multiple frames online        |
-| repeat_release_gap_floor_us | 33000         | ~2.0          | above the 1.5-frame local floor -> real online margin  |
-
-This gives a same-key cycle of ~58 ms (~3.5 frames at 60 FPS), versus the local minimum
-of ~2.75 frames. Because online reliability depends on absolute time (network jitter,
-replication, remote frame sampling) rather than the local frame,
-`repeat_release_gap_floor_us` is held as a fixed ~33 ms regardless of the local FPS.
+At 60 FPS these floors sit at/below the local frame terms, so the same-key cycle materialises
+to ~45.8 ms (~2.75 frames) — **equal to the local minimum**, by design. At 144 FPS the frame
+terms shrink and the absolute floors take over (hold 20000 / min 18000 / repeat 24000),
+holding a remote minimum without inflating to two host frames. `repeat_release_gap_floor_us`
+keeps slightly more margin than `hold_floor_us` because same-key re-trigger is the most
+jitter-fragile transition; if adverse-network testing later shows dropped repeats, raise that
+floor alone rather than the holds.
 
 The local profiles (`balanced`, `local_precise`, `dense_safe`) intentionally leave
 `min_hold_floor_us`/`repeat_release_gap_floor_us` at or below the shared local floors;
@@ -608,10 +603,10 @@ lower `hold_floor_us` and `min_hold_floor_us` values when FPS is known:
 
 | Profile class                         | hold/min floor | Why                                                        |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
-| local_precise, dense_safe             | 11000 us       | sharper local/dense holds at high FPS while staying above 144 FPS frame visibility |
-| balanced                              | 14000 us       | default profile keeps extra high-FPS margin over local-precise |
-| high_fps_precise                      | 10000 us       | experimental sharp local profile, still gated to >100 FPS  |
-| audience_safe                         | unchanged      | online reliability depends on absolute remote survivability |
+| local_precise                         | 0 us           | pure frame-relative = the measured visibility model; sharpest at high FPS |
+| dense_safe                            | 11000 us       | a small body floor above local while staying under the 144 FPS frame term |
+| balanced                              | 14000 us       | default profile keeps extra high-FPS body over local-precise |
+| audience_safe                         | 20000 / 18000 us | remote ~60fps registration floor + small margin (EXP-4); no wide 2-frame margin |
 
 Built-ins keep conservative `*_unframed_us` fallback values so the no-FPS/experiment path
 does not silently inherit the sharper local floors.
@@ -619,3 +614,50 @@ does not silently inherit the sharper local floors.
 > Caveat: the audience values are extrapolated from LOCAL measurements plus the principles
 > in this document. They have not yet been validated in a populated online room; that
 > validation is the remaining open item for the audience profile.
+
+> Update (EXP-4, June 2026): a first remote-listener A/B (a second player recorded the room
+> audio over two sessions) compared `audience_safe` (absolute floors on) against
+> `audience_frame_test` (floors off). On `TEST_metro_same_200` both registered all 64 onsets
+> with near-identical same-key valley depth (−15.27 vs −15.25 dB); on `TEST_repeat_staircase`
+> the floor-off version trailed by only 1–2 onsets (within detector noise), with no systematic
+> note loss or broken down-up-down. So under the network conditions sampled, the absolute
+> audience floors are **not yet shown to be necessary**. This is not proof they are redundant:
+> the floors exist for adverse remote conditions (high ping / jitter / replication stalls) that
+> these two clean sessions did not stress. Treat as "lower the floors only with deliberate,
+> staged validation under worse network", not "remove the floors".
+
+### A.10 Result 4 — Onset cadence is a fixed internal tick; input lead must NOT scale with render FPS
+
+A second measurement round (June 2026; recorded WAV via Audacity, onset counting per A.1)
+tested whether *onset timing* tracks the render frame or a fixed internal cadence.
+
+**EXP-1 — the player's send side is clean.** Per-event telemetry (`--debug-csv`) on a steady
+stream gave send-interval std of **0.05–0.07 ms** at both 60 and 144 FPS, and p95 send
+lateness ~**0.13 ms**. Any audible rhythm problem is therefore *not* the player's
+scheduler/sleep timing — it must originate in the game.
+
+**EXP-2 — onset jitter does not shrink with render FPS.** With the player's `--fps` off (no
+frame-aware rescaling) and the game FPS locked externally, a steady alternating-key stream
+gave game-side onset jitter of **≈13 ms at 60 FPS and ≈12 ms at 144 FPS** — essentially
+unchanged. A pure render-frame sampler would have roughly halved the jitter (16.7 → 6.9 ms
+frame). The 144 FPS residuals also showed periodic **±20 ms jumps** — the signature of a
+fixed cadence beating against the send stream, not render-frame-relative random jitter.
+
+Conclusion: onset registration is governed by a **fixed internal cadence (~60 Hz tick),
+independent of render FPS** — the same fixed wall first seen for same-key repeats (A.4/A.5),
+now confirmed to also govern single-note onset phase. The render frame only governs when it
+is *coarser* than this tick, i.e. below ~60 FPS.
+
+**Consequence for input lead (code change).** The earlier high-FPS lead "phase compensation"
+(`lead − frame/2 + frame'/2`, applied above 75 FPS for audience profiles) assumed the phase
+term scales with the render frame. EXP-2 contradicts that: the phase term is fixed. Scaling
+the lead *down* at high FPS biased notes systematically late and beat against the fixed tick —
+the observed "lạc nhịp" at 144 FPS that was absent at 60. The compensation was therefore
+**removed**: input lead is held at its base value for all FPS ≥ 60. The low-FPS clamp is
+unchanged and consistent with the model (below 60 FPS the render frame is the coarser
+quantiser, so the lead is still raised toward ~½ frame).
+
+Caveat: the residual ~12 ms onset jitter is the game's own cadence quantisation. It is present
+at every render FPS (including 60) and cannot be removed from the player side. Removing the bad
+scaling makes 144 FPS behave like 60 FPS — no better, no worse — it does not make onsets
+sample-accurate.

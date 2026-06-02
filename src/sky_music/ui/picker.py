@@ -132,10 +132,7 @@ PROFILES_INFO = [
 ]
 
 def get_profiles_info(fps: int | None) -> list[tuple[str, str]]:
-    lst = list(PROFILES_INFO)
-    if fps is not None and fps >= 90:
-        lst.append(("high-fps-precise", "High-FPS Precise: for verified 90+ FPS setups"))
-    return lst
+    return list(PROFILES_INFO)
 
 TEMPO_OPTIONS = [
     (0.90, "safer for listeners"),
@@ -1315,13 +1312,6 @@ def choose_song_interactively(
                 pass
         elif state.current_view == "fps_select":
             state.current_fps, state.current_view = state.temp_fps, "picker"
-            if state.current_profile == "high-fps-precise" and (state.current_fps is None or state.current_fps < 100):
-                state.current_profile = "local-precise"
-                try:
-                    from sky_music.config import persist_default_profile
-                    persist_default_profile(load_config(), state.current_profile)
-                except Exception:
-                    pass
             try:
                 persist_default_fps(load_config(), state.current_fps)
             except Exception:

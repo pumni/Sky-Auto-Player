@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
-from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic, align_frame_down_us, is_audience_safe_profile_name
+from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic, align_frame_down_us
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""
@@ -315,7 +315,6 @@ def build_key_actions(
         if policy.base_input_lead_us is not None
         else int(policy.input_lead_us)
     )
-    phase_comp = policy.phase_compensated
 
     return ScheduleMetadata(
         actions=tuple(key_actions_list),
@@ -334,7 +333,6 @@ def build_key_actions(
         fps=policy.fps,
         base_input_lead_us=base_lead,
         runtime_input_lead_us=int(policy.input_lead_us),
-        phase_compensated=phase_comp,
         chord_merge_window_us=int(policy.chord_merge_window_us),
         frame_align=policy.frame_align,
     )

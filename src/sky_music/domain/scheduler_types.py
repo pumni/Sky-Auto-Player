@@ -22,41 +22,6 @@ def align_frame_down_us(at_us: int, frame_us: int, mode: FrameAlignMode) -> int:
     return max(0, round(at_us / frame_us) * frame_us)
 
 
-def frame_us_for(fps: int) -> float:
-    if fps <= 0:
-        raise ValueError("fps must be > 0")
-    return 1_000_000 / fps
-
-
-def compensated_input_lead_us(
-    *,
-    base_input_lead_us: int,
-    reference_fps: int,
-    runtime_fps: int,
-    min_lead_us: int,
-    max_lead_us: int,
-) -> int:
-    reference_frame_us = frame_us_for(reference_fps)
-    runtime_frame_us = frame_us_for(runtime_fps)
-
-    reference_effective_lead = base_input_lead_us - reference_frame_us / 2
-    runtime_lead = reference_effective_lead + runtime_frame_us / 2
-
-    return int(round(max(min_lead_us, min(runtime_lead, max_lead_us))))
-
-
-def is_audience_safe_profile_name(name: str | None) -> bool:
-    if name is None:
-        return False
-    normalized = name.lower().replace("-", "_")
-    return normalized in {
-        "audience_safe",
-        "remote_safe",
-        "online_audible_safe",
-        "online_audible",
-    }
-
-
 @dataclass(frozen=True, slots=True)
 class KeyAction:
     kind: ActionKind
@@ -212,7 +177,6 @@ class FrameTimingPolicy:
     frame_align: FrameAlignMode = "none"
     profile_name: str | None = None
     base_input_lead_us: int | None = None
-    phase_compensated: bool = False
 
     @staticmethod
     def materialise_frame_floor(frames: float, floor_us: int, frame_us: int) -> Microseconds:
@@ -234,7 +198,6 @@ class FrameTimingPolicy:
         frame_align: FrameAlignMode = "none",
         *,
         profile_name: str | None = None,
-        phase_compensate_input_lead: bool = True,
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
             frame_us = Microseconds(round(1_000_000 / fps))
@@ -290,20 +253,12 @@ class FrameTimingPolicy:
                 scaled_chord_merge = math.floor(frame_us * chord_merge_max_frame_ratio)
                 eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, max(min_chord_merge_us, scaled_chord_merge)))
             else:
-                # Phase offset high-fps compensation for audience_safe
-                if phase_compensate_input_lead and is_audience_safe_profile_name(profile_name) and fps > 75:
-                    eff_input_lead_us = Microseconds(
-                        compensated_input_lead_us(
-                            base_input_lead_us=int(policy.input_lead_us),
-                            reference_fps=60,
-                            runtime_fps=fps,
-                            min_lead_us=8000,
-                            max_lead_us=int(policy.input_lead_us),
-                        )
-                    )
-                else:
-                    eff_input_lead_us = policy.input_lead_us
-                    
+                # At FPS >= 60 the render frame is finer than the game's fixed onset
+                # cadence (~60 Hz internal tick, measured June 2026 — see Appendix A,
+                # Result 4). The lead must therefore NOT be scaled with render FPS:
+                # reducing it by frame'/2 biased notes late and beat against the fixed
+                # tick (the "lạc nhịp" observed at 144 FPS). Lead is held at base.
+                eff_input_lead_us = policy.input_lead_us
                 eff_release_gap_us = policy.release_gap_us
                 eff_chord_merge = policy.chord_merge_window_us
 
@@ -327,15 +282,7 @@ class FrameTimingPolicy:
             conflict_policy = "degraded"
 
         align_mode: FrameAlignMode = frame_align if frame_align in ("none", "down_only") else "none"
-        
-        is_comp = (
-            phase_compensate_input_lead
-            and is_audience_safe_profile_name(profile_name)
-            and fps is not None
-            and fps > 75
-            and int(eff_input_lead_us) != int(policy.input_lead_us)
-        )
-            
+
         return cls(
             fps=fps if fps is not None else 0,
             frame_us=frame_us,
@@ -352,7 +299,6 @@ class FrameTimingPolicy:
             frame_align=align_mode,
             profile_name=profile_name,
             base_input_lead_us=int(policy.input_lead_us),
-            phase_compensated=is_comp,
         )
 
     @classmethod
@@ -406,6 +352,5 @@ class ScheduleMetadata:
     fps: int | None = None
     base_input_lead_us: int | None = None
     runtime_input_lead_us: int | None = None
-    phase_compensated: bool | None = None
     chord_merge_window_us: int | None = None
     frame_align: str | None = None

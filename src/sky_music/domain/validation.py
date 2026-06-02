@@ -340,18 +340,20 @@ def validate_audience_safe_profile(profile: dict[str, int]) -> None:
     )
     cycle_us = min_hold_floor_us + repeat_gap_floor_us
 
+    # Thresholds encode the audience registration floor + a small remote margin (NOT a wide
+    # 2-frame margin); see config.py audience_safe comment and Appendix A.9 / EXP-4.
     if cycle_us < 28_000:
         raise ValueError("audience-safe profile should have cycle_us >= 28000us")
 
-    if min(hold_floor_us, effective_hold_floor_us) < 28_000:
-        raise ValueError("audience-safe profile requires hold_floor_us >= 28000us")
+    if min(hold_floor_us, effective_hold_floor_us) < 18_000:
+        raise ValueError("audience-safe profile requires hold_floor_us >= 18000us")
 
     if min(min_hold_floor_us, effective_min_hold_floor_us) < 17_000:
         raise ValueError("audience-safe profile requires min_hold_us >= 17000us")
 
-    if min(repeat_gap_floor_us, effective_repeat_gap_floor_us) < 28_000:
+    if min(repeat_gap_floor_us, effective_repeat_gap_floor_us) < 22_000:
         raise ValueError(
-            "audience-safe profile requires repeat_release_gap_us >= 28000us"
+            "audience-safe profile requires repeat_release_gap_us >= 22000us"
         )
 
     if profile["input_lead_us"] < 10_000:
@@ -409,12 +411,6 @@ def validate_builtin_timing_profile(
     selected_fps: int = 60,
 ) -> None:
     normalized = name.lower().replace("-", "_")
-
-    if normalized == "high_fps_precise":
-        if selected_fps <= 100:
-            raise ValueError("high_fps_precise requires selected_fps > 100")
-        validate_timing_profile(profile, fps=selected_fps)
-        return
 
     validate_timing_profile(profile, fps=60)
 

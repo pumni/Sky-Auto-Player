@@ -1,0 +1,133 @@
+{
+  "name": "TEST_rolled_chord_18",
+  "songNotes": [
+    {
+      "time": 0,
+      "key": "Key0"
+    },
+    {
+      "time": 18,
+      "key": "Key2"
+    },
+    {
+      "time": 36,
+      "key": "Key4"
+    },
+    {
+      "time": 54,
+      "key": "Key6"
+    },
+    {
+      "time": 1500,
+      "key": "Key0"
+    },
+    {
+      "time": 1518,
+      "key": "Key2"
+    },
+    {
+      "time": 1536,
+      "key": "Key4"
+    },
+    {
+      "time": 1554,
+      "key": "Key6"
+    },
+    {
+      "time": 3000,
+      "key": "Key0"
+    },
+    {
+      "time": 3018,
+      "key": "Key2"
+    },
+    {
+      "time": 3036,
+      "key": "Key4"
+    },
+    {
+      "time": 3054,
+      "key": "Key6"
+    },
+    {
+      "time": 4500,
+      "key": "Key0"
+    },
+    {
+      "time": 4518,
+      "key": "Key2"
+    },
+    {
+      "time": 4536,
+      "key": "Key4"
+    },
+    {
+      "time": 4554,
+      "key": "Key6"
+    },
+    {
+      "time": 6000,
+      "key": "Key0"
+    },
+    {
+      "time": 6018,
+      "key": "Key2"
+    },
+    {
+      "time": 6036,
+      "key": "Key4"
+    },
+    {
+      "time": 6054,
+      "key": "Key6"
+    },
+    {
+      "time": 7500,
+      "key": "Key0"
+    },
+    {
+      "time": 7518,
+      "key": "Key2"
+    },
+    {
+      "time": 7536,
+      "key": "Key4"
+    },
+    {
+      "time": 7554,
+      "key": "Key6"
+    },
+    {
+      "time": 9000,
+      "key": "Key0"
+    },
+    {
+      "time": 9018,
+      "key": "Key2"
+    },
+    {
+      "time": 9036,
+      "key": "Key4"
+    },
+    {
+      "time": 9054,
+      "key": "Key6"
+    },
+    {
+      "time": 10500,
+      "key": "Key0"
+    },
+    {
+      "time": 10518,
+      "key": "Key2"
+    },
+    {
+      "time": 10536,
+      "key": "Key4"
+    },
+    {
+      "time": 10554,
+      "key": "Key6"
+    }
+  ]
+}

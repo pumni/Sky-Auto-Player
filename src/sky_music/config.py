@@ -99,11 +99,15 @@ class FrameTimingDefaults:
 # ==============================================================================
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
+        # Reference profile = the empirically measured floors themselves (Appendix A): hold is
+        # purely frame-relative (visibility = 1 frame, no fixed-ms component), so hold_floor =
+        # min_hold_floor = 0 and the 1.25-frame term governs at every FPS. repeat_gap keeps the
+        # measured ~18ms same-key wall. Sharpest profile; single notes at high FPS are short.
         "hold_frames": 1.25,
-        "hold_floor_us": 11000,
+        "hold_floor_us": 0,
         "hold_unframed_us": 22000,
         "min_hold_frames": 1.25,
-        "min_hold_floor_us": 11000,
+        "min_hold_floor_us": 0,
         "min_hold_unframed_us": 17000,
         "release_gap_us": 3500,
         "repeat_release_gap_frames": 1.5,
@@ -129,21 +133,22 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "focus_restore_grace_us": 100000,
     },
     "audience_safe": {
-        # Online audience profile (future default). Unlike local profiles, its min_hold and
-        # repeat gap are set ABOVE the local frame-aware floors so it actually carries extra
-        # multi-frame margin for remote listeners (network jitter + remote frame sampling).
-        # See docs/timing-principles.md Appendix A.9. These online targets are extrapolated
-        # from LOCAL measurements + the document's principles and should be validated in a
-        # populated online room.
+        # Online audience profile (future default). Differentiates from local profiles mainly
+        # through a conservative input_lead (remote perceived-delay compensation, a harmless
+        # uniform shift) and a slightly larger chord-merge window. The hold/min/repeat floors
+        # sit just ABOVE the registration floor a typical remote (~60 FPS) client needs — NOT a
+        # wide 2-frame margin — because a wide hold/gap trades away articulation and repeat
+        # speed without buying remote audibility (see Appendix A.9 + EXP-4). repeat_gap keeps a
+        # touch more margin than hold because same-key re-trigger is the most jitter-fragile.
         "hold_frames": 1.25,
-        "hold_floor_us": 34000,       # ~2.0 frame @60fps (large visible hold)
+        "hold_floor_us": 20000,       # ~1.2 frame @60fps: visible hold for a remote 60fps client
         "min_hold_frames": 1.25,
-        "min_hold_floor_us": 25000,   # 1.5 frame: compressed notes survive multi-frame online
+        "min_hold_floor_us": 18000,   # ~1 remote frame: compressed notes still survive online
         "release_gap_us": 9000,
         "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 33000,  # ~2.0 frame: above the 1.5-frame local floor (25001@60)
-        "input_lead_us": 14500,
-        "chord_merge_window_us": 6500,
+        "repeat_release_gap_floor_us": 24000,  # top of the measured 100%-reliable @60 band (A.4) + remote margin
+        "input_lead_us": 10000,
+        "chord_merge_window_us": 5000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
     },
@@ -161,21 +166,6 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "chord_merge_window_us": 4000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
-    },
-    "high_fps_precise": {
-        "hold_frames": 1.25,
-        "hold_floor_us": 10000,
-        "hold_unframed_us": 18000,
-        "min_hold_frames": 1.0,
-        "min_hold_floor_us": 10000,
-        "min_hold_unframed_us": 10000,
-        "release_gap_us": 3000,
-        "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 18000,
-        "input_lead_us": 4000,
-        "chord_merge_window_us": 2000,
-        "spin_threshold_us": 800,
-        "focus_restore_grace_us": 50000,
     },
 }
 
@@ -227,7 +217,6 @@ CLI_PROFILE_NAMES: tuple[str, ...] = (
     "local-precise",
     "audience-safe",
     "dense-safe",
-    "high-fps-precise",
 )
 
 _PROFILE_KEY_TO_CLI: dict[str, str] = {
@@ -235,7 +224,6 @@ _PROFILE_KEY_TO_CLI: dict[str, str] = {
     "local_precise": "local-precise",
     "audience_safe": "audience-safe",
     "dense_safe": "dense-safe",
-    "high_fps_precise": "high-fps-precise",
 }
 
 def canonical_profile_name(name: str) -> str:

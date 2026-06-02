@@ -46,4 +46,29 @@ def staircase_gap(key=7, reps=10, hold_ms=24,
 
 write("TEST_repeat_gap", staircase_gap())
 
+# Nhịp đều, ĐAN XEN 2 phím khác nhau -> không dính repeat_release_gap_floor,
+# nên unevenness đo được là THUẦN do frame-sampling/lead, không phải gap floor.
+def metronome_alt(keys=(0, 2), interval_ms=200, count=64):
+      return [(i * interval_ms, keys[i % len(keys)]) for i in range(count)]
+
+write("TEST_metro_alt_200", metronome_alt(interval_ms=200))   # 5 nốt/s, dễ tách onset
+write("TEST_metro_alt_120", metronome_alt(interval_ms=120))   # ép mạnh hơn
+
+# Phiên bản CÙNG phím để đối chứng (có dính gap floor) — chỉ dùng ở EXP-4 nếu cần
+write("TEST_metro_same_200", [(i * 200, 7) for i in range(64)])
+
+# O1: nhịp 120 BPM (500 ms) để khớp metronome chuẩn khi đo độ trễ tuyệt đối
+write("TEST_metro_alt_500", metronome_alt(interval_ms=500, count=40))
+
+# O2/O8: hợp âm "rải" — các phím cách nhau RẤT NHỎ để dò ngưỡng gom chord (chord_merge)
+def rolled_chord(keys=(0, 2, 4, 6), spread_ms=18, blocks=8, block_gap=1500):
+      notes, t = [], 0
+      for _ in range(blocks):
+          for i, k in enumerate(keys):
+              notes.append((t + i * spread_ms, k))
+          t += block_gap
+      return notes
+
+write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
+
 print("done -> songs/TEST_*.json")

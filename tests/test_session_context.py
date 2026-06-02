@@ -142,45 +142,10 @@ def test_from_cli_args_applies_hold_override():
     assert policy.hold_us >= 30_000
 
 
-def test_static_safety_guard_fallback():
-    session = PlaybackSessionContext(profile_name="high-fps-precise", fps=60)
-    policy = session.resolve_effective_policy(AppConfig())
-    # Should fall back to local-precise timing parameters, now frame-relative at 60fps.
-    assert policy.hold_us == 20834
-    assert policy.min_hold_us == 20834
-    assert policy.chord_merge_window_us == 2500
-
-
-def test_static_safety_guard_normalizes_hyphenated_high_fps_profile():
-    # Test that hyphenated and differently-cased names normalize and trigger fallback correctly
-    session = PlaybackSessionContext(profile_name="HIGH-fps-PRECISE", fps=None)
-    policy = session.resolve_effective_policy(AppConfig())
-    assert policy.hold_us == 22000
-    assert policy.min_hold_us == 17000
-
-
-def test_high_fps_precise_intact_at_120fps():
-    session = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
-    policy = session.resolve_effective_policy(AppConfig())
-    # Uses a sharp frame-relative hold while keeping min_hold at the 10ms absolute wall.
-    assert policy.hold_us == 10417
-    assert policy.min_hold_us == 10000
-    assert policy.chord_merge_window_us == 2000
-
-
-def test_picker_hides_high_fps_precise_when_low_fps():
+def test_picker_lists_exactly_the_four_profiles():
     from sky_music.ui.picker import get_profiles_info
-    profiles_60 = get_profiles_info(60)
-    assert "high-fps-precise" not in [p[0] for p in profiles_60]
-    
-    profiles_none = get_profiles_info(None)
-    assert "high-fps-precise" not in [p[0] for p in profiles_none]
-
-
-def test_picker_shows_high_fps_precise_when_high_fps():
-    from sky_music.ui.picker import get_profiles_info
-    profiles_120 = get_profiles_info(120)
-    assert "high-fps-precise" in [p[0] for p in profiles_120]
+    names = [p[0] for p in get_profiles_info(120)]
+    assert names == ["local-precise", "balanced", "audience-safe", "dense-safe"]
 
 
 def test_strict_timing_profile_validation_enforcement():

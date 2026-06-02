@@ -94,6 +94,8 @@ def test_canonical_profile_name_strips_fps_suffix():
     assert canonical_profile_name("remote-safe@60fps") == "audience-safe"
     assert canonical_profile_name("local_precise") == "local-precise"
     assert canonical_profile_name("dense-safe@120fps") == "dense-safe"
+    # Removed profiles canonicalise to the balanced default.
+    assert canonical_profile_name("high_fps_precise") == "balanced"
 
 
 def test_load_config_sanitizes_corrupted_profile_with_fps_suffix(tmp_path, monkeypatch):

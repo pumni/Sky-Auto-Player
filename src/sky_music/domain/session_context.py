@@ -90,7 +90,7 @@ class PlaybackSessionContext:
         if getattr(args, "repeat_release_gap_ms", None) is not None:
             overrides.append(("repeat_release_gap_us", args.repeat_release_gap_ms * 1000))
         if getattr(args, "input_lead_ms", None) is not None:
-            overrides.append(("input_lead_us", args.input_lead_ms * 1000))
+            overrides.append(("input_lead_us", int(round(args.input_lead_ms * 1000))))
         if getattr(args, "chord_merge_window_ms", None) is not None:
             overrides.append(("chord_merge_window_us", args.chord_merge_window_ms * 1000))
         if getattr(args, "focus_restore_grace_ms", None) is not None:
@@ -178,40 +178,16 @@ class PlaybackSessionContext:
             )
         return policy
 
-    def high_fps_fallback_profile(self) -> str | None:
-        """Static safety guard (pure, no I/O).
-
-        ``high_fps_precise`` is only safe above 100 FPS; if selected at <=100 FPS (or with
-        FPS unknown) it must fall back to ``local-precise`` to avoid dropped note repeats.
-        Returns the fallback profile name when the guard applies, else None. Callers that
-        want to inform the user (e.g. main playback setup) should emit a warning once and
-        normalize the session; ``resolve_effective_policy`` applies the same fallback
-        silently so every call site stays safe.
-        """
-        from sky_music.config import normalize_profile_name
-        if normalize_profile_name(self.profile_name) == "high_fps_precise" and (
-            self.fps is None or self.fps <= 100
-        ):
-            return "local-precise"
-        return None
-
     def resolve_effective_policy(self, cfg: AppConfig | None = None) -> FrameTimingPolicy:
         """Profile dict + CLI overrides + frame-aware scaling (single entry point).
 
-        Pure: no console output. The high-FPS static safety guard is applied silently here;
-        user-facing warning is emitted once by the playback setup (see main.play_song).
+        Pure: no console output.
         """
         cfg = cfg or load_config()
 
-        fallback = self.high_fps_fallback_profile()
-        effective_self = self.with_profile(fallback) if fallback else self
+        effective_self = self
 
         base = effective_self._base_timing_policy(cfg)
-        
-        has_manual_input_lead_override = any(
-            key == "input_lead_us"
-            for key, _ in effective_self.policy_overrides
-        )
 
         return FrameTimingPolicy.from_timing_policy(
             base,
@@ -219,7 +195,6 @@ class PlaybackSessionContext:
             same_key_conflict_policy=effective_self.same_key_conflict_policy,
             frame_align=effective_self.resolved_frame_align(cfg),
             profile_name=effective_self.profile_name,
-            phase_compensate_input_lead=not has_manual_input_lead_override,
             **cfg.frame_timing.as_policy_kwargs(),
         )
 

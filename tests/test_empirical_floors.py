@@ -101,7 +101,7 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
     [
         ("local-precise", 30, 41667, 41667, 50000),
         ("local-precise", 60, 20834, 20834, 25001),
-        ("local-precise", 144, 11000, 11000, 18000),
+        ("local-precise", 144, 8680, 8680, 18000),
         ("dense-safe", 30, 41667, 41667, 50000),
         ("dense-safe", 60, 20834, 20834, 25001),
         ("dense-safe", 144, 11000, 11000, 18000),
@@ -109,9 +109,8 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
         ("balanced", 60, 20834, 20834, 25001),
         ("balanced", 144, 14000, 14000, 18000),
         ("audience-safe", 30, 41667, 41667, 50000),
-        ("audience-safe", 60, 34000, 25000, 33000),
-        ("audience-safe", 144, 34000, 25000, 33000),
-        ("high-fps-precise", 144, 10000, 10000, 18000),
+        ("audience-safe", 60, 20834, 20834, 25001),
+        ("audience-safe", 144, 20000, 18000, 24000),
     ],
 )
 def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
@@ -135,8 +134,9 @@ def test_high_fps_local_profiles_have_distinct_hold_intents():
     local = PlaybackSessionContext(profile_name="local-precise", fps=144).resolve_effective_policy(cfg)
     balanced = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
     dense = PlaybackSessionContext(profile_name="dense-safe", fps=144).resolve_effective_policy(cfg)
-    precise = PlaybackSessionContext(profile_name="high-fps-precise", fps=144).resolve_effective_policy(cfg)
 
-    assert precise.hold_us == 10000
-    assert local.hold_us == dense.hold_us == 11000
+    # local_precise is pure frame-relative (floor 0) -> sharpest at high FPS; balanced and
+    # dense keep a small absolute body floor above it.
+    assert local.hold_us == 8680
+    assert dense.hold_us == 11000
     assert balanced.hold_us == 14000

@@ -87,7 +87,6 @@ class TelemetryLogger:
             "fps": getattr(metadata, "fps", None),
             "base_input_lead_us": getattr(metadata, "base_input_lead_us", None),
             "runtime_input_lead_us": getattr(metadata, "runtime_input_lead_us", None),
-            "phase_compensated": getattr(metadata, "phase_compensated", None),
             "chord_merge_window_us": getattr(metadata, "chord_merge_window_us", None),
             "frame_align": getattr(metadata, "frame_align", None),
         }

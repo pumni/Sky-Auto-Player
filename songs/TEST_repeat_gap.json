@@ -1,0 +1,405 @@
+{
+  "name": "TEST_repeat_gap",
+  "songNotes": [
+    {
+      "time": 0,
+      "key": "Key7"
+    },
+    {
+      "time": 74,
+      "key": "Key7"
+    },
+    {
+      "time": 148,
+      "key": "Key7"
+    },
+    {
+      "time": 222,
+      "key": "Key7"
+    },
+    {
+      "time": 296,
+      "key": "Key7"
+    },
+    {
+      "time": 370,
+      "key": "Key7"
+    },
+    {
+      "time": 444,
+      "key": "Key7"
+    },
+    {
+      "time": 518,
+      "key": "Key7"
+    },
+    {
+      "time": 592,
+      "key": "Key7"
+    },
+    {
+      "time": 666,
+      "key": "Key7"
+    },
+    {
+      "time": 2740,
+      "key": "Key7"
+    },
+    {
+      "time": 2804,
+      "key": "Key7"
+    },
+    {
+      "time": 2868,
+      "key": "Key7"
+    },
+    {
+      "time": 2932,
+      "key": "Key7"
+    },
+    {
+      "time": 2996,
+      "key": "Key7"
+    },
+    {
+      "time": 3060,
+      "key": "Key7"
+    },
+    {
+      "time": 3124,
+      "key": "Key7"
+    },
+    {
+      "time": 3188,
+      "key": "Key7"
+    },
+    {
+      "time": 3252,
+      "key": "Key7"
+    },
+    {
+      "time": 3316,
+      "key": "Key7"
+    },
+    {
+      "time": 5380,
+      "key": "Key7"
+    },
+    {
+      "time": 5434,
+      "key": "Key7"
+    },
+    {
+      "time": 5488,
+      "key": "Key7"
+    },
+    {
+      "time": 5542,
+      "key": "Key7"
+    },
+    {
+      "time": 5596,
+      "key": "Key7"
+    },
+    {
+      "time": 5650,
+      "key": "Key7"
+    },
+    {
+      "time": 5704,
+      "key": "Key7"
+    },
+    {
+      "time": 5758,
+      "key": "Key7"
+    },
+    {
+      "time": 5812,
+      "key": "Key7"
+    },
+    {
+      "time": 5866,
+      "key": "Key7"
+    },
+    {
+      "time": 7920,
+      "key": "Key7"
+    },
+    {
+      "time": 7968,
+      "key": "Key7"
+    },
+    {
+      "time": 8016,
+      "key": "Key7"
+    },
+    {
+      "time": 8064,
+      "key": "Key7"
+    },
+    {
+      "time": 8112,
+      "key": "Key7"
+    },
+    {
+      "time": 8160,
+      "key": "Key7"
+    },
+    {
+      "time": 8208,
+      "key": "Key7"
+    },
+    {
+      "time": 8256,
+      "key": "Key7"
+    },
+    {
+      "time": 8304,
+      "key": "Key7"
+    },
+    {
+      "time": 8352,
+      "key": "Key7"
+    },
+    {
+      "time": 10400,
+      "key": "Key7"
+    },
+    {
+      "time": 10444,
+      "key": "Key7"
+    },
+    {
+      "time": 10488,
+      "key": "Key7"
+    },
+    {
+      "time": 10532,
+      "key": "Key7"
+    },
+    {
+      "time": 10576,
+      "key": "Key7"
+    },
+    {
+      "time": 10620,
+      "key": "Key7"
+    },
+    {
+      "time": 10664,
+      "key": "Key7"
+    },
+    {
+      "time": 10708,
+      "key": "Key7"
+    },
+    {
+      "time": 10752,
+      "key": "Key7"
+    },
+    {
+      "time": 10796,
+      "key": "Key7"
+    },
+    {
+      "time": 12840,
+      "key": "Key7"
+    },
+    {
+      "time": 12881,
+      "key": "Key7"
+    },
+    {
+      "time": 12922,
+      "key": "Key7"
+    },
+    {
+      "time": 12963,
+      "key": "Key7"
+    },
+    {
+      "time": 13004,
+      "key": "Key7"
+    },
+    {
+      "time": 13045,
+      "key": "Key7"
+    },
+    {
+      "time": 13086,
+      "key": "Key7"
+    },
+    {
+      "time": 13127,
+      "key": "Key7"
+    },
+    {
+      "time": 13168,
+      "key": "Key7"
+    },
+    {
+      "time": 13209,
+      "key": "Key7"
+    },
+    {
+      "time": 15250,
+      "key": "Key7"
+    },
+    {
+      "time": 15288,
+      "key": "Key7"
+    },
+    {
+      "time": 15326,
+      "key": "Key7"
+    },
+    {
+      "time": 15364,
+      "key": "Key7"
+    },
+    {
+      "time": 15402,
+      "key": "Key7"
+    },
+    {
+      "time": 15440,
+      "key": "Key7"
+    },
+    {
+      "time": 15478,
+      "key": "Key7"
+    },
+    {
+      "time": 15516,
+      "key": "Key7"
+    },
+    {
+      "time": 15554,
+      "key": "Key7"
+    },
+    {
+      "time": 15592,
+      "key": "Key7"
+    },
+    {
+      "time": 17630,
+      "key": "Key7"
+    },
+    {
+      "time": 17665,
+      "key": "Key7"
+    },
+    {
+      "time": 17700,
+      "key": "Key7"
+    },
+    {
+      "time": 17735,
+      "key": "Key7"
+    },
+    {
+      "time": 17770,
+      "key": "Key7"
+    },
+    {
+      "time": 17805,
+      "key": "Key7"
+    },
+    {
+      "time": 17840,
+      "key": "Key7"
+    },
+    {
+      "time": 17875,
+      "key": "Key7"
+    },
+    {
+      "time": 17910,
+      "key": "Key7"
+    },
+    {
+      "time": 17945,
+      "key": "Key7"
+    },
+    {
+      "time": 19980,
+      "key": "Key7"
+    },
+    {
+      "time": 20012,
+      "key": "Key7"
+    },
+    {
+      "time": 20044,
+      "key": "Key7"
+    },
+    {
+      "time": 20076,
+      "key": "Key7"
+    },
+    {
+      "time": 20108,
+      "key": "Key7"
+    },
+    {
+      "time": 20140,
+      "key": "Key7"
+    },
+    {
+      "time": 20172,
+      "key": "Key7"
+    },
+    {
+      "time": 20204,
+      "key": "Key7"
+    },
+    {
+      "time": 20236,
+      "key": "Key7"
+    },
+    {
+      "time": 20268,
+      "key": "Key7"
+    },
+    {
+      "time": 22300,
+      "key": "Key7"
+    },
+    {
+      "time": 22329,
+      "key": "Key7"
+    },
+    {
+      "time": 22358,
+      "key": "Key7"
+    },
+    {
+      "time": 22387,
+      "key": "Key7"
+    },
+    {
+      "time": 22416,
+      "key": "Key7"
+    },
+    {
+      "time": 22445,
+      "key": "Key7"
+    },
+    {
+      "time": 22474,
+      "key": "Key7"
+    },
+    {
+      "time": 22503,
+      "key": "Key7"
+    },
+    {
+      "time": 22532,
+      "key": "Key7"
+    },
+    {
+      "time": 22561,
+      "key": "Key7"
+    }
+  ]
+}

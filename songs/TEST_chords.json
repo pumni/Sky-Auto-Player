@@ -1,0 +1,85 @@
+{
+  "name": "TEST_chords",
+  "songNotes": [
+    {
+      "time": 0,
+      "key": "Key0"
+    },
+    {
+      "time": 0,
+      "key": "Key2"
+    },
+    {
+      "time": 800,
+      "key": "Key0"
+    },
+    {
+      "time": 800,
+      "key": "Key2"
+    },
+    {
+      "time": 800,
+      "key": "Key4"
+    },
+    {
+      "time": 1600,
+      "key": "Key0"
+    },
+    {
+      "time": 1600,
+      "key": "Key2"
+    },
+    {
+      "time": 1600,
+      "key": "Key4"
+    },
+    {
+      "time": 1600,
+      "key": "Key6"
+    },
+    {
+      "time": 2400,
+      "key": "Key0"
+    },
+    {
+      "time": 2400,
+      "key": "Key2"
+    },
+    {
+      "time": 2400,
+      "key": "Key4"
+    },
+    {
+      "time": 2400,
+      "key": "Key6"
+    },
+    {
+      "time": 2400,
+      "key": "Key8"
+    },
+    {
+      "time": 3200,
+      "key": "Key0"
+    },
+    {
+      "time": 3200,
+      "key": "Key2"
+    },
+    {
+      "time": 3200,
+      "key": "Key4"
+    },
+    {
+      "time": 3200,
+      "key": "Key6"
+    },
+    {
+      "time": 3200,
+      "key": "Key8"
+    },
+    {
+      "time": 3200,
+      "key": "Key10"
+    }
+  ]
+}

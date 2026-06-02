@@ -292,7 +292,7 @@ def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
     assert policy.hold_us == 22000
     policy_2 = TimingPolicy.from_profile_name("audience-safe")
-    assert policy_2.hold_us == 34000
+    assert policy_2.hold_us == 20000
 
 def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
@@ -314,7 +314,7 @@ def test_high_fps_chord_merge_protection():
     assert p_local.chord_merge_window_us == 3000
 
     p_remote = FrameTimingPolicy.from_profile_name("audience-safe", fps=240)
-    assert p_remote.chord_merge_window_us == 6500
+    assert p_remote.chord_merge_window_us == 5000
 
 
 def test_cycle_rule_safety_margin_clamp():
@@ -358,8 +358,7 @@ def test_timing_profile_validators():
 
     # Verify all built-in profiles pass validate_builtin_timing_profile
     for name, p in DEFAULT_TIMING_PROFILES.items():
-        fps = 101 if name == "high_fps_precise" else 60
-        validate_builtin_timing_profile(name, p, selected_fps=fps)
+        validate_builtin_timing_profile(name, p, selected_fps=60)
 
     # Test failure case
     unsafe = {
@@ -398,43 +397,37 @@ def test_hold_ordering_invariant_rejects_hold_below_min_hold():
         validate_timing_profile(bad, fps=60)
 
 
-def test_audience_safe_high_fps_keeps_safety_durations():
+def test_audience_safe_floors_keep_remote_minimum_at_high_fps():
     p60 = FrameTimingPolicy.from_profile_name("audience-safe", fps=60)
     p144 = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
 
-    assert p144.hold_us == p60.hold_us
-    assert p144.min_hold_us == p60.min_hold_us
-    assert p144.release_gap_us == p60.release_gap_us
-    # audience_safe sets its repeat gap (33000) above every local frame-aware floor, so it is
-    # a constant absolute online margin independent of local FPS (Appendix A.9), not the
-    # generic 1.5-frame local floor that other profiles fall back to.
-    assert p144.repeat_release_gap_us == 33000
-    assert p60.repeat_release_gap_us == 33000
+    # At 60 FPS the 1.25/1.5-frame terms dominate the (lowered) absolute floors.
+    assert p60.hold_us == 20834
+    assert p60.min_hold_us == 20834
+    assert p60.repeat_release_gap_us == 25001
+    # At 144 FPS the frame terms shrink, so the absolute remote floors take over and hold the
+    # audience minimum (hold 20000 / min 18000 / repeat 24000). These are tighter than the old
+    # 2-frame floors — sharper articulation and faster repeats — but still a real remote margin
+    # above the registration floor (Appendix A.9 / EXP-4), not the generic local 1.5-frame wall.
+    assert p144.hold_us == 20000
+    assert p144.min_hold_us == 18000
+    assert p144.repeat_release_gap_us == 24000
+    assert p60.release_gap_us == p144.release_gap_us == 9000
 
 
-def test_audience_safe_144fps_compensates_input_lead():
-    p = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
-    assert p.input_lead_us == 9639
-
-
-@pytest.mark.parametrize(
-    ("fps", "expected_min", "expected_max"),
-    [
-        (60, 14500, 14500),
-        (90, 11722, 11722),
-        (120, 10333, 10333),
-        (144, 9639, 9639),
-        (165, 9197, 9197),
-        (240, 8250, 8250),
-    ],
-)
-def test_audience_safe_input_lead_is_phase_compensated(fps, expected_min, expected_max):
+@pytest.mark.parametrize("fps", [60, 90, 120, 144, 165, 240])
+def test_audience_safe_input_lead_is_not_scaled_above_60fps(fps):
+    # EXP-2 (June 2026): the game's onset cadence is a fixed ~60 Hz internal tick, not the
+    # render frame, so input lead must stay at its base value across all render FPS >= 60.
+    # (Previously this was scaled down by frame'/2, which biased notes late at high FPS.)
+    from sky_music.config import DEFAULT_TIMING_PROFILES
+    base = int(DEFAULT_TIMING_PROFILES["audience_safe"]["input_lead_us"])
     p = FrameTimingPolicy.from_profile_name("audience-safe", fps=fps)
-    assert expected_min <= p.input_lead_us <= expected_max
+    assert p.input_lead_us == base
 
 
 @pytest.mark.parametrize("profile", ["balanced", "local-precise", "dense-safe"])
-def test_non_audience_profiles_do_not_use_audience_phase_compensation(profile):
+def test_profiles_do_not_scale_input_lead_above_60fps(profile):
     p60 = FrameTimingPolicy.from_profile_name(profile, fps=60)
     p144 = FrameTimingPolicy.from_profile_name(profile, fps=144)
 
@@ -445,7 +438,7 @@ def test_audience_safe_runtime_validation():
     from sky_music.domain.validation import validate_audience_safe_runtime_policy
     from sky_music.config import DEFAULT_TIMING_PROFILES
 
-    # 144 FPS policy: runtime lead drops below 10,000us (to 9139us), which is valid under runtime validation
+    # 144 FPS policy: runtime lead stays at the base 14500us (no FPS scaling), which is valid
     policy = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
     ref_profile = DEFAULT_TIMING_PROFILES["audience_safe"]
     
@@ -462,34 +455,26 @@ def test_audience_safe_runtime_validation():
         validate_audience_safe_runtime_policy(invalid_policy, reference_profile=ref_profile)
 
 
-def test_high_fps_precise_rejected_at_100fps_or_lower():
+def test_unknown_profile_name_falls_back_to_balanced():
     from sky_music.domain.session_context import PlaybackSessionContext
-    # 100 FPS should fallback to local-precise
-    ctx = PlaybackSessionContext(profile_name="high-fps-precise", fps=100)
-    policy = ctx.resolve_effective_policy()
-    assert policy.profile_name == "local-precise"
-
-    # 101 FPS should remain high-fps-precise
-    ctx2 = PlaybackSessionContext(profile_name="high-fps-precise", fps=101)
-    policy2 = ctx2.resolve_effective_policy()
-    assert policy2.profile_name == "high-fps-precise"
+    # Removed/unknown profile names canonicalise to balanced rather than erroring.
+    ctx = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
+    assert ctx.profile_name == "balanced"
 
 
-def test_manual_input_lead_override_bypasses_compensation():
+def test_manual_input_lead_override_is_respected():
     from sky_music.domain.session_context import PlaybackSessionContext
-    # With override, p.input_lead_us should be exactly the override value (e.g. 10000us)
+    # An explicit override wins over the profile base at any FPS.
     ctx = PlaybackSessionContext(
         profile_name="audience-safe",
         fps=144,
         policy_overrides=(("input_lead_us", 10000),),
     )
-    policy = ctx.resolve_effective_policy()
-    assert policy.input_lead_us == 10000
-    assert policy.phase_compensated is False
+    assert ctx.resolve_effective_policy().input_lead_us == 10000
 
-    # Without override, p.input_lead_us is compensated (to 9639us)
+    # Without an override the audience lead stays at its base (no FPS scaling).
+    from sky_music.config import DEFAULT_TIMING_PROFILES
+    base = int(DEFAULT_TIMING_PROFILES["audience_safe"]["input_lead_us"])
     ctx2 = PlaybackSessionContext(profile_name="audience-safe", fps=144)
-    policy2 = ctx2.resolve_effective_policy()
-    assert policy2.input_lead_us == 9639
-    assert policy2.phase_compensated is True
+    assert ctx2.resolve_effective_policy().input_lead_us == base
 

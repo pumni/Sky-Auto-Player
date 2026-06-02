@@ -359,7 +359,7 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", floor_key="min_hold_floor_us")),
         ("release_gap_ms",       lambda n, d: f"{d.get('release_gap_us', 0) // 1000}"),
         ("repeat_gap_ms",        lambda n, d: frame_coupled_ms(d, value_key="repeat_release_gap_us", floor_key="repeat_release_gap_floor_us")),
-        ("input_lead_ms",        lambda n, d: f"{d.get('input_lead_us', 0) // 1000}"),
+        ("input_lead_ms",        lambda n, d: f"{d.get('input_lead_us', 0) / 1000:.1f}".rstrip('0').rstrip('.') if d.get('input_lead_us', 0) % 1000 != 0 else f"{d.get('input_lead_us', 0) // 1000}"),
         ("chord_merge_ms",       lambda n, d: f"{d.get('chord_merge_window_us', 0) // 1000}"),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
         ("conflict_policy",      lambda n, d: d.get("same_key_conflict_policy", "degraded")),
@@ -598,17 +598,6 @@ def play_selected_song(
         fps=force_fps,
     )
 
-    # High-FPS static safety guard: warn once here (resolve_effective_policy applies the
-    # same fallback silently). Normalizing the session keeps the HUD label and timing consistent.
-    _fallback_profile = session.high_fps_fallback_profile()
-    if _fallback_profile is not None:
-        print(
-            f"\n[Warning] Profile '{session.profile_name}' requires configured game FPS > 100. "
-            f"Current FPS: {session.fps if session.fps is not None else 'None'}. "
-            f"Safely falling back to '{_fallback_profile}'.\n"
-        )
-        session = session.with_profile(_fallback_profile)
-
     is_dry_run = DRY_RUN_MODE or force_dry_run
     current_profile = session.display_profile_label()
     current_tempo = session.tempo_scale
@@ -819,7 +808,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "local-precise (low latency), "
             "audience-safe (online play / audience audibility), "
             "dense-safe (many chords/repeats), "
-            "high-fps-precise (experimental 100+ FPS), "
             "balanced (default)"
         ),
     )
@@ -851,7 +839,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     timing.add_argument(
         "--input-lead-ms",
-        type=int,
+        type=float,
         help="Override input lead duration in ms (overrides profile)",
     )
     timing.add_argument(
