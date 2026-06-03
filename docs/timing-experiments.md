@@ -19,26 +19,26 @@ online. Mọi bước đều viết để bạn làm theo trực tiếp.
 Chạy một lần để sinh các bài `songs/TEST_*.json`:
 
 ```
-python tests/make_test_song.py
+uv run python tests/make_test_song.py
 ```
 
 Các bài cần dùng (đã có sẵn trong script):
 
-| Song | Hình dạng | Dùng cho |
-| --- | --- | --- |
-| `TEST_visibility` | 15 nốt đơn, cách 700 ms | sàn hold/visibility (T1) |
-| `TEST_repeat_gap` | 1 phím, các block gap giảm dần (50→5 ms) | sàn same-key gap (T2, O6) |
-| `TEST_repeat_staircase` | 1 phím, interval giảm dần | drop same-key A/B (T2, T4) |
+| Song                     | Hình dạng                                           | Dùng cho                              |
+| ------------------------ | --------------------------------------------------- | ------------------------------------- |
+| `TEST_visibility`        | 15 nốt đơn, cách 700 ms                             | sàn hold/visibility (T1)              |
+| `TEST_repeat_gap`        | 1 phím, các block gap giảm dần (50→5 ms)            | sàn same-key gap (T2, O6)             |
+| `TEST_repeat_staircase`  | 1 phím, interval giảm dần                           | drop same-key A/B (T2, T4)            |
 | `TEST_metro_alt_200/120` | nhịp đều, **đan xen 2 phím** (không dính gap floor) | jitter onset / cảm giác nhịp (T3, O4) |
-| `TEST_metro_same_200` | nhịp đều, 1 phím | survivability same-key remote (O3) |
-| `TEST_chords` | hợp âm 2..6 phím | chord remote (O8) |
+| `TEST_metro_same_200`    | nhịp đều, 1 phím                                    | survivability same-key remote (O3)    |
+| `TEST_chords`            | hợp âm 2..6 phím                                    | chord remote (O8)                     |
 
 Hai bài bổ sung cho Part 2 (đã có sẵn trong script):
 
-| Song | Hình dạng | Dùng cho |
-| --- | --- | --- |
-| `TEST_metro_alt_500` | nhịp 120 BPM (500 ms), đan xen 2 phím | đo độ trễ tuyệt đối bằng metronome (O1, O5) |
-| `TEST_rolled_chord_18` | hợp âm "rải" 4 phím cách 18 ms | ngưỡng gom chord (O2, O8) |
+| Song                   | Hình dạng                             | Dùng cho                                    |
+| ---------------------- | ------------------------------------- | ------------------------------------------- |
+| `TEST_metro_alt_500`   | nhịp 120 BPM (500 ms), đan xen 2 phím | đo độ trễ tuyệt đối bằng metronome (O1, O5) |
+| `TEST_rolled_chord_18` | hợp âm "rải" 4 phím cách 18 ms        | ngưỡng gom chord (O2, O8)                   |
 
 ### 0.2 Recording the game audio (Audacity, Windows WASAPI loopback)
 
@@ -58,15 +58,15 @@ Cách sạch nhất để thu đúng tiếng game trên Windows, không cần "S
 ### 0.3 Extracting onsets (Label Sounds → Export Labels)
 
 1. Chọn toàn bộ track (Ctrl+A).
-2. **Analyze ▸ Label Sounds** (bản cũ: *Sound Finder*). Tham số gợi ý ban đầu:
-   - *Threshold (dB)*: khoảng **-30 dB** (hạ xuống -40 nếu thiếu onset, nâng lên -25 nếu bắt nhầm
-     nhiễu). 
-   - *Minimum silence between sounds*: đặt **nhỏ hơn khoảng cách nốt** (ví dụ 0.05 s cho bài 200 ms).
-   - *Label type*: "Label before sound" / start of sound.
+2. **Analyze ▸ Label Sounds** (bản cũ: _Sound Finder_). Tham số gợi ý ban đầu:
+   - _Threshold (dB)_: khoảng **-30 dB** (hạ xuống -40 nếu thiếu onset, nâng lên -25 nếu bắt nhầm
+     nhiễu).
+   - _Minimum silence between sounds_: đặt **nhỏ hơn khoảng cách nốt** (ví dụ 0.05 s cho bài 200 ms).
+   - _Label type_: "Label before sound" / start of sound.
 3. Kiểm mắt: số nhãn phải khớp số nốt mong đợi. Nếu lệch, chỉnh threshold/min-silence và chạy lại
    (xem **O9** để hiệu chuẩn detector trước khi tin số liệu).
 4. **File ▸ Export Other ▸ Export Labels…** → lưu `labels.txt` (mỗi dòng: `start <tab> end <tab>
-   nhãn`). `start` chính là thời điểm onset.
+nhãn`). `start` chính là thời điểm onset.
 
 ### 0.4 The analysis script
 
@@ -75,13 +75,14 @@ CSV, tính cả **game-only jitter** (IOI thu được trừ IOI phía gửi →
 
 ```
 # chỉ phân tích onset thu được:
-python tests/analyze_onsets.py labels.txt
+uv run python tests/analyze_onsets.py labels.txt
 
 # khử nhiễu phía gửi (cần chạy player với --debug-csv, file ở logs/):
-python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.csv
+uv run python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.csv
 ```
 
 Đọc kết quả:
+
 - `[GAME] IOI mean/std/spread` — độ đều của nhịp thu được (std nhỏ = đều).
 - `[SENT] IOI std` — độ đều phía player gửi (phải rất nhỏ, ~<0.1 ms).
 - `[GAME-only jitter] std` + `residuals` — phần dao động THUẦN do game. Nếu residuals có **dao
@@ -115,10 +116,11 @@ python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.csv
 tiếng game. Hai cách, từ chính xác đến đơn giản:
 
 **Cách A — Audacity overdub (khách quan):**
+
 1. Trong Audacity: **Generate ▸ Rhythm Track**, đặt **Tempo = BPM của bài** (bài
    `TEST_metro_alt_500` = 500 ms/nốt = **120 BPM**), tạo một click track.
 2. **Hiệu chuẩn latency một lần**: Edit ▸ Preferences ▸ Devices ▸ Latency, làm bài test latency của
-   Audacity (thu lại chính click qua loopback, đo lệch, nhập vào *Latency correction*). Bước này để
+   Audacity (thu lại chính click qua loopback, đo lệch, nhập vào _Latency correction_). Bước này để
    track thu mới được canh đúng vào dòng thời gian của click.
 3. **Tách đường tiếng**: cho **game phát ra loa** (Audacity loopback thu loa này), còn **click của
    Audacity phát ra tai nghe** (thiết bị khác) để click KHÔNG lọt vào bản thu. Bật **Transport ▸
@@ -145,9 +147,9 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Chuẩn bị:** bài `TEST_visibility`; khóa FPS ngoài ở 30/60/144; **không `--fps`**.
 - **Các bước:** với mỗi FPS, quét hold giảm dần — chạy nhiều lần:
   ```
-  python -m main --song TEST_visibility --hold-ms 40 --min-hold-ms 40 --debug-csv
-  python -m main --song TEST_visibility --hold-ms 20 --min-hold-ms 20 --debug-csv
-  python -m main --song TEST_visibility --hold-ms 10 --min-hold-ms 10 --debug-csv
+  uv run python -m main --song TEST_visibility --hold-ms 40 --min-hold-ms 40 --debug-csv
+  uv run python -m main --song TEST_visibility --hold-ms 20 --min-hold-ms 20 --debug-csv
+  uv run python -m main --song TEST_visibility --hold-ms 10 --min-hold-ms 10 --debug-csv
   ...
   ```
   (Phải đặt CẢ `--hold-ms` lẫn `--min-hold-ms` vì clamp hold hợp nhất lấy `max(min_hold, …)`.)
@@ -162,7 +164,7 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 
 - **Chuẩn bị:** `TEST_repeat_gap` (hold cố định 24 ms, gap giảm 50→5 ms) hoặc `TEST_repeat_staircase`;
   khóa FPS ngoài; hold giữ ≥ 1 frame ở FPS test.
-- **Các bước:** `python -m main --song TEST_repeat_gap --debug-csv` ở 60 rồi 144 (không `--fps`).
+- **Các bước:** `uv run python -m main --song TEST_repeat_gap --debug-csv` ở 60 rồi 144 (không `--fps`).
   Thu, đếm onset MỖI block (mỗi block 10 lần bấm cùng phím).
 - **Đo:** block có gap nhỏ nhất mà vẫn đủ 10/10 onset.
 - **Kết quả mong đợi:** gap 100%-tin-cậy ≈22–24 ms @60, ≈14–17 ms @144; ở đúng 1 frame chỉ ~80%.
@@ -184,7 +186,7 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 ### T4 — Wide audience floors were not shown necessary (remote)
 
 - **Chuẩn bị:** phòng online, máy B thu (0.5). A/B `audience_safe` vs `audience_frame_test` (nếu
-  còn) hoặc so audience hiện tại với một profile floor thấp.
+  còn) hoặc so audience hiện tại với một profile floor thấp (local-precise).
 - **Các bước:** host phát `TEST_metro_same_200` rồi `TEST_repeat_staircase` lần lượt 2 profile; B thu
   từng lần.
 - **Đo (trên WAV của B):** đếm onset mỗi bài; đo "valley drop" giữa 2 onset same-key (độ tụt
@@ -205,7 +207,7 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Chuẩn bị:** `TEST_metro_alt_500` (120 BPM); metronome tham chiếu (0.7).
 - **Các bước (local):** với mỗi `--input-lead-ms` ∈ {0, 4, 8, 12, 16}:
   ```
-  python -m main --song TEST_metro_alt_500 --timing-profile local-precise --input-lead-ms 8 --debug-csv
+  uv run python -m main --song TEST_metro_alt_500 --timing-profile local-precise --input-lead-ms 8 --debug-csv
   ```
   Thu (overdub click, cách A) → tách onset → tính **offset = onset_game − click** trung bình.
 - **Các bước (remote):** lặp lại nhưng máy B nghe; B chỉnh metronome 120 BPM và đánh giá lead nào
@@ -221,7 +223,7 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Chuẩn bị:** `TEST_rolled_chord_18` (4 phím cách 18 ms).
 - **Các bước:** quét `--chord-merge-window-ms` ∈ {0, 5, 10, 15, 20, 30}:
   ```
-  python -m main --song TEST_rolled_chord_18 --chord-merge-window-ms 10 --debug-csv
+  uv run python -m main --song TEST_rolled_chord_18 --chord-merge-window-ms 10 --debug-csv
   ```
   Thu local; đếm xem mỗi block ra **4 onset rời** hay đã **gom thành 1**. (Có thể nhờ B nghe để xác
   nhận cảm giác "rải" còn không.)
@@ -230,13 +232,12 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 
 ### O3 — The real remote no-drop floor (sàn hold/gap audience theo số liệu)
 
-- **Vì sao mở:** sàn audience (hold 20000 / repeat 24000) là ngoại suy; `local` (hold ~0 / repeat
-  18000) **đôi khi mất nốt** remote. Ranh giới chưa đo.
+- **Vì sao mở:** sàn audience (hold 20000 / repeat 24000) là ngoại suy; `local` (hold ~0 / repeat 18000) **đôi khi mất nốt** remote. Ranh giới chưa đo.
 - **Chuẩn bị:** máy B thu; `TEST_metro_same_200` + `TEST_repeat_staircase`.
 - **Các bước:** giữ các tham số khác = local, nâng RIÊNG từng cái:
   - hold: `--hold-ms 0 → 8 → 12 → 16 → 20` (kèm `--min-hold-ms` tương ứng)
   - repeat_gap: `--repeat-release-gap-ms 18 → 20 → 22 → 24`
-  Mỗi mức chạy N lần (gồm cả một lần mạng đông/kém). B đếm onset mất.
+    Mỗi mức chạy N lần (gồm cả một lần mạng đông/kém). B đếm onset mất.
 - **Quyết định:** hold/repeat_gap **nhỏ nhất mà 0 drop qua mọi lần** = sàn audience thật, thay ngoại
   suy ở T4/A.9. Chỉ nâng cái nào chặn drop; đừng nâng cái khác.
 
@@ -253,7 +254,7 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
   - V2: local + `--input-lead-ms 10`
   - V3: local + `--hold-ms 20 --min-hold-ms 18`
   - V4: local + `--repeat-release-gap-ms 24`
-  Nên làm **mù** (mục O4 ghi chú dưới): người chấm không biết đang nghe biến nào.
+    Nên làm **mù** (mục O4 ghi chú dưới): người chấm không biết đang nghe biến nào.
 - **Quyết định:**
   - V1/V2 điểm nhịp **tệ hơn** → chord_merge/lead là thủ phạm phá nhịp → audience phải giữ chúng gần
     local.

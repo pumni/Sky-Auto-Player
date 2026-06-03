@@ -31,24 +31,24 @@ Sky Music Player should assume that the game samples input on frame boundaries a
 
 All timing values are expressed in microseconds.
 
-| Term                  | Meaning                                                                                               |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| hold_us               | Effective key-down duration for a normal note after profile materialisation and overrides.            |
-| hold_frames           | Local frame-visibility margin for normal holds.                                                       |
-| hold_floor_us         | Absolute lower wall/target for normal holds.                                                          |
-| min_hold_us           | Effective minimum key-down duration after compression.                                                |
-| min_hold_frames       | Local frame-visibility margin for compressed holds.                                                   |
-| min_hold_floor_us     | Absolute lower wall/target for compressed holds.                                                      |
-| release_gap_us        | Minimum gap after a key is released before general scheduling continues.                              |
-| repeat_release_gap_us | Effective up-time before pressing the same key again. This is the critical same-key repeat gap.       |
-| repeat_release_gap_frames | Local frame margin for same-key repeat up-time.                                                  |
-| repeat_release_gap_floor_us | Absolute lower wall/target for same-key repeat up-time.                                      |
-| input_lead_us         | How early input is sent relative to the musical timestamp.                                            |
-| chord_merge_window_us | Window used to snap nearby notes into the same chord.                                                 |
-| cycle_us              | min_hold_us plus repeat_release_gap_us. This is the critical same-key repeat cycle.                   |
-| frame_us              | Duration of one game frame. At 60 FPS, one frame is about 16.67 ms.                                   |
-| game_fps              | The FPS value selected or calibrated by the user. A value of 0 means frame-aware scaling is disabled. |
-| tempo_scale           | Playback speed multiplier. Values above 1.0 increase scheduling pressure.                             |
+| Term                        | Meaning                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------------- |
+| hold_us                     | Effective key-down duration for a normal note after profile materialisation and overrides.            |
+| hold_frames                 | Local frame-visibility margin for normal holds.                                                       |
+| hold_floor_us               | Absolute lower wall/target for normal holds.                                                          |
+| min_hold_us                 | Effective minimum key-down duration after compression.                                                |
+| min_hold_frames             | Local frame-visibility margin for compressed holds.                                                   |
+| min_hold_floor_us           | Absolute lower wall/target for compressed holds.                                                      |
+| release_gap_us              | Minimum gap after a key is released before general scheduling continues.                              |
+| repeat_release_gap_us       | Effective up-time before pressing the same key again. This is the critical same-key repeat gap.       |
+| repeat_release_gap_frames   | Local frame margin for same-key repeat up-time.                                                       |
+| repeat_release_gap_floor_us | Absolute lower wall/target for same-key repeat up-time.                                               |
+| input_lead_us               | How early input is sent relative to the musical timestamp.                                            |
+| chord_merge_window_us       | Window used to snap nearby notes into the same chord.                                                 |
+| cycle_us                    | min_hold_us plus repeat_release_gap_us. This is the critical same-key repeat cycle.                   |
+| frame_us                    | Duration of one game frame. At 60 FPS, one frame is about 16.67 ms.                                   |
+| game_fps                    | The FPS value selected or calibrated by the user. A value of 0 means frame-aware scaling is disabled. |
+| tempo_scale                 | Playback speed multiplier. Values above 1.0 increase scheduling pressure.                             |
 
 ---
 
@@ -357,12 +357,12 @@ Frame alignment should never be used as a substitute for adequate hold and relea
 
 The project ships exactly four profiles:
 
-| Profile          | Intended Use                            | Online Audience Use | Notes                                                                    |
-| ---------------- | --------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| local_precise    | Sharp local playback                    | No                  | Reference profile = the measured floors themselves; pure frame-relative holds. |
-| balanced         | General default playback                | Limited             | local_precise + a little body/lead. Good default for normal use.        |
-| dense_safe       | Dense local playback                    | Limited             | Body like balanced + larger chord merge / release gap for note pressure. |
-| audience_safe    | Online room playback                    | Yes                 | A little above balanced for remote audibility; carried mainly by input lead. |
+| Profile       | Intended Use             | Online Audience Use | Notes                                                                          |
+| ------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------ |
+| local_precise | Sharp local playback     | No                  | Reference profile = the measured floors themselves; pure frame-relative holds. |
+| balanced      | General default playback | Limited             | local_precise + a little body/lead. Good default for normal use.               |
+| dense_safe    | Dense local playback     | Limited             | Body like balanced + larger chord merge / release gap for note pressure.       |
+| audience_safe | Online room playback     | Yes                 | A little above balanced for remote audibility; carried mainly by input lead.   |
 
 balanced should remain the general default profile.
 
@@ -472,7 +472,7 @@ rule-of-thumb in this document, **the measured value governs**.
 ### A.1 Method
 
 Ground truth is the **recorded game audio**, not the scheduler log: `--debug-csv` verifies the
-*sent* side, onset counting on the WAV verifies *registration*. The full method, tooling
+_sent_ side, onset counting on the WAV verifies _registration_. The full method, tooling
 (`tests/make_test_song.py`, `tests/analyze_onsets.py`), and critical controls (lock FPS
 externally, `--fps` off when measuring game intrinsics, percussive instrument, count onsets) are
 documented in **`timing-experiments.md` §0**, which also proves each result below (Part 1).
@@ -520,7 +520,7 @@ repeats.)
 
 ### A.5 The asymmetry between hold and gap
 
-- **Hold (visibility)** floor is a *pure frame multiple* — no fixed component.
+- **Hold (visibility)** floor is a _pure frame multiple_ — no fixed component.
 - **Repeat gap** floor is a frame multiple **plus** a fixed ~17 ms wall.
 
 Practical consequence: higher FPS sharpens single-note capture without bound, but does
@@ -565,24 +565,24 @@ At 60 FPS the shared local margins materialise to at least `min_hold = 20834` an
 `repeat_gap = 25001`. Therefore a profile whose absolute floor is at or below those values
 does not differentiate that parameter at 60 FPS; the frame term wins.
 
-A profile *could* be made more conservative than the local minimum by setting its
+A profile _could_ be made more conservative than the local minimum by setting its
 `min_hold_floor_us`/`repeat_release_gap_floor_us` **above** the local materialised values.
 The earlier `audience_safe` did exactly that (≈2-frame floors). **As of the EXP-4 review
 (June 2026) it no longer does**: a wide hold/gap was found to trade away articulation,
-repeat speed, and chord expressiveness *without* a demonstrated remote benefit (frame-test
+repeat speed, and chord expressiveness _without_ a demonstrated remote benefit (frame-test
 with the floors removed was on par with the floored profile for a remote listener). The
 audience margin is therefore carried mainly by `input_lead_us` — which compensates remote
 perceived delay as a harmless uniform shift — and a modest `chord_merge_window_us`, while the
 hold/min/repeat floors sit just above the registration floor a typical remote (~60 FPS)
 client needs:
 
-| Value                       | audience_safe | In frames @60 | Rationale                                                  |
-| --------------------------- | ------------- | ------------- | ---------------------------------------------------------- |
-| hold_floor_us               | 20000         | ~1.2          | visible hold for a remote ~60fps client; no wide 2-frame margin |
-| min_hold_floor_us           | 18000         | ~1.1          | compressed notes survive ~1 remote frame                   |
-| repeat_release_gap_floor_us | 24000         | ~1.4          | top of the measured 100%-reliable @60 band (A.4) + remote jitter margin |
+| Value                       | audience_safe | In frames @60 | Rationale                                                                                                                 |
+| --------------------------- | ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| hold_floor_us               | 20000         | ~1.2          | visible hold for a remote ~60fps client; no wide 2-frame margin                                                           |
+| min_hold_floor_us           | 18000         | ~1.1          | compressed notes survive ~1 remote frame                                                                                  |
+| repeat_release_gap_floor_us | 24000         | ~1.4          | top of the measured 100%-reliable @60 band (A.4) + remote jitter margin                                                   |
 | input_lead_us               | 10000         | —             | remote perceived-delay compensation (uniform shift; the real audience lever) — still by-ear, see timing-experiments.md O1 |
-| chord_merge_window_us       | 5000          | —             | chord coherence for listeners without flattening arpeggios |
+| chord_merge_window_us       | 5000          | —             | chord coherence for listeners without flattening arpeggios                                                                |
 
 At 60 FPS these floors sit at/below the local frame terms, so the same-key cycle materialises
 to ~45.8 ms (~2.75 frames) — **equal to the local minimum**, by design. At 144 FPS the frame
@@ -601,12 +601,12 @@ differentiate through `hold_floor_us`, `input_lead_us` and
 As a follow-up tuning after the frame/floor representation landed, local profiles now use
 lower `hold_floor_us` and `min_hold_floor_us` values when FPS is known:
 
-| Profile class                         | hold/min floor | Why                                                        |
-| ------------------------------------- | -------------- | ---------------------------------------------------------- |
-| local_precise                         | 0 us           | pure frame-relative = the measured visibility model; sharpest at high FPS |
-| dense_safe                            | 11000 us       | a small body floor above local while staying under the 144 FPS frame term |
-| balanced                              | 14000 us       | default profile keeps extra high-FPS body over local-precise |
-| audience_safe                         | 20000 / 18000 us | remote ~60fps registration floor + small margin (EXP-4); no wide 2-frame margin |
+| Profile class | hold/min floor   | Why                                                                             |
+| ------------- | ---------------- | ------------------------------------------------------------------------------- |
+| local_precise | 0 us             | pure frame-relative = the measured visibility model; sharpest at high FPS       |
+| dense_safe    | 11000 us         | a small body floor above local while staying under the 144 FPS frame term       |
+| balanced      | 14000 us         | default profile keeps extra high-FPS body over local-precise                    |
+| audience_safe | 20000 / 18000 us | remote ~60fps registration floor + small margin (EXP-4); no wide 2-frame margin |
 
 Built-ins keep conservative `*_unframed_us` fallback values so the no-FPS/experiment path
 does not silently inherit the sharper local floors.
@@ -629,11 +629,11 @@ does not silently inherit the sharper local floors.
 ### A.10 Result 4 — Onset cadence is a fixed internal tick; input lead must NOT scale with render FPS
 
 A second measurement round (June 2026; recorded WAV via Audacity, onset counting per A.1)
-tested whether *onset timing* tracks the render frame or a fixed internal cadence.
+tested whether _onset timing_ tracks the render frame or a fixed internal cadence.
 
 **EXP-1 — the player's send side is clean.** Per-event telemetry (`--debug-csv`) on a steady
 stream gave send-interval std of **0.05–0.07 ms** at both 60 and 144 FPS, and p95 send
-lateness ~**0.13 ms**. Any audible rhythm problem is therefore *not* the player's
+lateness ~**0.13 ms**. Any audible rhythm problem is therefore _not_ the player's
 scheduler/sleep timing — it must originate in the game.
 
 **EXP-2 — onset jitter does not shrink with render FPS.** With the player's `--fps` off (no
@@ -646,12 +646,12 @@ fixed cadence beating against the send stream, not render-frame-relative random 
 Conclusion: onset registration is governed by a **fixed internal cadence (~60 Hz tick),
 independent of render FPS** — the same fixed wall first seen for same-key repeats (A.4/A.5),
 now confirmed to also govern single-note onset phase. The render frame only governs when it
-is *coarser* than this tick, i.e. below ~60 FPS.
+is _coarser_ than this tick, i.e. below ~60 FPS.
 
 **Consequence for input lead (code change).** The earlier high-FPS lead "phase compensation"
 (`lead − frame/2 + frame'/2`, applied above 75 FPS for audience profiles) assumed the phase
 term scales with the render frame. EXP-2 contradicts that: the phase term is fixed. Scaling
-the lead *down* at high FPS biased notes systematically late and beat against the fixed tick —
+the lead _down_ at high FPS biased notes systematically late and beat against the fixed tick —
 the observed "lạc nhịp" at 144 FPS that was absent at 60. The compensation was therefore
 **removed**: input lead is held at its base value for all FPS ≥ 60. The low-FPS clamp is
 unchanged and consistent with the model (below 60 FPS the render frame is the coarser
