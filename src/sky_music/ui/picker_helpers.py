@@ -21,9 +21,13 @@ def save_theme(theme_name: str) -> None:
 def load_song_choices() -> list[Path]:
     if not SONG_DIR.exists():
         return []
+    # Sort by the same key the picker displays (filename stem) so the visible list
+    # is genuinely A→Z. Accents are normalized so Vietnamese titles collate naturally
+    # and the order matches the search keys built from the stem.
+    from sky_music.ui.picker_theme import remove_accents
     return sorted(
         [path for path in SONG_DIR.iterdir() if path.suffix.lower() in SUPPORTED_EXTENSIONS],
-        key=lambda path: path.name.lower(),
+        key=lambda path: (remove_accents(path.stem).casefold(), path.stem.casefold()),
     )
 
 def get_song_choices(force_refresh: bool = False) -> list[Path]:

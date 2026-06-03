@@ -34,6 +34,10 @@ class SongUiMetadata:
     max_chord_size: int = 0
     chords_count: int = 0
     timing_stress_rate: float = 0.0
+    # False = only the cheap, policy-independent "raw" stats are filled
+    # (Time/Notes/density/gaps); risk + recommended profile are still being
+    # computed in the background. True = full schedule risk analysis is present.
+    analyzed: bool = True
 
 
 _metadata_cache: dict[tuple[Any, ...], SongUiMetadata] = {}
@@ -42,7 +46,7 @@ _persistent_loaded = False
 _cache_lock = RLock()
 _song_repository = get_shared_song_repository()
 
-PERSISTENT_CACHE_SCHEMA_VERSION = 2
+PERSISTENT_CACHE_SCHEMA_VERSION = 3
 PERSISTENT_CACHE_PATH = Path(".cache") / "sky_music" / "picker_metadata.sqlite3"
 _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "hold_us",
@@ -87,6 +91,7 @@ def _metadata_from_payload(payload: dict[str, Any]) -> SongUiMetadata | None:
             max_chord_size=int(payload.get("max_chord_size", 0)),
             chords_count=int(payload.get("chords_count", 0)),
             timing_stress_rate=float(payload.get("timing_stress_rate", 0.0)),
+            analyzed=bool(payload.get("analyzed", True)),
         )
     except Exception:
         return None
@@ -356,6 +361,11 @@ def _store_persistent_metadata(
     cfg: AppConfig | None,
     meta: SongUiMetadata,
 ) -> None:
+    # Never persist raw-only stats; only authoritative, fully analyzed metadata
+    # belongs in the cross-session SQLite cache.
+    if not meta.analyzed:
+        return
+
     key = _persistent_cache_key(song_path, session, cfg)
     if key is None:
         return
@@ -432,7 +442,11 @@ def get_song_ui_metadata(
 
         return SongUiMetadata(
             path=song_path,
-            name=song.name or song_path.stem,
+            # Title shown in the picker is the filename stem (single, instantly
+            # available, sortable source of truth) so the list collates A→Z and the
+            # visible title always matches the sort/search key. The song's internal
+            # JSON "name" can diverge wildly from the filename and is not used here.
+            name=song_path.stem,
             duration_seconds=sched.source_duration_us / 1_000_000,
             note_count=sched.note_count,
             max_polyphony=report.max_polyphony,
@@ -471,6 +485,128 @@ def get_song_ui_metadata(
         )
 
 
+def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
+    """Cheap, policy-independent stats straight from parsed notes (no scheduler).
+
+    Fills the columns that do not depend on the timing profile so the picker can
+    show Time/Notes/Density/gaps immediately (~1ms) while the much heavier risk
+    analysis (~5ms, schedule + analyze) runs in the background. ``analyzed`` is
+    False so the UI knows risk/recommendation are still pending.
+    """
+    try:
+        song = _song_repository.load(song_path)
+        notes = song.notes
+        note_count = len(notes)
+        if note_count == 0:
+            return SongUiMetadata(
+                path=song_path, name=song_path.stem, duration_seconds=0.0,
+                note_count=0, max_polyphony=0, min_note_gap_ms=0.0,
+                min_same_key_gap_ms=0.0, risk="low", recommended_profile="",
+                recommended_tempo_scale=1.0, warnings=(), analyzed=False,
+            )
+
+        times = sorted(int(n.time_ms) for n in notes)
+        duration_seconds = times[-1] / 1000.0
+
+        onsets = sorted(set(times))
+        min_note_gap_ms = float(min(
+            (onsets[i] - onsets[i - 1] for i in range(1, len(onsets))), default=0.0
+        ))
+
+        onset_counts: dict[int, int] = {}
+        for t in times:
+            onset_counts[t] = onset_counts.get(t, 0) + 1
+        max_chord_size = max(onset_counts.values())
+        chords_count = sum(1 for c in onset_counts.values() if c > 1)
+
+        key_last: dict[Any, int] = {}
+        same_key_gaps: list[int] = []
+        for note in sorted(notes, key=lambda n: n.time_ms):
+            t = int(note.time_ms)
+            if note.key in key_last:
+                same_key_gaps.append(t - key_last[note.key])
+            key_last[note.key] = t
+        min_same_key_gap_ms = float(min(same_key_gaps)) if same_key_gaps else 0.0
+
+        average_notes_per_second = note_count / duration_seconds if duration_seconds > 0 else 0.0
+        peak = 0
+        left = 0
+        for right in range(len(times)):
+            while times[right] - times[left] > 1000:
+                left += 1
+            peak = max(peak, right - left + 1)
+
+        return SongUiMetadata(
+            path=song_path, name=song_path.stem,
+            duration_seconds=duration_seconds, note_count=note_count,
+            max_polyphony=max_chord_size,  # exact lower bound; refined once analyzed
+            min_note_gap_ms=min_note_gap_ms, min_same_key_gap_ms=min_same_key_gap_ms,
+            risk="low", recommended_profile="", recommended_tempo_scale=1.0,
+            warnings=(),
+            average_notes_per_second=average_notes_per_second,
+            peak_notes_per_second_1s=float(peak),
+            impossible_repeats=0, max_chord_size=max_chord_size,
+            chords_count=chords_count, timing_stress_rate=0.0,
+            analyzed=False,
+        )
+    except Exception as exc:
+        # A parse/read failure is terminal, not pending — mark analyzed so the UI
+        # shows the error instead of an endless "analyzing…" state.
+        return SongUiMetadata(
+            path=song_path, name=song_path.stem, duration_seconds=0.0,
+            note_count=0, max_polyphony=0, min_note_gap_ms=0.0,
+            min_same_key_gap_ms=0.0, risk="error", recommended_profile="unplayable",
+            recommended_tempo_scale=1.0, warnings=(f"Failed to read song: {exc}",),
+            analyzed=True,
+        )
+
+
+def populate_raw_song_ui_metadata_for_paths(
+    paths: list[Path] | tuple[Path, ...],
+    session: PlaybackSessionContext | None = None,
+    cfg: AppConfig | None = None,
+) -> int:
+    """Seed the RAM cache with raw stats for paths that have no entry yet.
+
+    Runs in the lightweight cache worker. Never persists to SQLite (raw entries
+    are not authoritative) and never clobbers a fully analyzed entry.
+    """
+    if not paths:
+        return 0
+    session = session or PlaybackSessionContext.balanced()
+    filled = 0
+    for path in paths:
+        try:
+            song_file_key = _song_repository.cache_key(path)
+        except Exception:
+            continue
+        ram_key = session.metadata_cache_key(song_file_key, cfg)
+        with _cache_lock:
+            if _metadata_cache.get(ram_key) is not None:
+                continue
+        meta = compute_raw_song_ui_metadata(path)
+        with _cache_lock:
+            current = _metadata_cache.get(ram_key)
+            if current is None or not current.analyzed:
+                _metadata_cache[ram_key] = meta
+                filled += 1
+    return filled
+
+
+def hydrate_and_fill_raw_metadata(
+    paths: list[Path] | tuple[Path, ...],
+    session: PlaybackSessionContext | None = None,
+    cfg: AppConfig | None = None,
+) -> int:
+    """Cache-worker entry point: disk-cached full metadata first, then raw stats.
+
+    Returns how many rows became (re)paintable so the caller can decide to repaint.
+    """
+    loaded = hydrate_persistent_metadata_for_paths(paths, session, cfg)
+    raw = populate_raw_song_ui_metadata_for_paths(paths, session, cfg)
+    return loaded + raw
+
+
 def get_cached_song_ui_metadata(
     song_path: Path,
     session: PlaybackSessionContext | None = None,
@@ -485,7 +621,9 @@ def get_cached_song_ui_metadata(
     ram_key = session.metadata_cache_key(song_file_key, cfg)
     with _cache_lock:
         cached = _metadata_cache.get(ram_key)
-    if cached is not None:
+    # A raw-only entry (analyzed=False) is not a real hit for callers that need
+    # the risk analysis; fall through and compute the full metadata.
+    if cached is not None and cached.analyzed:
         return cached
 
     persistent = _peek_persistent_metadata(song_path, session, cfg)

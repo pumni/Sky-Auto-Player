@@ -7,7 +7,19 @@ It is intentionally a principles document, not an implementation document. It sh
 The goal is not to make playback appear fast in logs. The goal is reliable note registration inside the game and, when playing online, reliable audibility for other players.
 
 **Related docs:** `timing-experiments.md` (the experiments that prove Appendix A and the open
-calibration work) and `timing-profile-frame-model.md` (the frame-relative representation in code).
+calibration work), `timing-profile-frame-model.md` (the frame-relative representation in code),
+and `timing-architecture-audit.md` (the 2026-06 audit + 3-phase refactor that removed dead knobs).
+
+> ⚠️ **ARCHITECTURE UPDATE (June 2026).** A measurement-driven audit removed three timing knobs
+> that were stated here but had no real, necessary effect (see `timing-architecture-audit.md`):
+> **`input_lead`** (architectural no-op — the player generates the whole timeline with no external
+> reference, so a uniform shift is unobservable; proven, then removed), **`chord_merge`** (effectively
+> never fires on real songs), and **`frame_align`** (off in every profile, and pointless because the
+> game resamples on its own frames). The principles tied to them — **§10 Chord Batching, §11 Input
+> Lead, §15 Frame Alignment** — are now **RETIRED** (kept with a banner, not deleted, to preserve
+> section numbering and cross-references). The live local model is three real levers: **min_hold**
+> (visibility), **repeat_release_gap** (same-key), **release_gap**. Symptom/tuning tables below have
+> been pruned accordingly.
 
 ---
 
@@ -43,8 +55,8 @@ All timing values are expressed in microseconds.
 | repeat_release_gap_us       | Effective up-time before pressing the same key again. This is the critical same-key repeat gap.       |
 | repeat_release_gap_frames   | Local frame margin for same-key repeat up-time.                                                       |
 | repeat_release_gap_floor_us | Absolute lower wall/target for same-key repeat up-time.                                               |
-| input_lead_us               | How early input is sent relative to the musical timestamp.                                            |
-| chord_merge_window_us       | Window used to snap nearby notes into the same chord.                                                 |
+| ~~input_lead_us~~           | **REMOVED (June 2026)** — was "how early input is sent"; proven a no-op, deleted from code.            |
+| ~~chord_merge_window_us~~   | **REMOVED (June 2026)** — was the chord-snap window; never fired on real songs, deleted from code.     |
 | cycle_us                    | min_hold_us plus repeat_release_gap_us. This is the critical same-key repeat cycle.                   |
 | frame_us                    | Duration of one game frame. At 60 FPS, one frame is about 16.67 ms.                                   |
 | game_fps                    | The FPS value selected or calibrated by the user. A value of 0 means frame-aware scaling is disabled. |
@@ -112,8 +124,7 @@ They should reduce collapse and missed notes by balancing:
 
 - sufficient same-key release time;
 - reasonable visible hold duration;
-- slightly larger chord merge windows;
-- enough input lead to compensate for scheduling and frame delay.
+- a slightly larger general release gap for note pressure.
 
 Dense playback should not be solved by blindly lowering min_hold_us. If density causes misses, safer spacing is usually better than shorter spacing.
 
@@ -125,11 +136,12 @@ Online audience playback should use:
 
 - larger visible holds;
 - larger same-key release gaps;
-- larger chord merge windows;
-- more conservative input lead;
 - stronger protection against dense timing collapse.
 
-audience_safe is the recommended profile class for online rooms.
+audience_safe is the recommended profile class for online rooms. After the June 2026 refactor it
+differs from local profiles **only** through higher hold/min_hold/repeat_gap floors (no longer
+through input lead or chord merge, which were removed). Whether those wider floors are actually
+needed remote is still open — see `timing-experiments.md` O3/O4.
 
 If local playback sounds correct but other players miss notes, the timing should be treated as insufficient for online audience playback.
 
@@ -200,8 +212,7 @@ If notes vanish, first consider:
 1. increasing min_hold_us;
 2. increasing repeat_release_gap_us;
 3. using a safer profile;
-4. reducing tempo_scale;
-5. increasing chord_merge_window_us slightly if the issue is chord spread.
+4. reducing tempo_scale.
 
 For online audience playback, min_hold_us should be more conservative than local-only playback.
 
@@ -233,43 +244,37 @@ release_gap_us should be tuned for general stability, while repeat_release_gap_u
 
 ---
 
-## 10. Principle 6 — Chord Batching Reduces Pressure
+## 10. Principle 6 — Chord Batching ~~Reduces Pressure~~ **[RETIRED — June 2026]**
 
-chord_merge_window_us controls how nearby notes are grouped into a chord.
+> **RETIRED.** `chord_merge_window_us` was removed. Measurement (`timing-experiments.md` O2) showed
+> real songs never contain the 5–20 ms note clusters the window targeted — notes are either exactly
+> simultaneous or ≥ ~100 ms apart — so the window effectively never fired. Exactly-simultaneous chords
+> are still grouped into one SendInput at the final event-grouping step, so chords replicate as before.
+> Notes a few ms apart now go out at their own time (a frame-sampler sees them on the same frame
+> anyway). There is no chord-merge knob to tune; do not reintroduce one without new evidence.
 
-Small windows preserve expressive timing, strums, and intentional offsets.
+The historical text below is kept for context only:
 
-Larger windows reduce scheduling pressure and can make chords more coherent for remote listeners.
-
-The window should not be too large. Excessive batching can flatten intended arpeggios and make expressive passages sound unnatural.
-
-For local expressive playback, use smaller chord merge windows.
-
-For dense or online audience playback, slightly larger chord merge windows are usually safer.
+chord_merge_window_us controlled how nearby notes were grouped into a chord. Small windows preserved
+expressive timing; larger windows reduced scheduling pressure but could flatten intended arpeggios.
 
 ---
 
-## 11. Principle 7 — Input Lead Compensates for Delay
+## 11. Principle 7 — Input Lead ~~Compensates for Delay~~ **[RETIRED — June 2026]**
 
-input_lead_us sends input before the musical timestamp.
+> **RETIRED.** `input_lead_us` was removed after being proven an **architectural no-op**
+> (`timing-architecture-audit.md` §1, `timing-experiments.md` O1). The player generates the entire
+> timeline and the playback clock is zero-based to the moment you press play, so a uniform earlier
+> shift has nothing to be early *relative to* — it is unobservable, except for a small artifact that
+> compressed the very first interval (`max(0, source − lead)`). Sweeping the old `--input-lead-ms`
+> 0/8/20 produced identical measured offset. The real cause of any "off-beat" feel is relative scatter
+> (the game's ~60 Hz tick jitter, A.10), which a mean shift cannot fix. There is no lead knob; consistent
+> lateness is not a player-side tunable.
 
-It compensates for:
+The historical text below is kept for context only:
 
-- scheduler delay;
-- input injection delay;
-- OS-level timing variation;
-- frame boundary delay;
-- online perceived delay.
-
-Input lead should be adjusted gradually.
-
-Too little lead makes playback sound late.
-
-Too much lead makes playback feel early, especially for the local player.
-
-When the only symptom is consistent lateness, prefer calibrating input_lead_us before changing hold or gap values.
-
-For online audience playback, prefer using an audience-safe profile before manually pushing input lead too far.
+input_lead_us sent input before the musical timestamp to compensate for scheduler / injection / OS /
+frame / online delay. It was a by-ear value; too little sounded late, too much sounded early.
 
 ---
 
@@ -339,17 +344,18 @@ Frame-aware materialisation should protect users from unstable timing, not encou
 
 ---
 
-## 15. Principle 11 — Frame Alignment Must Be Conservative
+## 15. Principle 11 — Frame Alignment ~~Must Be Conservative~~ **[RETIRED — June 2026]**
 
-Frame alignment can improve capture consistency by placing events closer to expected frame boundaries.
+> **RETIRED.** `frame_align` (and `down_only`) were removed. The mode was off in every profile and is
+> conceptually pointless: the game samples input on *its own* render frames, which are not synchronised
+> to the player's clock, so snapping the send timestamps to the player's frame grid aligns to the wrong
+> reference. The safest default ("no frame alignment") is now the only behavior. Adequate hold and
+> release durations remain the real protection — see §6, §7, §8.
 
-However, aggressive alignment can add timing bias and make playback feel late or uneven.
+The historical text below is kept for context only:
 
-The safest default is no frame alignment.
-
-Down-only alignment may be useful as an opt-in calibration mode, but it should be easy to disable.
-
-Frame alignment should never be used as a substitute for adequate hold and release durations.
+Frame alignment aimed to place events closer to expected frame boundaries; aggressive alignment added
+bias and could make playback feel late, so the safe default was always "none".
 
 ---
 
@@ -361,8 +367,8 @@ The project ships exactly four profiles:
 | ------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------ |
 | local_precise | Sharp local playback     | No                  | Reference profile = the measured floors themselves; pure frame-relative holds. |
 | balanced      | General default playback | Limited             | local_precise + a little body/lead. Good default for normal use.               |
-| dense_safe    | Dense local playback     | Limited             | Body like balanced + larger chord merge / release gap for note pressure.       |
-| audience_safe | Online room playback     | Yes                 | A little above balanced for remote audibility; carried mainly by input lead.   |
+| dense_safe    | Dense local playback     | Limited             | Body like balanced + larger release gap for note pressure.                     |
+| audience_safe | Online room playback     | Yes                 | A little above balanced for remote audibility; carried by higher hold/gap floors (input lead removed). |
 
 balanced should remain the general default profile.
 
@@ -382,9 +388,7 @@ local_precise should be used only when local responsiveness matters more than re
 | Notes vanish locally                                     | Hold is too short or FPS is lower than expected     | Increase min_hold_us or use balanced.                     |
 | Local playback sounds fine, but other players miss notes | Online timing is too aggressive                     | Use audience_safe.                                        |
 | Other players hear repeated notes as incomplete          | Same-key release is too short for online audibility | Increase repeat_release_gap_us or use audience_safe.      |
-| Other players hear chords as broken or rattly            | Chord events are too spread out                     | Increase chord_merge_window_us slightly.                  |
-| Playback sounds consistently late                        | Input lead is too small                             | Increase input_lead_us gradually.                         |
-| Playback sounds early locally                            | Input lead is too large                             | Decrease input_lead_us.                                   |
+| Playback sounds consistently late or early               | Game's ~60 Hz tick / network jitter (not tunable)   | Not a player-side fix — see A.10 (input lead was removed). |
 | Dense passages collapse                                  | Scheduling pressure is too high                     | Use dense_safe, use audience_safe, or reduce tempo_scale. |
 | Local playback feels too soft or mushy                   | Holds or gaps are too large for the use case        | Use balanced or local_precise.                            |
 
@@ -401,9 +405,10 @@ When playback is unreliable, tune in this order:
 5. For dropped same-key repeats, increase repeat_release_gap_us.
 6. For vanished notes, increase min_hold_us.
 7. For online audience misses, switch to audience_safe.
-8. For broken or rattly chords, increase chord_merge_window_us slightly.
-9. For consistent lateness, adjust input_lead_us.
-10. Only after those steps, consider changing hold_us or defining a new profile.
+8. Only after those steps, consider changing hold_us or defining a new profile.
+
+(Consistent lateness and chord spread are no longer tunable: input lead and chord merge were removed.
+Residual onset scatter is the game's ~60 Hz tick — see A.10 — not a player-side knob.)
 
 Do not reduce safety floors to make playback appear faster.
 
@@ -420,12 +425,10 @@ Any profile change must be reviewed against these questions:
 3. Does it remain safe at the FPS values where it can be selected?
 4. Does it preserve same-key repeat reliability?
 5. Does it preserve visible key-down capture?
-6. Does it avoid excessive chord flattening?
-7. Does it avoid excessive input lead?
-8. Does it behave acceptably at tempo_scale 1.0?
-9. Does it remain reasonable when tempo_scale is increased?
-10. Has it been tested in real gameplay, not only scheduler logs?
-11. If it is meant for online rooms, have remote listeners confirmed reliability?
+6. Does it behave acceptably at tempo_scale 1.0?
+7. Does it remain reasonable when tempo_scale is increased?
+8. Has it been tested in real gameplay, not only scheduler logs?
+9. If it is meant for online rooms, have remote listeners confirmed reliability?
 
 A profile should not be exposed as production-ready until these questions have acceptable answers.
 
@@ -496,8 +499,11 @@ correct in principle, not merely a useful heuristic.
 ### A.3 Result 2 — Visibility floor (hold) = one frame, purely frame-relative
 
 Reliable key-down capture requires `hold ≥ 1 frame`. No fixed-millisecond component
-was observed (7 ms suffices at 144 FPS). Encoded standard: `min_visible_hold_frames =
-1.25` (one frame plus ~25% phase margin). This value is kept.
+was observed (7 ms suffices at 144 FPS). The measured reliable point is ≈0.96–1.01 frame at
+30/60/144 (result.md T1). Encoded standard: `min_visible_hold_frames = 1.25` (one frame plus
+~25% phase margin). **Update (Phase 3, June 2026):** `local_precise` alone lowers this to **1.1**
+(sharper by ~2.5 ms @60, still above the measured 16 ms reliable floor); the global default and the
+other three profiles keep 1.25.
 
 ### A.4 Result 3 — Same-key release-gap floor = max(~1.4 frame, ~17 ms fixed)
 
@@ -534,7 +540,8 @@ licence for arbitrarily fast repeated notes.
   expert/experiment escape hatch).
 - The same-key gap uses `repeat_release_gap_frames = 1.5` + `repeat_release_gap_floor_us = 18000`
   on **all** profiles, so they converge on this floor at a given FPS (30 → 50000 µs, 60 → 25001 µs,
-  144 → 18000 µs) and differentiate through hold, input lead, and chord merge instead.
+  144 → 18000 µs) and differentiate through **hold/min_hold floors and release_gap** instead (input
+  lead and chord merge were removed June 2026).
 
 ### A.7 Measurement pitfalls
 
@@ -554,6 +561,13 @@ experiment procedures.
 
 ### A.9 Profile differentiation lives in explicit floors and frame margins
 
+> ⚠️ **CORRECTION (June 2026 audit).** This section originally called `input_lead_us` "the real
+> audience lever". That is now known to be **wrong**: input lead is an architectural no-op (it shifts a
+> self-generated timeline with no external reference — `timing-architecture-audit.md` §1) and was
+> removed, along with `chord_merge_window_us`. Audience differentiation now rests **entirely** on the
+> hold/min_hold/repeat_gap floors. The input-lead / chord-merge rows and prose below are kept struck
+> through for history; read the floors, ignore those two levers.
+
 A direct consequence of the measured floors (A.3, A.4): frame-coupled profile values are
 materialised as the larger of a local frame term and an absolute floor:
 
@@ -571,18 +585,17 @@ The earlier `audience_safe` did exactly that (≈2-frame floors). **As of the EX
 (June 2026) it no longer does**: a wide hold/gap was found to trade away articulation,
 repeat speed, and chord expressiveness _without_ a demonstrated remote benefit (frame-test
 with the floors removed was on par with the floored profile for a remote listener). The
-audience margin is therefore carried mainly by `input_lead_us` — which compensates remote
-perceived delay as a harmless uniform shift — and a modest `chord_merge_window_us`, while the
-hold/min/repeat floors sit just above the registration floor a typical remote (~60 FPS)
-client needs:
+audience margin is therefore carried **entirely by the hold/min/repeat floors**, which sit just above
+the registration floor a typical remote (~60 FPS) client needs (~~plus input lead and chord merge —
+both removed June 2026~~):
 
 | Value                       | audience_safe | In frames @60 | Rationale                                                                                                                 |
 | --------------------------- | ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | hold_floor_us               | 20000         | ~1.2          | visible hold for a remote ~60fps client; no wide 2-frame margin                                                           |
 | min_hold_floor_us           | 18000         | ~1.1          | compressed notes survive ~1 remote frame                                                                                  |
 | repeat_release_gap_floor_us | 24000         | ~1.4          | top of the measured 100%-reliable @60 band (A.4) + remote jitter margin                                                   |
-| input_lead_us               | 10000         | —             | remote perceived-delay compensation (uniform shift; the real audience lever) — still by-ear, see timing-experiments.md O1 |
-| chord_merge_window_us       | 5000          | —             | chord coherence for listeners without flattening arpeggios                                                                |
+| ~~input_lead_us~~           | ~~10000~~     | —             | **REMOVED** — proven no-op (audit §1); was not actually compensating anything                                             |
+| ~~chord_merge_window_us~~   | ~~5000~~      | —             | **REMOVED** — never fired on real songs (O2)                                                                              |
 
 At 60 FPS these floors sit at/below the local frame terms, so the same-key cycle materialises
 to ~45.8 ms (~2.75 frames) — **equal to the local minimum**, by design. At 144 FPS the frame
@@ -595,8 +608,8 @@ floor alone rather than the holds.
 The local profiles (`balanced`, `local_precise`, `dense_safe`) intentionally leave
 `min_hold_floor_us`/`repeat_release_gap_floor_us` at or below the shared local floors;
 physics caps same-key reliability identically for all of them at low/normal FPS, so they
-differentiate through `hold_floor_us`, `input_lead_us` and
-`chord_merge_window_us` instead.
+differentiate through `hold_floor_us`/`min_hold_floor_us` and `release_gap_us` instead (input lead
+and chord merge were removed June 2026).
 
 As a follow-up tuning after the frame/floor representation landed, local profiles now use
 lower `hold_floor_us` and `min_hold_floor_us` values when FPS is known:
@@ -626,7 +639,11 @@ does not silently inherit the sharper local floors.
 > these two clean sessions did not stress. Treat as "lower the floors only with deliberate,
 > staged validation under worse network", not "remove the floors".
 
-### A.10 Result 4 — Onset cadence is a fixed internal tick; input lead must NOT scale with render FPS
+### A.10 Result 4 — Onset cadence is a fixed internal tick (game behavior, not player-tunable)
+
+> Heading note: the original framing ("input lead must NOT scale with render FPS") is now moot —
+> input lead was removed entirely (audit §1). The underlying finding about a fixed ~60 Hz game tick
+> stands and is the reason no player-side knob can fix onset phase.
 
 A second measurement round (June 2026; recorded WAV via Audacity, onset counting per A.1)
 tested whether _onset timing_ tracks the render frame or a fixed internal cadence.
@@ -637,27 +654,28 @@ lateness ~**0.13 ms**. Any audible rhythm problem is therefore _not_ the player'
 scheduler/sleep timing — it must originate in the game.
 
 **EXP-2 — onset jitter does not shrink with render FPS.** With the player's `--fps` off (no
-frame-aware rescaling) and the game FPS locked externally, a steady alternating-key stream
-gave game-side onset jitter of **≈13 ms at 60 FPS and ≈12 ms at 144 FPS** — essentially
-unchanged. A pure render-frame sampler would have roughly halved the jitter (16.7 → 6.9 ms
-frame). The 144 FPS residuals also showed periodic **±20 ms jumps** — the signature of a
-fixed cadence beating against the send stream, not render-frame-relative random jitter.
+frame-aware rescaling) and the game FPS locked externally, a steady alternating-key stream showed
+jitter that does not improve at 144 FPS. **Correction (result.md, vs the earlier "≈13/≈12 ms
+constant" estimate):** the jitter is **bimodal / phase-dependent**, not a stable floor — some runs are
+clean (residual std ~0.02 ms) and some carry **±~20 ms bucket-jumps** (std 5–8 ms; e.g. a 200 ms
+cadence splitting into 181/219 ms pairs). A pure render-frame sampler would have roughly halved the
+jitter (16.7 → 6.9 ms frame); it did not. The ±20 ms jumps are the signature of a fixed cadence
+beating against the send stream, not render-frame-relative random jitter.
 
 Conclusion: onset registration is governed by a **fixed internal cadence (~60 Hz tick),
 independent of render FPS** — the same fixed wall first seen for same-key repeats (A.4/A.5),
 now confirmed to also govern single-note onset phase. The render frame only governs when it
 is _coarser_ than this tick, i.e. below ~60 FPS.
 
-**Consequence for input lead (code change).** The earlier high-FPS lead "phase compensation"
-(`lead − frame/2 + frame'/2`, applied above 75 FPS for audience profiles) assumed the phase
-term scales with the render frame. EXP-2 contradicts that: the phase term is fixed. Scaling
-the lead _down_ at high FPS biased notes systematically late and beat against the fixed tick —
-the observed "lạc nhịp" at 144 FPS that was absent at 60. The compensation was therefore
-**removed**: input lead is held at its base value for all FPS ≥ 60. The low-FPS clamp is
-unchanged and consistent with the model (below 60 FPS the render frame is the coarser
-quantiser, so the lead is still raised toward ~½ frame).
+**Consequence for input lead (two code changes).** *First* (mid-2026) the high-FPS lead "phase
+compensation" (`lead − frame/2 + frame'/2`) was removed because EXP-2 showed the phase term is fixed,
+not render-frame-scaled — scaling the lead down at high FPS biased notes late ("lạc nhịp" at 144 FPS).
+*Then* (the June 2026 audit) **input lead was removed entirely**: it was shown to be an architectural
+no-op (the player generates the whole timeline against no external reference, so a uniform shift is
+unobservable — `timing-architecture-audit.md` §1, `timing-experiments.md` O1). So there is no lead to
+hold, scale, or compensate anymore.
 
-Caveat: the residual ~12 ms onset jitter is the game's own cadence quantisation. It is present
-at every render FPS (including 60) and cannot be removed from the player side. Removing the bad
-scaling makes 144 FPS behave like 60 FPS — no better, no worse — it does not make onsets
-sample-accurate.
+Caveat: the residual onset jitter (phase-dependent bucket-jumps up to ~20 ms) is the game's own
+cadence quantisation. It is present at every render FPS (including 60) and **cannot be removed from the
+player side** — no lead, frame-align, or chord-merge knob ever addressed it, which is exactly why all
+three were removed.

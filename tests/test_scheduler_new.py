@@ -292,13 +292,13 @@ def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
     assert policy.hold_us == 22000
     policy_2 = TimingPolicy.from_profile_name("audience-safe")
-    assert policy_2.hold_us == 20000
+    assert policy_2.hold_us == 18000
 
 def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     p = FrameTimingPolicy.from_profile_name("balanced", fps=60)
     assert p.fps == 60
-    assert p.hold_us == 20834
+    assert p.hold_us == 20001
 
 
 def test_local_precise_raw_hold_and_min_hold_are_unified():
@@ -412,18 +412,18 @@ def test_audience_safe_floors_keep_remote_minimum_at_high_fps():
     p60 = FrameTimingPolicy.from_profile_name("audience-safe", fps=60)
     p144 = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
 
-    # At 60 FPS the 1.25/1.5-frame terms dominate the (lowered) absolute floors.
-    assert p60.hold_us == 20834
-    assert p60.min_hold_us == 20834
+    # At 60 FPS the 1.2/1.5-frame terms dominate the (lowered) absolute floors.
+    assert p60.hold_us == 20001
+    assert p60.min_hold_us == 20001
     assert p60.repeat_release_gap_us == 25001
     # At 144 FPS the frame terms shrink, so the absolute remote floors take over and hold the
-    # audience minimum (hold 20000 / min 18000 / repeat 24000). These are tighter than the old
+    # audience minimum (hold 18000 / min 18000 / repeat 24000). These are tighter than the old
     # 2-frame floors — sharper articulation and faster repeats — but still a real remote margin
     # above the registration floor (Appendix A.9 / EXP-4), not the generic local 1.5-frame wall.
-    assert p144.hold_us == 20000
+    assert p144.hold_us == 18000
     assert p144.min_hold_us == 18000
     assert p144.repeat_release_gap_us == 24000
-    assert p60.release_gap_us == p144.release_gap_us == 9000
+    assert p60.release_gap_us == p144.release_gap_us == 5000
 
 
 def test_audience_safe_runtime_validation():

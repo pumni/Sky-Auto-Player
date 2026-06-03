@@ -1,35 +1,15 @@
 import unicodedata
 from typing import Any
 
-try:
-    from prompt_toolkit.utils import get_cwidth as _get_cwidth
-except Exception:  # pragma: no cover - fallback for non prompt_toolkit callers
-    _get_cwidth = None
+from sky_music.ui.text_render import cell_width, pad_cells, truncate_cells
 
-
-def display_width(text: str) -> int:
-    """Terminal cell width, not Python len()."""
-    if not text:
-        return 0
-    if _get_cwidth is not None:
-        return max(0, _get_cwidth(text))
-
-    width = 0
-    for char in text:
-        if unicodedata.combining(char):
-            continue
-        east_asian_width = unicodedata.east_asian_width(char)
-        width += 2 if east_asian_width in {"F", "W"} else 1
-    return width
+# Backwards-compatible aliases — terminal cell-width math lives in text_render now.
+display_width = cell_width
 
 
 def pad_text(text: str, width: int, align: str = "left") -> str:
     """Pad by terminal cell width so emoji/box chars don't shift columns."""
-    text_width = display_width(text)
-    padding = max(0, width - text_width)
-    if align == "right":
-        return " " * padding + text
-    return text + " " * padding
+    return pad_cells(text, width, align="right" if align == "right" else "left")
 
 THEME_PRESETS: dict[str, dict[str, Any]] = {
     "aurora": {
@@ -207,20 +187,4 @@ def append_highlighted_song_name(lines: list[tuple[str, str]], song_name: str, n
     lines.append(("class:unselected", song_name[end:]))
 
 def truncate_text(text: str, max_width: int) -> str:
-    if max_width <= 0:
-        return ""
-    if max_width == 1:
-        return "…"
-    if display_width(text) <= max_width:
-        return text
-
-    result: list[str] = []
-    used_width = 0
-    target_width = max_width - 1
-    for char in text:
-        char_width = display_width(char)
-        if used_width + char_width > target_width:
-            break
-        result.append(char)
-        used_width += char_width
-    return "".join(result) + "…"
+    return truncate_cells(text, max_width)

@@ -99,10 +99,10 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "focus_restore_grace_us": 50000,
     },
     "balanced": {
-        "hold_frames": 1.25,
+        "hold_frames": 1.2,
         "hold_floor_us": 14000,
         "hold_unframed_us": 26000,
-        "min_hold_frames": 1.25,
+        "min_hold_frames": 1.2,
         "min_hold_floor_us": 14000,
         "min_hold_unframed_us": 17000,
         "release_gap_us": 4000,
@@ -118,21 +118,21 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         # wide 2-frame margin — because a wide hold/gap trades away articulation and repeat
         # speed without buying remote audibility (see Appendix A.9 + EXP-4). repeat_gap keeps a
         # touch more margin than hold because same-key re-trigger is the most jitter-fragile.
-        "hold_frames": 1.25,
-        "hold_floor_us": 20000,       # ~1.2 frame @60fps: visible hold for a remote 60fps client
-        "min_hold_frames": 1.25,
+        "hold_frames": 1.2,
+        "hold_floor_us": 18000,       # ~1.2 frame @60fps: visible hold for a remote 60fps client
+        "min_hold_frames": 1.2,
         "min_hold_floor_us": 18000,   # ~1 remote frame: compressed notes still survive online
-        "release_gap_us": 9000,
+        "release_gap_us": 5000,
         "repeat_release_gap_frames": 1.5,
         "repeat_release_gap_floor_us": 24000,  # top of the measured 100%-reliable @60 band (A.4) + remote margin
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
     },
     "dense_safe": {
-        "hold_frames": 1.25,
+        "hold_frames": 1.2,
         "hold_floor_us": 11000,
         "hold_unframed_us": 22000,
-        "min_hold_frames": 1.25,
+        "min_hold_frames": 1.2,
         "min_hold_floor_us": 11000,
         "min_hold_unframed_us": 17000,
         "release_gap_us": 5000,

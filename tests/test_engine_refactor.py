@@ -385,8 +385,8 @@ class TestFpsTimingPolicyUpgrade:
         assert frame_policy.fps == 60
         expected_frame_us = round(1_000_000 / 60)
         assert frame_policy.frame_us == expected_frame_us
-        # Hold should be at least 1.25 frames worth
-        assert frame_policy.hold_us >= int(expected_frame_us * 1.25)
+        # Hold should be at least the profile's configured hold_frames worth
+        assert frame_policy.hold_us >= int(expected_frame_us * base_policy.hold_frames)
 
     def test_fps_none_does_not_upgrade(self):
         """When --fps is None, TimingPolicy stays as is."""

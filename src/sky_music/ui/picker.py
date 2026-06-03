@@ -1,3 +1,4 @@
+import os
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -5,6 +6,12 @@ from pathlib import Path
 from typing import Any, Literal
 import shutil
 
+from sky_music.ui.text_render import (
+    cell_width as _cell_width,
+    truncate_cells as _truncate_cells,
+    pad_cells as _pad_cells,
+    clamp_terminal_width,
+)
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
     get_theme,
@@ -12,7 +19,6 @@ from sky_music.ui.picker_theme import (
     normalized_index_map,
     get_match_span,
     append_highlighted_song_name,
-    truncate_text,
 )
 from sky_music.ui.picker_helpers import (
     SONG_DIR,
@@ -40,6 +46,7 @@ from sky_music.ui.picker_metadata import (
     get_cached_song_ui_metadata,
     peek_cached_song_ui_metadata,
     hydrate_persistent_metadata_for_paths,
+    hydrate_and_fill_raw_metadata,
     warm_persistent_metadata_cache,
     compute_song_ui_metadata_payloads,
     session_to_worker_payload,
@@ -60,10 +67,8 @@ try:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets import TextArea
     from prompt_toolkit.filters import Condition
-    from prompt_toolkit.utils import get_cwidth as _get_cwidth
     HAS_PROMPT_TOOLKIT = True
 except ImportError:
-    _get_cwidth = None
     HAS_PROMPT_TOOLKIT = False
 
 @dataclass
@@ -154,56 +159,38 @@ FPS_OPTIONS = [
 ]
 
 
-RESULTS_HEADER_HEIGHT = 2
+# Lines the song card spends on chrome: top border + column header + bottom border.
+RESULTS_FRAME_OVERHEAD = 3
 UNKNOWN_FIELD = "—"
-
-
-def _cell_width(text: str) -> int:
-    if not text:
-        return 0
-    if _get_cwidth is not None:
-        return max(0, _get_cwidth(text))
-    return len(text)
-
-
-def _truncate_cells(text: str, max_width: int) -> str:
-    if max_width <= 0:
-        return ""
-    if max_width == 1:
-        return "…"
-    if _cell_width(text) <= max_width:
-        return text
-
-    out: list[str] = []
-    used = 0
-    limit = max_width - 1
-    for char in text:
-        char_width = _cell_width(char)
-        if used + char_width > limit:
-            break
-        out.append(char)
-        used += char_width
-    return "".join(out) + "…"
-
-
-def _pad_cells(text: str, width: int, *, align: Literal["left", "right"] = "left") -> str:
-    padding = max(0, width - _cell_width(text))
-    if align == "right":
-        return " " * padding + text
-    return text + " " * padding
+# Shown when raw stats are present but risk analysis is still running.
+PENDING_FIELD = "…"
 
 
 def _title_column_width(terminal_width: int) -> int:
-    # Fixed fields consume roughly 45 cells: pointer/index + time/notes/risk/suggested.
-    return max(20, min(36, terminal_width - 45))
+    # Rows render inside a bordered card, so the row must total exactly the box
+    # inner width (terminal_width - 4). Fixed columns consume 44 cells
+    # (prefix 6 + the time/notes/risk/suggested block with separators), leaving
+    # terminal_width - 48 for the title. Clamped so titles stay readable.
+    return max(12, min(40, terminal_width - 48))
 
 
-def _format_results_header(title_width: int) -> list[tuple[str, str]]:
-    title = _pad_cells("Song Title", title_width)
-    divider = "─" * title_width
+def _results_header_line(title_width: int) -> list[tuple[str, str]]:
+    """Column header as one boxed content line (no trailing newline).
+
+    Column widths must match ``_format_song_row_fast`` exactly so the header
+    lines up with every row inside the card.
+    """
     return [
-        ("class:divider", f"  #   {title}    Time   Notes   Risk    Suggested\n"),
-        ("class:divider", f"  ──  {divider}    ────   ─────   ─────   ───────────\n"),
+        ("class:divider", _pad_cells("  #", 6)),
+        ("class:divider", _pad_cells("Song Title", title_width)),
+        ("class:divider", "    "),
+        ("class:divider", _pad_cells("Time", 4, align="right")),
+        ("class:divider", "   "),
+        ("class:divider", _pad_cells("Notes", 5, align="right")),
+        ("class:divider", "   "),
+        ("class:divider", _pad_cells("Risk", 5)),
+        ("class:divider", "   "),
+        ("class:divider", _truncate_cells("Suggested", 11)),
     ]
 
 
@@ -250,8 +237,11 @@ def _format_song_row_fast(
     title = metadata.name if metadata is not None else song_path.stem
     duration = _format_duration(metadata.duration_seconds) if metadata is not None else UNKNOWN_FIELD
     notes = str(metadata.note_count) if metadata is not None else UNKNOWN_FIELD
-    risk = metadata.risk.upper() if metadata is not None else UNKNOWN_FIELD
-    suggested = metadata.recommended_profile if metadata is not None else "loading"
+    # Time/Notes come from the instant raw tier; risk + suggestion only exist once
+    # the background analysis has run (analyzed=True).
+    analyzed = metadata is not None and metadata.analyzed
+    risk = metadata.risk.upper() if analyzed else (PENDING_FIELD if metadata is not None else UNKNOWN_FIELD)
+    suggested = metadata.recommended_profile if analyzed else (PENDING_FIELD if metadata is not None else "loading")
 
     prefix = f"{pointer if selected else ' '} {_pad_cells(str(song_index), 2, align='right')}  "
     fragments: list[tuple[str, str]] = [
@@ -267,8 +257,14 @@ def _format_song_row_fast(
         (row_style, _pad_cells(risk, 5)),
         (row_style, "   "),
         (row_style, _truncate_cells(suggested, 11)),
-        (row_style, "\n"),
     ])
+    # Pad the row to the card's inner width with the row style so the selection
+    # highlight spans the whole card and build_box adds no extra padding (which
+    # would otherwise break the right border alignment / split the highlight).
+    inner_width = max(0, terminal_width - 4)
+    used = sum(_cell_width(text) for _, text in fragments)
+    if used < inner_width:
+        fragments.append((row_style, " " * (inner_width - used)))
     return fragments
 
 
@@ -497,23 +493,26 @@ def choose_song_interactively(
         terminal_width = state.term_width
         if state.current_view == "picker":
             title_width = _title_column_width(terminal_width)
-            lines = _format_results_header(title_width)
-            
-            if not state.filtered_songs:
-                lines.append(("class:empty", f"  {empty_icon} No songs found\n"))
-                return lines
 
-            max_visible = max(1, state.results_height - RESULTS_HEADER_HEIGHT)
+            if not state.filtered_songs:
+                return build_box(
+                    "Songs (0)",
+                    [[("class:empty", f"{empty_icon} No songs found")]],
+                    width=terminal_width,
+                )
+
+            max_visible = max(1, state.results_height - RESULTS_FRAME_OVERHEAD)
             _sync_scroll_offset(state, max_visible)
             start_idx = state.scroll_offset
             end_idx = min(len(state.filtered_songs), start_idx + max_visible)
-                
+
+            content_lines: list[Any] = [_results_header_line(title_width)]
             for idx in range(start_idx, end_idx):
                 path = state.filtered_songs[idx]
                 orig_idx = song_indices.get(path, idx + 1)
                 is_selected = idx == state.selected_index
                 metadata = peek_cached_song_ui_metadata(path, state.active_session, state.user_cfg)
-                lines.extend(
+                content_lines.append(
                     _format_song_row_fast(
                         orig_idx,
                         path,
@@ -524,8 +523,11 @@ def choose_song_interactively(
                         terminal_width,
                     )
                 )
-            return lines
-            
+            total = len(state.filtered_songs)
+            shown = end_idx - start_idx
+            title = f"Songs ({total})" if shown >= total else f"Songs ({start_idx + 1}-{end_idx} of {total})"
+            return build_box(title, content_lines, width=terminal_width)
+
         elif state.current_view == "preview":
             if not state.filtered_songs:
                 return []
@@ -542,16 +544,25 @@ def choose_song_interactively(
                     width=terminal_width,
                 )
 
+            poly_str = str(metadata.max_polyphony) if metadata.analyzed else f"{metadata.max_chord_size}+"
             preview_content = [
                 f"{metadata.name}",
-                f"Time {_format_duration(metadata.duration_seconds)} │ Notes {metadata.note_count} │ Polyphony {metadata.max_polyphony}",
-                f"Risk {metadata.risk.upper()} │ Stress: {metadata.timing_stress_rate:.1f}% ({metadata.impossible_repeats} conflicts)",
+                f"Time {_format_duration(metadata.duration_seconds)} │ Notes {metadata.note_count} │ Polyphony {poly_str}",
+                (
+                    f"Risk {metadata.risk.upper()} │ Stress: {metadata.timing_stress_rate:.1f}% ({metadata.impossible_repeats} conflicts)"
+                    if metadata.analyzed else
+                    "Risk: analyzing…"
+                ),
                 f"Min repeat gap: {metadata.min_same_key_gap_ms:.0f}ms │ Peak density: {metadata.peak_notes_per_second_1s:.1f} n/s",
             ]
 
+            suggested_line = (
+                f"Suggested: {metadata.recommended_profile} @ {metadata.recommended_tempo_scale:.2f}x"
+                if metadata.analyzed else "Suggested: analyzing…"
+            )
             timing_content = [
                 f"Current:   {state.current_profile} @ {state.current_tempo:.2f}x",
-                f"Suggested: {metadata.recommended_profile} @ {metadata.recommended_tempo_scale:.2f}x",
+                suggested_line,
                 f"FPS Sync:  {state.current_fps or 'Auto'}"
             ]
             return build_box("Song Detail", preview_content, width=terminal_width) + build_box("Timing Settings", timing_content, width=terminal_width)
@@ -660,13 +671,17 @@ def choose_song_interactively(
                 width=terminal_width,
             )
 
+        # Time/Notes/density/gap are raw (instant); risk + true polyphony wait for
+        # the background analysis.
+        risk_str = metadata.risk.upper() if metadata.analyzed else PENDING_FIELD
+        poly_str = str(metadata.max_polyphony) if metadata.analyzed else f"{metadata.max_chord_size}+"
         content = [metadata.name]
         if d_height >= 6:
             content.append(
                 f"Time {_format_duration(metadata.duration_seconds)} │ "
-                f"Notes {metadata.note_count} │ Risk {metadata.risk.upper()}"
+                f"Notes {metadata.note_count} │ Risk {risk_str}"
             )
-            content.append(f"Poly: {metadata.max_polyphony} │ Gap: {metadata.min_same_key_gap_ms:.0f}ms")
+            content.append(f"Poly: {poly_str} │ Gap: {metadata.min_same_key_gap_ms:.0f}ms")
             content.append(
                 f"Density: {metadata.average_notes_per_second:.1f}/s "
                 f"(peak {metadata.peak_notes_per_second_1s:.1f}/s)"
@@ -674,13 +689,13 @@ def choose_song_interactively(
         elif d_height >= 4:
             content.append(
                 f"Time {_format_duration(metadata.duration_seconds)} │ Notes {metadata.note_count} │ "
-                f"Risk {metadata.risk.upper()}"
+                f"Risk {risk_str}"
             )
-            content.append(f"Poly: {metadata.max_polyphony} │ Density: {metadata.average_notes_per_second:.1f}/s")
+            content.append(f"Poly: {poly_str} │ Density: {metadata.average_notes_per_second:.1f}/s")
         else:
             content.append(
                 f"Time {_format_duration(metadata.duration_seconds)} │ Notes {metadata.note_count} │ "
-                f"Risk {metadata.risk.upper()}"
+                f"Risk {risk_str}"
             )
         return build_box("Selected", content, width=terminal_width)
 
@@ -693,6 +708,9 @@ def choose_song_interactively(
             meta = peek_cached_song_ui_metadata(state.filtered_songs[state.selected_index], state.active_session, state.user_cfg)
             if meta is None:
                 line1 = [("class:detail", "Metadata loading…")]
+            elif not meta.analyzed:
+                # Raw stats are in; surface them while the risk verdict is pending.
+                line1 = [("class:detail", f"{meta.note_count} notes · {meta.average_notes_per_second:.1f}/s · risk analyzing…")]
             else:
                 risk_style = (
                     "fg:#ef4444 bold"
@@ -736,7 +754,7 @@ def choose_song_interactively(
     def _visible_picker_paths() -> list[Path]:
         if state.current_view != "picker" or not state.filtered_songs:
             return []
-        max_visible = max(1, state.results_height - RESULTS_HEADER_HEIGHT)
+        max_visible = max(1, state.results_height - RESULTS_FRAME_OVERHEAD)
         _sync_scroll_offset(state, max_visible)
         start_idx = state.scroll_offset
         end_idx = min(len(state.filtered_songs), start_idx + max_visible)
@@ -786,11 +804,13 @@ def choose_song_interactively(
             return
 
         session = state.active_session or picker_session()
-        paths = [
-            path
-            for path in _metadata_paths_for_current_view()
-            if peek_cached_song_ui_metadata(path, session, state.user_cfg) is None
-        ]
+        paths = []
+        for path in _metadata_paths_for_current_view():
+            cached = peek_cached_song_ui_metadata(path, session, state.user_cfg)
+            # None = nothing yet; not analyzed = only raw stats present, still
+            # needs the full risk analysis. Both require a process-pool compute.
+            if cached is None or not cached.analyzed:
+                paths.append(path)
         if not paths:
             return
 
@@ -919,7 +939,10 @@ def choose_song_interactively(
             return
 
         generation = state.metadata_generation
-        future = cache_executor.submit(hydrate_persistent_metadata_for_paths, paths, session, state.user_cfg)
+        # Combined cache-worker pass: disk-cached full metadata first, then cheap
+        # raw stats so Time/Notes/density paint within a frame, well before the
+        # heavier risk analysis arrives from the process pool.
+        future = cache_executor.submit(hydrate_and_fill_raw_metadata, paths, session, state.user_cfg)
         state.metadata_hydration_future = future
 
         def on_done(done_future: Future[int], done_generation: int = generation, done_app: Any = target_app) -> None:
@@ -1027,7 +1050,7 @@ def choose_song_interactively(
         # 1. Update terminal metrics. Compare against the clamped width, otherwise
         # terminals wider than the clamp make term_changed=True on every keypress.
         size = shutil.get_terminal_size((80, 24))
-        next_width = max(60, min(100, size.columns))
+        next_width = clamp_terminal_width(size.columns)
         next_height = size.lines
         term_changed = state.term_width != next_width or state.term_height != next_height
         if term_changed:
@@ -1092,10 +1115,12 @@ def choose_song_interactively(
         if state.current_view in {"picker", "preview"} and prefetch_metadata:
             schedule_visible_persistent_hydration(delay=prefetch_delay)
         
-        elapsed = time.perf_counter() - start
-        if elapsed > 0.05:
-            with open("ui_profile.log", "a", encoding="utf-8") as f:
-                f.write(f"update_ui {state.current_view} took {elapsed:.4f}s\n")
+        # Opt-in render profiling: set SKY_UI_PROFILE=1 to log slow repaints.
+        if os.environ.get("SKY_UI_PROFILE"):
+            elapsed = time.perf_counter() - start
+            if elapsed > 0.05:
+                with open("ui_profile.log", "a", encoding="utf-8") as f:
+                    f.write(f"update_ui {state.current_view} took {elapsed:.4f}s\n")
 
     def _on_search_changed(_: Any) -> None:
         # Render the filtered list immediately, but delay metadata warmup so

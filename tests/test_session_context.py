@@ -32,7 +32,7 @@ def test_balanced_at_30fps_scales_hold():
     policy = session.resolve_effective_policy(AppConfig())
     assert policy.fps == 30
     assert policy.frame_us == 33_333
-    assert policy.hold_us == 41_667
+    assert policy.hold_us == 40_000
 
 
 def test_with_profile_preserves_fps():
@@ -85,8 +85,8 @@ def test_repeat_release_gap_scales_with_fps():
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    # Visibility floor (Exp1) = max(base 15000, 1.25*frame=41667) = 41667 at 30fps.
-    assert policy.min_hold_us == 41_667
+    # Visibility floor (Exp1) = max(base 14000, 1.2*frame=40000) = 40000 at 30fps.
+    assert policy.min_hold_us == 40_000
 
 
 def test_frame_timing_config_overrides_ratios():

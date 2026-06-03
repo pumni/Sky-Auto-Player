@@ -1,3 +1,18 @@
+> **GHI CHÚ THÊM (2026-06)** — kết quả đo dưới đây đã xử lý xong; **dữ liệu giữ nguyên**, chỉ thêm ghi
+> chú đối chiếu. Mỗi kết quả dẫn tới quyết định gì (chi tiết: `timing-architecture-audit.md`):
+>
+> | Kết quả | Đã làm gì |
+> | --- | --- |
+> | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1 (Phase 3); 3 profile khác giữ 1.25 |
+> | **T2** gap 24ms@60 / 16ms@144 | XÁC NHẬN → giữ `max(1.5×frame, 18000µs)`, khớp đo |
+> | **T3** jitter lưỡng cực/phase-dependent | ĐÍNH CHÍNH (không phải sàn 12–13ms cố định) → principles A.10 |
+> | **T4** floor thấp ≈ floor cao remote | sàn rộng chưa chứng minh là cần (mạng tốt) |
+> | **O1** input_lead 0/8/20 offset như nhau | KẾT LUẬN no-op kiến trúc → **ĐÃ XOÁ** input_lead (Phase 1) |
+> | **O2** bài thật không có cụm 5–20ms | → **ĐÃ XOÁ** chord_merge (Phase 2) |
+> | **O3** sàn no-drop remote | **CÒN MỞ** — gác để làm chuẩn local trước |
+>
+> Mô hình local giờ còn 3 cần gạt thật: `min_hold`, `repeat_release_gap`, `release_gap`.
+
 ### T1 — Game samples input once per render frame; visibility floor = 1 frame
 
 30fps 33-15/15 32-15/15 31-14/15(vẫn là 15 nhưng đôi khi mất nốt) 30-14/15 tức là bất đầu có dấu hiệu giảm

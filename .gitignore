@@ -45,3 +45,4 @@ dist/
 
 # Cache Files
 .cache/
+.pytest_cache/

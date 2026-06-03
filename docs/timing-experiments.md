@@ -1,14 +1,23 @@
 # Timing Experiments — Proof and Open Calibration
 
 Tài liệu này là hướng dẫn thực hành để **chứng minh** các giá trị timing đang được coi là chân
-lý (Part 1) và để **đo chính xác** những con số còn đang đặt bằng tai hoặc ngoại suy — đặc biệt
-`input_lead_us`, `chord_merge_window_us`, và sàn hold/gap remote thật (Part 2).
+lý (Part 1) và để **đo chính xác** những con số còn đang đặt bằng tai hoặc ngoại suy — chủ yếu là
+**sàn hold/gap remote thật** và đặc tả jitter mạng (Part 2).
 
 Công cụ: **Audacity** để thu và tách onset; một **máy thứ hai** đóng vai người nghe trong phòng
 online. Mọi bước đều viết để bạn làm theo trực tiếp.
 
 > Nguyên tắc tối cao: sự thật nằm ở **âm thanh game thu được**, không phải log. Nếu một kết quả đo
 > ở đây mâu thuẫn với một "quy tắc kinh nghiệm" trong `timing-principles.md`, **kết quả đo thắng**.
+
+> ⚠️ **CẬP NHẬT KIẾN TRÚC (2026-06) — đọc trước khi dùng file này.** Sau đợt audit + refactor 3 phase
+> (xem [`timing-architecture-audit.md`](timing-architecture-audit.md)), **ba cần gạt đã bị XOÁ khỏi
+> code**: `input_lead` (no-op kiến trúc — player tự sinh timeline, không có mốc tham chiếu ngoài),
+> `chord_merge` (gần như không fire trên bài thật), `frame_align` (off mọi profile + vô nghĩa). Các
+> thí nghiệm gắn với chúng (**O1, O2, O5**, và phần lớn **O4**) giờ **OBSOLETE** — giữ lại làm hồ sơ,
+> không chạy nữa. Mọi flag `--input-lead-ms` / `--chord-merge-window-ms` / `--frame-align` đã biến
+> mất. Mô hình local còn đúng **3 cần gạt thật**: `min_hold` (sàn visibility), `repeat_release_gap`
+> (sàn same-key), `release_gap`. Phần CÒN MỞ thực sự: **O3, O6, O7, O9** (+ O8 đã re-frame).
 
 ---
 
@@ -33,12 +42,16 @@ Các bài cần dùng (đã có sẵn trong script):
 | `TEST_metro_same_200`    | nhịp đều, 1 phím                                    | survivability same-key remote (O3)    |
 | `TEST_chords`            | hợp âm 2..6 phím                                    | chord remote (O8)                     |
 
-Hai bài bổ sung cho Part 2 (đã có sẵn trong script):
+Hai bài bổ sung (đã có sẵn trong script):
 
-| Song                   | Hình dạng                             | Dùng cho                                    |
-| ---------------------- | ------------------------------------- | ------------------------------------------- |
-| `TEST_metro_alt_500`   | nhịp 120 BPM (500 ms), đan xen 2 phím | đo độ trễ tuyệt đối bằng metronome (O1, O5) |
-| `TEST_rolled_chord_18` | hợp âm "rải" 4 phím cách 18 ms        | ngưỡng gom chord (O2, O8)                   |
+| Song                   | Hình dạng                             | Dùng cho                                            |
+| ---------------------- | ------------------------------------- | --------------------------------------------------- |
+| `TEST_metro_alt_500`   | nhịp 120 BPM (500 ms), đan xen 2 phím | ~~O1/O5 (lead)~~ — giờ chỉ còn hữu ích cho O7 jitter |
+| `TEST_rolled_chord_18` | hợp âm "rải" 4 phím cách 18 ms        | ~~O2 (chord_merge)~~ **OBSOLETE** — chord_merge đã xoá |
+
+> Hai bài này sinh ra cho các thí nghiệm đã OBSOLETE. Giữ trong script (vô hại); `TEST_metro_alt_500`
+> còn dùng được cho O7. `TEST_rolled_chord_18` giờ chỉ minh hoạ: nốt cách 18 ms nay **luôn đi riêng**
+> (không còn bị gom) — đúng behavior mới.
 
 ### 0.2 Recording the game audio (Audacity, Windows WASAPI loopback)
 
@@ -110,7 +123,12 @@ uv run python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.cs
 4. Dùng nhạc cụ **gõ/tắt nhanh**; đếm **onset**, không đếm độ to.
 5. Mỗi lần thu chạy kèm `--debug-csv` để có số liệu phía gửi đối chiếu.
 
-### 0.7 Metronome reference (cần cho O1 — đo độ trễ tuyệt đối)
+### 0.7 Metronome reference (đo độ trễ tuyệt đối)
+
+> Trước đây mục này phục vụ O1 (calibrate input_lead). **input_lead đã bị xoá** nên phần calibrate
+> lead không còn ý nghĩa (player không có mốc tham chiếu ngoài để "đến sớm" — xem audit doc §1).
+> Phương pháp metronome vẫn giữ vì còn cần để đo **offset/độ trễ tuyệt đối** ở O6/O7 và để kiểm tra
+> phía remote nếu sau này quay lại O3/O4. **Bỏ qua mọi nhắc tới `--input-lead-ms` bên dưới.**
 
 Để biết nốt vào **sớm/trễ so với phách** bao nhiêu, cần một mốc nhịp nằm cùng dòng thời gian với
 tiếng game. Hai cách, từ chính xác đến đơn giản:
@@ -130,9 +148,10 @@ tiếng game. Hai cách, từ chính xác đến đơn giản:
 5. Tách onset game (0.3). Với mỗi nốt, **offset = onset_game − click gần nhất**. Offset trung bình
    < 0 = nốt vào sớm, > 0 = vào trễ.
 
-**Cách B — bằng tai (đơn giản, đúng cách 14500 ban đầu được chọn):** bật metronome 120 BPM, phát
-`TEST_metro_alt_500`, chỉnh `--input-lead-ms` đến khi nghe nốt **trùng phách**. Đây là cách nhanh,
-chấp nhận được vì lead vốn là đại lượng cảm nhận.
+**Cách B — bằng tai (đơn giản):** ~~bật metronome 120 BPM, phát `TEST_metro_alt_500`, chỉnh
+`--input-lead-ms` đến khi nghe nốt trùng phách.~~ **OBSOLETE** — không còn flag lead để chỉnh. Giờ
+nốt luôn phát đúng tại `source_time` (không dịch); nếu nghe lệch phách thì đó là tick ~60 Hz của
+game (T3) hoặc trễ mạng, **không sửa được từ player**.
 
 ---
 
@@ -155,10 +174,13 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
   (Phải đặt CẢ `--hold-ms` lẫn `--min-hold-ms` vì clamp hold hợp nhất lấy `max(min_hold, …)`.)
   Thu mỗi lần, đếm onset.
 - **Đo:** hold nhỏ nhất mà vẫn đủ 15/15 onset.
-- **Kết quả mong đợi:** ≈33 ms @30, ≈17 ms @60, ≈7 ms @144 (≈ 1 frame). Hold dưới 1 frame đăng ký
-  **theo xác suất** (vd ~0.72 frame ≈ 72%).
-- **Kết luận:** game đọc **state** theo frame → `min_visible_hold_frames = 1.25`, không có thành
-  phần ms cố định.
+- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @30 reliable 32 ms (rớt 31), @60 reliable 16 ms (rớt 15), @144
+  reliable 7 ms (rớt 6) → sàn thật ≈ **0.96–1.01 frame** ở cả ba FPS (tuyến tính sạch). Hold dưới mép
+  đăng ký theo xác suất.
+- **Kết luận:** game đọc **state** theo frame, sàn visibility = **1.0 frame**. Code dùng
+  `min_visible_hold_frames = 1.25` (= 1 frame + ~25% biên). **ĐÃ ÁP DỤNG (Phase 3):** riêng
+  `local_precise` hạ ratio xuống **1.1** (sắc hơn ~2.5 ms @60, vẫn trên sàn đo 16 ms); 3 profile khác
+  giữ 1.25.
 
 ### T2 — Same-key repeat gap floor = max(~1.5 frame, ~18 ms)
 
@@ -167,26 +189,34 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Các bước:** `uv run python -m main --song TEST_repeat_gap --debug-csv` ở 60 rồi 144 (không `--fps`).
   Thu, đếm onset MỖI block (mỗi block 10 lần bấm cùng phím).
 - **Đo:** block có gap nhỏ nhất mà vẫn đủ 10/10 onset.
-- **Kết quả mong đợi:** gap 100%-tin-cậy ≈22–24 ms @60, ≈14–17 ms @144; ở đúng 1 frame chỉ ~80%.
-- **Kết luận:** `gap ≥ max(~1.4×frame, ~17 ms)` → encode `repeat_release_gap_frames = 1.5`,
-  `repeat_release_gap_floor_us = 18000`.
+- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @60 reliable **24 ms** (1.44 frame), @144 reliable **16 ms** (2.3
+  frame). Ở 144 gap tin cậy >> 1.5 frame → bị **tường thời gian cố định ~16–18 ms** chi phối (= chu kỳ
+  tick ~60 Hz, nối với T3), không phải bội số frame.
+- **Kết luận:** `gap ≥ max(1.5×frame, 18000 µs)` → khớp đo @60 (model 25001 ≈ đo 24), hơi bảo thủ @144
+  (model 18000 vs đo 16). Giữ `repeat_release_gap_frames = 1.5`, `repeat_release_gap_floor_us = 18000`.
 
-### T3 — Onset cadence is a fixed ~60 Hz tick (input lead must not scale with render FPS ≥60)
+### T3 — Onset cadence is a fixed ~60 Hz tick (game behavior, player không sửa được)
+
+> Hệ quả cũ "input lead không scale theo FPS" giờ MOOT (lead đã xoá). Nhưng phát hiện gốc về **tick
+> ~60 Hz của game** vẫn đứng vững và là lý do nền tảng để KHÔNG cố "đẩy nốt cho đúng nhịp" từ player.
 
 - **EXP-1 (phía gửi sạch):** `TEST_metro_alt_120` ở 60 và 144 với `--debug-csv`; phân tích CHỈ CSV.
-  Kỳ vọng send-interval std ~0.05–0.07 ms, lateness p95 ~0.13 ms → vấn đề nhịp KHÔNG do player.
+  ✅ Đo: send-interval std ~0.036–0.052 ms, lateness p95 ~0.07–0.11 ms → **vấn đề nhịp KHÔNG do player**.
 - **EXP-2 (jitter onset không giảm theo FPS):** `TEST_metro_alt_200`, **không `--fps`**, khóa FPS
   ngoài 60 rồi 144; thu + `analyze_onsets.py labels.txt csv`.
-  - Kỳ vọng `[GAME-only jitter] std` ≈13 ms @60 ≈12 ms @144 (gần như không đổi — nếu bám render
-    frame phải giảm ~một nửa). Residuals @144 có nhảy chu kỳ ±~20 ms.
-- **Kết luận:** onset bị tick nội cố định ~60 Hz chi phối, độc lập render FPS ≥60 → lead giữ cố định
-  ở FPS ≥60 (đã gỡ phase-comp; đã bỏ `high_fps_precise`). Jitter ~12 ms là của game, **không sửa
-  được từ player**.
+  - ✅ **ĐÍNH CHÍNH so với kỳ vọng cũ:** jitter KHÔNG phải sàn cố định ~12–13 ms. Thực đo là **lưỡng
+    cực / phụ thuộc pha**: có run sạch (residual std ~0.02 ms: 60fps-01, 144fps-02), có run dính
+    **bucket-jump ~20 ms** (60fps-02 std 5.35 ms; 144fps-01 std 8.25 ms, IOI cụm 181/219 ms). Quan
+    trọng: bucket-jump **không giảm khi lên 144** → không bám render frame.
+- **Kết luận:** onset bị **tick nội ~60 Hz** lượng tử hoá theo pha, độc lập render FPS ≥60. Đây là
+  **hành vi game, player không sửa được** — không dịch đều (lead) hay snap frame (frame_align) nào
+  chữa được scatter tương đối. Chính vì vậy 3 cần gạt onset đó đã bị xoá.
 
 ### T4 — Wide audience floors were not shown necessary (remote)
 
-- **Chuẩn bị:** phòng online, máy B thu (0.5). A/B `audience_safe` vs `audience_frame_test` (nếu
-  còn) hoặc so audience hiện tại với một profile floor thấp (local-precise).
+- **Chuẩn bị:** phòng online, máy B thu (0.5). A/B `audience_safe` vs `local_precise` (profile
+  `audience_frame_test` đã bị xoá ở đợt rút gọn profile). LƯU Ý: sau refactor, audience_safe khác
+  local_precise CHỈ ở sàn hold/min_hold/repeat_gap + release_gap (không còn khác lead/chord).
 - **Các bước:** host phát `TEST_metro_same_200` rồi `TEST_repeat_staircase` lần lượt 2 profile; B thu
   từng lần.
 - **Đo (trên WAV của B):** đếm onset mỗi bài; đo "valley drop" giữa 2 onset same-key (độ tụt
@@ -198,41 +228,35 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 
 ## Part 2 — Open calibration experiments
 
-Đây là phần cần làm để thay các con số đang đoán bằng số đo.
+Phần này thay các con số đang đoán bằng số đo. **Trạng thái sau refactor:** O1/O2/O5 đã OBSOLETE
+(knob bị xoá); O4 re-frame; còn mở thực sự = **O3, O6, O7, O8, O9**.
 
-### O1 — `input_lead_us`: đo độ trễ thật (local và remote)
+### O1 — ~~`input_lead_us`: đo độ trễ thật~~ **[OBSOLETE — knob đã xoá]**
 
-- **Vì sao mở:** lead là đại lượng **cảm nhận**, chưa đo trực tiếp. Hiện local 4000, audience 10000
-  (vừa hạ từ 14500 bằng tai).
-- **Chuẩn bị:** `TEST_metro_alt_500` (120 BPM); metronome tham chiếu (0.7).
-- **Các bước (local):** với mỗi `--input-lead-ms` ∈ {0, 4, 8, 12, 16}:
-  ```
-  uv run python -m main --song TEST_metro_alt_500 --timing-profile local-precise --input-lead-ms 8 --debug-csv
-  ```
-  Thu (overdub click, cách A) → tách onset → tính **offset = onset_game − click** trung bình.
-- **Các bước (remote):** lặp lại nhưng máy B nghe; B chỉnh metronome 120 BPM và đánh giá lead nào
-  trùng phách nhất (cách B), hoặc B thu + đo offset nếu B cũng dựng được click tham chiếu.
-- **Quyết định:** lead local = giá trị làm offset_local ≈ 0; lead audience = giá trị làm offset_remote
-  ≈ 0. **Hiệu hai cái = độ trễ mạng/replication thật** — đây là cơ sở duy nhất đáng tin cho phần
-  lead dôi của audience. (Lead chỉ dịch trung bình, KHÔNG sửa được jitter ~12 ms của T3.)
+> **Kết luận đã chốt (O1 + audit §1):** input_lead là **no-op kiến trúc**. Engine zero-base đồng hồ về
+> lúc bấm play; scheduler dịch đều mọi nốt rồi clamp nốt đầu `max(0, source − lead)`. Player tự sinh
+> toàn timeline, **không có mốc tham chiếu ngoài** → dịch đều là không quan sát được (chỉ để lại
+> artifact nén khoảng mở đầu). Thực đo: lead 0/8/20 cho offset y như nhau (~20 ms — là DAW/tick game,
+> không do lead). **Đã XOÁ input_lead khỏi code (Phase 1).** Không còn gì để calibrate ở đây.
+> Bài học giữ lại: lead chỉ dịch trung bình, KHÔNG sửa được scatter tương đối (jitter T3) — đó mới là
+> thứ tai nghe là "lạc nhịp".
 
-### O2 — `chord_merge_window_us`: ngưỡng làm bẹt
+### O2 — ~~`chord_merge_window_us`: ngưỡng làm bẹt~~ **[OBSOLETE — knob đã xoá]**
 
-- **Vì sao mở:** cửa sổ lớn gom nốt (mạch lạc) nhưng làm bẹt rải/arpeggio. Local 2500 vs audience
-  5000 là đoán.
-- **Chuẩn bị:** `TEST_rolled_chord_18` (4 phím cách 18 ms).
-- **Các bước:** quét `--chord-merge-window-ms` ∈ {0, 5, 10, 15, 20, 30}:
-  ```
-  uv run python -m main --song TEST_rolled_chord_18 --chord-merge-window-ms 10 --debug-csv
-  ```
-  Thu local; đếm xem mỗi block ra **4 onset rời** hay đã **gom thành 1**. (Có thể nhờ B nghe để xác
-  nhận cảm giác "rải" còn không.)
-- **Quyết định:** cửa sổ phải **nhỏ hơn** điểm bắt đầu gom. Đây là trần cho chord_merge của audience
-  (liên quan trực tiếp O4).
+> **Kết luận đã chốt (O2):** ngưỡng làm bẹt nằm trong **10–20 ms** (0/10 ms giữ rải; 20/30 ms gom).
+> Local 2500 / audience 5000 đều an toàn dưới ngưỡng — NHƯNG bài thật **không có cụm 5–20 ms** (nốt
+> hoặc trùng giờ, hoặc cách ~100 ms) nên chord_merge **gần như không bao giờ fire**. **Đã XOÁ
+> chord_merge (Phase 2);** chord trùng timestamp vẫn gom ở bước event-grouping cuối, nốt lệch ≥ vài ms
+> đi riêng — đúng ý đồ. Không còn cần đo.
 
-### O3 — The real remote no-drop floor (sàn hold/gap audience theo số liệu)
+### O3 — The real remote no-drop floor (sàn hold/gap audience theo số liệu) — **CÒN MỞ**
 
-- **Vì sao mở:** sàn audience (hold 20000 / repeat 24000) là ngoại suy; `local` (hold ~0 / repeat 18000) **đôi khi mất nốt** remote. Ranh giới chưa đo.
+> **Trạng thái (result.md):** user **gác có chủ đích** để làm chuẩn local trước ("xử lý tốt local thì
+> remote cũng tốt"). Sau refactor, audience_safe khác local_precise chỉ ở sàn → đây là nơi DUY NHẤT
+> còn lý do tồn tại của audience_safe; cần O3 để chứng minh sàn nào thật sự cần.
+
+- **Vì sao mở:** sàn audience (hold 20000 / repeat 24000) là ngoại suy; `local_precise` (visibility
+  1.1 frame / repeat 18000) **đôi khi mất nốt** remote. Ranh giới chưa đo.
 - **Chuẩn bị:** máy B thu; `TEST_metro_same_200` + `TEST_repeat_staircase`.
 - **Các bước:** giữ các tham số khác = local, nâng RIÊNG từng cái:
   - hold: `--hold-ms 0 → 8 → 12 → 16 → 20` (kèm `--min-hold-ms` tương ứng)
@@ -241,37 +265,31 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Quyết định:** hold/repeat_gap **nhỏ nhất mà 0 drop qua mọi lần** = sàn audience thật, thay ngoại
   suy ở T4/A.9. Chỉ nâng cái nào chặn drop; đừng nâng cái khác.
 
-### O4 — ⭐ The local-vs-audience on-beat puzzle (trọng tâm)
+### O4 — The local-vs-audience on-beat puzzle — **PHẦN LỚN ĐÃ GIẢI (bằng suy luận sau refactor)**
 
 - **Hiện tượng (báo cáo thực tế):** qua `local_precise`, máy người nghe thấy **chặt và đúng nhịp
-  hơn** `audience_safe`, dù local **đôi khi mất nốt**. audience không mất nốt nhưng nghe lỏng/lệch
-  nhịp.
-- **Giả thuyết:** audience phá nhịp bởi **chord_merge (5000)** và **input_lead (10000)** (và phụ là
-  hold dài); cái duy nhất chặn mất nốt là **hold/repeat_gap**. Liều thuốc đã overshoot.
-- **Các bước (A/B một-biến):** giữ MỌI thứ = local, chỉ đẩy **một** cần gạt về giá trị audience mỗi
-  biến; máy B chấm điểm "đúng nhịp" (1–5) và đếm drop cho từng biến:
-  - V1: local + `--chord-merge-window-ms 5`
-  - V2: local + `--input-lead-ms 10`
-  - V3: local + `--hold-ms 20 --min-hold-ms 18`
-  - V4: local + `--repeat-release-gap-ms 24`
-    Nên làm **mù** (mục O4 ghi chú dưới): người chấm không biết đang nghe biến nào.
-- **Quyết định:**
-  - V1/V2 điểm nhịp **tệ hơn** → chord_merge/lead là thủ phạm phá nhịp → audience phải giữ chúng gần
-    local.
-  - V3/V4 **giảm drop** mà không hại nhịp → đó là cần gạt an toàn để nâng.
-  - Tổng hợp: `audience_safe` đúng ≈ `local_precise` + mức nâng V3/V4 tối thiểu từ **O3**, chord_merge
-    nhỏ, lead lấy từ **O1**. (Việc đã hạ lead 14500→10000 đi đúng hướng này.)
-- **Ghi chú làm mù:** host phát cùng một bài dưới 2 cấu hình theo thứ tự ngẫu nhiên, đặt tên file thu
-  trung tính (`A1.wav`, `A2.wav`); người chấm nghe xong mới mở bảng tra cấu hình. Lặp ≥3 vòng.
+  hơn** `audience_safe`, dù local **đôi khi mất nốt**.
+- **Giả thuyết cũ đã BỊ BÁC một phần:** nghi phạm chính từng là **chord_merge** + **input_lead**.
+  Cả hai giờ đã chứng minh vô hại/no-op và **đã xoá**. → Sau refactor, onset của local và audience
+  **giống hệt nhau** (cùng = `source_time`, không còn lead/chord làm khác). Vậy audience **không thể**
+  "lạc nhịp tương đối" so với local từ phía player.
+- **Cái còn lại có thể gây "lỏng":**
+  1. **hold dài hơn** của audience (20000 vs 1.1f) → key chồng lấn nhiều hơn = cảm giác "mushy", dù
+     KHÔNG dịch onset;
+  2. **trễ + jitter mạng** + bucket-jump ~20 ms của game (T3) — run-to-run, không phải local-vs-audience;
+- **Còn cần đo (nếu quay lại nhánh remote):** A/B một-biến giữa local và audience, giờ chỉ còn **2 cần
+  gạt** để thử (làm mù, máy B chấm "đúng nhịp" 1–5 + đếm drop):
+  - V1: local + `--hold-ms 20 --min-hold-ms 18`  (kiểm "mushy" do hold dài)
+  - V2: local + `--repeat-release-gap-ms 24`      (kiểm an toàn same-key)
+- **Quyết định:** nếu V1 làm điểm nhịp tệ hơn mà không giảm drop → hold dài là thủ phạm "lỏng", giữ
+  audience hold sát local. Tổng hợp với **O3**: audience đúng ≈ local + mức nâng tối thiểu chặn drop.
+- **Ghi chú làm mù:** host phát cùng bài dưới 2 cấu hình thứ tự ngẫu nhiên, tên file trung tính
+  (`A1.wav`, `A2.wav`); người chấm nghe xong mới tra cấu hình. Lặp ≥3 vòng.
 
-### O5 — The `<60 FPS` input-lead assumption (nhánh duy nhất chưa đo)
+### O5 — ~~The `<60 FPS` input-lead assumption~~ **[OBSOLETE — knob đã xoá]**
 
-- **Vì sao mở:** dưới 60 FPS player nâng lead về `½ frame` theo lý thuyết render frame thô hơn tick
-  ~60 Hz. EXP-2 chỉ đo 60 và 144.
-- **Các bước:** khóa 30 FPS; dùng phương pháp metronome (O1) đo lead làm offset ≈ 0; so với lead ở
-  60 FPS.
-- **Quyết định:** nếu lead tối ưu @30 ≈ lead @60 → giả định nâng lead ở thấp FPS là sai, bỏ; nếu cao
-  hơn rõ → giữ.
+> input_lead bị xoá; nhánh `<60` nâng lead về `½ frame` (`input_lead_min_frame_ratio`) cũng đã gỡ ở
+> Phase 1. Không còn lead để đo ở FPS thấp. (Sàn hold/gap ở 30 FPS vẫn cần đo — xem **O6**.)
 
 ### O6 — Clean 30 FPS same-key gap point (mục A.8 còn treo)
 
@@ -290,16 +308,19 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **Đo:** `jitter_mạng ≈ sqrt(std_B² − std_A²)` (gần đúng, coi nhiễu độc lập). Lặp ở vài điều kiện
   mạng (vắng/đông người, Wi-Fi/ethernet).
 - **Quyết định:** biên cộng thêm cho sàn O3 nên ≳ jitter mạng đo được (vd 2σ). Nếu jitter mạng nhỏ
-  so với 12 ms jitter game → sàn rộng càng vô ích.
+  so với bucket-jump ~20 ms phụ-thuộc-pha của game (T3) → sàn rộng càng vô ích.
 
-### O8 — Remote chord integrity (mới)
+### O8 — Remote chord integrity — **RE-FRAME (không còn chord_merge để so)**
 
-- **Vì sao thêm:** mục tiêu lớn của audience là hợp âm nghe đủ/không vỡ ở máy khác; chưa đo riêng.
+- **Vì sao giữ:** mục tiêu lớn của audience là hợp âm nghe đủ/không vỡ ở máy khác — vẫn là câu hỏi
+  hợp lệ, ĐỘC LẬP với chord_merge (knob đó đã xoá). Giờ chord = các nốt **cùng timestamp** được gửi
+  trong một SendInput (gom ở event-grouping cuối).
 - **Các bước:** host phát `TEST_chords` (hợp âm 2..6 phím) qua local vs audience; B thu.
-- **Đo:** mỗi hợp âm B nghe đủ số nốt không (đếm thành phần trong phổ tại mỗi onset), có "rattly/vỡ"
-  không. So chord_merge nhỏ (local 2500) vs lớn (audience 5000).
-- **Quyết định:** nếu chord_merge lớn KHÔNG cải thiện độ đủ nốt remote → bằng chứng nữa để hạ
-  chord_merge audience (củng cố O4).
+- **Đo:** mỗi hợp âm B nghe đủ số nốt không (đếm thành phần phổ tại mỗi onset), có "rattly/vỡ" không.
+  Biến duy nhất còn khác giữa local/audience ảnh hưởng chord là **hold** (dài hơn) — kiểm xem hold dài
+  có giúp/làm hại độ đủ nốt remote không.
+- **Quyết định:** nếu hold dài KHÔNG cải thiện độ đủ nốt remote → thêm bằng chứng để giữ audience hold
+  sát local (củng cố O4).
 
 ### O9 — Onset-detector calibration (control — làm trước khi tin số liệu)
 
@@ -315,10 +336,13 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 
 ## Part 3 — Folding results back
 
+- **Chỉ còn 3 cần gạt để chỉnh trong `config.py`:** `min_hold` (sàn visibility, qua `*_frames`/
+  `*_floor_us`), `repeat_release_gap`, `release_gap`. `input_lead`/`chord_merge`/`frame_align` đã bị
+  xoá — đừng thêm lại; nếu một thí nghiệm "cần" chúng, hãy hỏi lại giả thuyết (xem audit doc §1–2).
 - Chỉ hạ một sàn **sau khi** O3 chứng minh 0 drop ở mức thấp hơn; không bao giờ hạ sàn chỉ để nhìn
   "nhanh hơn" (nguyên tắc §18/§20 của `timing-principles.md`).
 - Khi một số đo đã chốt: cập nhật `config.py` (và `FrameTimingDefaults` nếu là tỷ lệ toàn cục) cùng
-  dòng tương ứng trong `timing-principles.md` Appendix A, trích mã thí nghiệm (O1/O3/…) ở đây.
+  dòng tương ứng trong `timing-principles.md` Appendix A, trích mã thí nghiệm (O3/O6/O7) ở đây.
 - Tick ~60 Hz và bộ lấy mẫu theo frame là **hành vi của game** — chạy lại các thí nghiệm Part 1 như
   regression sau mỗi lần game cập nhật.
 

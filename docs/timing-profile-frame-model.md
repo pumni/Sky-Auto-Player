@@ -1,8 +1,13 @@
 # Frame-Relative Timing Model (reference)
 
 **Status:** Implemented. This is the live model; `timing-principles.md` Appendix A holds the
-evidence, `timing-experiments.md` holds the experiments, and `config.py` /
-`scheduler_types.py` hold the code.
+evidence, `timing-experiments.md` holds the experiments, `timing-architecture-audit.md` records the
+June 2026 refactor, and `config.py` / `scheduler_types.py` hold the code.
+
+> **Update (June 2026 refactor).** Three absolute-µs parameters were removed: `input_lead_us` (no-op),
+> `chord_merge_window_us` (never fired on real songs), `frame_align` (off everywhere). The frame model
+> below is unchanged for the surviving parameters — `hold`, `min_hold`, `repeat_gap` (frame-coupled)
+> and `release_gap` (absolute). `local_precise` now uses `hold/min_hold frames = 1.1` (others 1.25).
 
 > History: profiles used to declare absolute microseconds with a *separate* global frame-aware
 > scaling layer (`min_hold = max(base_us, 1.25 × frame)`). The number you wrote was not the
@@ -21,7 +26,7 @@ effective_us(param) = max(ceil(frames(param) × local_frame_us), floor_us(param)
 ```
 
 - `frames` = the **local visibility margin** (physics: ≥ 1 frame). Moves with the profile and
-  is per-profile overridable (hold/min_hold ≈ 1.25, repeat_gap ≈ 1.5).
+  is per-profile overridable (hold/min_hold = 1.1 for local_precise / 1.25 for the others, repeat_gap ≈ 1.5).
 - `floor_us` = the profile's **absolute target / wall** — its real character.
 
 `ceil` is required (matches the historical `math.ceil(frame × ratio)`; `round` drifts ±1 µs).
@@ -44,9 +49,7 @@ So `floor_us` is where a profile says "regardless of my local FPS, never go belo
 | `hold`                | `hold_frames` + `hold_floor_us`                                            |
 | `min_hold`            | `min_hold_frames` + `min_hold_floor_us`                                    |
 | `repeat_gap`          | `repeat_gap_frames` + `repeat_gap_floor_us`                               |
-| `input_lead`          | `input_lead_us` (absolute; raised at <60 FPS only — no high-FPS scaling, Appendix A.10) |
 | `release_gap`         | `release_gap_us` (absolute; low-FPS clamp)                                |
-| `chord_merge_window`  | `chord_merge_window_us` (absolute; low-FPS clamp)                         |
 | `spin_threshold`      | `spin_threshold_us`                                                        |
 | `focus_restore_grace` | `focus_restore_grace_us`                                                   |
 
@@ -62,9 +65,7 @@ hold_us       = max(ceil(hold_frames     * frame_us), hold_floor_us)
 min_hold_us   = max(ceil(min_hold_frames * frame_us), min_hold_floor_us)
 repeat_gap_us = max(ceil(repeat_gap_frames * frame_us), repeat_gap_floor_us)
 
-release_gap_us        = clamp_low_fps(release_gap_us, frame_us)
-chord_merge_window_us = clamp_low_fps(chord_merge_window_us, frame_us)
-input_lead_us         = clamp_low_fps(input_lead_us, frame_us)   # raise at <60 FPS only
+release_gap_us        = clamp_low_fps(release_gap_us, frame_us)   # raise at <60 FPS only
 spin / grace          = as declared
 # then apply absolute-µs overrides (§5)
 ```
@@ -94,6 +95,6 @@ pins the materialised values at 30/60/144 as a regression. Summary of intent:
 | profile        | hold floor | notes                                                       |
 | -------------- | ---------- | ----------------------------------------------------------- |
 | local_precise  | 0          | pure frame-relative = the measured visibility model; sharpest |
-| dense_safe     | 11000      | small body floor + larger chord merge / release for density |
-| balanced       | 14000      | default; a little body/lead above local                     |
+| dense_safe     | 11000      | small body floor + larger release gap for density           |
+| balanced       | 14000      | default; a little extra body above local                    |
 | audience_safe  | 20000      | small remote margin above the registration floor (EXP-4)    |

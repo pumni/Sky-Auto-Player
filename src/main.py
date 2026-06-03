@@ -168,36 +168,16 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
     ANSI_RED = "\033[31m"
     ANSI_YELLOW = "\033[33m"
     
-    # Standardize width dynamic determination with songs.py and ui.py
+    # Share the picker's width clamp and box renderer so every panel renders at
+    # the same width with cell-width-correct borders (no len()-based drift).
     import shutil
+    from sky_music.ui.text_render import clamp_terminal_width, ansi_box
     terminal_width = shutil.get_terminal_size((80, 24)).columns
-    width = max(60, min(80, terminal_width))
-
-    def pad_line(content: str, w: int) -> str:
-        import re
-        clean = re.sub(r'\033\[[0-9;]*m', '', content)
-        cur_len = len(clean)
-        if cur_len < w:
-            return content + " " * (w - cur_len)
-        return content
+    width = clamp_terminal_width(terminal_width)
 
     def print_ansi_box(title: str, lines: list[str], border_color: str = ANSI_CYAN) -> None:
-        top_left = "╭"
-        top_right = "╮"
-        bottom_left = "╰"
-        bottom_right = "╯"
-        horiz = "─"
-        vert = "│"
-        
-        title_part = f"{horiz} {title} "
-        top_line = f"{border_color}{top_left}{title_part}{horiz * (width - len(title_part) - 2)}{top_right}{ANSI_RESET}"
-        bottom_line = f"{border_color}{bottom_left}{horiz * (width - 2)}{bottom_right}{ANSI_RESET}"
-        
-        print(top_line)
-        for line in lines:
-            padded = pad_line(line, width - 4)
-            print(f"{border_color}{vert}{ANSI_RESET} {padded} {border_color}{vert}{ANSI_RESET}")
-        print(bottom_line)
+        for rendered in ansi_box(title, lines, width=width, border_color=border_color):
+            print(rendered)
 
     # 1. Sky window
     win = doctor.check_sky_window()

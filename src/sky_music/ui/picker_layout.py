@@ -1,11 +1,12 @@
 from typing import Any, Literal
 from dataclasses import dataclass
 from sky_music.ui.picker_theme import get_match_span
-
-try:
-    from prompt_toolkit.utils import get_cwidth as _prompt_get_cwidth
-except Exception:  # pragma: no cover - prompt_toolkit is optional in tests
-    _prompt_get_cwidth = None
+from sky_music.ui.text_render import (
+    cell_width as _cell_width,
+    truncate_cells as _truncate_cells,
+    pad_cells as _pad_cells,
+    fit_cells as _fit_cells,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,45 +15,6 @@ class ActionHint:
     long: str
     short: str
     tiny: str
-
-
-def _cell_width(text: str) -> int:
-    if not text:
-        return 0
-    if _prompt_get_cwidth is not None:
-        return max(0, _prompt_get_cwidth(text))
-    return len(text)
-
-
-def _truncate_cells(text: str, max_width: int) -> str:
-    if max_width <= 0:
-        return ""
-    if max_width == 1:
-        return "…" if _cell_width(text) > 1 else text
-    if _cell_width(text) <= max_width:
-        return text
-
-    out: list[str] = []
-    used = 0
-    limit = max_width - 1
-    for char in text:
-        char_width = _cell_width(char)
-        if used + char_width > limit:
-            break
-        out.append(char)
-        used += char_width
-    return "".join(out) + "…"
-
-
-def _pad_cells(text: str, width: int, *, align: Literal["left", "right"] = "left") -> str:
-    padding = max(0, width - _cell_width(text))
-    if align == "right":
-        return " " * padding + text
-    return text + " " * padding
-
-
-def _fit_cells(text: str, width: int, *, align: Literal["left", "right"] = "left") -> str:
-    return _pad_cells(_truncate_cells(text, width), width, align=align)
 
 
 def format_actions(actions: list[ActionHint], width: int) -> list[tuple[str, str]]:
@@ -185,7 +147,9 @@ def build_header_box(title: str, info_parts: list[str], width: int) -> list[tupl
     width = max(8, width)
     inner_w = max(20, width - 4)
     info_str = format_info_str(info_parts, inner_w)
-    title_label = f" {title.strip()} "
+    # Match build_box: corner is followed by a horizontal rule then the title,
+    # so all cards share the identical "╭─ Title ──╮" header style.
+    title_label = f"─ {title.strip()} "
     top_fill = max(0, width - 2 - _cell_width(title_label))
     top_line = f"╭{title_label}{'─' * top_fill}╮\n"
     info_line = f"│ {_fit_cells(info_str, inner_w)} │\n"
