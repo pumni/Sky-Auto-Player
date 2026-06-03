@@ -320,12 +320,6 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
             "repeat_release_gap_us below 6000us is not allowed for built-ins"
         )
 
-    if profile["input_lead_us"] < 0:
-        raise ValueError("input_lead_us must be non-negative")
-
-    if profile["chord_merge_window_us"] < 0:
-        raise ValueError("chord_merge_window_us must be non-negative")
-
 
 def validate_audience_safe_profile(profile: dict[str, int]) -> None:
     hold_floor_us = int(profile.get("hold_floor_us", profile.get("hold_us", 0)))
@@ -356,22 +350,12 @@ def validate_audience_safe_profile(profile: dict[str, int]) -> None:
             "audience-safe profile requires repeat_release_gap_us >= 22000us"
         )
 
-    if profile["input_lead_us"] < 10_000:
-        raise ValueError("audience-safe profile requires input_lead_us >= 10000us")
-
-    if profile["chord_merge_window_us"] < 5_000:
-        raise ValueError(
-            "audience-safe profile requires chord_merge_window_us >= 5000us"
-        )
-
 
 validate_audience_safe_base_profile = validate_audience_safe_profile
 
 
 def validate_audience_safe_runtime_policy(
     policy: FrameTimingPolicy,
-    *,
-    reference_profile: dict[str, int],
 ) -> None:
     cycle_us = int(policy.min_hold_us) + int(policy.repeat_release_gap_us)
 
@@ -388,19 +372,6 @@ def validate_audience_safe_runtime_policy(
     if int(policy.repeat_release_gap_us) < 12_000:
         raise ValueError(
             f"runtime audience_safe repeat_release_gap_us {policy.repeat_release_gap_us}us below 12000us"
-        )
-
-    if int(policy.input_lead_us) < 8_000:
-        raise ValueError(
-            f"runtime audience_safe input_lead_us {policy.input_lead_us}us below 8000us"
-        )
-
-    if int(policy.input_lead_us) > reference_profile["input_lead_us"]:
-        raise ValueError("runtime compensated lead should not exceed base lead")
-
-    if int(policy.chord_merge_window_us) < 5_000:
-        raise ValueError(
-            f"runtime audience_safe chord_merge_window_us {policy.chord_merge_window_us}us below 5000us"
         )
 
 

@@ -8,7 +8,7 @@ setting in the UI.
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 CONFIG_PATH: Path = Path("config.json")
 SCHEMA_VERSION: int = 2
@@ -29,22 +29,11 @@ class SafetyDefaults:
     prompt_on_high_risk:   bool = True
 
 
-FrameAlignMode = Literal["none", "down_only"]
-
-
-def normalize_frame_align(value: str | None) -> FrameAlignMode:
-    if value == "down_only":
-        return "down_only"
-    return "none"
-
-
 @dataclass
 class FrameTimingDefaults:
     """Frame-aware scaling ratios (defaults match built-in FrameTimingPolicy formulas)."""
 
     min_visible_hold_frames: float = 1.25
-    chord_merge_max_frame_ratio: float = 0.25
-    input_lead_min_frame_ratio: float = 0.5
     release_gap_min_frame_ratio: float = 0.15
     # Same-key release floor, empirically measured (Exp2): reliable repeats need a gap of
     # max(~1.5 frame, ~17ms fixed). The fixed floor dominates at high FPS.
@@ -54,7 +43,6 @@ class FrameTimingDefaults:
     # compressed one, needs >= 1 frame to register (Exp1). 1.25 = one frame + ~25% margin,
     # matching the hold target, and applied at all FPS (not just <60).
     min_hold_min_frame_ratio: float = 1.25
-    frame_align: FrameAlignMode = "none"
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "FrameTimingDefaults":
@@ -67,20 +55,15 @@ class FrameTimingDefaults:
 
         return cls(
             min_visible_hold_frames=ratio("min_visible_hold_frames", 1.25),
-            chord_merge_max_frame_ratio=ratio("chord_merge_max_frame_ratio", 0.25),
-            input_lead_min_frame_ratio=ratio("input_lead_min_frame_ratio", 0.5),
             release_gap_min_frame_ratio=ratio("release_gap_min_frame_ratio", 0.15),
             repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 1.5),
             repeat_release_gap_floor_us=int(ratio("repeat_release_gap_floor_us", 18000)),
             min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 1.25),
-            frame_align=normalize_frame_align(str(raw.get("frame_align", "none"))),
         )
 
     def as_policy_kwargs(self) -> dict[str, float]:
         return {
             "min_visible_hold_frames": self.min_visible_hold_frames,
-            "chord_merge_max_frame_ratio": self.chord_merge_max_frame_ratio,
-            "input_lead_min_frame_ratio": self.input_lead_min_frame_ratio,
             "release_gap_min_frame_ratio": self.release_gap_min_frame_ratio,
             "repeat_release_gap_min_frame_ratio": self.repeat_release_gap_min_frame_ratio,
             "repeat_release_gap_floor_us": self.repeat_release_gap_floor_us,
@@ -101,19 +84,17 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         # Reference profile = the empirically measured floors themselves (Appendix A): hold is
         # purely frame-relative (visibility = 1 frame, no fixed-ms component), so hold_floor =
-        # min_hold_floor = 0 and the 1.25-frame term governs at every FPS. repeat_gap keeps the
+        # min_hold_floor = 0 and the 1.1-frame term governs at every FPS. repeat_gap keeps the
         # measured ~18ms same-key wall. Sharpest profile; single notes at high FPS are short.
-        "hold_frames": 1.25,
+        "hold_frames": 1.1,
         "hold_floor_us": 0,
         "hold_unframed_us": 22000,
-        "min_hold_frames": 1.25,
+        "min_hold_frames": 1.1,
         "min_hold_floor_us": 0,
-        "min_hold_unframed_us": 17000,
+        "min_hold_unframed_us": 22000,
         "release_gap_us": 3500,
         "repeat_release_gap_frames": 1.5,
         "repeat_release_gap_floor_us": 18000,
-        "input_lead_us": 4000,
-        "chord_merge_window_us": 2500,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
     },
@@ -127,16 +108,13 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "release_gap_us": 4000,
         "repeat_release_gap_frames": 1.5,
         "repeat_release_gap_floor_us": 18000,
-        "input_lead_us": 6000,
-        "chord_merge_window_us": 3000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
     "audience_safe": {
-        # Online audience profile (future default). Differentiates from local profiles mainly
-        # through a conservative input_lead (remote perceived-delay compensation, a harmless
-        # uniform shift) and a slightly larger chord-merge window. The hold/min/repeat floors
-        # sit just ABOVE the registration floor a typical remote (~60 FPS) client needs — NOT a
+        # Online audience profile (future default). Differentiates from local profiles through
+        # conservative hold/min/repeat floors that sit just ABOVE the registration floor a
+        # typical remote (~60 FPS) client needs — NOT a
         # wide 2-frame margin — because a wide hold/gap trades away articulation and repeat
         # speed without buying remote audibility (see Appendix A.9 + EXP-4). repeat_gap keeps a
         # touch more margin than hold because same-key re-trigger is the most jitter-fragile.
@@ -147,8 +125,6 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "release_gap_us": 9000,
         "repeat_release_gap_frames": 1.5,
         "repeat_release_gap_floor_us": 24000,  # top of the measured 100%-reliable @60 band (A.4) + remote margin
-        "input_lead_us": 10000,
-        "chord_merge_window_us": 5000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
     },
@@ -162,8 +138,6 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "release_gap_us": 5000,
         "repeat_release_gap_frames": 1.5,
         "repeat_release_gap_floor_us": 18000,
-        "input_lead_us": 7000,
-        "chord_merge_window_us": 4000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
@@ -319,7 +293,6 @@ def persist_calibration_defaults(
     profile_name: str,
     tempo_scale: float,
     fps: int,
-    input_lead_us: int,
 ) -> None:
     """Persist calibration without storing already frame-scaled hold values."""
     if tempo_scale <= 0:
@@ -327,7 +300,6 @@ def persist_calibration_defaults(
     canonical = canonical_profile_name(profile_name)
     profile_key = normalize_profile_name(canonical)
     base_profile = dict(profile_dict_for(cfg, profile_key))
-    base_profile["input_lead_us"] = int(input_lead_us)
 
     cfg.default_timing_profile = canonical
     cfg.default_tempo_scale = float(tempo_scale)
@@ -464,13 +436,10 @@ def save_config(cfg: AppConfig) -> None:
     }
     raw["frame_timing"] = {
         "min_visible_hold_frames": cfg.frame_timing.min_visible_hold_frames,
-        "chord_merge_max_frame_ratio": cfg.frame_timing.chord_merge_max_frame_ratio,
-        "input_lead_min_frame_ratio": cfg.frame_timing.input_lead_min_frame_ratio,
         "release_gap_min_frame_ratio": cfg.frame_timing.release_gap_min_frame_ratio,
         "repeat_release_gap_min_frame_ratio": cfg.frame_timing.repeat_release_gap_min_frame_ratio,
         "repeat_release_gap_floor_us": cfg.frame_timing.repeat_release_gap_floor_us,
         "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
-        "frame_align": cfg.frame_timing.frame_align,
     }
     raw["timing_profiles"]              = cfg.timing_profiles
     raw["songs_dir"]                    = cfg.songs_dir

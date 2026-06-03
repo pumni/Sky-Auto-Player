@@ -49,14 +49,11 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "min_hold_us",
     "release_gap_us",
     "repeat_release_gap_us",
-    "input_lead_us",
-    "chord_merge_window_us",
     "spin_threshold_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",
     "frame_us",
     "fps",
-    "frame_align",
 )
 
 
@@ -132,7 +129,6 @@ def _persistent_cache_key(
                 "fps": session.fps,
                 "scan_code_mode": session.scan_code_mode,
                 "same_key_conflict_policy": session.same_key_conflict_policy,
-                "frame_align": session.resolved_frame_align(cfg),
                 "policy_overrides": list(session.policy_overrides),
             },
             "effective_policy": _effective_policy_signature(session, cfg),
@@ -286,7 +282,6 @@ def session_to_worker_payload(session: PlaybackSessionContext) -> dict[str, Any]
         "fps": session.fps,
         "scan_code_mode": session.scan_code_mode,
         "same_key_conflict_policy": session.same_key_conflict_policy,
-        "frame_align": session.frame_align,
         "policy_overrides": list(session.policy_overrides),
     }
 
@@ -303,16 +298,12 @@ def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionCont
     if conflict_policy not in {"degraded", "strict"}:
         conflict_policy = "degraded"
 
-    frame_align_raw = payload.get("frame_align")
-    frame_align = str(frame_align_raw) if frame_align_raw in {"none", "down_only"} else None
-
     return PlaybackSessionContext(
         profile_name=str(payload.get("profile_name", "balanced")),
         tempo_scale=float(payload.get("tempo_scale", 1.0)),
         fps=payload.get("fps"),
         scan_code_mode=str(payload.get("scan_code_mode", "physical")),
         same_key_conflict_policy=conflict_policy,  # type: ignore[arg-type]
-        frame_align=frame_align,  # type: ignore[arg-type]
         policy_overrides=tuple(overrides),
     )
 

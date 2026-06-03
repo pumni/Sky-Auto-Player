@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
-from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic, align_frame_down_us
+from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""
@@ -26,10 +26,7 @@ def _recommended_tempo_scale_for_repeats(
 
 @dataclass(frozen=True, slots=True)
 class ScheduledNoteDraft:
-    source_time_us: int
-    snapped_time_us: int
-    shifted_time_us: int
-    down_time_us: int
+    at_us: int
     note_key: NoteKey
     scan_code: int
     source_index: int
@@ -93,105 +90,38 @@ def build_key_actions(
             )
             
         drafts.append(ScheduledNoteDraft(
-            source_time_us=source_time_us,
-            snapped_time_us=source_time_us,
-            shifted_time_us=source_time_us,
-            down_time_us=source_time_us,
+            at_us=source_time_us,
             note_key=k,
             scan_code=sc,
             source_index=idx
         ))
         
     # Sort chronologically by original source time
-    drafts.sort(key=lambda d: d.source_time_us)
-
-    # 2. Merge chords using tolerance window (chord_merge_window_us) based on physical scan_codes
-    merged_drafts = []
-    current_groups = [] # list of tuples: (group_time_us, set_of_scan_codes_in_group)
+    drafts.sort(key=lambda d: d.at_us)
     
-    for draft in drafts:
-        snapped = False
-        target_snapped_time = draft.source_time_us
-
-        if policy.chord_merge_window_us > 0:
-            # Keep the active chord-group window small even when many notes snap
-            # into existing groups. Previously stale groups were only pruned when
-            # creating a new group, which made dense songs do extra linear scans.
-            current_groups = [
-                group
-                for group in current_groups
-                if draft.source_time_us <= group[0] + policy.chord_merge_window_us
-            ]
-            for g_time_us, scan_codes_in_group in current_groups:
-                if draft.source_time_us <= g_time_us + policy.chord_merge_window_us:
-                    if draft.scan_code not in scan_codes_in_group:
-                        target_snapped_time = g_time_us
-                        scan_codes_in_group.add(draft.scan_code)
-                        snapped = True
-                        break
-
-        if not snapped:
-            g_time_us = draft.source_time_us
-            target_snapped_time = g_time_us
-            current_groups.append((g_time_us, {draft.scan_code}))
-            
-        # Recreate frozen draft with the computed snapped and shifted times
-        shifted_time_us = max(0, target_snapped_time - policy.input_lead_us)
-        merged_drafts.append(ScheduledNoteDraft(
-            source_time_us=draft.source_time_us,
-            snapped_time_us=target_snapped_time,
-            shifted_time_us=shifted_time_us,
-            down_time_us=shifted_time_us,
-            note_key=draft.note_key,
-            scan_code=draft.scan_code,
-            source_index=draft.source_index
-        ))
-        
-    # 3. Apply optional frame alignment to the effective key-down timestamps.
-    # Same-key repeat constraints must use this final down time, not the pre-align time.
-    aligned_drafts = []
-    for draft in merged_drafts:
-        down_time_us = draft.shifted_time_us
-        if policy.frame_align == "down_only" and policy.frame_us > 0:
-            down_time_us = align_frame_down_us(down_time_us, policy.frame_us, policy.frame_align)
-        aligned_drafts.append(ScheduledNoteDraft(
-            source_time_us=draft.source_time_us,
-            snapped_time_us=draft.snapped_time_us,
-            shifted_time_us=draft.shifted_time_us,
-            down_time_us=down_time_us,
-            note_key=draft.note_key,
-            scan_code=draft.scan_code,
-            source_index=draft.source_index
-        ))
-
-    # 4. Sort merged_drafts chronologically by final key-down time
-    merged_drafts = sorted(aligned_drafts, key=lambda d: d.down_time_us)
-    
-    # 5. Pre-calculate the next occurrence time of the same physical key
+    # 2. Pre-calculate the next occurrence time of the same physical key
     next_same_key_time = {}
     last_seen_by_key = {}
-    for idx in range(len(merged_drafts) - 1, -1, -1):
-        draft = merged_drafts[idx]
+    for idx in range(len(drafts) - 1, -1, -1):
+        draft = drafts[idx]
         next_same_key_time[draft.source_index] = last_seen_by_key.get(draft.scan_code)
-        last_seen_by_key[draft.scan_code] = (draft.down_time_us, draft.source_time_us)
+        last_seen_by_key[draft.scan_code] = draft.at_us
         
     raw_events = [] # list of dicts: {"at_us": int, "sc": int, "kind": "down"|"up", "reason": str}
     diagnostics = []
     
-    # 6. Schedule down/up bounds for each individual note
-    for draft in merged_drafts:
+    # 3. Schedule down/up bounds for each individual note
+    for draft in drafts:
         next_same_info = next_same_key_time[draft.source_index]
         sc = draft.scan_code
-        shifted_us = draft.down_time_us
-        orig_us = draft.source_time_us
+        down_at_us = draft.at_us
         
         effective_delta_us = None
         max_hold = None
         risk = "ok"
         
         if next_same_info is not None:
-            next_shifted_us, next_orig_us = next_same_info
-            effective_delta_us = next_shifted_us - shifted_us
+            effective_delta_us = next_same_info - down_at_us
             
             if shortest_same_key_interval_us is None or effective_delta_us < shortest_same_key_interval_us:
                 shortest_same_key_interval_us = effective_delta_us
@@ -234,11 +164,11 @@ def build_key_actions(
         if actual_hold < policy.hold_us:
             compressed_holds += 1
             
-        up_at_us = shifted_us + actual_hold
+        up_at_us = down_at_us + actual_hold
         
         # Add events
-        raw_events.append({"at_us": shifted_us, "sc": sc, "kind": "down", "reason": "onset"})
-        raw_events.append({"at_us": up_at_us, "sc": sc, "kind": "up", "reason": "repeat_release" if next_same_info else "release"})
+        raw_events.append({"at_us": down_at_us, "sc": sc, "kind": "down", "reason": "onset"})
+        raw_events.append({"at_us": up_at_us, "sc": sc, "kind": "up", "reason": "repeat_release" if next_same_info is not None else "release"})
 
     # 5.5 Release collision delay: when a standard release coincides with another key's down,
     # defer release so the new down is not swallowed by release ordering.
@@ -307,14 +237,7 @@ def build_key_actions(
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
     playback_duration_us = duration_us
-    source_duration_us = Microseconds(max((d.source_time_us for d in merged_drafts), default=0) + policy.hold_us)
-
-    # Resolve base and runtime timing parameters for telemetry/reporting directly from policy
-    base_lead = (
-        policy.base_input_lead_us
-        if policy.base_input_lead_us is not None
-        else int(policy.input_lead_us)
-    )
+    source_duration_us = Microseconds(max((d.at_us for d in drafts), default=0) + policy.hold_us)
 
     return ScheduleMetadata(
         actions=tuple(key_actions_list),
@@ -331,8 +254,4 @@ def build_key_actions(
         diagnostics=tuple(diagnostics),
         frame_us=policy.frame_us,
         fps=policy.fps,
-        base_input_lead_us=base_lead,
-        runtime_input_lead_us=int(policy.input_lead_us),
-        chord_merge_window_us=int(policy.chord_merge_window_us),
-        frame_align=policy.frame_align,
     )

@@ -12,14 +12,6 @@ Microseconds = NewType("Microseconds", int)
 ScanCode = NewType("ScanCode", int)
 
 ActionKind = Literal["down", "up"]
-FrameAlignMode = Literal["none", "down_only"]
-
-
-def align_frame_down_us(at_us: int, frame_us: int, mode: FrameAlignMode) -> int:
-    """Optional snap of key-down timestamps to frame boundaries (down_only mode)."""
-    if mode != "down_only" or frame_us <= 0:
-        return at_us
-    return max(0, round(at_us / frame_us) * frame_us)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +29,6 @@ class TimingPolicy:
     release_gap_us: Microseconds
     repeat_release_gap_us: Microseconds
 
-    input_lead_us: Microseconds = Microseconds(0)
-    chord_merge_window_us: Microseconds = Microseconds(0)
     focus_restore_grace_us: Microseconds = Microseconds(100_000) # Default is overridden in from_dict
 
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
@@ -110,8 +100,6 @@ class TimingPolicy:
             min_hold_us=min_hold_us,
             release_gap_us=Microseconds(int_value("release_gap_us", int(base["release_gap_us"]))),
             repeat_release_gap_us=repeat_gap_us,
-            input_lead_us=Microseconds(int_value("input_lead_us", int(base["input_lead_us"]))),
-            chord_merge_window_us=Microseconds(int_value("chord_merge_window_us", int(base["chord_merge_window_us"]))),
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
@@ -167,16 +155,11 @@ class FrameTimingPolicy:
     release_gap_us: Microseconds
     repeat_release_gap_us: Microseconds
 
-    input_lead_us: Microseconds
-    chord_merge_window_us: Microseconds
     focus_restore_grace_us: Microseconds
 
     min_visible_hold_frames: float = 1.25
-    chord_merge_max_frame_ratio: float = 0.25
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
-    frame_align: FrameAlignMode = "none"
     profile_name: str | None = None
-    base_input_lead_us: int | None = None
 
     @staticmethod
     def materialise_frame_floor(frames: float, floor_us: int, frame_us: int) -> Microseconds:
@@ -188,14 +171,11 @@ class FrameTimingPolicy:
         policy: TimingPolicy,
         fps: int | None = None,
         min_visible_hold_frames: float = 1.25,
-        chord_merge_max_frame_ratio: float = 0.25,
         same_key_conflict_policy: Literal["degraded", "strict"] | None = None,
-        input_lead_min_frame_ratio: float = 0.5,
         release_gap_min_frame_ratio: float = 0.15,
         repeat_release_gap_min_frame_ratio: float = 1.5,
         repeat_release_gap_floor_us: int = 18000,
         min_hold_min_frame_ratio: float = 1.25,
-        frame_align: FrameAlignMode = "none",
         *,
         profile_name: str | None = None,
     ) -> "FrameTimingPolicy":
@@ -234,7 +214,6 @@ class FrameTimingPolicy:
             )
 
             if fps < 60:
-                eff_input_lead_us = Microseconds(max(policy.input_lead_us, math.ceil(frame_us * input_lead_min_frame_ratio)))
                 eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.ceil(frame_us * release_gap_min_frame_ratio)))
 
                 # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin).
@@ -246,21 +225,8 @@ class FrameTimingPolicy:
                 if current_cycle < required_cycle_us:
                     deficit = required_cycle_us - current_cycle
                     eff_repeat_release_gap_us = Microseconds(eff_repeat_release_gap_us + deficit)
-
-                # Prevent chord merge window from collapsing too small at low FPS.
-                is_remote_like = policy.repeat_release_gap_us >= 15000 or policy.input_lead_us >= 12000
-                min_chord_merge_us = 4000 if is_remote_like else 2000
-                scaled_chord_merge = math.floor(frame_us * chord_merge_max_frame_ratio)
-                eff_chord_merge = Microseconds(min(policy.chord_merge_window_us, max(min_chord_merge_us, scaled_chord_merge)))
             else:
-                # At FPS >= 60 the render frame is finer than the game's fixed onset
-                # cadence (~60 Hz internal tick, measured June 2026 — see Appendix A,
-                # Result 4). The lead must therefore NOT be scaled with render FPS:
-                # reducing it by frame'/2 biased notes late and beat against the fixed
-                # tick (the "lạc nhịp" observed at 144 FPS). Lead is held at base.
-                eff_input_lead_us = policy.input_lead_us
                 eff_release_gap_us = policy.release_gap_us
-                eff_chord_merge = policy.chord_merge_window_us
 
             if policy.hold_override_us is not None:
                 eff_hold_us = policy.hold_override_us
@@ -272,16 +238,12 @@ class FrameTimingPolicy:
             frame_us = Microseconds(0)
             eff_hold_us = policy.hold_us
             eff_min_hold_us = policy.min_hold_us
-            eff_chord_merge = policy.chord_merge_window_us
-            eff_input_lead_us = policy.input_lead_us
             eff_release_gap_us = policy.release_gap_us
             eff_repeat_release_gap_us = policy.repeat_release_gap_us
             
         conflict_policy = same_key_conflict_policy if same_key_conflict_policy is not None else policy.same_key_conflict_policy
         if conflict_policy not in ("strict", "degraded"):
             conflict_policy = "degraded"
-
-        align_mode: FrameAlignMode = frame_align if frame_align in ("none", "down_only") else "none"
 
         return cls(
             fps=fps if fps is not None else 0,
@@ -290,15 +252,10 @@ class FrameTimingPolicy:
             min_hold_us=eff_min_hold_us,
             release_gap_us=eff_release_gap_us,
             repeat_release_gap_us=eff_repeat_release_gap_us,
-            input_lead_us=eff_input_lead_us,
-            chord_merge_window_us=eff_chord_merge,
             focus_restore_grace_us=policy.focus_restore_grace_us,
             min_visible_hold_frames=min_visible_hold_frames,
-            chord_merge_max_frame_ratio=chord_merge_max_frame_ratio,
             same_key_conflict_policy=conflict_policy,
-            frame_align=align_mode,
             profile_name=profile_name,
-            base_input_lead_us=int(policy.input_lead_us),
         )
 
     @classmethod
@@ -350,7 +307,3 @@ class ScheduleMetadata:
     recommended_tempo_scale: float | None = None
     frame_us: Microseconds | None = None
     fps: int | None = None
-    base_input_lead_us: int | None = None
-    runtime_input_lead_us: int | None = None
-    chord_merge_window_us: int | None = None
-    frame_align: str | None = None

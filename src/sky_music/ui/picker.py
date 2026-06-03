@@ -549,11 +549,8 @@ def choose_song_interactively(
                 f"Min repeat gap: {metadata.min_same_key_gap_ms:.0f}ms │ Peak density: {metadata.peak_notes_per_second_1s:.1f} n/s",
             ]
 
-            effective = state.active_session.resolve_effective_policy(user_cfg)
-            lead_ms = effective.input_lead_us // 1000
-
             timing_content = [
-                f"Current:   {state.current_profile} @ {state.current_tempo:.2f}x (lead: {lead_ms}ms)",
+                f"Current:   {state.current_profile} @ {state.current_tempo:.2f}x",
                 f"Suggested: {metadata.recommended_profile} @ {metadata.recommended_tempo_scale:.2f}x",
                 f"FPS Sync:  {state.current_fps or 'Auto'}"
             ]
@@ -614,7 +611,6 @@ def choose_song_interactively(
                 f"Latest: {summary.get('song', 'Unknown')} @ {inp.fps} FPS",
                 f"Profile: {inp.profile_name} -> {rec.profile_name}",
                 f"Tempo:   {inp.tempo_scale:.2f}x -> {rec.tempo_scale:.2f}x",
-                f"Lead:    {rec.input_lead_us / 1000:.1f}ms",
                 f"Hold:    {rec.hold_us / 1000:.1f}ms",
                 f"Severity {rec.severity.upper()}",
                 rec.reason,
@@ -1341,7 +1337,6 @@ def choose_song_interactively(
                         profile_name=rec.profile_name,
                         tempo_scale=rec.tempo_scale,
                         fps=inp.fps,
-                        input_lead_us=rec.input_lead_us,
                     )
                     state.current_profile = canonical_profile_name(rec.profile_name)
                     state.current_tempo = rec.tempo_scale

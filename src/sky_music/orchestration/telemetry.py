@@ -85,10 +85,6 @@ class TelemetryLogger:
             "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),
             "frame_us": getattr(metadata, "frame_us", None),
             "fps": getattr(metadata, "fps", None),
-            "base_input_lead_us": getattr(metadata, "base_input_lead_us", None),
-            "runtime_input_lead_us": getattr(metadata, "runtime_input_lead_us", None),
-            "chord_merge_window_us": getattr(metadata, "chord_merge_window_us", None),
-            "frame_align": getattr(metadata, "frame_align", None),
         }
 
     def get_summary(self) -> dict | None:
@@ -261,7 +257,6 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 print(f"\n  Calibration Recommendation:")
                 print(f"    * Suggested Profile : {rec.profile_name}")
                 print(f"    * Suggested Tempo   : {rec.tempo_scale:.2f}x")
-                print(f"    * Input Lead (us)   : {rec.input_lead_us} ({rec.input_lead_us/1000:.1f} ms)")
                 print(f"    * Hold Duration (us): {rec.hold_us} ({rec.hold_us/1000:.1f} ms)")
                 print(f"    * Severity Level    : {rec.severity.upper()}")
                 print(f"    * Reason            : {rec.reason}")

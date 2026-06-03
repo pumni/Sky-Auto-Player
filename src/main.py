@@ -359,8 +359,6 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", floor_key="min_hold_floor_us")),
         ("release_gap_ms",       lambda n, d: f"{d.get('release_gap_us', 0) // 1000}"),
         ("repeat_gap_ms",        lambda n, d: frame_coupled_ms(d, value_key="repeat_release_gap_us", floor_key="repeat_release_gap_floor_us")),
-        ("input_lead_ms",        lambda n, d: f"{d.get('input_lead_us', 0) / 1000:.1f}".rstrip('0').rstrip('.') if d.get('input_lead_us', 0) % 1000 != 0 else f"{d.get('input_lead_us', 0) // 1000}"),
-        ("chord_merge_ms",       lambda n, d: f"{d.get('chord_merge_window_us', 0) // 1000}"),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
         ("conflict_policy",      lambda n, d: d.get("same_key_conflict_policy", "degraded")),
     ]
@@ -446,7 +444,6 @@ def _apply_calibration_from_telemetry(
     print(f"  {ANSI_BOLD}{ANSI_CYAN}Applied calibration to session{ANSI_RESET}")
     print(f"    Profile     : {rec.profile_name}")
     print(f"    Tempo scale : {rec.tempo_scale:.2f}x")
-    print(f"    Input lead  : {rec.input_lead_us / 1000:.1f} ms")
     print(f"    Hold target : {rec.hold_us / 1000:.1f} ms ({ANSI_DIM}via FrameTimingPolicy{ANSI_RESET})")
     print(f"    Severity    : {rec.severity.upper()}")
     print(f"    Reason      : {rec.reason}")
@@ -456,7 +453,6 @@ def _apply_calibration_from_telemetry(
             profile_name=rec.profile_name,
             tempo_scale=rec.tempo_scale,
             fps=inp.fps,
-            input_lead_us=rec.input_lead_us,
         )
         print(f"  {ANSI_GREEN}Saved calibration defaults to config.json.{ANSI_RESET}")
     else:
@@ -504,7 +500,6 @@ def _run_auto_calibrate(summary_path: Path | str | None = None) -> None:
     print("  Calibration Recommendation:")
     print(f"    Suggested Profile : {rec.profile_name}")
     print(f"    Suggested Tempo   : {rec.tempo_scale:.2f}x")
-    print(f"    Input Lead        : {rec.input_lead_us / 1000:.1f} ms")
     print(f"    Hold Target       : {rec.hold_us / 1000:.1f} ms")
     print(f"    Severity          : {rec.severity.upper()}")
     print(f"    Reason            : {rec.reason}")
@@ -838,16 +833,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override same-key repeat gap in ms (overrides profile)",
     )
     timing.add_argument(
-        "--input-lead-ms",
-        type=float,
-        help="Override input lead duration in ms (overrides profile)",
-    )
-    timing.add_argument(
-        "--chord-merge-window-ms",
-        type=int,
-        help="Override chord merge tolerance window in ms (overrides profile)",
-    )
-    timing.add_argument(
         "--spin-threshold-us",
         type=int,
         help="Override CPU spin threshold in microseconds (precise=800, balanced=500, battery_safe=200/0) (overrides profile)",
@@ -875,16 +860,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="FPS",
         help=(
             "Game frame rate hint for frame-aware timing (e.g. 30, 60, 120). "
-            "Scales hold, input lead, release gap, and chord merge via FrameTimingPolicy."
-        ),
-    )
-    timing.add_argument(
-        "--frame-align",
-        choices=["none", "down_only"],
-        default=None,
-        help=(
-            "Optional snap of key-down events to frame boundaries (requires --fps). "
-            "Default: frame_timing.frame_align from config.json."
+            "Scales hold and release gap via FrameTimingPolicy."
         ),
     )
 
@@ -1009,7 +985,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "apply calibration recommendations from the latest telemetry summary and "
-            "persist profile, tempo, FPS, and input lead defaults to config.json."
+            "persist profile, tempo, and FPS defaults to config.json."
         ),
     )
 

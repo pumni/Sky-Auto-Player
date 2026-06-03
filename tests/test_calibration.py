@@ -296,8 +296,7 @@ def test_calibrate_hold_uses_frame_timing_policy():
     )
     rec = calibrate_profile(inp)
     assert rec.profile_name == "local-precise"
-    assert rec.hold_us == 41_667
-    assert rec.input_lead_us >= 16_666
+    assert rec.hold_us == 36_667
 
 
 def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):
@@ -345,7 +344,7 @@ def test_apply_calibration_loads_latest_summary(tmp_path, monkeypatch):
     assert main.TIMING_PROFILE_NAME == "local-precise@60fps"
 
 
-def test_save_calibration_persists_profile_tempo_fps_and_input_lead(tmp_path, monkeypatch):
+def test_save_calibration_persists_profile_tempo_and_fps(tmp_path, monkeypatch):
     from sky_music.config import load_config
 
     config_file = tmp_path / "config.json"
@@ -368,7 +367,7 @@ def test_save_calibration_persists_profile_tempo_fps_and_input_lead(tmp_path, mo
     assert saved.default_timing_profile == "balanced"
     assert saved.default_tempo_scale == 0.95
     assert saved.game_fps == 60
-    assert saved.timing_profiles["balanced"]["input_lead_us"] >= 8_000
+    assert "balanced" in saved.timing_profiles
     assert "@" not in saved.default_timing_profile
 
 

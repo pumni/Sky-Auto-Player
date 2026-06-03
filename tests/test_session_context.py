@@ -100,8 +100,8 @@ def test_frame_timing_config_overrides_ratios():
     policy = session.resolve_effective_policy(cfg)
     # Built-in frame-model profiles declare their own frame margins; global frame_timing
     # ratios are retained only for legacy _us-only policies.
-    assert policy.hold_us == 41_667
-    assert policy.min_hold_us == 41_667
+    assert policy.hold_us == 36_667
+    assert policy.min_hold_us == 36_667
 
 
 def test_apply_recommendation_to_context_updates_session():
@@ -111,7 +111,6 @@ def test_apply_recommendation_to_context_updates_session():
     rec = CalibrationRecommendation(
         profile_name="dense-safe",
         tempo_scale=0.9,
-        input_lead_us=12_000,
         hold_us=30_000,
         reason="test",
         severity="moderate",
@@ -119,16 +118,9 @@ def test_apply_recommendation_to_context_updates_session():
     updated = apply_recommendation_to_context(session, rec)
     assert updated.profile_name == "dense-safe"
     assert updated.tempo_scale == 0.9
-    assert dict(updated.policy_overrides)["input_lead_us"] == 12_000
+    assert "input_lead_us" not in dict(updated.policy_overrides)
     policy = updated.resolve_effective_policy(AppConfig())
-    assert policy.input_lead_us >= 12_000
-
-
-def test_frame_align_from_config():
-    cfg = AppConfig(frame_timing=FrameTimingDefaults(frame_align="down_only"))
-    session = PlaybackSessionContext.balanced(fps=30)
-    assert session.resolved_frame_align(cfg) == "down_only"
-    assert session.resolve_effective_policy(cfg).frame_align == "down_only"
+    assert policy.hold_us > 0
 
 
 def test_from_cli_args_applies_hold_override():
@@ -158,7 +150,6 @@ def test_strict_timing_profile_validation_enforcement():
                 "release_gap_us": 2000,
                 "repeat_release_gap_us": 4000,
                 "input_lead_us": 3000,
-                "chord_merge_window_us": 2000,
             }
         }
     )
@@ -176,7 +167,6 @@ def test_strict_timing_profile_validation_enforcement():
                 "release_gap_us": 8000,
                 "repeat_release_gap_us": 14000,
                 "input_lead_us": 14000,
-                "chord_merge_window_us": 6000,
             }
         }
     )

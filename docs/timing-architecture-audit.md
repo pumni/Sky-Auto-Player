@@ -148,6 +148,14 @@ Mỗi phase: chạy full test + verify `resolve_effective_policy` không đổi 
 
 ### 6.0 Baseline đông cứng (chụp trước refactor, 2026-06)
 
+> **TIẾN ĐỘ — TẤT CẢ 3 PHASE ĐÃ NGHIỆM THU PASS (2026-06):**
+> Phase 1 (bỏ input_lead) ✅ · Phase 2 (bỏ chord_merge + frame_align) ✅ · Phase 3 (gộp hold/min_hold
+> + local 1.1f + gộp ScheduledNoteDraft) ✅. Test: 176 → **171 passed**. Mô hình local còn đúng 3 cần
+> gạt thật (min_hold/visibility, repeat_gap, release_gap) + hạ tầng. `ScheduledNoteDraft` còn một
+> trường thời gian (`at_us`). local_precise visibility @60 = 18334 (1.1f), sắc hơn cũ 2.5ms, vẫn trên
+> sàn đo 16ms.
+
+
 - **Test suite: `176 passed`** (`uv run python -m pytest -q`). Sau mỗi phase phải xanh lại (số test
   có thể GIẢM khi xoá test của field bị bỏ — đó là hợp lệ; KHÔNG được có test fail).
 - **Bảng resolved policy** (lệnh tái lập ở 6.4). Mọi cột KHÔNG thuộc "thay đổi có chủ đích" của phase
@@ -197,15 +205,30 @@ audience_safe  144   20000  18000     24000  9000     10000  5000   none
 
 ### 6.3 Cổng nghiệm thu — Phase 3 (gộp `hold`/`min_hold` + hạ ratio)
 
-> Cổng này CHỈ chốt sau khi quyết định: ratio 1.25→1.1 áp **global** (mọi profile) hay **chỉ local**.
-> Trước khi code Phase 3, bên thực thi phải hỏi/chốt điểm này; nghiệm thu dùng bảng giá trị mới tương ứng.
+> **QUYẾT ĐỊNH ĐÃ CHỐT (user, 2026-06):** hạ ratio visibility `1.25 → 1.1` **CHỈ cho `local_precise`**.
+> `balanced` / `dense_safe` / `audience_safe` **giữ nguyên 1.25** (cả 3 set `hold_frames`/`min_hold_frames`
+> tường minh trong profile dict, nên chỉ cần đổi của local_precise — KHÔNG đổi `FrameTimingDefaults`
+> global). Phạm vi này giữ thang bậc profile rõ: local sắc nhất, các profile khác bảo thủ hơn.
 
-1. Một field sàn visibility duy nhất cho local (không còn cặp `hold`/`min_hold` trùng giá trị); bỏ
-   `hold_unframed_us`/`min_hold_unframed_us` (trừ raw escape hatch nếu giữ).
-2. Giá trị resolved khớp bảng MỚI theo công thức `max(ceil(ratio×frame), floor)` với ratio đã chốt.
-   Tham chiếu @60 nếu ratio=1.1 local: visibility floor `ceil(1.1×16667)=18334` (trước 20834).
-3. `validate_hold_ordering` và invariant `min_hold_frames>=1.0` vẫn pass.
-4. `pytest -q` xanh.
+**Thay đổi có chủ đích — CHỈ cột visibility của `local_precise` đổi:**
+
+| FPS | local_precise visibility (hold==min_hold) MỚI | (baseline cũ 1.25f) |
+| --: | --: | --: |
+| 30 | **36667** | 41667 |
+| 60 | **18334** | 20834 |
+| 144 | **7639** | 8680 |
+
+1. **Cấu trúc:** `local_precise` có MỘT field sàn visibility (không còn cặp `hold`/`min_hold` trùng giá
+   trị tình cờ). Gộp `ScheduledNoteDraft` 4 trường thời gian (`source`/`snapped`/`shifted`/`down`, giờ
+   bằng nhau hệt sau Phase 1+2) về **một** trường + bỏ biến trung gian `target_snapped_time` + sửa
+   tên `merged_drafts`/`snapped`/`shifted` (gây hiểu nhầm) + đánh số lại comment (đang nhảy 2→3→5→6).
+2. **Giá trị:** local_precise @{30,60,144} khớp bảng trên. **3 profile kia + repeat_gap + release_gap
+   của MỌI profile = y hệt baseline §6.0.**
+3. **fps=None (raw escape hatch):** đây là chỗ DUY NHẤT hiện `hold≠min_hold` (22000 vs 17000). Gộp ép
+   một giá trị raw — bên thực thi chọn một số, đảm bảo `hold==min_hold`, và GHI rõ lý do; nghiệm thu
+   xác nhận bất biến `hold==min_hold` ở raw.
+4. `validate_hold_ordering` + invariant `min_hold_frames >= 1.0` vẫn pass (1.1 ≥ 1.0 ✓).
+5. `pytest -q` xanh.
 
 ### 6.4 Lệnh tái lập bảng resolved (dùng để equivalence-check mọi phase)
 

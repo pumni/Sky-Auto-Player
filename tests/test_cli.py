@@ -105,23 +105,35 @@ def test_dynamic_fps_resolution(monkeypatch):
     assert resolved_fps == 60
 
 
-def test_cli_input_lead_ms_float_argument():
+def test_cli_removed_lead_argument_is_rejected():
     parser = main.build_arg_parser()
-    args = parser.parse_args(["--input-lead-ms", "14.5"])
-    assert args.input_lead_ms == 14.5
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--input-lead-ms", "14.5"])
 
 
-def test_session_context_input_lead_ms_float_conversion():
+def test_session_context_has_no_removed_lead_override():
     from sky_music.domain.session_context import PlaybackSessionContext
 
     parser = main.build_arg_parser()
-    args = parser.parse_args(["--input-lead-ms", "14.5"])
+    args = parser.parse_args([])
     main.apply_config_defaults(args, AppConfig())
     
     session = PlaybackSessionContext.from_cli_args(args)
-    # The policy override list should contain a rounded int microsecond value for input_lead_us
     overrides = dict(session.policy_overrides)
-    assert overrides.get("input_lead_us") == 14500
+    assert "input_lead_us" not in overrides
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--chord-merge-window-ms", "5"],
+        ["--frame-align", "down_only"],
+    ],
+)
+def test_removed_phase2_timing_arguments_are_rejected(args):
+    parser = main.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(args)
 
 
 

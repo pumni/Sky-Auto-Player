@@ -23,7 +23,6 @@ class CalibrationInput:
 class CalibrationRecommendation:
     profile_name: str
     tempo_scale: float
-    input_lead_us: int
     hold_us: int
     reason: str
     severity: Literal["ok", "moderate", "severe"]
@@ -65,23 +64,8 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     from sky_music.config import load_config
     from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 
-    fps = inp.fps if inp.fps > 0 else 60
-    frame_us = round(1_000_000 / fps)
     cfg = load_config()
-    
-    # 1. Input Lead calibration formula
-    recommended_lead = inp.p95_lateness_us + inp.p95_send_duration_us + int(frame_us * 0.5)
-    
-    # Clamp based on FPS targets to prevent excessive lag or premature key releases
-    if inp.fps == 120:
-        recommended_lead = max(4000, min(14000, recommended_lead))
-    elif inp.fps == 60:
-        recommended_lead = max(8000, min(24000, recommended_lead))
-    elif inp.fps == 30:
-        recommended_lead = max(16000, min(45000, recommended_lead))
-    else:
-        recommended_lead = max(6000, min(30000, recommended_lead))
-        
+
     p99 = inp.p99_lateness_us
     late_10ms = inp.late_over_10ms
     
@@ -138,12 +122,10 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
         **cfg.frame_timing.as_policy_kwargs(),
     )
     recommended_hold = effective.hold_us
-    recommended_lead = max(recommended_lead, effective.input_lead_us)
 
     return CalibrationRecommendation(
         profile_name=rec_profile,
         tempo_scale=rec_tempo,
-        input_lead_us=recommended_lead,
         hold_us=recommended_hold,
         reason=reason,
         severity=severity

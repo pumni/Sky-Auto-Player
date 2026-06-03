@@ -116,19 +116,30 @@ def test_release_gap_us_at_30fps():
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
     assert frame_policy.release_gap_us == 5000
  
-def test_frame_timing_policy_scales_lead_at_30fps():
-    from sky_music.domain.scheduler_types import FrameTimingPolicy
-    base = TimingPolicy.from_dict({"input_lead_us": 6000})
-    # 30fps = 33,333us. 50% = 16,667us (ceiled).
-    frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert frame_policy.input_lead_us == 16667
+def test_frame_timing_policy_has_no_lead_field():
+    frame_policy = FrameTimingPolicy.from_profile_name("balanced", fps=30)
+    assert not hasattr(frame_policy, "input_lead_us")
 
-def test_chord_merge_clamping_at_120fps():
-    from sky_music.domain.scheduler_types import FrameTimingPolicy
-    base = TimingPolicy.from_dict({"chord_merge_window_us": 5000})
-    # 120fps >= 60, so the original chord_merge_window_us is kept intact without scaling down.
-    frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=120)
-    assert frame_policy.chord_merge_window_us == 5000
+
+def test_onsets_are_not_shifted_or_clamped():
+    song = Song(
+        name="Even",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(500), key=NoteKey("Key1")),
+            Note(time_ms=Millis(1000), key=NoteKey("Key2")),
+            Note(time_ms=Millis(1500), key=NoteKey("Key3")),
+        ),
+    )
+    policy = FrameTimingPolicy.from_profile_name("local-precise", fps=60)
+    res = build_key_actions(song, policy=policy)
+    downs = [int(a.at_us) for a in res.actions if a.kind == "down"]
+    assert downs == [0, 500_000, 1_000_000, 1_500_000]
+    assert [b - a for a, b in zip(downs, downs[1:])] == [500_000, 500_000, 500_000]
+
+def test_chord_window_field_is_removed():
+    frame_policy = FrameTimingPolicy.from_profile_name("balanced", fps=120)
+    assert not hasattr(frame_policy, "chord_merge_window_us")
 
 def test_pre_playback_schedule_analyzer():
     from sky_music.domain.analyzer import analyze_schedule
@@ -227,57 +238,46 @@ def test_degraded_policy_still_compresses_impossible_repeat():
     assert res.impossible_same_key_repeats == 1
 
 
-def test_down_only_frame_align_snaps_key_down():
+def test_exact_timestamp_chord_still_groups_without_window():
     song = Song(
-        name="Align",
-        notes=(Note(time_ms=Millis(1000), key=NoteKey("Key0")),),
-    )
-    policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({"input_lead_us": 0}),
-        fps=30,
-        frame_align="down_only",
-    )
-    res = build_key_actions(song, policy=policy)
-    down = next(a for a in res.actions if a.kind == "down")
-    assert down.at_us == 999_990
-
-
-def test_frame_align_same_key_repeat_uses_aligned_next_down():
-    song = Song(
-        name="Aligned Repeat",
+        name="Exact Chord",
         notes=(
             Note(time_ms=Millis(1000), key=NoteKey("Key0")),
-            Note(time_ms=Millis(1010), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1000), key=NoteKey("Key1")),
+            Note(time_ms=Millis(1000), key=NoteKey("Key2")),
         ),
     )
-    policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({
-            "hold_us": 2_000,
-            "min_hold_us": 1_000,
-            "repeat_release_gap_us": 1_000,
-            "input_lead_us": 0,
-        }),
-        fps=30,
-        min_visible_hold_frames=0,
-        min_hold_min_frame_ratio=0,
-        repeat_release_gap_min_frame_ratio=0,
-        frame_align="down_only",
-        same_key_conflict_policy="strict",
+    policy = FrameTimingPolicy.from_profile_name("balanced", fps=60)
+    res = build_key_actions(song, policy=policy)
+    downs = [a for a in res.actions if a.kind == "down"]
+    assert len(downs) == 1
+    assert len(downs[0].scan_codes) == 3
+    assert downs[0].at_us == 1_000_000
+
+
+def test_nearby_chord_notes_are_not_window_merged():
+    song = Song(
+        name="Spread Chord",
+        notes=(
+            Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1010), key=NoteKey("Key1")),
+            Note(time_ms=Millis(1020), key=NoteKey("Key2")),
+        ),
     )
-    with pytest.raises(ScheduleBuildError):
-        build_key_actions(song, policy=policy)
+    policy = FrameTimingPolicy.from_profile_name("balanced", fps=60)
+    res = build_key_actions(song, policy=policy)
+    downs = [a for a in res.actions if a.kind == "down"]
+    assert [int(a.at_us) for a in downs] == [1_000_000, 1_010_000, 1_020_000]
+    assert [len(a.scan_codes) for a in downs] == [1, 1, 1]
 
 
-def test_none_frame_align_preserves_exact_down_time():
+def test_frame_alignment_field_is_removed():
     song = Song(
         name="Exact",
         notes=(Note(time_ms=Millis(1000), key=NoteKey("Key0")),),
     )
-    policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({"input_lead_us": 0}),
-        fps=None,
-        frame_align="none",
-    )
+    policy = FrameTimingPolicy.from_profile_name("balanced", fps=30)
+    assert not hasattr(policy, "frame_align")
     res = build_key_actions(song, policy=policy)
     down = next(a for a in res.actions if a.kind == "down")
     assert down.at_us == 1_000_000
@@ -300,6 +300,20 @@ def test_frame_timing_policy_from_profile_name():
     assert p.fps == 60
     assert p.hold_us == 20834
 
+
+def test_local_precise_raw_hold_and_min_hold_are_unified():
+    p = FrameTimingPolicy.from_profile_name("local-precise", fps=None)
+    assert p.hold_us == p.min_hold_us == 22_000
+
+
+def test_scheduled_note_draft_has_single_time_field():
+    from dataclasses import fields
+    from sky_music.domain.scheduler import ScheduledNoteDraft
+
+    names = {field.name for field in fields(ScheduledNoteDraft)}
+    assert "at_us" in names
+    assert {"source_time_us", "snapped_time_us", "shifted_time_us", "down_time_us"}.isdisjoint(names)
+
 def test_playback_overrides_dataclass():
     from main import PlaybackOverrides
     o = PlaybackOverrides(dry_run=True, fps=120)
@@ -307,14 +321,12 @@ def test_playback_overrides_dataclass():
     assert o.fps == 120
 
 
-def test_high_fps_chord_merge_protection():
+def test_high_fps_policy_has_no_chord_window():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    # At 240fps (>= 60), original profile values are kept intact.
     p_local = FrameTimingPolicy.from_profile_name("balanced", fps=240)
-    assert p_local.chord_merge_window_us == 3000
-
     p_remote = FrameTimingPolicy.from_profile_name("audience-safe", fps=240)
-    assert p_remote.chord_merge_window_us == 5000
+    assert not hasattr(p_local, "chord_merge_window_us")
+    assert not hasattr(p_remote, "chord_merge_window_us")
 
 
 def test_cycle_rule_safety_margin_clamp():
@@ -365,7 +377,6 @@ def test_timing_profile_validators():
         "min_hold_us": 5000,
         "repeat_release_gap_us": 5000,
         "input_lead_us": 0,
-        "chord_merge_window_us": 0,
     }
     with pytest.raises(ValueError, match="Unsafe cycle"):
         validate_timing_profile(unsafe, fps=60)
@@ -391,7 +402,7 @@ def test_hold_ordering_invariant_rejects_hold_below_min_hold():
     # And the invariant is reachable through the full profile validator too.
     bad = {
         "hold_us": 1, "min_hold_us": 22000, "repeat_release_gap_us": 18000,
-        "input_lead_us": 14000, "chord_merge_window_us": 6000,
+        "input_lead_us": 14000,
     }
     with pytest.raises(ValueError, match="hold_us"):
         validate_timing_profile(bad, fps=60)
@@ -415,35 +426,13 @@ def test_audience_safe_floors_keep_remote_minimum_at_high_fps():
     assert p60.release_gap_us == p144.release_gap_us == 9000
 
 
-@pytest.mark.parametrize("fps", [60, 90, 120, 144, 165, 240])
-def test_audience_safe_input_lead_is_not_scaled_above_60fps(fps):
-    # EXP-2 (June 2026): the game's onset cadence is a fixed ~60 Hz internal tick, not the
-    # render frame, so input lead must stay at its base value across all render FPS >= 60.
-    # (Previously this was scaled down by frame'/2, which biased notes late at high FPS.)
-    from sky_music.config import DEFAULT_TIMING_PROFILES
-    base = int(DEFAULT_TIMING_PROFILES["audience_safe"]["input_lead_us"])
-    p = FrameTimingPolicy.from_profile_name("audience-safe", fps=fps)
-    assert p.input_lead_us == base
-
-
-@pytest.mark.parametrize("profile", ["balanced", "local-precise", "dense-safe"])
-def test_profiles_do_not_scale_input_lead_above_60fps(profile):
-    p60 = FrameTimingPolicy.from_profile_name(profile, fps=60)
-    p144 = FrameTimingPolicy.from_profile_name(profile, fps=144)
-
-    assert p144.input_lead_us == p60.input_lead_us
-
-
 def test_audience_safe_runtime_validation():
     from sky_music.domain.validation import validate_audience_safe_runtime_policy
-    from sky_music.config import DEFAULT_TIMING_PROFILES
 
-    # 144 FPS policy: runtime lead stays at the base 14500us (no FPS scaling), which is valid
     policy = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
-    ref_profile = DEFAULT_TIMING_PROFILES["audience_safe"]
     
     # This should pass without raising ValueError
-    validate_audience_safe_runtime_policy(policy, reference_profile=ref_profile)
+    validate_audience_safe_runtime_policy(policy)
 
     # Let's test a policy that violates runtime limits (e.g. min_hold_us too small)
     invalid_policy = FrameTimingPolicy.from_timing_policy(
@@ -452,7 +441,7 @@ def test_audience_safe_runtime_validation():
         profile_name="audience-safe",
     )
     with pytest.raises(ValueError, match="min_hold_us"):
-        validate_audience_safe_runtime_policy(invalid_policy, reference_profile=ref_profile)
+        validate_audience_safe_runtime_policy(invalid_policy)
 
 
 def test_unknown_profile_name_falls_back_to_balanced():
@@ -462,19 +451,12 @@ def test_unknown_profile_name_falls_back_to_balanced():
     assert ctx.profile_name == "balanced"
 
 
-def test_manual_input_lead_override_is_respected():
+def test_removed_lead_override_is_ignored():
     from sky_music.domain.session_context import PlaybackSessionContext
-    # An explicit override wins over the profile base at any FPS.
     ctx = PlaybackSessionContext(
         profile_name="audience-safe",
         fps=144,
         policy_overrides=(("input_lead_us", 10000),),
     )
-    assert ctx.resolve_effective_policy().input_lead_us == 10000
-
-    # Without an override the audience lead stays at its base (no FPS scaling).
-    from sky_music.config import DEFAULT_TIMING_PROFILES
-    base = int(DEFAULT_TIMING_PROFILES["audience_safe"]["input_lead_us"])
-    ctx2 = PlaybackSessionContext(profile_name="audience-safe", fps=144)
-    assert ctx2.resolve_effective_policy().input_lead_us == base
+    assert not hasattr(ctx.resolve_effective_policy(), "input_lead_us")
 

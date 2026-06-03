@@ -218,19 +218,11 @@ class ProgressRenderer:
             pol = self.active_policy
             frame_label = f"{pol.frame_us}us" if pol.frame_us > 0 else "N/A"
             fps_label = f"{pol.fps}fps" if pol.fps > 0 else "N/A"
-            
-            from sky_music.config import load_config, profile_dict_for
-            try:
-                base_dict = profile_dict_for(load_config(), self.profile_name)
-                base_lead = base_dict.get("input_lead_us", 0)
-            except Exception:
-                base_lead = 0
-                
-            lead_info = f"lead base/run: {base_lead}/{pol.input_lead_us}us"
+
             cycle_info = f"cycle: {int(pol.min_hold_us) + int(pol.repeat_release_gap_us)}us"
             hold_info = f"hold/min/gap: {pol.hold_us}/{pol.min_hold_us}/{pol.repeat_release_gap_us}us"
             
-            timing_line = f"{ANSI_GRAY}Timing: {fps_label} ({frame_label}) │ {lead_info} │ {cycle_info} │ {hold_info}{ANSI_RESET}"
+            timing_line = f"{ANSI_GRAY}Timing: {fps_label} ({frame_label}) │ {cycle_info} │ {hold_info}{ANSI_RESET}"
             lines.insert(1, timing_line)
 
         status_box = ansi_box("Status", lines, border_color=status_color)

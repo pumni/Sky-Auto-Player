@@ -99,9 +99,9 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
 @pytest.mark.parametrize(
     ("profile", "fps", "hold", "min_hold", "repeat_gap"),
     [
-        ("local-precise", 30, 41667, 41667, 50000),
-        ("local-precise", 60, 20834, 20834, 25001),
-        ("local-precise", 144, 8680, 8680, 18000),
+        ("local-precise", 30, 36667, 36667, 50000),
+        ("local-precise", 60, 18334, 18334, 25001),
+        ("local-precise", 144, 7639, 7639, 18000),
         ("dense-safe", 30, 41667, 41667, 50000),
         ("dense-safe", 60, 20834, 20834, 25001),
         ("dense-safe", 144, 11000, 11000, 18000),
@@ -137,6 +137,6 @@ def test_high_fps_local_profiles_have_distinct_hold_intents():
 
     # local_precise is pure frame-relative (floor 0) -> sharpest at high FPS; balanced and
     # dense keep a small absolute body floor above it.
-    assert local.hold_us == 8680
+    assert local.hold_us == 7639
     assert dense.hold_us == 11000
     assert balanced.hold_us == 14000

@@ -7,11 +7,9 @@ from typing import Any, Literal, TYPE_CHECKING
 
 from sky_music.config import (
     AppConfig,
-    FrameAlignMode,
     canonical_profile_name,
     display_profile_name,
     load_config,
-    normalize_frame_align,
     profile_dict_for,
     spin_threshold_for_profile,
 )
@@ -33,7 +31,6 @@ class PlaybackSessionContext:
     fps: int | None = None
     scan_code_mode: str = "physical"
     same_key_conflict_policy: ConflictPolicy = "degraded"
-    frame_align: FrameAlignMode | None = None
     policy_overrides: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
@@ -73,13 +70,6 @@ class PlaybackSessionContext:
             else base_policy.same_key_conflict_policy  # type: ignore[assignment]
         )
 
-        frame_align_raw = getattr(args, "frame_align", None)
-        frame_align: FrameAlignMode | None
-        if frame_align_raw is None:
-            frame_align = None
-        else:
-            frame_align = normalize_frame_align(str(frame_align_raw))
-
         overrides: list[tuple[str, Any]] = []
         if getattr(args, "hold_ms", None) is not None:
             overrides.append(("hold_us", args.hold_ms * 1000))
@@ -89,10 +79,6 @@ class PlaybackSessionContext:
             overrides.append(("release_gap_us", args.release_gap_ms * 1000))
         if getattr(args, "repeat_release_gap_ms", None) is not None:
             overrides.append(("repeat_release_gap_us", args.repeat_release_gap_ms * 1000))
-        if getattr(args, "input_lead_ms", None) is not None:
-            overrides.append(("input_lead_us", int(round(args.input_lead_ms * 1000))))
-        if getattr(args, "chord_merge_window_ms", None) is not None:
-            overrides.append(("chord_merge_window_us", args.chord_merge_window_ms * 1000))
         if getattr(args, "focus_restore_grace_ms", None) is not None:
             overrides.append(("focus_restore_grace_us", args.focus_restore_grace_ms * 1000))
 
@@ -102,15 +88,8 @@ class PlaybackSessionContext:
             fps=fps,
             scan_code_mode=str(args.scan_code_mode),
             same_key_conflict_policy=conflict,
-            frame_align=frame_align,
             policy_overrides=tuple(overrides),
         )
-
-    def resolved_frame_align(self, cfg: AppConfig | None = None) -> FrameAlignMode:
-        if self.frame_align is not None:
-            return self.frame_align
-        cfg = cfg or load_config()
-        return cfg.frame_timing.frame_align
 
     def with_profile(self, profile_name: str) -> PlaybackSessionContext:
         return replace(self, profile_name=canonical_profile_name(profile_name))
@@ -139,7 +118,6 @@ class PlaybackSessionContext:
             self.tempo_scale,
             self.scan_code_mode,
             self.same_key_conflict_policy,
-            self.resolved_frame_align(cfg),
             self.policy_overrides,
         )
 
@@ -158,7 +136,7 @@ class PlaybackSessionContext:
         from sky_music.domain.validation import validate_builtin_timing_profile
         profile_fields = {
             "hold_us", "min_hold_us", "release_gap_us",
-            "repeat_release_gap_us", "input_lead_us", "chord_merge_window_us",
+            "repeat_release_gap_us",
             "hold_frames", "hold_floor_us", "min_hold_frames", "min_hold_floor_us",
             "repeat_release_gap_frames", "repeat_release_gap_floor_us",
         }
@@ -193,7 +171,6 @@ class PlaybackSessionContext:
             base,
             fps=effective_self.fps,
             same_key_conflict_policy=effective_self.same_key_conflict_policy,
-            frame_align=effective_self.resolved_frame_align(cfg),
             profile_name=effective_self.profile_name,
             **cfg.frame_timing.as_policy_kwargs(),
         )
@@ -233,13 +210,9 @@ def merge_session_with_overrides(
 def apply_recommendation_to_context(
     session: PlaybackSessionContext,
     recommendation: CalibrationRecommendation,
-    *,
-    apply_input_lead: bool = True,
 ) -> PlaybackSessionContext:
     """Apply telemetry calibration advice to an in-memory session (does not persist config)."""
     override_map = dict(session.policy_overrides)
-    if apply_input_lead:
-        override_map["input_lead_us"] = recommendation.input_lead_us
     return replace(
         session,
         profile_name=canonical_profile_name(recommendation.profile_name),
