@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,7 @@ DRY_RUN_MODE = False
 TEMPO_SCALE = 1.0
 TIMING_PROFILE_NAME = "balanced"
 VERBOSE_HUD = False
+PICKER_UI_MODE = "auto"
 
 def init_debug_log() -> None:
     global DEBUG_LOG_PATH, DEBUG_START_PERF
@@ -900,6 +902,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="check keyboard layout mapping and physically held note keys only",
     )
     diag.add_argument(
+        "--selftest-textual",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    diag.add_argument(
         "--sky-process-names",
         default=sky_process_names_csv(),
         help="comma-separated Sky executable names to match (default: Sky.exe,...)",
@@ -987,11 +994,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show detailed live timing/backend stats during playback (2-line HUD)",
     )
+    disp.add_argument(
+        "--ui",
+        choices=["auto", "textual", "classic"],
+        default="auto",
+        help="song picker backend (default: auto; classic is a compatibility fallback)",
+    )
 
     return parser
 
 def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) -> None:
-    global PLAYBACK_DEBUG, DEBUG_LOG_PATH
+    global PLAYBACK_DEBUG, DEBUG_LOG_PATH, PICKER_UI_MODE
     from sky_music.platform.win32 import inputs
     from sky_music.ui import picker as songs
 
@@ -1007,6 +1020,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     if RUNTIME_STATE.tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
     RUNTIME_STATE.verbose_hud = args.verbose_hud
+    PICKER_UI_MODE = args.ui
 
     if PLAYBACK_DEBUG:
         init_debug_log()
@@ -1027,6 +1041,74 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     if args.theme is not None:
         songs.ACTIVE_THEME = args.theme
         songs.save_theme(args.theme)
+
+def _supports_textual() -> bool:
+    if not sys.stdout.isatty():
+        return False
+    if sys.platform != "win32":
+        return True
+    return bool(os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM") == "vscode")
+
+def _run_textual_selftest() -> int:
+    """Headless frozen-exe smoke test for Textual picker packaging."""
+    import asyncio
+
+    try:
+        from rapidfuzz import fuzz
+        from sky_music.ui.textual_app import app as app_module
+        from sky_music.ui.textual_app.app import SkyPickerApp
+    except Exception as exc:
+        print(f"Textual selftest import failed: {exc}", file=sys.stderr)
+        return 1
+
+    class SelftestMetadataCoordinator:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.closed = False
+
+        def refresh(self, _paths: list[Path]) -> None:
+            return
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def run_picker_probe() -> None:
+        original_get_song_choices = app_module.get_song_choices
+        original_warm_cache = app_module.warm_persistent_metadata_cache
+        original_metadata = app_module.MetadataCoordinator
+        app_module.get_song_choices = lambda force_refresh=False: [
+            Path("songs/Diamonds.json"),
+            Path("songs/Dandelions.json"),
+        ]
+        app_module.warm_persistent_metadata_cache = lambda: 0
+        app_module.MetadataCoordinator = SelftestMetadataCoordinator
+        try:
+            app = SkyPickerApp(theme_name="aurora")
+            async with app.run_test(size=(100, 30)) as pilot:
+                await pilot.pause()
+                table = app.query_one("#songs")
+                if getattr(table, "row_count", 0) != 2:
+                    raise RuntimeError("Textual picker table did not render selftest rows")
+                if not app.screen.has_class("theme-aurora"):
+                    raise RuntimeError("Textual picker did not apply the active theme class")
+                await pilot.press("escape")
+            if app.return_value is not None:
+                raise RuntimeError("Textual picker selftest did not exit cleanly")
+        finally:
+            app_module.get_song_choices = original_get_song_choices
+            app_module.warm_persistent_metadata_cache = original_warm_cache
+            app_module.MetadataCoordinator = original_metadata
+
+    try:
+        score = fuzz.WRatio("diamonds", "dimonds")
+        if score <= 0:
+            raise RuntimeError("rapidfuzz returned an invalid selftest score")
+        asyncio.run(run_picker_probe())
+    except Exception as exc:
+        print(f"Textual selftest failed: {exc}", file=sys.stderr)
+        return 1
+
+    print("Textual selftest OK: rapidfuzz imported and SkyPickerApp mounted headlessly.")
+    return 0
 
 def build_playback_controls(args: argparse.Namespace) -> PlaybackControls:
     if args.disable_hotkeys:
@@ -1081,6 +1163,18 @@ def prompt_song_selection(
         tempo=tempo,
         fps=fps,
     )
+    if PICKER_UI_MODE == "textual" or (PICKER_UI_MODE == "auto" and _supports_textual()):
+        from sky_music.ui.textual_app import choose_song_interactively_textual
+
+        return choose_song_interactively_textual(
+            theme_name=songs.ACTIVE_THEME,
+            initial_profile=session.profile_name,
+            initial_tempo=session.tempo_scale,
+            initial_fps=session.fps,
+            initial_dry_run=dry_run,
+            scan_code_mode=session.scan_code_mode,
+        )
+
     if songs.HAS_PROMPT_TOOLKIT:
         return songs.choose_song_interactively(
             initial_profile=session.profile_name,
@@ -1137,6 +1231,9 @@ def main() -> int:
     user_cfg = load_config()
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    if getattr(args, "selftest_textual", False):
+        return _run_textual_selftest()
 
     apply_config_defaults(args, user_cfg)
     configure_from_args(args, user_cfg)

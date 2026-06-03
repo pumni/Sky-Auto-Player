@@ -7,7 +7,7 @@ June 2026 refactor, and `config.py` / `scheduler_types.py` hold the code.
 > **Update (June 2026 refactor).** Three absolute-µs parameters were removed: `input_lead_us` (no-op),
 > `chord_merge_window_us` (never fired on real songs), `frame_align` (off everywhere). The frame model
 > below is unchanged for the surviving parameters — `hold`, `min_hold`, `repeat_gap` (frame-coupled)
-> and `release_gap` (absolute). `local_precise` now uses `hold/min_hold frames = 1.1` (others 1.25).
+> and `release_gap` (absolute). `local_precise` now uses `hold/min_hold frames = 1.05` (others 1.2).
 
 > History: profiles used to declare absolute microseconds with a *separate* global frame-aware
 > scaling layer (`min_hold = max(base_us, 1.25 × frame)`). The number you wrote was not the
@@ -26,7 +26,7 @@ effective_us(param) = max(ceil(frames(param) × local_frame_us), floor_us(param)
 ```
 
 - `frames` = the **local visibility margin** (physics: ≥ 1 frame). Moves with the profile and
-  is per-profile overridable (hold/min_hold = 1.1 for local_precise / 1.25 for the others, repeat_gap ≈ 1.5).
+  is per-profile overridable (hold/min_hold = 1.05 for local_precise / 1.2 for the others, repeat_gap ≈ 1.5).
 - `floor_us` = the profile's **absolute target / wall** — its real character.
 
 `ceil` is required (matches the historical `math.ceil(frame × ratio)`; `round` drifts ±1 µs).

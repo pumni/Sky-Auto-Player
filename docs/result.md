@@ -3,8 +3,8 @@
 >
 > | Kết quả | Đã làm gì |
 > | --- | --- |
-> | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1 (Phase 3); 3 profile khác giữ 1.25 |
-> | **T2** gap 24ms@60 / 16ms@144 | XÁC NHẬN → giữ `max(1.5×frame, 18000µs)`, khớp đo |
+> | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1, sau đó siết thử nghiệm tiếp xuống 1.05; 3 profile khác giữ 1.2 |
+> | **T2** gap 24ms@60 / 16ms@144 | XÁC NHẬN → local_precise giữ `1.5×frame`, siết high-FPS fixed floor thử nghiệm xuống `17000µs`; profile khác còn `18000µs` |
 > | **T3** jitter lưỡng cực/phase-dependent | ĐÍNH CHÍNH (không phải sàn 12–13ms cố định) → principles A.10 |
 > | **T4** floor thấp ≈ floor cao remote | sàn rộng chưa chứng minh là cần (mạng tốt) |
 > | **O1** input_lead 0/8/20 offset như nhau | KẾT LUẬN no-op kiến trúc → **ĐÃ XOÁ** input_lead (Phase 1) |
@@ -21,7 +21,7 @@
 
 144fps 7-15/15 6-(mất từ 3-4 nốt)
 
-### T2 — Same-key repeat gap floor = max(~1.5 frame, ~18 ms)
+### T2 — Same-key repeat gap floor = max(~1.5 frame, ~17-18 ms)
 
 | FPS | 2 bản pass 10/10 nhỏ nhất | Bắt đầu không ổn định | Nhận xét                                                                          |
 | --: | ------------------------: | --------------------: | --------------------------------------------------------------------------------- |
@@ -33,7 +33,7 @@
 |  60 | 16.67 ms |  25.00 ms | 18 ms | **25 ms** |
 | 144 |  6.94 ms |  10.42 ms | 18 ms | **18 ms** |
 
-với 1.5 frames + 18_000 µs floor thì nó hơi bảo thủ hơn mức quan sát được ở 144 FPS, nhưng đúng hướng vì 14 ms không ổn định và 60 FPS cần khoảng 24–25 ms để đạt 10/10 đáng tin cậy. ( nên xem xét lại chuẩn)
+với 1.5 frames + 18_000 µs floor thì nó hơi bảo thủ hơn mức quan sát được ở 144 FPS, nhưng đúng hướng vì 14 ms không ổn định và 60 FPS cần khoảng 24–25 ms để đạt 10/10 đáng tin cậy. `local_precise` hiện được siết thử nghiệm xuống 17_000 µs để kiểm vùng high-FPS sát hơn; cần chạy lại T2 @144 trước khi coi là floor đã chốt.
 
 ### T3 — Onset cadence is a fixed ~60 Hz tick (input lead must not scale with render FPS ≥60)
 

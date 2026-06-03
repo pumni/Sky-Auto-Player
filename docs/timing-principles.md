@@ -500,10 +500,9 @@ correct in principle, not merely a useful heuristic.
 
 Reliable key-down capture requires `hold ≥ 1 frame`. No fixed-millisecond component
 was observed (7 ms suffices at 144 FPS). The measured reliable point is ≈0.96–1.01 frame at
-30/60/144 (result.md T1). Encoded standard: `min_visible_hold_frames = 1.25` (one frame plus
-~25% phase margin). **Update (Phase 3, June 2026):** `local_precise` alone lowers this to **1.1**
-(sharper by ~2.5 ms @60, still above the measured 16 ms reliable floor); the global default and the
-other three profiles keep 1.25.
+30/60/144 (result.md T1). Encoded standard: built-ins keep a margin above one frame. **Update
+(June 2026):** `local_precise` is intentionally the sharp experimental local profile and now uses
+**1.05** frames; the other profiles keep wider margins.
 
 ### A.4 Result 3 — Same-key release-gap floor = max(~1.4 frame, ~17 ms fixed)
 
@@ -520,7 +519,8 @@ The floor is **neither constant in milliseconds nor constant in frames**. It fit
 60 Hz, independent of render FPS — hypothesised, not proven). At a gap of exactly one
 frame, reliability is only ~80% (phase-dependent), so margin is mandatory.
 
-Encoded standard: `repeat_release_gap ≥ max(1.5 × frame, 18000 µs)`. (The previous
+Encoded standard: `repeat_release_gap ≥ max(1.5 × frame, ~17000–18000 µs)`. `local_precise` uses
+17000 µs as a sharper high-FPS trial; the other profiles keep 18000 µs. (The previous
 `0.5 × frame` with no fixed floor was too low on both counts and dropped fast same-key
 repeats.)
 
@@ -538,10 +538,10 @@ licence for arbitrarily fast repeated notes.
 - Frame-coupled values materialise as `max(ceil(frames × frame_us), floor_us)` whenever
   `game_fps > 0`; when `game_fps = 0` the raw `*_unframed_us` values are kept (the intentional
   expert/experiment escape hatch).
-- The same-key gap uses `repeat_release_gap_frames = 1.5` + `repeat_release_gap_floor_us = 18000`
-  on **all** profiles, so they converge on this floor at a given FPS (30 → 50000 µs, 60 → 25001 µs,
-  144 → 18000 µs) and differentiate through **hold/min_hold floors and release_gap** instead (input
-  lead and chord merge were removed June 2026).
+- The same-key gap uses `repeat_release_gap_frames = 1.5` on **all** profiles. `local_precise`
+  uses a 17000 µs fixed floor, while the other profiles keep 18000 µs (30 → 50000 µs, 60 → 25001 µs;
+  at 144 FPS local_precise → 17000 µs, others → 18000 µs). Profiles otherwise differentiate through
+  **hold/min_hold floors and release_gap** (input lead and chord merge were removed June 2026).
 
 ### A.7 Measurement pitfalls
 

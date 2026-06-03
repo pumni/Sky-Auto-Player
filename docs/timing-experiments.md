@@ -178,9 +178,8 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
   reliable 7 ms (rớt 6) → sàn thật ≈ **0.96–1.01 frame** ở cả ba FPS (tuyến tính sạch). Hold dưới mép
   đăng ký theo xác suất.
 - **Kết luận:** game đọc **state** theo frame, sàn visibility = **1.0 frame**. Code dùng
-  `min_visible_hold_frames = 1.25` (= 1 frame + ~25% biên). **ĐÃ ÁP DỤNG (Phase 3):** riêng
-  `local_precise` hạ ratio xuống **1.1** (sắc hơn ~2.5 ms @60, vẫn trên sàn đo 16 ms); 3 profile khác
-  giữ 1.25.
+  frame margin theo profile. **ĐÃ ÁP DỤNG:** `local_precise` đã được siết thử nghiệm xuống
+  **1.05** (vẫn trên sàn đo ~1.0 frame); 3 profile khác giữ margin rộng hơn.
 
 ### T2 — Same-key repeat gap floor = max(~1.5 frame, ~18 ms)
 
@@ -192,8 +191,8 @@ Mỗi chân lý dưới đây đã được mã hóa trong `config.py`/`FrameTim
 - **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @60 reliable **24 ms** (1.44 frame), @144 reliable **16 ms** (2.3
   frame). Ở 144 gap tin cậy >> 1.5 frame → bị **tường thời gian cố định ~16–18 ms** chi phối (= chu kỳ
   tick ~60 Hz, nối với T3), không phải bội số frame.
-- **Kết luận:** `gap ≥ max(1.5×frame, 18000 µs)` → khớp đo @60 (model 25001 ≈ đo 24), hơi bảo thủ @144
-  (model 18000 vs đo 16). Giữ `repeat_release_gap_frames = 1.5`, `repeat_release_gap_floor_us = 18000`.
+- **Kết luận:** `gap ≥ max(1.5×frame, ~17–18 ms)` → khớp đo @60 (model 25001 ≈ đo 24), hơi bảo thủ @144.
+  `local_precise` hiện thử `repeat_release_gap_floor_us = 17000`; các profile khác giữ 18000.
 
 ### T3 — Onset cadence is a fixed ~60 Hz tick (game behavior, player không sửa được)
 
@@ -256,7 +255,7 @@ Phần này thay các con số đang đoán bằng số đo. **Trạng thái sau
 > còn lý do tồn tại của audience_safe; cần O3 để chứng minh sàn nào thật sự cần.
 
 - **Vì sao mở:** sàn audience (hold 20000 / repeat 24000) là ngoại suy; `local_precise` (visibility
-  1.1 frame / repeat 18000) **đôi khi mất nốt** remote. Ranh giới chưa đo.
+  1.05 frame / repeat 17000 floor) **đôi khi mất nốt** remote. Ranh giới chưa đo.
 - **Chuẩn bị:** máy B thu; `TEST_metro_same_200` + `TEST_repeat_staircase`.
 - **Các bước:** giữ các tham số khác = local, nâng RIÊNG từng cái:
   - hold: `--hold-ms 0 → 8 → 12 → 16 → 20` (kèm `--min-hold-ms` tương ứng)
@@ -274,7 +273,7 @@ Phần này thay các con số đang đoán bằng số đo. **Trạng thái sau
   **giống hệt nhau** (cùng = `source_time`, không còn lead/chord làm khác). Vậy audience **không thể**
   "lạc nhịp tương đối" so với local từ phía player.
 - **Cái còn lại có thể gây "lỏng":**
-  1. **hold dài hơn** của audience (20000 vs 1.1f) → key chồng lấn nhiều hơn = cảm giác "mushy", dù
+  1. **hold dài hơn** của audience (20000 vs 1.05f) → key chồng lấn nhiều hơn = cảm giác "mushy", dù
      KHÔNG dịch onset;
   2. **trễ + jitter mạng** + bucket-jump ~20 ms của game (T3) — run-to-run, không phải local-vs-audience;
 - **Còn cần đo (nếu quay lại nhánh remote):** A/B một-biến giữa local và audience, giờ chỉ còn **2 cần

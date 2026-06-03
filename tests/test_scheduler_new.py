@@ -371,6 +371,7 @@ def test_timing_profile_validators():
     # Verify all built-in profiles pass validate_builtin_timing_profile
     for name, p in DEFAULT_TIMING_PROFILES.items():
         validate_builtin_timing_profile(name, p, selected_fps=60)
+    validate_timing_profile(DEFAULT_TIMING_PROFILES["local_precise"], fps=144)
 
     # Test failure case
     unsafe = {

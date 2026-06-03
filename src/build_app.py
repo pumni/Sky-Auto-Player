@@ -1,15 +1,33 @@
+import argparse
 import subprocess
 import shutil
 import sys
 from pathlib import Path
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build the Sky Player executable.")
+    parser.add_argument(
+        "--textual-proof",
+        action="store_true",
+        help="build the Phase 0 Textual proof app instead of the playback CLI",
+    )
+    parser.add_argument(
+        "--collect-textual",
+        action="store_true",
+        help="include PyInstaller collect-all flags for textual and rich (default for release builds)",
+    )
+    return parser
+
+def main() -> None:
     if sys.platform == 'win32':
         try:
             sys.stdout.reconfigure(encoding='utf-8')
             sys.stderr.reconfigure(encoding='utf-8')
         except Exception:
             pass
+
+    args = build_arg_parser().parse_args()
+    entrypoint = "src/sky_music/ui/textual_app/app.py" if args.textual_proof else "src/main.py"
 
     print("[+] Đang dọn dẹp các thư mục build cũ...")
     for folder in ["build", "dist"]:
@@ -25,8 +43,20 @@ def main():
         "--console",
         "--name", "Sky-Player",
         "--paths", "./src",
-        "src/main.py"
     ]
+    if args.collect_textual or not args.textual_proof:
+        cmd.extend(["--collect-all", "textual", "--collect-all", "rich"])
+        cmd.extend(
+            [
+                "--hidden-import",
+                "sky_music.ui.textual_app",
+                "--hidden-import",
+                "sky_music.ui.textual_app.app",
+                "--hidden-import",
+                "sky_music.ui.textual_app.workers",
+            ]
+        )
+    cmd.append(entrypoint)
     subprocess.run(cmd, check=True)
     
     print("[+] Đang sao chép thư mục bài hát (songs) và tài liệu hướng dẫn...")

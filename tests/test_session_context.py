@@ -100,8 +100,8 @@ def test_frame_timing_config_overrides_ratios():
     policy = session.resolve_effective_policy(cfg)
     # Built-in frame-model profiles declare their own frame margins; global frame_timing
     # ratios are retained only for legacy _us-only policies.
-    assert policy.hold_us == 36_667
-    assert policy.min_hold_us == 36_667
+    assert policy.hold_us == 35_000
+    assert policy.min_hold_us == 35_000
 
 
 def test_apply_recommendation_to_context_updates_session():

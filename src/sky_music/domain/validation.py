@@ -312,7 +312,8 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
             f"60 FPS profile has too little margin: {cycle_us:.0f}us < 18000us"
         )
 
-    if min_hold_us < 10_000:
+    frame_model_min_hold = _has_frame_model(profile, "min_hold") and "min_hold_us" not in profile
+    if min_hold_us < 10_000 and not frame_model_min_hold:
         raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
 
     if repeat_release_gap_us < 6_000:

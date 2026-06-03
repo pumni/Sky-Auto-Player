@@ -7,6 +7,8 @@ requires-python = ">=3.14"
 dependencies = [
     "prompt-toolkit>=3.0.52",
     "pyinstaller>=6.0.0",
+    "rapidfuzz>=3.14.5",
+    "textual>=8.2.7",
 ]
 
 [build-system]
@@ -16,6 +18,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = ["main", "songs", "ui", "inputs", "scheduler", "build_app"]
+
+[dependency-groups]
+dev = [
+    "pytest-textual-snapshot>=1.1.0",
+]
 
 [project.scripts]
 play = "main:main"

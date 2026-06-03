@@ -296,7 +296,7 @@ def test_calibrate_hold_uses_frame_timing_policy():
     )
     rec = calibrate_profile(inp)
     assert rec.profile_name == "local-precise"
-    assert rec.hold_us == 36_667
+    assert rec.hold_us == 35_000
 
 
 def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):

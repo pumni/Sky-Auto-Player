@@ -42,6 +42,75 @@ def test_cli_theme_argument():
     args = parser.parse_args(["--theme", "cyberpunk"])
     assert args.theme == "cyberpunk"
 
+def test_cli_ui_argument_defaults_to_auto():
+    parser = main.build_arg_parser()
+    args = parser.parse_args([])
+    assert args.ui == "auto"
+    args = parser.parse_args(["--ui", "textual"])
+    assert args.ui == "textual"
+
+
+class DummyStdout:
+    def __init__(self, is_tty: bool) -> None:
+        self.is_tty = is_tty
+
+    def isatty(self) -> bool:
+        return self.is_tty
+
+
+def test_supports_textual_requires_tty(monkeypatch):
+    monkeypatch.setattr(main.sys, "stdout", DummyStdout(False))
+    assert main._supports_textual() is False
+
+
+def test_supports_textual_on_windows_terminal(monkeypatch):
+    monkeypatch.setattr(main.sys, "stdout", DummyStdout(True))
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    monkeypatch.setenv("WT_SESSION", "test-session")
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    assert main._supports_textual() is True
+
+
+def test_supports_textual_falls_back_on_weak_windows_terminal(monkeypatch):
+    monkeypatch.setattr(main.sys, "stdout", DummyStdout(True))
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    monkeypatch.delenv("WT_SESSION", raising=False)
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    assert main._supports_textual() is False
+
+
+def test_textual_selftest_argument_is_hidden_and_parses():
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--selftest-textual"])
+    assert args.selftest_textual is True
+    assert "--selftest-textual" not in parser.format_help()
+
+
+def test_textual_selftest_runs_headlessly():
+    assert main._run_textual_selftest() == 0
+
+def test_prompt_song_selection_routes_to_textual(monkeypatch):
+    from sky_music.ui import textual_app
+    from sky_music.ui.picker import SongPickerResult
+
+    expected = SongPickerResult(
+        song_path=Path("songs/Alpha.json"),
+        action="dry_run",
+        profile_name="balanced",
+        tempo_scale=1.0,
+        fps=None,
+    )
+
+    def fake_textual_picker(**kwargs: object) -> SongPickerResult:
+        assert kwargs["initial_profile"] == "balanced"
+        assert kwargs["initial_dry_run"] is True
+        return expected
+
+    monkeypatch.setattr(main, "PICKER_UI_MODE", "textual")
+    monkeypatch.setattr(textual_app, "choose_song_interactively_textual", fake_textual_picker)
+
+    assert main.prompt_song_selection(dry_run=True) == expected
+
 def test_cli_repeat_argument():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--repeat", "5"])
