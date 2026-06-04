@@ -73,12 +73,11 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         # Reference profile = the empirically measured floors themselves (Appendix A): hold is
         # purely frame-relative (visibility = 1 frame, no fixed-ms component), so hold_floor =
-        # min_hold_floor = 0 and the 1.05-frame term governs at every FPS. Sharpest profile;
-        # single notes at high FPS are short.
-        "hold_frames": 1.05,
+        # min_hold_floor = 0
+        "hold_frames": 1,
         "hold_floor_us": 0,
         "hold_unframed_us": 22000,
-        "min_hold_frames": 1.05,
+        "min_hold_frames": 1,
         "min_hold_floor_us": 0,
         "min_hold_unframed_us": 22000,
         "spin_threshold_us": 800,

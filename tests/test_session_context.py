@@ -31,8 +31,8 @@ def test_balanced_at_30fps_scales_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
     assert policy.fps == 30
-    assert policy.frame_us == 33_333
-    assert policy.hold_us == 40_000
+    assert policy.frame_us == 33_334
+    assert policy.hold_us == 40_001
 
 
 def test_with_profile_preserves_fps():
@@ -78,8 +78,9 @@ def test_metadata_uses_session_fps_for_schedule():
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    # Visibility floor (Exp1) = max(base 14000, 1.2*frame=40000) = 40000 at 30fps.
-    assert policy.min_hold_us == 40_000
+    # 30fps frame = ceil(1e6/30) = 33334. Visibility floor (Exp1) = max(base 14000,
+    # ceil(1.2*frame)=40001) = 40001 at 30fps.
+    assert policy.min_hold_us == 40_001
 
 
 def test_frame_timing_config_overrides_ratios():
@@ -91,10 +92,11 @@ def test_frame_timing_config_overrides_ratios():
     )
     session = PlaybackSessionContext(profile_name="local-precise", fps=30)
     policy = session.resolve_effective_policy(cfg)
-    # Built-in frame-model profiles declare their own frame margins; global frame_timing
-    # ratios are retained only for legacy _us-only policies.
-    assert policy.hold_us == 35_000
-    assert policy.min_hold_us == 35_000
+    # Built-in frame-model profiles declare their own frame margins (local_precise = 1.0 frame);
+    # global frame_timing ratios are retained only for legacy _us-only policies. 30fps frame =
+    # ceil(1e6/30) = 33334.
+    assert policy.hold_us == 33_334
+    assert policy.min_hold_us == 33_334
 
 
 def test_apply_recommendation_to_context_updates_session():

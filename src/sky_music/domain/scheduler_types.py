@@ -156,7 +156,12 @@ class FrameTimingPolicy:
         profile_name: str | None = None,
     ) -> "FrameTimingPolicy":
         if fps is not None and fps > 0:
-            frame_us = Microseconds(round(1_000_000 / fps))
+            # Round the frame period UP: a visibility/safety floor must never be shorter than a
+            # real frame. round() truncates (e.g. 1e6/144 = 6944.44 -> 6944, which is below a real
+            # frame), so a 1.0-frame floor would silently drop into the sub-frame probabilistic
+            # zone. ceil() keeps `ceil(frames * frame_us) >= frames * real_frame`. Must match the
+            # identical computation in domain/validation.py:_frame_coupled_us.
+            frame_us = Microseconds(math.ceil(1_000_000 / fps))
             hold_frames = policy.hold_frames if policy.hold_uses_frame_model else min_visible_hold_frames
             min_hold_frames = (
                 policy.min_hold_frames

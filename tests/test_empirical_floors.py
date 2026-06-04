@@ -29,7 +29,7 @@ def test_frame_timing_defaults_encode_empirical_standard():
 
 @pytest.mark.parametrize(
     ("fps", "expected"),
-    [(30, 41667), (60, 20834), (144, 8680)],
+    [(30, 41668), (60, 20834), (144, 8682)],
 )
 def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
     base = TimingPolicy.from_dict(
@@ -79,16 +79,16 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("profile", "fps", "hold", "min_hold"),
     [
-        ("local-precise", 30, 35000, 35000),
-        ("local-precise", 60, 17501, 17501),
-        ("local-precise", 144, 7292, 7292),
-        ("dense-safe", 30, 40000, 40000),
+        ("local-precise", 30, 33334, 33334),
+        ("local-precise", 60, 16667, 16667),
+        ("local-precise", 144, 6945, 6945),
+        ("dense-safe", 30, 40001, 40001),
         ("dense-safe", 60, 20001, 20001),
         ("dense-safe", 144, 11000, 11000),
-        ("balanced", 30, 40000, 40000),
+        ("balanced", 30, 40001, 40001),
         ("balanced", 60, 20001, 20001),
         ("balanced", 144, 14000, 14000),
-        ("audience-safe", 30, 40000, 40000),
+        ("audience-safe", 30, 40001, 40001),
         ("audience-safe", 60, 20001, 20001),
         ("audience-safe", 144, 18000, 18000),
     ],
@@ -117,6 +117,6 @@ def test_high_fps_local_profiles_have_distinct_hold_intents():
 
     # local_precise is pure frame-relative (floor 0) -> sharpest at high FPS; balanced and
     # dense keep a small absolute body floor above it.
-    assert local.hold_us == 7292
+    assert local.hold_us == 6945
     assert dense.hold_us == 11000
     assert balanced.hold_us == 14000

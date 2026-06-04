@@ -187,7 +187,9 @@ def _frame_coupled_us(
     if legacy_key in profile and _has_frame_model(profile, stem):
         return int(profile[legacy_key])
     if _has_frame_model(profile, stem):
-        frame_us = round(1_000_000 / fps)
+        # ceil() to mirror FrameTimingPolicy.from_timing_policy materialisation exactly; a floor
+        # must round the frame period up so it never undershoots a real frame.
+        frame_us = math.ceil(1_000_000 / fps)
         frames = float(profile.get(f"{stem}_frames", default_frames))
         floor = int(profile.get(f"{stem}_floor_us", profile.get(legacy_key, 0)))
         return max(math.ceil(frames * frame_us), floor)

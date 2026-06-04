@@ -299,8 +299,9 @@ def test_analyzer_detects_dense_clusters():
 def test_min_hold_scales_at_30fps():
     base = TimingPolicy.from_dict({"min_hold_us": 16000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    # 30fps = 33,333us. Visibility floor (Exp1) = max(base 16000, 1.25*frame=41667) = 41667.
-    assert frame_policy.min_hold_us == 41667
+    # 30fps frame = ceil(1e6/30) = 33334us. Visibility floor (Exp1) = max(base 16000,
+    # ceil(1.25*frame)=41668) = 41668.
+    assert frame_policy.min_hold_us == 41668
 
 def test_strict_policy_rejects_impossible_repeat():
     song = Song(
@@ -466,14 +467,14 @@ def test_min_hold_frame_floor_clamp():
     base = TimingPolicy.from_dict({
         "min_hold_us": 1000,
     })
-    # at 30fps (low-fps upscale triggers), frame_us = 33333
+    # at 30fps (low-fps upscale triggers), frame_us = ceil(1e6/30) = 33334
     p = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert p.min_hold_us == 41667
+    assert p.min_hold_us == 41668
 
     p_custom = FrameTimingPolicy.from_timing_policy(
         base, fps=30, min_hold_min_frame_ratio=1.05
     )
-    assert p_custom.min_hold_us == 35000
+    assert p_custom.min_hold_us == 35001
 
 def test_timing_profile_validators():
     from sky_music.domain.validation import (
