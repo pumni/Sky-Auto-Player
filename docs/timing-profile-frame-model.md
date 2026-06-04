@@ -1,107 +1,78 @@
-# Frame-Relative Timing Model (reference)
+# Pure Frame-Relative Timing Model
 
-**Status:** Implemented. This is the live model; `timing-principles.md` Appendix A holds the
-evidence, `timing-experiments.md` holds the experiments, `timing-architecture-audit.md` records the
-June 2026 refactor, and `config.py` / `scheduler_types.py` hold the code.
+**Status:** Implemented June 2026. This is the live timing-profile reference.
 
-> **Update (June 2026 refactor).** Four timing knobs were removed: `input_lead_us` (no-op),
-> `chord_merge_window_us` (never fired on real songs), `frame_align` (off everywhere), and
-> `release_gap_us` (near-zero corpus binding and misleading profile semantics), and
-> `repeat_release_gap` (mechanism candidate, but not a reachable production profile lever in the
-> audited corpus/model). The live code model now represents `hold` and `min_hold` only.
-> `local_precise` uses `hold/min_hold frames = 1.0` — exactly one frame, the measured visibility
-> floor — while the other profiles keep `1.2`.
+Related evidence and decisions:
 
-> History: profiles used to declare absolute microseconds with a *separate* global frame-aware
-> scaling layer (`min_hold = max(base_us, 1.25 × frame)`). The number you wrote was not the
-> number that ran, and one intent lived in two places. That two-layer model was replaced by the
-> single per-profile model below (a behaviour-preserving representation change, verified 0
-> mismatch at 30/60/144 at the time; floors were retuned afterwards). The migration scaffolding
-> is in git history and `test_empirical_floors.py`.
+- `timing-principles.md` Appendix A: in-game measurements and historical context.
+- `timing-experiments.md`: experiments and A/B observations.
+- `floor-removal-three-profile-plan.md`: accepted floor-removal decision and target baselines.
 
 ## 1. Core model
 
-Every frame-coupled duration is the **larger of a local-visibility frame term and an absolute
-floor**, declared together per profile:
+When FPS is known and positive, every built-in hold is materialised only from its declared frame
+ratio:
 
-```
-effective_us(param) = max(ceil(frames(param) × local_frame_us), floor_us(param))
-```
-
-- `frames` = the **local visibility margin** (physics: ≥ 1 frame). Moves with the profile and
-  is per-profile overridable (hold/min_hold = 1.0 for local_precise / 1.2 for the others).
-- `floor_us` = the profile's **absolute target / wall** — its real character.
-
-Rounding is **`ceil` in both places**, and this is a safety requirement: a visibility floor must
-never come out *shorter* than a real frame. The frame period itself is `ceil(1_000_000 / fps)` (not
-`round`, which truncated e.g. `1e6/144 = 6944.44 → 6944`, putting a 1.0-frame floor *below* a real
-frame), and the outer `ceil(frames × frame_us)` matches the historical `math.ceil`. Both
-`FrameTimingPolicy.from_timing_policy` and `validation._frame_coupled_us` must use the identical
-computation.
-
-## 2. Why floors are absolute (local vs remote)
-
-- **Local visibility** must survive the *local* client's per-frame sampling → the frame term.
-- **Online survivability** depends on the *remote* client's frame sampling + network, which are
-  independent of local FPS → an absolute µs floor. A 144 FPS local player must still emit
-  durations a ~60 FPS remote listener can capture.
-- The ~60 Hz onset cadence (Appendix A) is an absolute-time effect of the same kind — it does
-  **not** scale with render FPS.
-
-So `floor_us` is where a profile says "regardless of my local FPS, never go below this."
-
-## 3. Parameter taxonomy
-
-| Parameter             | Representation                                                              |
-| --------------------- | -------------------------------------------------------------------------- |
-| `hold`                | `hold_frames` + `hold_floor_us`                                            |
-| `min_hold`            | `min_hold_frames` + `min_hold_floor_us`                                    |
-| `spin_threshold`      | `spin_threshold_us`                                                        |
-| `focus_restore_grace` | `focus_restore_grace_us`                                                   |
-
-`*_unframed_us` keys are the conservative fallback used only on the no-FPS / `game_fps = 0`
-path (frame-aware disabled).
-
-`spin_threshold` and `focus_restore_grace` are engine infrastructure and should converge to global
-policy values after O10.5/O10.6, not profile timing semantics.
-
-## 4. Resolution pipeline (single layer)
-
-```
-frame_us = ceil(1_000_000 / fps)        # fps > 0; fps == 0/None disables frame-aware sizing
-
-hold_us       = max(ceil(hold_frames     * frame_us), hold_floor_us)
-min_hold_us   = max(ceil(min_hold_frames * frame_us), min_hold_floor_us)
-
-spin / grace          = as declared
-# then apply absolute-µs overrides (§5)
+```text
+frame_us = ceil(1_000_000 / fps)
+effective_us = ceil(frames * frame_us)
 ```
 
-## 5. Override / escape-hatch layer (absolute µs)
+There is no absolute floor and no `max(frame_term, floor_us)` step. The frame period and the final
+duration are both rounded up so a declared 1.0-frame hold never becomes shorter than a real frame.
 
-Applied **after** materialisation: CLI flags (`--hold-ms`, `--min-hold-ms`, …), telemetry
-calibration, and `config.json` `_us` keys. Clean split: **profiles = declarative intent;
-`_us` = absolute control.** Appendix-A probing keeps working via `--hold-ms` / `--min-hold-ms`.
-User overrides compose onto the built-in via a deep overlay (override one field, keep the rest).
+When FPS is `None` or disabled, the profile uses `*_unframed_us`. Explicit `_us` values supplied by
+CLI or config remain absolute overrides and are applied after frame materialisation.
 
-## 6. Validation invariants
+## 2. Hold unification
 
-- `0 < min_hold_frames <= hold_frames` and `min_hold_floor_us <= hold_floor_us`
-  → materialised `min_hold_us <= hold_us` at every FPS.
-- `min_hold_frames >= 1.0` → ≥ one visibility frame at any FPS (makes the 60 FPS cycle rule
-  structural rather than a separate check).
-- `*_floor_us >= 0`; `ABSOLUTE_MIN_HOLD_US` backstop.
-- `validate_audience_safe_profile` enforces the audience floor thresholds (see `validation.py`).
+Built-ins declare only `min_hold_frames` and `min_hold_unframed_us`. Normal `hold` derives from
+`min_hold`, so built-in effective policies satisfy:
 
-## 7. Current floors
+```text
+hold_us == min_hold_us
+```
 
-The authoritative per-profile floors live in `config.py::DEFAULT_TIMING_PROFILES` and are
-documented with rationale in `timing-principles.md` Appendix A.9. `test_empirical_floors.py`
-pins the materialised values at 30/60/144 as a regression. Summary of intent:
+An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape hatch and may separate
+normal hold from minimum compressed hold.
 
-| profile        | hold floor | notes                                                       |
-| -------------- | ---------- | ----------------------------------------------------------- |
-| local_precise  | 0          | pure frame-relative = the measured visibility model; sharpest |
-| dense_safe     | 11000      | small body floor for dense local playback                   |
-| balanced       | 14000      | default; a little extra body above local                    |
-| audience_safe  | 18000      | small remote margin above the registration floor (EXP-4)    |
+## 3. Current profiles
+
+| Profile | `min_hold_frames` | `min_hold_unframed_us` | Intent |
+| --- | ---: | ---: | --- |
+| `local_precise` | 1.0 | 22000 | Sharpest local visibility profile |
+| `audience_safe` | 1.05 | 18000 | Audience-tested sharp profile |
+| `balanced` | 1.2 | 17000 | General default with more local-frame body |
+
+`dense_safe` was removed. Fast repeat or schedule-stress recommendations now select
+`local_precise` together with tempo reduction.
+
+## 4. Validation invariants
+
+- `min_hold_frames >= 1.0`.
+- If explicitly declared, `0 < min_hold_frames <= hold_frames`.
+- Materialised `min_hold_us` must be greater than the real frame duration.
+- Explicit hold/min-hold ordering remains `0 < min_hold_us <= hold_us`.
+- Unknown legacy keys, including former `*_floor_us` keys, are ignored.
+
+There is no audience-specific absolute-duration validator. `audience_safe` is validated by the same
+frame-relative rules as the other profiles.
+
+## 5. Accepted audience risk
+
+Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS,
+`audience_safe` materialises to 7293 us, which may be missed by a remote client sampling around
+60 FPS. This is intentional and must not be silently counteracted by introducing another absolute
+wall under a different name.
+
+## 6. Regression baselines
+
+The required `hold_us == min_hold_us` values are:
+
+| Profile | None | 30 FPS | 60 FPS | 144 FPS |
+| --- | ---: | ---: | ---: | ---: |
+| `local_precise` | 22000 | 33334 | 16667 | 6945 |
+| `audience_safe` | 18000 | 35001 | 17501 | 7293 |
+| `balanced` | 17000 | 40001 | 20001 | 8334 |
+
+Golden schedules use `TimingPolicy.from_dict({})` and must not be regenerated for this change.

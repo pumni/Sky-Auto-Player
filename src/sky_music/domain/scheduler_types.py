@@ -31,9 +31,7 @@ class TimingPolicy:
 
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
     hold_frames: float = 1.25
-    hold_floor_us: Microseconds | None = None
     min_hold_frames: float = 1.25
-    min_hold_floor_us: Microseconds | None = None
     hold_override_us: Microseconds | None = None
     min_hold_override_us: Microseconds | None = None
     hold_uses_frame_model: bool = False
@@ -43,6 +41,10 @@ class TimingPolicy:
     def from_dict(cls, p_dict: dict, **kwargs) -> "TimingPolicy":
         from sky_music.config import DEFAULT_TIMING_PROFILES
         base = DEFAULT_TIMING_PROFILES["balanced"]
+        declares_hold = any(
+            key in p_dict
+            for key in ("hold_us", "hold_frames", "hold_unframed_us")
+        )
 
         def int_value(key: str, default: int) -> int:
             return int(p_dict.get(key, default))
@@ -54,33 +56,48 @@ class TimingPolicy:
             *,
             value_key: str,
             frames_key: str,
-            floor_key: str,
             unframed_key: str,
             default_frames: float,
-        ) -> tuple[Microseconds, float, Microseconds, Microseconds | None, bool]:
-            base_value = int(base.get(floor_key, base.get(value_key, 0)))
+            fallback_value: int | None = None,
+            fallback_frames: float | None = None,
+        ) -> tuple[Microseconds, float, Microseconds | None, bool]:
+            base_value = int(base.get(value_key, base.get(unframed_key, 0)))
             base_unframed_value = int(base.get(unframed_key, base_value))
-            has_frame_model = frames_key in p_dict or floor_key in p_dict
-            floor = int_value(floor_key, base_value) if has_frame_model else int_value(value_key, base_value)
-            default_value = floor if has_frame_model else base_unframed_value
+            has_frame_model = frames_key in p_dict or (
+                fallback_frames is not None and value_key in p_dict
+            )
+            default_value = (
+                fallback_value if fallback_value is not None else base_unframed_value
+            )
             value = int_value(value_key, int_value(unframed_key, default_value))
             override = Microseconds(value) if has_frame_model and value_key in p_dict else None
-            return Microseconds(value), float_value(frames_key, default_frames), Microseconds(floor), override, has_frame_model
+            frames = float_value(
+                frames_key,
+                fallback_frames if fallback_frames is not None else default_frames,
+            )
+            return Microseconds(value), frames, override, has_frame_model
 
-        hold_us, hold_frames, hold_floor_us, hold_override_us, hold_uses_frame_model = frame_coupled(
-            value_key="hold_us",
-            frames_key="hold_frames",
-            floor_key="hold_floor_us",
-            unframed_key="hold_unframed_us",
-            default_frames=1.25,
-        )
-        min_hold_us, min_hold_frames, min_hold_floor_us, min_hold_override_us, min_hold_uses_frame_model = frame_coupled(
+        min_hold_us, min_hold_frames, min_hold_override_us, min_hold_uses_frame_model = frame_coupled(
             value_key="min_hold_us",
             frames_key="min_hold_frames",
-            floor_key="min_hold_floor_us",
             unframed_key="min_hold_unframed_us",
             default_frames=1.25,
         )
+
+        if declares_hold:
+            hold_us, hold_frames, hold_override_us, hold_uses_frame_model = frame_coupled(
+                value_key="hold_us",
+                frames_key="hold_frames",
+                unframed_key="hold_unframed_us",
+                default_frames=1.25,
+                fallback_value=int(min_hold_us),
+                fallback_frames=min_hold_frames,
+            )
+        else:
+            hold_us = min_hold_us
+            hold_frames = min_hold_frames
+            hold_override_us = min_hold_override_us
+            hold_uses_frame_model = min_hold_uses_frame_model
         
         return cls(
             hold_us=hold_us,
@@ -92,9 +109,7 @@ class TimingPolicy:
                 else "degraded"
             ),
             hold_frames=hold_frames,
-            hold_floor_us=hold_floor_us,
             min_hold_frames=min_hold_frames,
-            min_hold_floor_us=min_hold_floor_us,
             hold_override_us=hold_override_us,
             min_hold_override_us=min_hold_override_us,
             hold_uses_frame_model=hold_uses_frame_model,
@@ -118,10 +133,6 @@ class TimingPolicy:
         return cls.from_profile_name("audience_safe")
 
     @classmethod
-    def dense_safe(cls) -> "TimingPolicy":
-        return cls.from_profile_name("dense_safe")
-
-    @classmethod
     def balanced(cls) -> "TimingPolicy":
         return cls.from_profile_name("balanced")
 
@@ -136,13 +147,12 @@ class FrameTimingPolicy:
 
     focus_restore_grace_us: Microseconds
 
-    min_visible_hold_frames: float = 1.25
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
     profile_name: str | None = None
 
     @staticmethod
-    def materialise_frame_floor(frames: float, floor_us: int, frame_us: int) -> Microseconds:
-        return Microseconds(max(math.ceil(frames * frame_us), floor_us))
+    def materialise_frame_us(frames: float, frame_us: int) -> Microseconds:
+        return Microseconds(math.ceil(frames * frame_us))
 
     @classmethod
     def from_timing_policy(
@@ -168,16 +178,8 @@ class FrameTimingPolicy:
                 if policy.min_hold_uses_frame_model
                 else min_hold_min_frame_ratio
             )
-            eff_hold_us = cls.materialise_frame_floor(
-                hold_frames,
-                int(policy.hold_floor_us if policy.hold_floor_us is not None else policy.hold_us),
-                int(frame_us),
-            )
-            eff_min_hold_us = cls.materialise_frame_floor(
-                min_hold_frames,
-                int(policy.min_hold_floor_us if policy.min_hold_floor_us is not None else policy.min_hold_us),
-                int(frame_us),
-            )
+            eff_hold_us = cls.materialise_frame_us(hold_frames, int(frame_us))
+            eff_min_hold_us = cls.materialise_frame_us(min_hold_frames, int(frame_us))
 
             if policy.hold_override_us is not None:
                 eff_hold_us = policy.hold_override_us
@@ -198,7 +200,6 @@ class FrameTimingPolicy:
             hold_us=eff_hold_us,
             min_hold_us=eff_min_hold_us,
             focus_restore_grace_us=policy.focus_restore_grace_us,
-            min_visible_hold_frames=min_visible_hold_frames,
             same_key_conflict_policy=conflict_policy,
             profile_name=profile_name,
         )
@@ -215,10 +216,6 @@ class FrameTimingPolicy:
     @classmethod
     def audience_safe(cls, **kwargs) -> "FrameTimingPolicy":
         return cls.from_profile_name("audience_safe", **kwargs)
-
-    @classmethod
-    def dense_safe(cls, **kwargs) -> "FrameTimingPolicy":
-        return cls.from_profile_name("dense_safe", **kwargs)
 
     @classmethod
     def balanced(cls, **kwargs) -> "FrameTimingPolicy":

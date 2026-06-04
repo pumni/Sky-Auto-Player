@@ -23,7 +23,7 @@ The `parser` reads the JSON file, strictly validating timestamps and schemas. Un
 ### Step 2: The AOT Scheduler (`build_key_actions`)
 Instead of calculating delays on the fly, the entire song is mapped out onto an absolute timeline in **microseconds** *before* playback begins.
 *   **Tempo Scaling:** All timestamps are scaled by `tempo_scale` and converted to microseconds. Notes are emitted at their exact source time — the player generates the whole timeline against no external reference, so there is no uniform "input lead" shift (it was proven a no-op and removed; see `timing-architecture-audit.md`).
-*   **Visibility Hold (`hold_us` / `min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling — a floor of roughly one game frame, materialised from the profile's `*_frames` margin and `*_floor_us`. This is the only timing lever the scheduler enforces.
+*   **Visibility Hold (`hold_us` / `min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-ins materialise purely as `ceil(profile_frames * frame_us)`; with no FPS they use conservative `*_unframed_us` values. Explicit `_us` overrides remain an expert escape hatch. This is the only timing lever the scheduler enforces.
 *   **Same-Key Feasibility:** If the same key repeats faster than `min_hold_us`, the previous hold is compressed down to `min_hold_us` (never below). If the authored interval is below `min_hold_us` the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, `degraded` mode keeps `min_hold_us` and reports the overlap. There is no separate repeat-gap/chord-merge/frame-align knob — all three were removed after measurement showed they did not change real-song playback.
 *   **Event Grouping:** Notes sharing the exact same timestamp are grouped into a single `SendInput` batch (chords). Notes a few ms apart go out at their own time; the game samples them on the same frame anyway.
 
@@ -64,7 +64,7 @@ The Orchestration layer includes a `calibration` module that analyzes the P95 an
 
 **How to Calibrate via CLI:**
 1. Play a song with `--debug-csv`.
-2. Run `python src/main.py --auto-calibrate` to view recommendations based on jitter (e.g., if P99 lateness > 10ms, it will recommend downshifting to a safer profile such as `audience-safe`).
+2. Run `python src/main.py --auto-calibrate` to view recommendations based on jitter. Schedule stress and fast repeats recommend `local-precise` plus a tempo reduction; dense polyphony may recommend `audience-safe`.
 3. Run `python src/main.py --save-calibration` to permanently write the recommended profile and FPS offsets to `config.json`.
 
 **How to Calibrate via UI:**

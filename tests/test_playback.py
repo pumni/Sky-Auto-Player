@@ -41,6 +41,28 @@ class FakeSleeper:
     def sleep_us(self, duration_us):
         self.clock.sleep_us(max(1, duration_us))
 
+
+class AdvancingReadClock(FakeClock):
+    """Simulation clock that advances during busy-wait clock reads."""
+    def __init__(self, start_us=0, read_step_us=10):
+        super().__init__(start_us)
+        self.read_step_us = read_step_us
+
+    def now_us(self):
+        current_us = self.time_us
+        self.time_us += self.read_step_us
+        return current_us
+
+
+class CountingControls:
+    def __init__(self):
+        self.poll_calls = 0
+
+    def poll(self):
+        self.poll_calls += 1
+        return None
+
+
 def test_dry_run_playback_execution():
     """Verify PlaybackEngine interacts correctly with the InputBackend and dispatches correct batches."""
     song = Song(
@@ -131,6 +153,51 @@ def test_deterministic_playback_with_fake_time():
     res = engine.play()
     assert res == PLAYBACK_FINISHED
     assert clock.now_us() >= 5_020_000
+
+
+def test_runtime_polling_is_throttled_during_approach_phase():
+    song = Song(name="Polling Cadence", notes=())
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=10_000, reason="onset")
+    clock = AdvancingReadClock()
+    controls = CountingControls()
+    engine = PlaybackEngine(
+        song=song,
+        actions=(action,),
+        backend=DryRunBackend(),
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=False,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=500),
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert 2 <= controls.poll_calls <= 12
+
+
+def test_final_spin_does_not_poll_controls_or_focus():
+    song = Song(name="Pure Final Spin", notes=())
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=500, reason="onset")
+    clock = AdvancingReadClock()
+    controls = CountingControls()
+    guard = _CountingFocusGuard(active=True)
+    engine = PlaybackEngine(
+        song=song,
+        actions=(action,),
+        backend=DryRunBackend(),
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=True,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=800),
+        focus_guard=guard,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert controls.poll_calls == 0
+    assert guard.is_active_calls == 1
 
 class MockControls:
     def __init__(self, command=None):

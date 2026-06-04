@@ -136,7 +136,6 @@ PROFILES_INFO = [
     ("local-precise", "Local Precise: sharp local play, less safe for remote listeners"),
     ("balanced", "Balanced: default setting for local or online play"),
     ("audience-safe", "Audience Safe: helps online players hear notes clearly"),
-    ("dense-safe", "Dense Safe: safer for fast repeats and dense songs"),
 ]
 
 def get_profiles_info(fps: int | None) -> list[tuple[str, str]]:

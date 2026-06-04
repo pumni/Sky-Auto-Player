@@ -3,7 +3,14 @@ from typing import Literal
 
 from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
-from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic
+from sky_music.domain.scheduler_types import (
+    ActionKind,
+    FrameTimingPolicy,
+    KeyAction,
+    Microseconds,
+    ScheduleDiagnostic,
+    ScheduleMetadata,
+)
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""
@@ -40,6 +47,14 @@ class PlannedKeyHold:
     risk: Literal["ok", "moderate", "severe"]
     effective_delta_us: int | None = None
     compressed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RawKeyEvent:
+    at_us: int
+    scan_code: int
+    kind: ActionKind
+    reason: str
 
 
 def normalise_note_drafts(drafts: list[ScheduledNoteDraft]) -> tuple[ScheduledNoteDraft, ...]:
@@ -140,8 +155,8 @@ def build_key_actions(
     min_same_key_up_gap_us = None
     note_count = len(song.notes)
     
-    # 1. Normalize and resolve NoteKeys to physical scan codes & Apply tempo scaling
-    drafts = []
+    # Stage 1: normalise note intents after tempo scaling and scan-code resolution.
+    drafts: list[ScheduledNoteDraft] = []
     for idx, note in enumerate(song.notes):
         k = note.key
         if k.startswith("1Key") or k.startswith("2Key") or k.startswith("3Key"):
@@ -170,13 +185,12 @@ def build_key_actions(
     deduplicated_note_count = len(drafts)
     duplicate_note_count = raw_draft_count - deduplicated_note_count
     
-    # 2. Pre-calculate the next occurrence time of the same physical key
+    # Stage 2: plan each physical-key lane and emit typed raw key events.
     next_same_key_time = next_same_key_times(drafts)
-        
-    raw_events = [] # list of dicts: {"at_us": int, "sc": int, "kind": "down"|"up", "reason": str}
-    diagnostics = []
-    
-    # 3. Schedule down/up bounds for each individual note
+
+    raw_events: list[RawKeyEvent] = []
+    diagnostics: list[ScheduleDiagnostic] = []
+
     for draft in drafts:
         next_same_info = next_same_key_time[draft.source_index]
         sc = draft.scan_code
@@ -216,7 +230,7 @@ def build_key_actions(
                     recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
                         effective_delta_us, policy, tempo_scale
                     ),
-                    recommended_profile="dense-safe",
+                    recommended_profile="local-precise",
                 )
         elif planned_hold.risk == "moderate":
             risky_same_key_repeats += 1
@@ -232,19 +246,28 @@ def build_key_actions(
             
         up_at_us = down_at_us + actual_hold
         
-        # Add events
-        raw_events.append({"at_us": down_at_us, "sc": sc, "kind": "down", "reason": "onset"})
-        raw_events.append({"at_us": up_at_us, "sc": sc, "kind": "up", "reason": "repeat_release" if next_same_info is not None else "release"})
+        raw_events.append(RawKeyEvent(
+            at_us=down_at_us,
+            scan_code=sc,
+            kind="down",
+            reason="onset",
+        ))
+        raw_events.append(RawKeyEvent(
+            at_us=up_at_us,
+            scan_code=sc,
+            kind="up",
+            reason="repeat_release" if next_same_info is not None else "release",
+        ))
 
-    # 4. Group simultaneous events into single KeyAction objects
-    grouped = {} # key: (at_us, kind, reason) -> list of scan codes
+    # Stage 3: group simultaneous events without merging distinct reasons.
+    grouped: dict[tuple[int, ActionKind, str], list[int]] = {}
     for ev in raw_events:
-        g_key = (ev["at_us"], ev["kind"], ev["reason"])
+        g_key = (ev.at_us, ev.kind, ev.reason)
         if g_key not in grouped:
             grouped[g_key] = []
-        grouped[g_key].append(ev["sc"])
-        
-    key_actions_list = []
+        grouped[g_key].append(ev.scan_code)
+
+    key_actions_list: list[KeyAction] = []
     for (at_us, kind, reason), scs in grouped.items():
         unique_scs = tuple(dict.fromkeys(scs))
         key_actions_list.append(KeyAction(
@@ -254,7 +277,7 @@ def build_key_actions(
             reason=reason
         ))
         
-    # 5. Sort final timeline with strict microsecond accuracy & kind prioritization
+    # Stage 4: sort the executable timeline with up-before-down priority.
     def action_priority(action: KeyAction) -> int:
         if action.kind == "up":
             return 0
@@ -262,8 +285,8 @@ def build_key_actions(
             
     key_actions_list.sort(key=lambda a: (a.at_us, action_priority(a)))
     
-    # 6. Calculate max polyphony
-    active_keys = set()
+    # Stage 5: derive metrics from the executable timeline.
+    active_keys: set[int] = set()
     max_polyphony = 0
     for action in key_actions_list:
         if action.kind == "down":

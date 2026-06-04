@@ -9,7 +9,8 @@ The goal is not to make playback appear fast in logs. The goal is reliable note 
 **Related docs:** `timing-experiments.md` (the experiments that prove Appendix A and the open
 calibration work), `timing-profile-frame-model.md` (the frame-relative representation in code),
 `timing-architecture-audit.md` (the 2026-06 audit + 3-phase refactor that removed dead knobs), and
-`scheduler-core-architecture-plan.md` (the follow-up scheduler contract/refactor plan).
+`scheduler-core-architecture-plan.md` (the follow-up scheduler contract/refactor plan), and
+`floor-removal-three-profile-plan.md` (the June 2026 decision to remove absolute hold floors).
 
 > ⚠️ **ARCHITECTURE UPDATE (June 2026).** A measurement-driven audit removed four timing knobs
 > that were stated here but had no real, necessary effect (see `timing-architecture-audit.md`):
@@ -25,6 +26,13 @@ calibration work), `timing-profile-frame-model.md` (the frame-relative represent
 > section numbering and cross-references). The current production timing model exposes
 > **hold/min_hold** only; same-key repeats are feasible when authored spacing is at least
 > `min_hold_us`, otherwise strict mode rejects and degraded mode reports the overlap.
+>
+> **FLOOR REMOVAL UPDATE (June 2026).** Built-in frame-aware holds are now purely
+> `ceil(frames * frame_us)`. `hold_floor_us` and `min_hold_floor_us` were removed. The project
+> ships only `local_precise` (1.0 frame), `audience_safe` (1.05 frames), and `balanced`
+> (1.2 frames). At high local FPS, `audience_safe` can be shorter than one frame on a remote
+> ~60 FPS client; this is an intentional, A/B-tested tradeoff. Historical floor discussion in
+> Appendix A.9 is retained but marked superseded.
 
 ---
 
@@ -52,10 +60,8 @@ All timing values are expressed in microseconds.
 | --------------------------- | ----------------------------------------------------------------------------------------------------- |
 | hold_us                     | Effective key-down duration for a normal note after profile materialisation and overrides.            |
 | hold_frames                 | Local frame-visibility margin for normal holds.                                                       |
-| hold_floor_us               | Absolute lower wall/target for normal holds.                                                          |
 | min_hold_us                 | Effective minimum key-down duration after compression.                                                |
 | min_hold_frames             | Local frame-visibility margin for compressed holds.                                                   |
-| min_hold_floor_us           | Absolute lower wall/target for compressed holds.                                                      |
 | ~~repeat_release_gap_us~~       | **REMOVED (June 2026)** — was a requested same-key up-time target; not reachable as a production lever. |
 | ~~repeat_release_gap_frames~~   | **REMOVED (June 2026)** — former frame margin for same-key repeat up-time.                           |
 | ~~repeat_release_gap_floor_us~~ | **REMOVED (June 2026)** — former absolute lower wall/target for same-key repeat up-time.             |
@@ -103,7 +109,6 @@ Examples:
 
 - local_precise
 - balanced
-- dense_safe
 - audience_safe
 
 A general 60 FPS-safe profile must keep `min_hold_us` above one game frame after materialisation.
@@ -371,20 +376,18 @@ bias and could make playback feel late, so the safe default was always "none".
 
 ## 16. Recommended Profile Intent
 
-The project ships exactly four profiles:
+The project ships exactly three profiles:
 
 | Profile       | Intended Use             | Online Audience Use | Notes                                                                          |
 | ------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------ |
 | local_precise | Sharp local playback     | No                  | Reference profile = the measured floors themselves; pure frame-relative holds. |
 | balanced      | General default playback | Limited             | local_precise + a little body. Good default for normal use.                    |
-| dense_safe    | Dense local playback     | Limited             | Slightly stronger body floor for note pressure.                                |
-| audience_safe | Online room playback     | Yes                 | A little above balanced for remote audibility; currently carried by higher hold floors. |
+| audience_safe | Sharper audience-tested playback | Conditional | 1.05 frame; no absolute remote-client visibility wall.                         |
 
 balanced should remain the general default profile.
 
-audience_safe should be the recommended profile for online audience playback.
-
-dense_safe should be used when density causes collapse but online audience safety is not the main requirement.
+audience_safe is an audience-tested sharp profile, but high local FPS can reduce its absolute hold
+below a remote ~60 FPS frame. Use remote listening tests when reliability matters.
 
 local_precise should be used only when local responsiveness matters more than remote reliability.
 
@@ -399,7 +402,7 @@ local_precise should be used only when local responsiveness matters more than re
 | Local playback sounds fine, but other players miss notes | Online timing is too aggressive                     | Use audience_safe.                                        |
 | Other players hear repeated notes as incomplete          | Same-key transition may not survive replication     | Use audience_safe/reduce tempo; validate remotely.        |
 | Playback sounds consistently late or early               | Game-side bucket/phase behavior or network jitter   | Not a player-side lead fix — see A.10 (input lead was removed). |
-| Dense passages collapse                                  | Scheduling pressure is too high                     | Use dense_safe, use audience_safe, or reduce tempo_scale. |
+| Dense passages collapse                                  | Scheduling pressure is too high                     | Reduce tempo_scale; use local_precise for fast repeats or audience_safe for polyphony. |
 | Local playback feels too soft or mushy                   | Holds or gaps are too large for the use case        | Use balanced or local_precise.                            |
 
 ---
@@ -432,7 +435,7 @@ The priority is reliable registration in the game and reliable audibility for li
 Any profile change must be reviewed against these questions:
 
 1. What playback intent is this profile for?
-2. Is it local-only, dense-safe, general default, or online audience-safe?
+2. Is it local-precise, general default, or audience-tested?
 3. Does it remain safe at the FPS values where it can be selected?
 4. Does it preserve same-key repeat reliability?
 5. Does it preserve visible key-down capture?
@@ -579,7 +582,12 @@ experiment procedures.
   ~46 ms reliable gap there.
 - Onset counts are noisy (±1–2); thresholds above are read as trends, not exact values.
 
-### A.9 Profile differentiation lives in explicit floors and frame margins
+### A.9 Historical floor model (superseded)
+
+> **SUPERSEDED June 2026:** The materialisation model below describes the former implementation.
+> Absolute hold floors and `dense_safe` have been removed. Current built-ins use only
+> `ceil(frames * frame_us)` when FPS is known and `*_unframed_us` when FPS is unknown. This
+> section remains as experimental history and rationale for the later floor-removal decision.
 
 > ⚠️ **CORRECTION (June 2026 audit).** This section originally called `input_lead_us` "the real
 > audience lever". That is now known to be **wrong**: input lead is an architectural no-op (it shifts a

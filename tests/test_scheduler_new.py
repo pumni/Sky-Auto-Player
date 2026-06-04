@@ -243,6 +243,7 @@ def test_scheduler_fails_on_unmapped_note_key():
 def test_frame_timing_policy_has_no_release_gap_field():
     frame_policy = FrameTimingPolicy.from_profile_name("balanced", fps=30)
     assert not hasattr(frame_policy, "release_gap_us")
+    assert not hasattr(frame_policy, "min_visible_hold_frames")
 
 def test_onsets_are_not_shifted_or_clamped():
     song = Song(
@@ -317,7 +318,7 @@ def test_strict_policy_rejects_impossible_repeat():
     )
     with pytest.raises(ScheduleBuildError) as exc_info:
         build_key_actions(song, policy=policy)
-    assert exc_info.value.recommended_profile == "dense-safe"
+    assert exc_info.value.recommended_profile == "local-precise"
     assert exc_info.value.recommended_tempo_scale is not None
 
 def test_degraded_policy_still_compresses_impossible_repeat():
@@ -421,8 +422,49 @@ def test_frame_alignment_field_is_removed():
 
 def test_timing_policy_from_dict_defaults():
     policy = TimingPolicy.from_dict({})
-    assert policy.hold_us == 26000
-    assert policy.min_hold_us == 17000
+    assert policy.hold_us == policy.min_hold_us == 17000
+
+
+def test_timing_policy_without_hold_declaration_mirrors_min_hold_model():
+    policy = TimingPolicy.from_dict({
+        "min_hold_frames": 1.1,
+        "min_hold_floor_us": 12_000,
+        "min_hold_unframed_us": 18_000,
+    })
+
+    assert policy.hold_us == policy.min_hold_us == 18_000
+    assert policy.hold_frames == policy.min_hold_frames == 1.1
+    assert not hasattr(policy, "hold_floor_us")
+    assert not hasattr(policy, "min_hold_floor_us")
+    assert policy.hold_override_us == policy.min_hold_override_us
+    assert policy.hold_uses_frame_model is policy.min_hold_uses_frame_model is True
+
+
+@pytest.mark.parametrize(
+    ("hold_declaration", "expected_raw_hold"),
+    [
+        ({"hold_us": 24_000}, 24_000),
+        ({"hold_frames": 2.0}, 17_000),
+        ({"hold_unframed_us": 24_000}, 24_000),
+    ],
+)
+def test_explicit_hold_declarations_remain_escape_hatches(
+    hold_declaration, expected_raw_hold
+):
+    policy = TimingPolicy.from_dict({
+        "min_hold_frames": 1.2,
+        "min_hold_floor_us": 14_000,
+        "min_hold_unframed_us": 17_000,
+        **hold_declaration,
+    })
+
+    assert policy.hold_us == expected_raw_hold
+    assert policy.min_hold_us == 17_000
+
+    if "hold_frames" in hold_declaration:
+        effective = FrameTimingPolicy.from_timing_policy(policy, fps=60)
+        assert effective.hold_us == 33_334
+        assert effective.min_hold_us == 20_001
 
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
@@ -434,7 +476,7 @@ def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     p = FrameTimingPolicy.from_profile_name("balanced", fps=60)
     assert p.fps == 60
-    assert p.hold_us == 20001
+    assert p.hold_us == 16834
 
 def test_local_precise_raw_hold_and_min_hold_are_unified():
     p = FrameTimingPolicy.from_profile_name("local-precise", fps=None)
@@ -486,6 +528,10 @@ def test_timing_profile_validators():
     # Verify all built-in profiles pass validate_builtin_timing_profile
     for name, p in DEFAULT_TIMING_PROFILES.items():
         validate_builtin_timing_profile(name, p, selected_fps=60)
+        assert not any(
+            key in p
+            for key in ("hold_frames", "hold_floor_us", "hold_unframed_us")
+        )
     validate_timing_profile(DEFAULT_TIMING_PROFILES["local_precise"], fps=144)
 
     # Test failure case
@@ -519,38 +565,24 @@ def test_hold_ordering_invariant_rejects_hold_below_min_hold():
     with pytest.raises(ValueError, match="hold_us"):
         validate_timing_profile(bad, fps=60)
 
-def test_audience_safe_floors_keep_remote_minimum_at_high_fps():
+def test_audience_safe_is_purely_frame_relative_at_high_fps():
     p60 = FrameTimingPolicy.from_profile_name("audience-safe", fps=60)
     p144 = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
 
-    # At 60 FPS the 1.2/1.5-frame terms dominate the (lowered) absolute floors.
-    assert p60.hold_us == 20001
-    assert p60.min_hold_us == 20001
-    # At 144 FPS the frame terms shrink, so the absolute remote floors take over and hold the
-    # audience minimum (hold 18000 / min 18000).
-    assert p144.hold_us == 18000
-    assert p144.min_hold_us == 18000
+    assert p60.hold_us == p60.min_hold_us == 17001
+    assert p144.hold_us == p144.min_hold_us == 7084
 
-def test_audience_safe_runtime_validation():
-    from sky_music.domain.validation import validate_audience_safe_runtime_policy
-
-    policy = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
-    
-    # This should pass without raising ValueError
-    validate_audience_safe_runtime_policy(policy)
-
-    # Let's test a policy that violates runtime limits (e.g. min_hold_us too small)
-    invalid_policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({"min_hold_us": 10000}),
-        fps=144,
-        profile_name="audience-safe",
-    )
-    with pytest.raises(ValueError, match="min_hold_us"):
-        validate_audience_safe_runtime_policy(invalid_policy)
+def test_removed_floor_keys_are_ignored():
+    policy = TimingPolicy.from_dict({
+        "min_hold_frames": 1.2,
+        "min_hold_floor_us": 99_000,
+        "min_hold_unframed_us": 17_000,
+    })
+    effective = FrameTimingPolicy.from_timing_policy(policy, fps=144)
+    assert effective.hold_us == effective.min_hold_us == 8334
 
 def test_unknown_profile_name_falls_back_to_balanced():
     from sky_music.domain.session_context import PlaybackSessionContext
     # Removed/unknown profile names canonicalise to balanced rather than erroring.
     ctx = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
     assert ctx.profile_name == "balanced"
-

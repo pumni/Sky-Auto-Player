@@ -331,14 +331,23 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
     cfg = cfg or load_config()
     profiles = merged_timing_profiles(cfg)
 
-    def frame_coupled_ms(data: dict, *, value_key: str, floor_key: str) -> str:
-        value = data.get(value_key, data.get(floor_key, 0))
+    def frame_coupled_ms(
+        data: dict,
+        *,
+        value_key: str,
+        unframed_key: str,
+    ) -> str:
+        value = data.get(value_key, data.get(unframed_key, 0))
         return f"{int(value) // 1000}"
 
     COLS = [
         ("Profile",              lambda n, d: n),
-        ("hold_ms",              lambda n, d: frame_coupled_ms(d, value_key="hold_us", floor_key="hold_floor_us")),
-        ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", floor_key="min_hold_floor_us")),
+        ("hold_ms",              lambda n, d: frame_coupled_ms(
+            d,
+            value_key="hold_us",
+            unframed_key="min_hold_unframed_us",
+        )),
+        ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
         ("conflict_policy",      lambda n, d: d.get("same_key_conflict_policy", "degraded")),
     ]
@@ -782,7 +791,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Timing profile: "
             "local-precise (low latency), "
             "audience-safe (online play / audience audibility), "
-            "dense-safe (many chords/repeats), "
             "balanced (default)"
         ),
     )

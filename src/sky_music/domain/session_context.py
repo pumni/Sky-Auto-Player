@@ -138,7 +138,7 @@ class PlaybackSessionContext:
         from sky_music.domain.validation import validate_builtin_timing_profile
         profile_fields = {
             "hold_us", "min_hold_us",
-            "hold_frames", "hold_floor_us", "min_hold_frames", "min_hold_floor_us",
+            "hold_frames", "min_hold_frames",
         }
         validate_builtin_timing_profile(
             self.profile_name,

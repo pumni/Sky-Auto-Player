@@ -32,7 +32,7 @@ def test_balanced_at_30fps_scales_hold():
     policy = session.resolve_effective_policy(AppConfig())
     assert policy.fps == 30
     assert policy.frame_us == 33_334
-    assert policy.hold_us == 40_001
+    assert policy.hold_us == 33_668
 
 
 def test_with_profile_preserves_fps():
@@ -46,14 +46,14 @@ def test_with_profile_preserves_fps():
 
 def test_merge_session_with_overrides_keeps_fps_when_profile_changes():
     base = PlaybackSessionContext.balanced(fps=120)
-    merged = merge_session_with_overrides(base, profile="dense-safe")
-    assert merged.profile_name == "dense-safe"
+    merged = merge_session_with_overrides(base, profile="local-precise")
+    assert merged.profile_name == "local-precise"
     assert merged.fps == 120
 
 
 def test_risk_profile_switch_keeps_fps():
     session = PlaybackSessionContext.balanced(fps=30)
-    switched = session.with_profile("dense-safe")
+    switched = session.with_profile("local-precise")
     before = session.resolve_effective_policy(AppConfig())
     after = switched.resolve_effective_policy(AppConfig())
     assert before.fps == after.fps == 30
@@ -78,9 +78,8 @@ def test_metadata_uses_session_fps_for_schedule():
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
-    # 30fps frame = ceil(1e6/30) = 33334. Visibility floor (Exp1) = max(base 14000,
-    # ceil(1.2*frame)=40001) = 40001 at 30fps.
-    assert policy.min_hold_us == 40_001
+    # 30fps frame = ceil(1e6/30) = 33334. Visibility floor (Exp1) = ceil(1.01*frame)=33668 at 30fps.
+    assert policy.min_hold_us == 33_668
 
 
 def test_frame_timing_config_overrides_ratios():
@@ -104,14 +103,14 @@ def test_apply_recommendation_to_context_updates_session():
 
     session = PlaybackSessionContext.balanced(tempo_scale=1.0, fps=60)
     rec = CalibrationRecommendation(
-        profile_name="dense-safe",
+        profile_name="local-precise",
         tempo_scale=0.9,
         hold_us=30_000,
         reason="test",
         severity="moderate",
     )
     updated = apply_recommendation_to_context(session, rec)
-    assert updated.profile_name == "dense-safe"
+    assert updated.profile_name == "local-precise"
     assert updated.tempo_scale == 0.9
     policy = updated.resolve_effective_policy(AppConfig())
     assert policy.hold_us > 0
@@ -128,10 +127,36 @@ def test_from_cli_args_applies_hold_override():
     assert policy.hold_us >= 30_000
 
 
-def test_picker_lists_exactly_the_four_profiles():
+def test_cli_hold_and_min_hold_overrides_keep_compression_band():
+    import main
+    from sky_music.domain.scheduler import plan_same_key_hold
+
+    parser = main.build_arg_parser()
+    args = parser.parse_args([
+        "--timing-profile", "balanced",
+        "--hold-ms", "24",
+        "--min-hold-ms", "10",
+    ])
+    policy = PlaybackSessionContext.from_cli_args(args, AppConfig()).resolve_effective_policy(
+        AppConfig()
+    )
+
+    assert policy.hold_us == 24_000
+    assert policy.min_hold_us == 10_000
+    planned = plan_same_key_hold(
+        target_hold_us=policy.hold_us,
+        min_hold_us=policy.min_hold_us,
+        effective_delta_us=21_000,
+    )
+    assert planned.risk == "moderate"
+    assert planned.hold_us == 21_000
+    assert planned.compressed is True
+
+
+def test_picker_lists_exactly_the_three_profiles():
     from sky_music.ui.picker import get_profiles_info
     names = [p[0] for p in get_profiles_info(120)]
-    assert names == ["local-precise", "balanced", "audience-safe", "dense-safe"]
+    assert names == ["local-precise", "balanced", "audience-safe"]
 
 
 def test_strict_timing_profile_validation_enforcement():
@@ -149,16 +174,16 @@ def test_strict_timing_profile_validation_enforcement():
     with pytest.raises(ValueError, match="Unsafe min_hold_us|min_hold_us below 10000us"):
         session.resolve_effective_policy(cfg_unsafe)
 
-    # 2. Test audience-safe overrides strict limit
+    # 2. Audience-safe now uses the same frame visibility validation as other profiles.
     cfg_unsafe_audience = AppConfig(
         timing_profiles={
             "audience_safe": {
                 "hold_us": 34000,
-                "min_hold_us": 15000,  # Below the 18000us limit for audience-safe.
+                "min_hold_us": 15000,
             }
         }
     )
     session_audience = PlaybackSessionContext(profile_name="audience-safe", fps=60)
-    with pytest.raises(ValueError, match="Unsafe min_hold_us|audience-safe profile requires min_hold_us >= 18000us"):
+    with pytest.raises(ValueError, match="Unsafe min_hold_us"):
         session_audience.resolve_effective_policy(cfg_unsafe_audience)
 

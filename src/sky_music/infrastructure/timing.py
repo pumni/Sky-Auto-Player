@@ -32,6 +32,11 @@ _DEFAULT_SPIN_THRESHOLD_US = SleepPolicy.spin_threshold_us
 
 class PreciseSleeper:
     """Standardized high-precision sleeper using hybrid coarse, medium, yield, and spin phases."""
+    def spin_until_us(self, target_us: int, clock: Clock) -> None:
+        """Busy-wait until target_us without performing sleeps or runtime polling."""
+        while clock.now_us() < target_us:
+            pass
+
     def sleep_step_towards_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = _DEFAULT_SPIN_THRESHOLD_US) -> None:
         """Sleeps a single step towards target_us, allowing the caller to perform frequent polling."""
         now = clock.now_us()
@@ -59,11 +64,10 @@ class PreciseSleeper:
         Looping wrapper that sleeps until target_us is reached.
         
         WARNING: This is a blocking call. During playback, do NOT use this directly in the main
-        playback engine loop since it blocks hotkey polling, pause/resume checks, and state rendering.
-        Instead, use PreciseSleeper.sleep_step_towards_us() in a loop alongside runtime control polls.
-        This function is intended primarily for tests and simulation environments.
+        playback engine loop since it blocks hotkey polling, pause/resume checks, and state rendering
+        for the entire wait. The engine only uses spin_until_us() for its final sub-millisecond
+        timing window. This function is intended primarily for tests and simulation environments.
         """
         while clock.now_us() < target_us:
             self.sleep_step_towards_us(target_us, clock, sleeper, spin_threshold_us)
-
 

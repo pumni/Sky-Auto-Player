@@ -200,7 +200,7 @@ def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None = 
     high_poly = res.max_polyphony >= 5
     
     if severity == "high":
-        suggested_profile = "dense-safe" if has_repeats else "audience-safe"
+        suggested_profile = "local-precise" if has_repeats else "audience-safe"
         suggested_tempo_scale = 0.92
     elif severity == "medium":
         suggested_profile = "audience-safe" if high_poly else "balanced"

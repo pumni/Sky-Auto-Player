@@ -201,6 +201,8 @@ def _cached_key_input(scan_code: int, flags: int) -> INPUT:
 def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
     if not scan_codes:
         return
+    # Keep this boundary defensive: release/retry paths and direct callers do not all originate
+    # from the scheduler's already-deduplicated KeyAction batches.
     scan_codes = tuple(dict.fromkeys(scan_codes))
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
     key_inputs = [_cached_key_input(scan_code, flags) for scan_code in scan_codes]

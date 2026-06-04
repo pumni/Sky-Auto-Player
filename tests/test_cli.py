@@ -141,6 +141,14 @@ def test_cli_calibration_summary_argument():
     assert args.calibration_summary == Path("logs/run.summary.json")
 
 
+def test_profile_comparison_derives_hold_from_min_hold(capsys):
+    main._print_profile_comparison_table(AppConfig())
+
+    output = capsys.readouterr().out
+    balanced_row = next(line for line in output.splitlines() if "balanced" in line)
+    assert balanced_row.count("17") == 2
+
+
 def test_dynamic_fps_resolution(monkeypatch):
     # Case 1: --fps is NOT in sys.argv (standard launch)
     monkeypatch.setattr(sys, "argv", ["main.py"])
