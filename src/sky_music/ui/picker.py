@@ -49,6 +49,7 @@ from sky_music.ui.picker_metadata import (
     hydrate_and_fill_raw_metadata,
     warm_persistent_metadata_cache,
     compute_song_ui_metadata_payloads,
+    worker_process_warmup,
     session_to_worker_payload,
     store_computed_song_ui_metadata_payloads,
     clear_metadata_cache,
@@ -101,6 +102,8 @@ class PickerState:
     metadata_refresh_pending: bool = False
     metadata_generation: int = 0
     metadata_prefetch_future: Future[None] | None = None
+    # Phase 2C: second slot for the bulk (non-priority) batch submitted in parallel.
+    metadata_prefetch_future_bulk: Future[None] | None = None
     metadata_hydration_future: Future[int] | None = None
     active_session: Any = None  # PlaybackSessionContext
     user_cfg: Any = None # AppConfig
@@ -338,14 +341,21 @@ def choose_song_interactively(
     metadata_thread_executor: ThreadPoolExecutor | None = None
     metadata_uses_process_pool = True
     try:
-        # Keep exactly one CPU worker. The goal is not throughput; it is to move
-        # parse/schedule/analyze work away from prompt_toolkit's UI thread and
-        # away from the main process GIL on Windows.
-        metadata_process_executor = ProcessPoolExecutor(max_workers=1)
+        # Phase 2B: 2 CPU workers – one processes the selected song immediately
+        # while the second handles the rest of the visible window in parallel.
+        # On Windows the first worker is pre-spawned via worker_process_warmup()
+        # so spawn latency (~200-500 ms) is overlapped with the first UI render.
+        metadata_process_executor = ProcessPoolExecutor(max_workers=2)
         metadata_executor = metadata_process_executor
+        # Phase 2B: trigger worker spawn NOW so the process is ready by the time
+        # the first real metadata batch arrives.  Fire-and-forget is intentional.
+        try:
+            metadata_process_executor.submit(worker_process_warmup)
+        except Exception:
+            pass
     except Exception:
         metadata_uses_process_pool = False
-        metadata_thread_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-picker-meta")
+        metadata_thread_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sky-picker-meta")
         metadata_executor = metadata_thread_executor
 
     cache_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-picker-cache")
@@ -748,6 +758,11 @@ def choose_song_interactively(
         state.metadata_hydration_pending = False
         if cancel_pending and state.metadata_prefetch_future is not None and not state.metadata_prefetch_future.done():
             state.metadata_prefetch_future.cancel()
+        state.metadata_prefetch_future = None
+        # Phase 2C: also cancel the bulk future.
+        if cancel_pending and state.metadata_prefetch_future_bulk is not None and not state.metadata_prefetch_future_bulk.done():
+            state.metadata_prefetch_future_bulk.cancel()
+        state.metadata_prefetch_future_bulk = None
         if cancel_pending and state.metadata_hydration_future is not None and not state.metadata_hydration_future.done():
             state.metadata_hydration_future.cancel()
 
@@ -814,80 +829,119 @@ def choose_song_interactively(
         if not paths:
             return
 
-        current_future = state.metadata_prefetch_future
-        if current_future is not None and not current_future.done():
-            # Keep at most one batch queued/running. It will exit early if stale.
+        # Phase 2C: with 2 workers available we split the batch so the selected
+        # song always gets its own dedicated future submitted first (priority),
+        # while the remaining visible songs run in parallel on the second worker.
+        # The selected song's Risk/Suggestion columns therefore appear as soon as
+        # possible regardless of how many other songs are in the visible window.
+        priority_paths = paths[:1]   # selected (or nearest unanalyzed) song
+        bulk_paths     = paths[1:]   # rest of the visible window
+
+        # Don't queue a new batch while one is still running – but only block
+        # when BOTH slots are occupied (not just the priority one).
+        priority_running = (
+            state.metadata_prefetch_future is not None
+            and not state.metadata_prefetch_future.done()
+        )
+        bulk_running = (
+            state.metadata_prefetch_future_bulk is not None
+            and not state.metadata_prefetch_future_bulk.done()
+        )
+        if priority_running and bulk_running:
             return
 
         generation = state.metadata_generation
-        worker_paths, worker_session = _metadata_worker_payload(paths, session)
-        future = metadata_executor.submit(
-            compute_song_ui_metadata_payloads,
-            worker_paths,
-            worker_session,
-            state.user_cfg,
-        )
-        state.metadata_prefetch_future = future
 
-        def on_done(
-            done_future: Future[list[dict[str, Any]]],
-            done_generation: int = generation,
+        def _make_on_done(
+            which: str,
             done_session: PlaybackSessionContext = session,
             done_app: Any = app,
-        ) -> None:
-            if state.metadata_prefetch_future is done_future:
-                state.metadata_prefetch_future = None
+            done_generation: int = generation,
+        ):
+            """Return a done-callback for either the priority or bulk future."""
+            def on_done(done_future: Future[list[dict[str, Any]]]) -> None:
+                # Clear the matching slot so the next scroll/selection can queue.
+                if which == "priority" and state.metadata_prefetch_future is done_future:
+                    state.metadata_prefetch_future = None
+                elif which == "bulk" and state.metadata_prefetch_future_bulk is done_future:
+                    state.metadata_prefetch_future_bulk = None
 
-            if done_future.cancelled():
-                return
+                if done_future.cancelled():
+                    return
 
-            stored_count = 0
-            try:
-                payloads = done_future.result()
-                stored_count = store_computed_song_ui_metadata_payloads(payloads, done_session, state.user_cfg)
-            except Exception:
-                # If a process worker breaks, keep the picker usable by falling back
-                # to the thread backend for later batches. The UI still remains
-                # non-blocking; only the metadata backend changes.
-                nonlocal metadata_uses_process_pool, metadata_process_executor, metadata_thread_executor, metadata_executor
-                if metadata_uses_process_pool:
-                    metadata_uses_process_pool = False
-                    try:
-                        if metadata_process_executor is not None:
-                            metadata_process_executor.shutdown(wait=False, cancel_futures=True)
-                    except Exception:
-                        pass
-                    metadata_process_executor = None
-                    if metadata_thread_executor is None:
-                        metadata_thread_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-picker-meta")
-                    metadata_executor = metadata_thread_executor
+                stored_count = 0
+                try:
+                    payloads = done_future.result()
+                    stored_count = store_computed_song_ui_metadata_payloads(
+                        payloads, done_session, state.user_cfg
+                    )
+                except Exception:
+                    # If a process worker breaks, fall back to thread backend.
+                    nonlocal metadata_uses_process_pool, metadata_process_executor
+                    nonlocal metadata_thread_executor, metadata_executor
+                    if metadata_uses_process_pool:
+                        metadata_uses_process_pool = False
+                        try:
+                            if metadata_process_executor is not None:
+                                metadata_process_executor.shutdown(wait=False, cancel_futures=True)
+                        except Exception:
+                            pass
+                        metadata_process_executor = None
+                        if metadata_thread_executor is None:
+                            metadata_thread_executor = ThreadPoolExecutor(
+                                max_workers=2, thread_name_prefix="sky-picker-meta"
+                            )
+                        metadata_executor = metadata_thread_executor
 
-            if getattr(done_app, "is_done", False):
-                return
-
-            loop = getattr(done_app, "loop", None)
-            if loop is None:
-                if done_generation == state.metadata_generation and stored_count > 0:
-                    _schedule_coalesced_metadata_refresh(done_app, done_generation)
-                return
-
-            def finish_on_ui_thread() -> None:
                 if getattr(done_app, "is_done", False):
                     return
-                if done_generation == state.metadata_generation:
-                    if stored_count > 0:
+
+                loop = getattr(done_app, "loop", None)
+                if loop is None:
+                    if done_generation == state.metadata_generation and stored_count > 0:
                         _schedule_coalesced_metadata_refresh(done_app, done_generation)
-                else:
-                    # A newer search/selection/view exists. Kick one fresh batch instead
-                    # of repainting stale data.
-                    schedule_visible_metadata_prefetch(done_app, delay=0.01)
+                    return
 
-            try:
-                loop.call_soon_threadsafe(finish_on_ui_thread)
-            except RuntimeError:
-                return
+                def finish_on_ui_thread() -> None:
+                    if getattr(done_app, "is_done", False):
+                        return
+                    if done_generation == state.metadata_generation:
+                        if stored_count > 0:
+                            _schedule_coalesced_metadata_refresh(done_app, done_generation)
+                    else:
+                        # A newer search/selection/view exists – kick a fresh batch.
+                        schedule_visible_metadata_prefetch(done_app, delay=0.01)
 
-        future.add_done_callback(on_done)
+                try:
+                    loop.call_soon_threadsafe(finish_on_ui_thread)
+                except RuntimeError:
+                    return
+            return on_done
+
+        # Submit priority batch (selected song) if the slot is free.
+        if not priority_running and priority_paths:
+            worker_paths, worker_session = _metadata_worker_payload(priority_paths, session)
+            pf = metadata_executor.submit(
+                compute_song_ui_metadata_payloads,
+                worker_paths,
+                worker_session,
+                state.user_cfg,
+            )
+            state.metadata_prefetch_future = pf
+            pf.add_done_callback(_make_on_done("priority"))
+
+        # Submit bulk batch (remaining visible songs) if the slot is free.
+        if not bulk_running and bulk_paths:
+            worker_paths_bulk, worker_session_bulk = _metadata_worker_payload(bulk_paths, session)
+            bf = metadata_executor.submit(
+                compute_song_ui_metadata_payloads,
+                worker_paths_bulk,
+                worker_session_bulk,
+                state.user_cfg,
+            )
+            state.metadata_prefetch_future_bulk = bf
+            bf.add_done_callback(_make_on_done("bulk"))
+
 
     def schedule_visible_metadata_prefetch(app: Any | None = None, delay: float = 0.08) -> None:
         """Start expensive metadata work after the UI has had a chance to repaint."""
@@ -1014,7 +1068,15 @@ def choose_song_interactively(
         if getattr(app, "is_done", False):
             return
 
-        future = cache_executor.submit(warm_persistent_metadata_cache)
+        # Phase 3A: pass the full song list so warm_persistent_metadata_cache
+        # can derive an adaptive limit (max(500, N * 8)) instead of defaulting
+        # to 500 when the library is large.
+        song_paths_hint = list(state.song_choices)
+        future = cache_executor.submit(
+            warm_persistent_metadata_cache,
+            None,
+            song_paths=song_paths_hint,
+        )
 
         def on_done(done_future: Future[int]) -> None:
             try:

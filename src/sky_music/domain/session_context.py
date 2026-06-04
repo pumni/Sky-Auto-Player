@@ -109,7 +109,10 @@ class PlaybackSessionContext:
         return display_profile_name(self.profile_name, self.fps)
 
     def metadata_cache_key(self, song_path: Any, cfg: AppConfig | None = None) -> tuple[Any, ...]:
-        cfg = cfg or load_config()
+        # Phase 2A: cfg was previously loaded here via load_config() but was never
+        # used in the returned tuple – removing that dead call eliminates a
+        # config-file lookup from every render-path invocation of
+        # peek_cached_song_ui_metadata(). The parameter is kept for API compat.
         return (
             song_path,
             self.profile_name,

@@ -82,6 +82,30 @@ _write_counter: int = 0
 _write_counter_lock = RLock()
 _tls = threading.local()  # thread-local storage for per-thread SQLite connections
 
+# ---------------------------------------------------------------------------
+# Phase 3B – Path+session → RAM-key short-circuit cache
+# ---------------------------------------------------------------------------
+# peek_cached_song_ui_metadata() is the hottest render-path function.  Its
+# first step is _song_repository.cache_key(song_path) which, even with the
+# _identity_cache, requires a dict lookup keyed by (Path, int(profile)).  For
+# 111 songs × 10+ repaints/s that adds up.  We cache the final ram_key tuple
+# keyed by (song_path_str, session_signature) so that after the first render
+# we bypass cache_key() completely on every subsequent frame.
+_path_session_ram_cache: dict[tuple[str, tuple[Any, ...]], tuple[Any, ...]] = {}
+_path_session_ram_lock = RLock()
+
+
+def _session_signature(session: PlaybackSessionContext) -> tuple[Any, ...]:
+    """Cheap, hashable identity for a session (no config file access)."""
+    return (
+        session.profile_name,
+        session.fps,
+        session.tempo_scale,
+        session.scan_code_mode,
+        session.same_key_conflict_policy,
+        session.policy_overrides,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -277,16 +301,39 @@ def _close_persistent_cache_connection() -> None:
 # Public cache API
 # ---------------------------------------------------------------------------
 
-def warm_persistent_metadata_cache(limit: int = 6000) -> int:
+def warm_persistent_metadata_cache(
+    limit: int | None = None,
+    *,
+    song_paths: list[Path] | tuple[Path, ...] | None = None,
+) -> int:
     """Load persistent picker metadata into memory.
 
-    This is safe to run from the picker metadata worker. `peek_cached_song_ui_metadata`
-    intentionally does not do disk I/O, so the UI thread stays responsive.
+    Phase 3A: ``limit`` is now optional.  When omitted (the common case) we
+    derive an adaptive ceiling that keeps the warm-up query tight while still
+    retaining enough history for session-to-session cache hits:
+
+        effective_limit = max(500, len(song_paths) * 8)   # ~8 historical sessions
+
+    If ``song_paths`` is not supplied either, we fall back to a conservative
+    500-row default (enough for the common ≤111-song library) instead of the
+    old hard-coded 6000.
+
+    This is safe to run from the picker cache worker.
+    `peek_cached_song_ui_metadata` intentionally does not do disk I/O, so
+    the UI thread stays responsive.
     """
     global _persistent_loaded
     with _cache_lock:
         if _persistent_loaded:
             return len(_persistent_cache)
+
+    # Phase 3A: derive adaptive limit.
+    if limit is not None:
+        effective_limit = max(1, int(limit))
+    elif song_paths is not None:
+        effective_limit = max(500, len(song_paths) * 8)
+    else:
+        effective_limit = 500  # conservative default; beats old hard-coded 6000 for small libs
 
     loaded: dict[str, SongUiMetadata] = {}
     try:
@@ -298,7 +345,7 @@ def warm_persistent_metadata_cache(limit: int = 6000) -> int:
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (int(limit),),
+            (effective_limit,),
         ).fetchall()
     except Exception:
         rows = []
@@ -445,6 +492,20 @@ def compute_song_ui_metadata_payloads(
         meta = get_song_ui_metadata(Path(value), session, cfg)
         payloads.append(_metadata_to_payload(meta))
     return payloads
+
+
+def worker_process_warmup() -> bool:
+    """No-op submitted to ProcessPoolExecutor to pre-spawn the worker process.
+
+    Phase 2B: On Windows, ProcessPoolExecutor uses the 'spawn' start method,
+    meaning every new worker process must import the entire module tree from
+    scratch (~200-500 ms).  By submitting this trivial task immediately after
+    creating the executor we overlap that spawn latency with the first UI render
+    instead of paying it when the first real analysis batch is dispatched.
+
+    Returns True so the caller can confirm the worker is alive.
+    """
+    return True
 
 
 def store_computed_song_ui_metadata_payloads(
@@ -798,14 +859,48 @@ def peek_cached_song_ui_metadata(
 
     This function is safe in render paths: it checks RAM and already-warmed
     persistent cache only, never disk-loads synchronously.
+
+    Phase 3B: We maintain a path+session → ram_key short-circuit cache so that
+    on every frame repaint after the first we skip _song_repository.cache_key()
+    (and its dict lookup) entirely for paths we have already seen.
     """
     session = session or PlaybackSessionContext.balanced()
+    sig = _session_signature(session)
+    path_str = str(song_path)
+    ps_key = (path_str, sig)
+
+    # Fast path: if we already know the ram_key for this path+session, skip
+    # _song_repository.cache_key() entirely.
+    with _path_session_ram_lock:
+        ram_key = _path_session_ram_cache.get(ps_key)
+
+    if ram_key is not None:
+        with _cache_lock:
+            cached = _metadata_cache.get(ram_key)
+        if cached is not None:
+            return cached
+        # RAM evicted but ps_key still valid – fall through to persistent check.
+        persistent = _peek_persistent_metadata(song_path, session, cfg)
+        if persistent is None:
+            return None
+        with _cache_lock:
+            _metadata_cache[ram_key] = persistent
+        return persistent
+
+    # Slow path (first time we see this path+session): compute the full ram_key.
     try:
         song_file_key = _song_repository.cache_key(song_path)
     except Exception:
         return None
 
     ram_key = session.metadata_cache_key(song_file_key, cfg)
+
+    # Store in the short-circuit cache for future frames.
+    with _path_session_ram_lock:
+        if len(_path_session_ram_cache) > 5000:
+            _path_session_ram_cache.clear()
+        _path_session_ram_cache[ps_key] = ram_key
+
     with _cache_lock:
         cached = _metadata_cache.get(ram_key)
     if cached is not None:
@@ -831,6 +926,9 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
     # Phase 1A: also invalidate the SHA-256 RAM key cache.
     with _pkey_ram_lock:
         _pkey_ram_cache.clear()
+    # Phase 3B: invalidate the path+session → ram_key short-circuit cache.
+    with _path_session_ram_lock:
+        _path_session_ram_cache.clear()
     if clear_persistent:
         # Phase 1B: close and discard the thread-local connection before unlinking.
         _close_persistent_cache_connection()
