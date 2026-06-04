@@ -366,19 +366,34 @@ class PlaybackEngine:
     ) -> ExecutionResult | None:
         if not releases:
             return None
+        representative = min(
+            releases,
+            key=lambda release: (
+                release.effective_release_us,
+                release.source_action_index,
+                release.scan_code,
+            ),
+        )
         scheduled_us = min(release.scheduled_release_us for release in releases)
         deferred_by_us = max(
             0,
             max(release.effective_release_us - release.scheduled_release_us for release in releases),
         )
+        source_action_indices = {release.source_action_index for release in releases}
+        reasons = {release.reason for release in releases}
+        reason = (
+            representative.reason
+            if len(source_action_indices) == 1 and len(reasons) == 1
+            else "mixed_deferred_release"
+        )
         action = KeyAction(
             kind="up",
             scan_codes=tuple(ScanCode(release.scan_code) for release in releases),
             at_us=Microseconds(scheduled_us),
-            reason=releases[0].reason,
+            reason=reason,
         )
         result = self._execute_action(
-            releases[0].source_action_index,
+            representative.source_action_index,
             action,
             state,
             generation_ids=tuple(release.generation_id for release in releases),

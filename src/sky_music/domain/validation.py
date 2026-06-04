@@ -273,4 +273,4 @@ def validate_builtin_timing_profile(
     *,
     selected_fps: int = 60,
 ) -> None:
-    validate_timing_profile(profile, fps=60)
+    validate_timing_profile(profile, fps=selected_fps if selected_fps > 0 else 60)

@@ -336,8 +336,13 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         *,
         value_key: str,
         unframed_key: str,
+        fallback_unframed_key: str | None = None,
     ) -> str:
-        value = data.get(value_key, data.get(unframed_key, 0))
+        value = data.get(value_key)
+        if value is None:
+            value = data.get(unframed_key)
+        if value is None and fallback_unframed_key is not None:
+            value = data.get(fallback_unframed_key, 0)
         return f"{int(value) // 1000}"
 
     COLS = [
@@ -345,7 +350,8 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         ("hold_ms",              lambda n, d: frame_coupled_ms(
             d,
             value_key="hold_us",
-            unframed_key="min_hold_unframed_us",
+            unframed_key="hold_unframed_us",
+            fallback_unframed_key="min_hold_unframed_us",
         )),
         ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),

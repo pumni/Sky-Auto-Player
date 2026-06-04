@@ -532,6 +532,8 @@ def test_timing_profile_validators():
             key in p
             for key in ("hold_frames", "hold_floor_us", "hold_unframed_us")
         )
+    with pytest.raises(ValueError, match="Unsafe min_hold_us"):
+        validate_builtin_timing_profile("custom", {"min_hold_us": 20000}, selected_fps=30)
     validate_timing_profile(DEFAULT_TIMING_PROFILES["local_precise"], fps=144)
 
     # Test failure case

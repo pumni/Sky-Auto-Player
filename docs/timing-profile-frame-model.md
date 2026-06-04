@@ -38,11 +38,11 @@ normal hold from minimum compressed hold.
 
 ## 3. Current profiles
 
-| Profile | `min_hold_frames` | `min_hold_unframed_us` | Intent |
-| --- | ---: | ---: | --- |
-| `local_precise` | 1.0 | 22000 | Sharpest local visibility profile |
-| `audience_safe` | 1.05 | 18000 | Audience-tested sharp profile |
-| `balanced` | 1.2 | 17000 | General default with more local-frame body |
+| Profile         | `min_hold_frames` | `min_hold_unframed_us` | Intent                                     |
+| --------------- | ----------------: | ---------------------: | ------------------------------------------ |
+| `local_precise` |               1.0 |                  22000 | Sharpest local visibility profile          |
+| `audience_safe` |              1.02 |                  18000 | Audience-tested sharp profile              |
+| `balanced`      |              1.01 |                  17000 | General default with more local-frame body |
 
 `dense_safe` was removed. Fast repeat or schedule-stress recommendations now select
 `local_precise` together with tempo reduction.
@@ -61,7 +61,7 @@ frame-relative rules as the other profiles.
 ## 5. Accepted audience risk
 
 Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS,
-`audience_safe` materialises to 7293 us, which may be missed by a remote client sampling around
+`audience_safe` materialises to 7084 us, which may be missed by a remote client sampling around
 60 FPS. This is intentional and must not be silently counteracted by introducing another absolute
 wall under a different name.
 
@@ -69,10 +69,10 @@ wall under a different name.
 
 The required `hold_us == min_hold_us` values are:
 
-| Profile | None | 30 FPS | 60 FPS | 144 FPS |
-| --- | ---: | ---: | ---: | ---: |
-| `local_precise` | 22000 | 33334 | 16667 | 6945 |
-| `audience_safe` | 18000 | 35001 | 17501 | 7293 |
-| `balanced` | 17000 | 40001 | 20001 | 8334 |
+| Profile         |  None | 30 FPS | 60 FPS | 144 FPS |
+| --------------- | ----: | -----: | -----: | ------: |
+| `local_precise` | 22000 |  33334 |  16667 |    6945 |
+| `audience_safe` | 18000 |  34001 |  17001 |    7084 |
+| `balanced`      | 17000 |  33668 |  16834 |    7015 |
 
 Golden schedules use `TimingPolicy.from_dict({})` and must not be regenerated for this change.
