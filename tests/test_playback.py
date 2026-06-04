@@ -235,3 +235,58 @@ def test_focus_restore_grace_handles_pause_command():
     assert state.focus_pause_started_us is None
     assert state.manual_pause_started_us is not None
     assert state.pause_time_us > 0
+
+
+class _CountingFocusGuard:
+    """FocusGuard that records how many times is_active() actually runs."""
+    def __init__(self, active: bool = True):
+        self.active = active
+        self.is_active_calls = 0
+    def is_active(self) -> bool:
+        self.is_active_calls += 1
+        return self.active
+    def focus(self) -> bool:
+        return True
+
+
+def _focus_cache_engine(guard, clock):
+    song = Song(name="FocusCache", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
+    sched = build_key_actions(song)
+    return PlaybackEngine(
+        song=song, actions=sched.actions, backend=DryRunBackend(),
+        telemetry_enabled=False, require_focus=True,
+        clock=clock, sleeper=FakeSleeper(clock), focus_guard=guard,
+    )
+
+
+def test_focus_check_is_memoised_within_ttl():
+    """Repeated focus checks inside the TTL window hit the heavy is_active() only once."""
+    clock = FakeClock(start_us=1_000_000)
+    guard = _CountingFocusGuard(active=True)
+    engine = _focus_cache_engine(guard, clock)
+
+    # Many checks at the same instant -> exactly one real is_active() call.
+    for _ in range(50):
+        assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+
+def test_focus_check_refreshes_after_ttl():
+    """Once the TTL elapses, the next check re-queries the guard (so alt-tab is detected)."""
+    clock = FakeClock(start_us=1_000_000)
+    guard = _CountingFocusGuard(active=True)
+    engine = _focus_cache_engine(guard, clock)
+
+    assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+    # Within TTL: still cached.
+    clock.sleep_us(engine._focus_cache_ttl_us - 1)
+    assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+    # Past TTL: focus has been lost in the meantime -> re-queried and observed.
+    clock.sleep_us(2)
+    guard.active = False
+    assert engine._focus_is_active() is False
+    assert guard.is_active_calls == 2

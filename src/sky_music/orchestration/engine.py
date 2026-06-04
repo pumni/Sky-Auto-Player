@@ -131,6 +131,19 @@ class PlaybackEngine:
         else:
             self.focus_guard = self.config.focus_guard
 
+        # Focus-check cache. is_active() is a heavy Win32 chain (GetForegroundWindow +
+        # OpenProcess/QueryFullProcessImageName/CloseHandle for process validation). The playback
+        # loop polls it once per iteration, and the final spin phase before each event iterates
+        # every few microseconds — re-running that chain hundreds of times right inside the timing-
+        # critical window burns CPU and adds jitter. Focus state does not need microsecond freshness
+        # (the OS itself changes foreground on a far coarser scale, and pause polling already runs at
+        # poll_s ~ 25 ms), so we memoise it for a short TTL. This collapses the per-event spin burst
+        # to at most one real check per TTL while still pausing within a couple of milliseconds of an
+        # alt-tab.
+        self._focus_cache_ttl_us: int = 2_000
+        self._focus_active_cache: bool = True
+        self._focus_cache_at_us: int = -self._focus_cache_ttl_us - 1
+
     def _handle_commands(self, command: Optional[str], state: PlaybackState, total_time_seconds: float) -> Optional[str]:
         """Handles playback commands like pause, skip, quit, etc."""
         if command == "quit":
@@ -162,6 +175,15 @@ class PlaybackEngine:
                     self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status="playing", force=True)
         return None
 
+    def _focus_is_active(self) -> bool:
+        """Focus state with short-TTL memoisation to keep the heavy is_active() call out of the
+        hot spin loop. Returns the cached value unless the TTL has elapsed."""
+        now_us = self.clock.now_us()
+        if now_us - self._focus_cache_at_us >= self._focus_cache_ttl_us:
+            self._focus_active_cache = self.focus_guard.is_active()
+            self._focus_cache_at_us = now_us
+        return self._focus_active_cache
+
     def _process_wait_states(self, state: PlaybackState, first_action_executed: bool, total_time_seconds: float) -> Tuple[bool, Optional[str]]:
         """Handles focus lost and manual pause wait states."""
         if state.manual_pause_started_us is not None:
@@ -170,7 +192,7 @@ class PlaybackEngine:
             self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
-        if self.require_focus and not self.focus_guard.is_active():
+        if self.require_focus and not self._focus_is_active():
             if state.focus_pause_started_us is None:
                 self.backend.release_all()
                 state.focus_pause_started_us = self.clock.now_us()
