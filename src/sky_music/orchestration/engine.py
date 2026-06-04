@@ -131,23 +131,6 @@ class PlaybackEngine:
         else:
             self.focus_guard = self.config.focus_guard
 
-    def get_elapsed_us(
-        self,
-        start_perf: int,
-        pause_time_us: int,
-        manual_pause_started_us: Optional[int],
-        focus_pause_started_us: Optional[int],
-    ) -> int:
-        """Compute elapsed playback time in microseconds, accounting for pauses."""
-        # Wrap the new state logic to satisfy the old interface
-        state = PlaybackState(
-            start_perf=start_perf,
-            pause_time_us=pause_time_us,
-            manual_pause_started_us=manual_pause_started_us,
-            focus_pause_started_us=focus_pause_started_us
-        )
-        return state.get_elapsed_us(self.clock)
-
     def _handle_commands(self, command: Optional[str], state: PlaybackState, total_time_seconds: float) -> Optional[str]:
         """Handles playback commands like pause, skip, quit, etc."""
         if command == "quit":
@@ -223,22 +206,15 @@ class PlaybackEngine:
         self,
         idx: int,
         action: KeyAction,
-        start_perf: int,
-        pause_time_us: int,
-        manual_pause_started_us: Optional[int],
-        focus_pause_started_us: Optional[int],
+        state: PlaybackState,
     ) -> ExecutionResult:
         """Dispatch a single KeyAction to the backend and record precise timing metrics."""
-        send_start_us = self.get_elapsed_us(
-            start_perf, pause_time_us, manual_pause_started_us, focus_pause_started_us
-        )
+        send_start_us = state.get_elapsed_us(self.clock)
         if action.kind == "down":
             self.backend.key_down(action.scan_codes)
         else:
             self.backend.key_up(action.scan_codes)
-        send_end_us = self.get_elapsed_us(
-            start_perf, pause_time_us, manual_pause_started_us, focus_pause_started_us
-        )
+        send_end_us = state.get_elapsed_us(self.clock)
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
 
@@ -334,11 +310,7 @@ class PlaybackEngine:
 
                 # Execute action via extracted method (telemetry + late tracking inside)
                 first_action_executed = True
-                exec_result = self._execute_action(
-                    idx, action,
-                    state.start_perf, state.pause_time_us,
-                    state.manual_pause_started_us, state.focus_pause_started_us,
-                )
+                exec_result = self._execute_action(idx, action, state)
 
                 lateness_us = exec_result.lateness_us
                 if exec_result.is_late:

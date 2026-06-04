@@ -110,67 +110,34 @@ def test_telemetry_summary_includes_schedule_metadata():
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestGetElapsedUs:
-    """Tests for the extracted get_elapsed_us instance method."""
+    """Elapsed-time accounting now lives on PlaybackState.get_elapsed_us(clock)."""
 
-    def _engine_with_clock(self):
-        class _FakeClock:
-            def __init__(self, start_us: int = 10_000):
-                self.current_us = start_us
-            def now_us(self) -> int:
-                return self.current_us
-
-        class _FakeSleeper:
-            def __init__(self, clock):
-                self.clock = clock
-            def sleep(self, seconds: float) -> None:
-                self.clock.current_us += max(1, int(seconds * 1_000_000))
-
-        song = _simple_song((0, 100))
-        sched = build_key_actions(song)
-        clock = _FakeClock(start_us=10_000)
-        sleeper = _FakeSleeper(clock)
-        backend = DryRunBackend()
-        engine = PlaybackEngine(
-            song=song, actions=sched.actions, backend=backend,
-            telemetry_enabled=False, require_focus=False,
-            clock=clock, sleeper=sleeper,
-        )
-        return engine, clock
+    class _FakeClock:
+        def __init__(self, start_us: int = 10_000):
+            self.current_us = start_us
+        def now_us(self) -> int:
+            return self.current_us
 
     def test_no_pause(self):
-        engine, clock = self._engine_with_clock()
-        # clock is at 10_000; start_perf=0 → elapsed = 10_000 - 0 = 10_000
-        elapsed = engine.get_elapsed_us(
-            start_perf=0,
-            pause_time_us=0,
-            manual_pause_started_us=None,
-            focus_pause_started_us=None,
-        )
-        assert elapsed == 10_000
+        from sky_music.orchestration.engine import PlaybackState
+        clock = self._FakeClock(start_us=10_000)
+        # start_perf=0 → elapsed = 10_000 - 0 = 10_000
+        state = PlaybackState(start_perf=0)
+        assert state.get_elapsed_us(clock) == 10_000
 
     def test_with_manual_pause(self):
-        engine, clock = self._engine_with_clock()
-        # Advance clock to 20_000; manual pause started at 15_000
-        # elapsed = (20_000 - 0) - (20_000 - 15_000) = 20_000 - 5_000 = 15_000
-        clock.current_us = 20_000
-        elapsed = engine.get_elapsed_us(
-            start_perf=0,
-            pause_time_us=0,
-            manual_pause_started_us=15_000,
-            focus_pause_started_us=None,
-        )
-        assert elapsed == 15_000
+        from sky_music.orchestration.engine import PlaybackState
+        clock = self._FakeClock(start_us=20_000)
+        # elapsed = (20_000 - 0) - (20_000 - 15_000) = 15_000
+        state = PlaybackState(start_perf=0, manual_pause_started_us=15_000)
+        assert state.get_elapsed_us(clock) == 15_000
 
     def test_never_negative(self):
-        engine, clock = self._engine_with_clock()
+        from sky_music.orchestration.engine import PlaybackState
+        clock = self._FakeClock(start_us=10_000)
         # start_perf far in the future → result clamped to 0
-        elapsed = engine.get_elapsed_us(
-            start_perf=99_999_999,
-            pause_time_us=0,
-            manual_pause_started_us=None,
-            focus_pause_started_us=None,
-        )
-        assert elapsed == 0
+        state = PlaybackState(start_perf=99_999_999)
+        assert state.get_elapsed_us(clock) == 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,12 +154,9 @@ class TestExecuteAction:
             song=song, actions=sched.actions, backend=backend,
             telemetry_enabled=False, require_focus=False,
         )
+        from sky_music.orchestration.engine import PlaybackState
         action = sched.actions[0]  # first down event
-        result = engine._execute_action(
-            idx=0, action=action,
-            start_perf=0, pause_time_us=0,
-            manual_pause_started_us=None, focus_pause_started_us=None,
-        )
+        result = engine._execute_action(idx=0, action=action, state=PlaybackState(start_perf=0))
         assert isinstance(result, ExecutionResult)
         assert result.event_index == 0
         assert result.scheduled_us == action.at_us
@@ -207,12 +171,9 @@ class TestExecuteAction:
             song=song, actions=sched.actions, backend=backend,
             telemetry_enabled=False, require_focus=False,
         )
+        from sky_music.orchestration.engine import PlaybackState
         down_action = next(a for a in sched.actions if a.kind == "down")
-        engine._execute_action(
-            idx=0, action=down_action,
-            start_perf=0, pause_time_us=0,
-            manual_pause_started_us=None, focus_pause_started_us=None,
-        )
+        engine._execute_action(idx=0, action=down_action, state=PlaybackState(start_perf=0))
         assert ("down", tuple(sorted(down_action.scan_codes))) in backend.history
 
     def test_dispatch_up_action(self):
@@ -223,13 +184,11 @@ class TestExecuteAction:
             song=song, actions=sched.actions, backend=backend,
             telemetry_enabled=False, require_focus=False,
         )
+        from sky_music.orchestration.engine import PlaybackState
         # Execute down first so the up can release it
+        state = PlaybackState(start_perf=0)
         for action in sched.actions:
-            engine._execute_action(
-                idx=0, action=action,
-                start_perf=0, pause_time_us=0,
-                manual_pause_started_us=None, focus_pause_started_us=None,
-            )
+            engine._execute_action(idx=0, action=action, state=state)
         assert any(k == "up" for k, _ in backend.history)
 
 
