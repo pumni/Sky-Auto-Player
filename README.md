@@ -1,4 +1,4 @@
-# Sky Children of the Light: PC Precision Music Player
+# 🎵 Sky Children of the Light: PC Precision Music Player
 
 An automatic music player designed for **Sky: Children of the Light** on PC. It reads JSON, skysheet, or JSON-compatible txt song files downloaded from specy/skyMusic and simulates keyboard keypresses in real-time.
 
@@ -7,16 +7,16 @@ An automatic music player designed for **Sky: Children of the Light** on PC. It 
 
 ---
 
-## Quick Start & Installation
+## 🛠️ Quick Start & Installation
 
-### Option 1: Standalone Release
+### 🚀 Option 1: Standalone Release (Recommended)
 
 1. Go to the [Releases](https://github.com/pumznguyen/Sky-Player/releases) page on GitHub.
 2. Download the latest `Sky-Player.zip` package.
 3. Extract the ZIP file anywhere on your PC.
 4. Launch your **Sky game**, then double-click `Sky-Player.exe` inside the extracted folder to start playing!
 
-### Option 2: Running from Source
+### 💻 Option 2: Running from Source
 
 If you prefer running the Python script directly, install Python >= 3.11 and `uv`:
 
@@ -31,7 +31,7 @@ uv run python src/main.py
 
 ---
 
-## How to Use
+## 🎵 How to Use
 
 1. **Open your Sky game** first.
 2. **Launch the player**.
@@ -47,7 +47,7 @@ uv run python src/main.py
 
 The default picker mode is `--ui auto`. It uses the Textual picker in supported terminals and falls back to the classic prompt-toolkit picker elsewhere. Use `--ui classic` to force the old picker or `--ui textual` to force the new picker. The classic picker is deprecated, but remains available as a compatibility fallback.
 
-### Adding More Songs
+### ➕ Adding More Songs
 
 1. Go to [Sky Music Nightly](https://specy.github.io/skyMusic/).
 2. Download any song in **JSON**, **skysheet**, or JSON-compatible **txt** format.
@@ -56,7 +56,7 @@ The default picker mode is `--ui auto`. It uses the Textual picker in supported 
 
 ---
 
-## Advanced Settings & CLI
+## ⚙️ Advanced Settings & CLI
 
 Most settings—including timing profiles, calibration, and FPS adjustments—can be managed effortlessly inside the app using the **Command Palette** (press `/` while in the menu).
 

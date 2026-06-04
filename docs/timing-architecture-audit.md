@@ -5,6 +5,18 @@
 > Đây là bản thiết kế cho đợt refactor — chưa implement. Nguồn số đo: [`timing-experiments.md`](timing-experiments.md)
 > (Part 1 T1–T4) và [`result.md`](result.md) (kết quả thực đo của user, 2026-06).
 
+> ⚠️ **SUPERSEDED NOTE (2026-06-04).** Kết luận ban đầu trong file này còn giữ `release_gap`.
+> Corpus/timeline audit sau đó cho thấy `release_gap` gần như không bind trên bài thật và làm profile
+> semantics rối hơn giá trị thực tế. `release_gap_us` đã bị xoá khỏi code/profile/CLI/scheduler.
+>
+> **O10 reachability correction:** `repeat_release_gap` cũng chưa phải production playback lever đã
+> chứng minh. Scheduler chỉ đổi degraded schedule trong band `[min_hold+gap, hold+gap)`; mọi profile
+> frame-aware hiện có `hold == min_hold`, nên band rỗng. Corpus thật có 0 schedule-changing positive
+> interval tới tempo 3.0x. Chỉ `min_hold` hiện là lever production đã chứng minh.
+>
+> **Final follow-up:** `repeat_release_gap` đã bị xoá khỏi profile/CLI/runtime policy semantics.
+> Scheduler hiện chỉ còn `hold/min_hold`; same-key interval dưới `min_hold_us` là infeasible.
+
 ---
 
 ## 0. Nguyên tắc phân loại
@@ -59,23 +71,24 @@ bài bắt đầu ở t=0, clamp làm **nén khoảng mở đầu đúng bằng 
 | Chỉ số | Tác dụng thật? | Phán quyết | Bằng chứng / lý do |
 | --- | --- | --- | --- |
 | `min_hold` (sàn visibility 1 frame) | ✅ Cốt lõi | **GIỮ** + tinh chỉnh ratio | T1: sàn thật ~1.0f; code 1.25f |
-| `repeat_release_gap` (sàn same-key) | ✅ Cốt lõi | **GIỮ** (đã chuẩn) | T2: 25001@60 ≈ đo 24ms; 18000@144 ≈ đo 16ms |
+| `repeat_release_gap` (target same-key) | ⚠️ Mechanism thật, current lever không reachable | **AUDIT / bỏ khỏi profile nếu không re-architect** | compression band rỗng khi `hold==min_hold`; corpus thật 0 schedule-changing positive interval tới 3.0x |
 | `hold` (trần note-down) | ⚠️ Local `hold==min_hold` mọi FPS | **GỘP** vào min_hold (local) | Sky kêu khi key-DOWN; độ dài hold không đổi onset đơn |
 | `input_lead` | ❌ No-op + méo nốt đầu | **BỎ** | §1 ở trên + O1 |
 | `chord_merge` | ❌ Gần như không fire | **BỎ** (chord trùng giờ vẫn gom ở step 6) | O2; bài thật không có cụm 5–20ms |
 | `frame_align` (`down_only`) | ❌ Off mọi profile, vô nghĩa | **BỎ** | game tự sample theo frame riêng của nó |
 | `hold_unframed` / `min_hold_unframed` | ⚠️ Chỉ dùng khi fps=None | **GỘP** (chỉ còn raw escape hatch) | raw mode = cổng thí nghiệm |
-| `release_gap` (defer release đụng down) | ✅ Có, nhỏ | **GIỮ** | `scheduler.py:255` |
-| `focus_restore_grace`, `spin_threshold` | ✅ Infra | **GIỮ** | khác concern, không chạm onset |
+| `release_gap` (defer release đụng down) | ❌ Gần như không bind | **BỎ** (audit bổ sung 2026-06-04) | corpus thật không có post-release cross-key gap sát vài ms; code path làm profile rối |
+| `focus_restore_grace`, `spin_threshold` | ✅ Infra | **GLOBALIZE / đo riêng** | khác concern, không chạm onset; không nên là profile semantics |
 | `same_key_conflict_policy` | ✅ strict/degraded | **GIỮ** | gate impossible repeat |
 | ratio `input_lead_min_frame_ratio` (<60 raise lead) | ❌ Chết theo lead | **BỎ** | phụ thuộc input_lead |
 | ratio `chord_merge_max_frame_ratio` | ❌ Chết theo chord_merge | **BỎ** | phụ thuộc chord_merge |
 
-### Mô hình local sau dọn dẹp = đúng 3 cần gạt thật
+### Mô hình local sau O10 reachability audit
 
 1. **`min_hold`** — sàn 1-frame (visibility). Tinh chỉnh 1.25 → ~1.0–1.1 theo T1.
-2. **`repeat_release_gap`** — `max(1.5×frame, ~17ms)`. Đã khớp T2, giữ.
-3. **`release_gap`** — defer release nhỏ khi đụng down kế. Giữ.
+2. **`repeat_release_gap`** — game mechanism có thể thật, nhưng current frame-aware profile không có
+   compression band để thực thi ở degraded mode. Không tune 17/18 ms trước khi quyết định
+   re-architect hoặc remove khỏi profile semantics.
 
 Cộng hạ tầng: `focus_restore_grace`, `spin_threshold`, `same_key_conflict_policy`. Mọi thứ khác là
 nhiễu.
@@ -87,8 +100,8 @@ nhiễu.
 - `min_visible_hold_frames` / `min_hold_min_frame_ratio`: **1.25 → 1.1**.
   T1: ở 60fps, 16ms (0.96f) vẫn 15/15; rớt từ 15ms (0.90f). 1.1f còn ~15% biên trên mép rớt thật →
   sắc hơn ~4ms@60 mà gần như không rủi ro.
-- `repeat_release_gap_floor_us`: **18000 → 16500** (tuỳ chọn). T2 @144 đo 16ms reliable; giữ chút biên.
-  Không bắt buộc — 18000 chỉ dư 2ms.
+- ~~`repeat_release_gap_floor_us`: 18000 → 16500~~ **SUPERSEDED:** không tune số này trước O10.4
+  reachability decision; current frame-aware degraded schedule không đổi theo floor.
 
 > Đây đúng là item §16 ("frame-relative local hold tuning, tách riêng, cần đo in-game") trong
 > [`timing-profile-frame-model.md`](timing-profile-frame-model.md). Giờ đã có dữ liệu T1 để quyết.
@@ -150,8 +163,10 @@ Mỗi phase: chạy full test + verify `resolve_effective_policy` không đổi 
 
 > **TIẾN ĐỘ — TẤT CẢ 3 PHASE ĐÃ NGHIỆM THU PASS (2026-06):**
 > Phase 1 (bỏ input_lead) ✅ · Phase 2 (bỏ chord_merge + frame_align) ✅ · Phase 3 (gộp hold/min_hold
-> + local 1.1f + gộp ScheduledNoteDraft) ✅. Test: 176 → **171 passed**. Mô hình local còn đúng 3 cần
-> gạt thật (min_hold/visibility, repeat_gap, release_gap) + hạ tầng. `ScheduledNoteDraft` còn một
+> + local 1.1f + gộp ScheduledNoteDraft) ✅. Test: 176 → **171 passed**. **Superseded 2026-06-04:**
+> min_hold/visibility là production lever đã chứng minh; repeat_gap còn trong code nhưng O10 audit
+> cho thấy current frame-aware degraded schedule không có reachable compression band.
+> `ScheduledNoteDraft` còn một
 > trường thời gian (`at_us`). local_precise visibility @60 = 18334 (1.1f), sắc hơn cũ 2.5ms, vẫn trên
 > sàn đo 16ms.
 
@@ -162,7 +177,7 @@ Mỗi phase: chạy full test + verify `resolve_effective_policy` không đổi 
   phải **y hệt baseline**:
 
 ```
-profile        fps   hold   min_hold  rgap   rel_gap  lead   chord  align
+profile        fps   hold   min_hold  rgap   lead   chord  align
 local_precise  None  22000  17000     18000  3500     4000   2500   none
 local_precise  30    41667  41667     50000  5000     16667  2500   none
 local_precise  60    20834  20834     25001  3500     4000   2500   none
@@ -222,8 +237,8 @@ audience_safe  144   20000  18000     24000  9000     10000  5000   none
    trị tình cờ). Gộp `ScheduledNoteDraft` 4 trường thời gian (`source`/`snapped`/`shifted`/`down`, giờ
    bằng nhau hệt sau Phase 1+2) về **một** trường + bỏ biến trung gian `target_snapped_time` + sửa
    tên `merged_drafts`/`snapped`/`shifted` (gây hiểu nhầm) + đánh số lại comment (đang nhảy 2→3→5→6).
-2. **Giá trị:** local_precise @{30,60,144} khớp bảng trên. **3 profile kia + repeat_gap + release_gap
-   của MỌI profile = y hệt baseline §6.0.**
+2. **Giá trị:** local_precise @{30,60,144} khớp bảng trên. **Superseded 2026-06-04:** `release_gap`
+   đã xoá; các equivalence check mới chỉ xét hold/min_hold/repeat_gap.
 3. **fps=None (raw escape hatch):** đây là chỗ DUY NHẤT hiện `hold≠min_hold` (22000 vs 17000). Gộp ép
    một giá trị raw — bên thực thi chọn một số, đảm bảo `hold==min_hold`, và GHI rõ lý do; nghiệm thu
    xác nhận bất biến `hold==min_hold` ở raw.
@@ -238,7 +253,7 @@ from sky_music.domain.scheduler_types import FrameTimingPolicy
 for name in ['local_precise','balanced','dense_safe','audience_safe']:
     for fps in (None,30,60,144):
         p=getattr(FrameTimingPolicy,name)(fps=fps)
-        print(name,fps,p.hold_us,p.min_hold_us,p.repeat_release_gap_us,p.release_gap_us,p.frame_align)
+        print(name,fps,p.hold_us,p.min_hold_us,p.repeat_release_gap_us)
 "
 ```
 

@@ -4,14 +4,20 @@
 > | Kết quả | Đã làm gì |
 > | --- | --- |
 > | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1, sau đó siết thử nghiệm tiếp xuống 1.05; 3 profile khác giữ 1.2 |
-> | **T2** gap 24ms@60 / 16ms@144 | XÁC NHẬN → local_precise giữ `1.5×frame`, siết high-FPS fixed floor thử nghiệm xuống `17000µs`; profile khác còn `18000µs` |
+> | **T2** gap 24ms@60 / 16ms@144 | Game mechanism có cơ sở; O10 reachability audit sau đó cho thấy current frame-aware degraded schedule không thực thi được profile gap khi `hold==min_hold` |
 > | **T3** jitter lưỡng cực/phase-dependent | ĐÍNH CHÍNH (không phải sàn 12–13ms cố định) → principles A.10 |
 > | **T4** floor thấp ≈ floor cao remote | sàn rộng chưa chứng minh là cần (mạng tốt) |
 > | **O1** input_lead 0/8/20 offset như nhau | KẾT LUẬN no-op kiến trúc → **ĐÃ XOÁ** input_lead (Phase 1) |
 > | **O2** bài thật không có cụm 5–20ms | → **ĐÃ XOÁ** chord_merge (Phase 2) |
 > | **O3** sàn no-drop remote | **CÒN MỞ** — gác để làm chuẩn local trước |
 >
-> Mô hình local giờ còn 3 cần gạt thật: `min_hold`, `repeat_release_gap`, `release_gap`.
+> Cập nhật 2026-06-04: `release_gap` đã bị xoá. O10 reachability audit tiếp theo cho thấy
+> `repeat_release_gap` chưa phải production playback lever trong current frame-aware policies:
+> compression band rỗng khi `hold==min_hold`, và corpus thật có 0 schedule-changing positive interval
+> tới tempo 3.0x. `min_hold` hiện là lever production đã chứng minh.
+>
+> Follow-up kiến trúc: `repeat_release_gap` cũng đã bị xoá khỏi profile/CLI/runtime policy semantics.
+> T2 giữ vai trò hồ sơ mechanism/counterfactual, không còn là knob production.
 
 ### T1 — Game samples input once per render frame; visibility floor = 1 frame
 
@@ -33,7 +39,10 @@
 |  60 | 16.67 ms |  25.00 ms | 18 ms | **25 ms** |
 | 144 |  6.94 ms |  10.42 ms | 18 ms | **18 ms** |
 
-với 1.5 frames + 18_000 µs floor thì nó hơi bảo thủ hơn mức quan sát được ở 144 FPS, nhưng đúng hướng vì 14 ms không ổn định và 60 FPS cần khoảng 24–25 ms để đạt 10/10 đáng tin cậy. `local_precise` hiện được siết thử nghiệm xuống 17_000 µs để kiểm vùng high-FPS sát hơn; cần chạy lại T2 @144 trước khi coi là floor đã chốt.
+Các số trên mô tả game mechanism quan sát được, nhưng O10 reachability audit sau đó cho thấy chúng
+chưa biện minh cho profile floor hiện tại: mọi frame-aware profile materialise `hold==min_hold`, làm
+compression band rỗng trong degraded mode. Corpus thật có 0 schedule-changing positive interval tới
+tempo 3.0x. Không chốt/tune 17–18 ms như production lever trước quyết định O10.4.
 
 ### T3 — Onset cadence is a fixed ~60 Hz tick (input lead must not scale with render FPS ≥60)
 
