@@ -290,3 +290,28 @@ def test_focus_check_refreshes_after_ttl():
     guard.active = False
     assert engine._focus_is_active() is False
     assert guard.is_active_calls == 2
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="win32 SendInput backend only")
+def test_send_scan_code_batch_builds_correct_cached_inputs(monkeypatch):
+    """The cached-INPUT fast path must emit the same down/up scan-code events as before."""
+    from sky_music.platform.win32 import inputs
+
+    captured = []
+    monkeypatch.setattr(inputs, "send_input_batch", lambda batch: captured.append(list(batch)))
+
+    inputs.send_scan_code_batch((30, 31), key_up=False)
+    down_batch = captured[-1]
+    assert [ki.ki.wScan for ki in down_batch] == [30, 31]
+    assert all(ki.type == inputs.INPUT_KEYBOARD for ki in down_batch)
+    assert all(ki.ki.dwFlags == inputs.KEYEVENTF_SCANCODE for ki in down_batch)
+
+    inputs.send_scan_code_batch((30,), key_up=True)
+    up_batch = captured[-1]
+    assert up_batch[0].ki.dwFlags == (inputs.KEYEVENTF_SCANCODE | inputs.KEYEVENTF_KEYUP)
+
+    # Same (scan_code, flags) reuses the cached object; different flags do not collide.
+    assert inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE) is inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE)
+    assert inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE) is not inputs._cached_key_input(
+        30, inputs.KEYEVENTF_SCANCODE | inputs.KEYEVENTF_KEYUP
+    )
