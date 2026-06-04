@@ -192,7 +192,10 @@ same_key_interval_us must be at least min_hold_us.
 
 If the authored same-key interval is below `min_hold_us`, the scheduler cannot both preserve the
 visibility floor and release before the next down. Degraded mode keeps `min_hold_us` and reports the
-overlap; strict mode may reject instead.
+overlap; strict mode may reject instead. At runtime, the player anchors `min_hold_us` to confirmed
+down-dispatch completion and defers the matching release per key. If that confirmed hold makes a new
+same-key down infeasible, degraded mode explicitly drops the conflicting new down instead of relying
+on backend duplicate-down filtering.
 
 A same-key repeat can be dropped, merged, or heard as incomplete if the game does not observe a complete down-up-down sequence.
 
@@ -212,6 +215,16 @@ minimum. Online reliability should target remote survivability, not merely one-f
 ## 7. Principle 3 — The Visibility Rule
 
 min_hold_us must be long enough for the game client to observe the key as down.
+
+The runtime visibility contract is:
+
+```text
+normal_up_dispatch_started >= down_dispatch_completed + min_hold_us
+```
+
+This protects the configured visibility floor against differential down/up dispatch lateness without
+globally increasing profile holds. Safety releases caused by pause, focus loss, panic, quit, or an
+exception are intentionally exempt.
 
 A short hold may feel attractive for dense songs, but it can make notes vanish if the game does not sample the down state in time.
 

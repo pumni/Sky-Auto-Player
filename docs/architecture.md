@@ -28,7 +28,21 @@ Instead of calculating delays on the fly, the entire song is mapped out onto an 
 *   **Event Grouping:** Notes sharing the exact same timestamp are grouped into a single `SendInput` batch (chords). Notes a few ms apart go out at their own time; the game samples them on the same frame anyway.
 
 ### Step 3: The Real-Time Engine
-The `PlaybackEngine` takes the pre-calculated `KeyAction` timeline and enters a highly optimized `while` loop, checking `time.perf_counter_ns()`.
+The `PlaybackEngine` compiles the pre-calculated `KeyAction` timeline into per-key runtime
+generations, then enters a highly optimized `while` loop checking `time.perf_counter_ns()`.
+
+The runtime coordinator preserves authored down deadlines while enforcing the resolved
+`min_hold_us` from confirmed down dispatch:
+
+```text
+release_not_before = down_dispatch_completed + min_hold_us
+effective_release = max(scheduled_release, release_not_before)
+```
+
+Releases are deferred per key, so protecting one note's hold does not block unrelated downs.
+Generation identity also prevents a stale up from releasing a later same-key note after a conflict,
+pause, focus loss, or panic release. In degraded mode, a runtime-infeasible same-key down is
+explicitly dropped while other playable chord keys continue.
 
 To achieve microsecond accuracy on Windows (where `time.sleep` is notoriously inaccurate), the engine uses a **Hybrid Sleeper** (`PreciseSleeper`) that steps toward each deadline:
 1.  **Coarse Sleep:** If the next action is >20ms away, it OS-sleeps in chunks (capped at 20ms, waking ~5ms early) so the loop can still poll hotkeys/pause.
@@ -58,6 +72,11 @@ Because every PC and network environment has different latency profiles, the eng
 When running with the `--debug-csv` flag (or globally enabled in settings), a CSV is dumped to the `logs/` directory.
 *   `lateness_us`: The delay between when a note was scheduled to play vs. when the OS actually fired it.
 *   `send_duration_us`: How long the `SendInput` call blocked the thread.
+*   `sent_scan_codes` / `skipped_scan_codes`: What the backend actually accepted or skipped.
+*   `confirmed_hold_lower_bound_us`: Conservative hold measured from completed down dispatch to the
+    start of the matching up dispatch.
+*   `runtime_outcome` / `deferred_by_us`: Whether an intent was sent, deferred, suppressed, or
+    dropped by an explicit runtime conflict decision.
 
 ### Calibration Loop
 The Orchestration layer includes a `calibration` module that analyzes the P95 and P99 percentiles of the telemetry lateness.

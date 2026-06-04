@@ -739,7 +739,9 @@ def play_selected_song(
         tempo_scale=current_tempo,
         sleep_policy=active_sleep_policy,
         focus_restore_grace_us=active_policy.focus_restore_grace_us,
-        fps=getattr(active_policy, "fps", None)
+        fps=getattr(active_policy, "fps", None),
+        min_hold_us=int(active_policy.min_hold_us),
+        same_key_conflict_policy=active_policy.same_key_conflict_policy,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
     result = engine.play()
