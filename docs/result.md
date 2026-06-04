@@ -3,7 +3,7 @@
 >
 > | Kết quả | Đã làm gì |
 > | --- | --- |
-> | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1, sau đó siết thử nghiệm tiếp xuống 1.05; 3 profile khác giữ 1.2 |
+> | **T1** visibility ~1.0 frame | ÁP DỤNG → local_precise hạ ratio 1.25→1.1→1.05→**1.0 (đúng 1 frame, ceil rounding, validate in-game)**; 3 profile khác giữ 1.2 |
 > | **T2** gap 24ms@60 / 16ms@144 | Game mechanism có cơ sở; O10 reachability audit sau đó cho thấy current frame-aware degraded schedule không thực thi được profile gap khi `hold==min_hold` |
 > | **T3** jitter lưỡng cực/phase-dependent | ĐÍNH CHÍNH (không phải sàn 12–13ms cố định) → principles A.10 |
 > | **T4** floor thấp ≈ floor cao remote | sàn rộng chưa chứng minh là cần (mạng tốt) |

@@ -9,7 +9,8 @@ June 2026 refactor, and `config.py` / `scheduler_types.py` hold the code.
 > `release_gap_us` (near-zero corpus binding and misleading profile semantics), and
 > `repeat_release_gap` (mechanism candidate, but not a reachable production profile lever in the
 > audited corpus/model). The live code model now represents `hold` and `min_hold` only.
-> `local_precise` uses `hold/min_hold frames = 1.05` (others 1.2).
+> `local_precise` uses `hold/min_hold frames = 1.0` — exactly one frame, the measured visibility
+> floor — while the other profiles keep `1.2`.
 
 > History: profiles used to declare absolute microseconds with a *separate* global frame-aware
 > scaling layer (`min_hold = max(base_us, 1.25 × frame)`). The number you wrote was not the
@@ -28,10 +29,15 @@ effective_us(param) = max(ceil(frames(param) × local_frame_us), floor_us(param)
 ```
 
 - `frames` = the **local visibility margin** (physics: ≥ 1 frame). Moves with the profile and
-  is per-profile overridable (hold/min_hold = 1.05 for local_precise / 1.2 for the others).
+  is per-profile overridable (hold/min_hold = 1.0 for local_precise / 1.2 for the others).
 - `floor_us` = the profile's **absolute target / wall** — its real character.
 
-`ceil` is required (matches the historical `math.ceil(frame × ratio)`; `round` drifts ±1 µs).
+Rounding is **`ceil` in both places**, and this is a safety requirement: a visibility floor must
+never come out *shorter* than a real frame. The frame period itself is `ceil(1_000_000 / fps)` (not
+`round`, which truncated e.g. `1e6/144 = 6944.44 → 6944`, putting a 1.0-frame floor *below* a real
+frame), and the outer `ceil(frames × frame_us)` matches the historical `math.ceil`. Both
+`FrameTimingPolicy.from_timing_policy` and `validation._frame_coupled_us` must use the identical
+computation.
 
 ## 2. Why floors are absolute (local vs remote)
 
@@ -62,7 +68,7 @@ policy values after O10.5/O10.6, not profile timing semantics.
 ## 4. Resolution pipeline (single layer)
 
 ```
-frame_us = 1_000_000 / (fps if fps and fps > 0 else 60)        # baseline 60 when unknown
+frame_us = ceil(1_000_000 / fps)        # fps > 0; fps == 0/None disables frame-aware sizing
 
 hold_us       = max(ceil(hold_frames     * frame_us), hold_floor_us)
 min_hold_us   = max(ceil(min_hold_frames * frame_us), min_hold_floor_us)

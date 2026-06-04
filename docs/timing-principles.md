@@ -511,8 +511,11 @@ correct in principle, not merely a useful heuristic.
 Reliable key-down capture requires `hold ≥ 1 frame`. No fixed-millisecond component
 was observed (7 ms suffices at 144 FPS). The measured reliable point is ≈0.96–1.01 frame at
 30/60/144 (result.md T1). Encoded standard: built-ins keep a margin above one frame. **Update
-(June 2026):** `local_precise` is intentionally the sharp experimental local profile and now uses
-**1.05** frames; the other profiles keep wider margins.
+(June 2026):** `local_precise` is intentionally the sharp local profile and now sits at exactly
+**1.0** frame — the measured floor itself, validated in-game — while the other profiles keep wider
+margins (1.2). To guarantee a 1.0-frame floor never lands *below* a real frame, the frame period is
+rounded up (`frame_us = ceil(1e6/fps)`), so `local_precise` materialises 33334 / 16667 / 6945 µs at
+30 / 60 / 144 FPS.
 
 ### A.4 Result 3 — Same-key release-gap floor = max(~1.4 frame, ~17 ms fixed) **[HISTORICAL]**
 
