@@ -182,16 +182,30 @@ def send_input_batch(inputs: list[INPUT]) -> None:
             )
         _retry_wait_seconds(0.002)
 
+# Cache one immutable INPUT per (scan_code, flags). Sky uses at most ~15 keys x {down, up}, so this
+# is a tiny fixed-size table. Building the KEYBDINPUT/INPUT structs is the bulk of the per-event
+# Python cost (~50-60% for chords); SendInput copies these by value into the batch array, so the
+# cached entries are never mutated and the partial-send retry in send_input_batch still operates on
+# the copied array.
+_INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
+
+def _cached_key_input(scan_code: int, flags: int) -> INPUT:
+    cache_key = (scan_code, flags)
+    cached = _INPUT_CACHE.get(cache_key)
+    if cached is None:
+        cached = INPUT(type=INPUT_KEYBOARD)
+        cached.ki = KEYBDINPUT(0, scan_code, flags, 0, 0)
+        _INPUT_CACHE[cache_key] = cached
+    return cached
+
 def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
     if not scan_codes:
         return
+    # Keep this boundary defensive: release/retry paths and direct callers do not all originate
+    # from the scheduler's already-deduplicated KeyAction batches.
     scan_codes = tuple(dict.fromkeys(scan_codes))
-    key_inputs = []
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-    for scan_code in scan_codes:
-        key_input = INPUT(type=INPUT_KEYBOARD)
-        key_input.ki = KEYBDINPUT(0, scan_code, flags, 0, 0)
-        key_inputs.append(key_input)
+    key_inputs = [_cached_key_input(scan_code, flags) for scan_code in scan_codes]
     send_input_batch(key_inputs)
 
 def get_process_name_by_pid(pid: int) -> str | None:

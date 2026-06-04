@@ -15,13 +15,15 @@ class TelemetryLogger:
         profile_name: str = "balanced",
         tempo_scale: float = 1.0,
         run_id: str | None = None,
-        fps: int | None = None
+        fps: int | None = None,
+        min_hold_us: int = 0,
     ):
         self.song_name = song_name
         self.enabled = enabled
         self.profile_name = profile_name
         self.tempo_scale = tempo_scale
         self.fps = fps
+        self.min_hold_us = max(0, int(min_hold_us))
         self.records = []
         self.log_filepath = None
         self.backend_health: BackendHealth | None = None
@@ -48,22 +50,42 @@ class TelemetryLogger:
         lateness_us: int,
         send_duration_us: int,
         scan_codes: tuple[int, ...],
-        reason: str
+        reason: str,
+        *,
+        dispatch_id: int | None = None,
+        dispatch_completed_us: int | None = None,
+        sent_scan_codes: tuple[int, ...] | None = None,
+        skipped_scan_codes: tuple[int, ...] = (),
+        generation_ids: tuple[int, ...] = (),
+        runtime_outcome: str = "sent",
+        deferred_by_us: int = 0,
     ) -> None:
         if not self.enabled:
             return
             
         scan_codes_str = ";".join(str(sc) for sc in scan_codes)
+        sent_scan_codes = scan_codes if sent_scan_codes is None else sent_scan_codes
         self.records.append({
             "song": self.song_name,
             "event_index": event_index,
+            "dispatch_id": event_index if dispatch_id is None else dispatch_id,
             "kind": kind,
             "scheduled_us": scheduled_us,
             "actual_us": actual_us,
+            "dispatch_completed_us": (
+                actual_us + send_duration_us
+                if dispatch_completed_us is None
+                else dispatch_completed_us
+            ),
             "lateness_us": lateness_us,
             "send_duration_us": send_duration_us,
             "scan_codes": scan_codes_str,
-            "reason": reason
+            "sent_scan_codes": ";".join(str(sc) for sc in sent_scan_codes),
+            "skipped_scan_codes": ";".join(str(sc) for sc in skipped_scan_codes),
+            "generation_ids": ";".join(str(generation_id) for generation_id in generation_ids),
+            "runtime_outcome": runtime_outcome,
+            "deferred_by_us": deferred_by_us,
+            "reason": reason,
         })
         
     def record_backend_health(self, health: BackendHealth) -> None:
@@ -101,24 +123,37 @@ class TelemetryLogger:
         if not self.records:
             return None
 
-        latenesses = [r["lateness_us"] for r in self.records]
-        send_durations = [r["send_duration_us"] for r in self.records]
+        dispatch_records = [
+            record
+            for record in self.records
+            if record.get("sent_scan_codes", record["scan_codes"])
+            or record.get("skipped_scan_codes", "")
+        ]
+        latenesses = [r["lateness_us"] for r in dispatch_records]
+        send_durations = [r["send_duration_us"] for r in dispatch_records]
 
         over_2ms = sum(1 for lat in latenesses if lat > 2000)
         over_5ms = sum(1 for lat in latenesses if lat > 5000)
         over_10ms = sum(1 for lat in latenesses if lat > 10000)
 
         hold_durations: list[int] = []
-        active_downs: dict[int, int] = {}
+        confirmed_hold_lower_bounds: list[int] = []
+        active_downs: dict[int, tuple[int, int]] = {}
         for r in self.records:
-            codes = [int(sc) for sc in r["scan_codes"].split(";") if sc]
+            sent_codes = r.get("sent_scan_codes", r["scan_codes"])
+            codes = [int(sc) for sc in sent_codes.split(";") if sc]
             if r["kind"] == "down":
                 for sc in codes:
-                    active_downs[sc] = r["actual_us"]
+                    active_downs[sc] = (
+                        r["actual_us"],
+                        r.get("dispatch_completed_us", r["actual_us"] + r["send_duration_us"]),
+                    )
             elif r["kind"] == "up":
                 for sc in codes:
                     if sc in active_downs:
-                        hold_durations.append(r["actual_us"] - active_downs[sc])
+                        down_started_us, down_completed_us = active_downs[sc]
+                        hold_durations.append(r["actual_us"] - down_started_us)
+                        confirmed_hold_lower_bounds.append(r["actual_us"] - down_completed_us)
                         del active_downs[sc]
 
         def _pct(values: list[int], pct: float) -> float:
@@ -130,11 +165,19 @@ class TelemetryLogger:
 
         def _stats(values: list[int], thresholds: bool = False) -> dict:
             if not values:
-                base: dict = {"p50_us": 0.0, "p95_us": 0.0, "p99_us": 0.0, "max_us": 0.0, "avg_us": 0.0}
+                base: dict = {
+                    "min_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0,
+                    "max_us": 0.0,
+                    "avg_us": 0.0,
+                }
                 if thresholds:
                     base.update({"over_2ms": 0, "over_5ms": 0, "over_10ms": 0})
                 return base
             res = {
+                "min_us": float(min(values)),
                 "p50_us": _pct(values, 0.50),
                 "p95_us": _pct(values, 0.95),
                 "p99_us": _pct(values, 0.99),
@@ -165,6 +208,51 @@ class TelemetryLogger:
             "lateness_us": _stats(latenesses, thresholds=True),
             "send_duration_us": _stats(send_durations),
             "note_hold_duration_us": _stats(hold_durations),
+            "confirmed_hold_lower_bound_us": _stats(confirmed_hold_lower_bounds),
+            "confirmed_hold_shortfall_count": sum(
+                1
+                for hold_us in confirmed_hold_lower_bounds
+                if self.min_hold_us > 0 and hold_us < self.min_hold_us
+            ),
+            "attempted_dispatches": len(dispatch_records),
+            "successful_dispatches": sum(
+                1 for record in self.records if record.get("sent_scan_codes", record["scan_codes"])
+            ),
+            "sent_down_count": sum(
+                len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc])
+                for record in self.records
+                if record["kind"] == "down"
+            ),
+            "sent_up_count": sum(
+                len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc])
+                for record in self.records
+                if record["kind"] == "up"
+            ),
+            "backend_skipped_down_count": sum(
+                len([sc for sc in record.get("skipped_scan_codes", "").split(";") if sc])
+                for record in self.records
+                if record["kind"] == "down"
+            ),
+            "backend_skipped_up_count": sum(
+                len([sc for sc in record.get("skipped_scan_codes", "").split(";") if sc])
+                for record in self.records
+                if record["kind"] == "up"
+            ),
+            "runtime_conflict_dropped_down_count": sum(
+                len([sc for sc in record["scan_codes"].split(";") if sc])
+                for record in self.records
+                if record.get("runtime_outcome") == "dropped_conflict"
+            ),
+            "deferred_release_count": sum(
+                1 for record in self.records if int(record.get("deferred_by_us", 0)) > 0
+            ),
+            "release_deferral_us": _stats(
+                [
+                    int(record.get("deferred_by_us", 0))
+                    for record in self.records
+                    if int(record.get("deferred_by_us", 0)) > 0
+                ]
+            ),
             "backend": backend_info,
         }
         if self.schedule_summary is not None:
@@ -177,7 +265,24 @@ class TelemetryLogger:
 
         try:
             # 1. Save standard raw CSV records
-            fields = ["song", "event_index", "kind", "scheduled_us", "actual_us", "lateness_us", "send_duration_us", "scan_codes", "reason"]
+            fields = [
+                "song",
+                "event_index",
+                "dispatch_id",
+                "kind",
+                "scheduled_us",
+                "actual_us",
+                "dispatch_completed_us",
+                "lateness_us",
+                "send_duration_us",
+                "scan_codes",
+                "sent_scan_codes",
+                "skipped_scan_codes",
+                "generation_ids",
+                "runtime_outcome",
+                "deferred_by_us",
+                "reason",
+            ]
             with self.log_filepath.open("w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fields)
                 writer.writeheader()

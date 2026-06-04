@@ -71,51 +71,26 @@ class FrameTimingDefaults:
 # ==============================================================================
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
-        # Reference profile = the empirically measured floors themselves (Appendix A): hold is
-        # purely frame-relative (visibility = 1 frame, no fixed-ms component), so hold_floor =
-        # min_hold_floor = 0 and the 1.05-frame term governs at every FPS. Sharpest profile;
-        # single notes at high FPS are short.
-        "hold_frames": 1.05,
-        "hold_floor_us": 0,
-        "hold_unframed_us": 22000,
-        "min_hold_frames": 1.05,
-        "min_hold_floor_us": 0,
+        # hold is intentionally omitted from built-ins and derives from min_hold. Declare hold_*
+        # explicitly only as an experiment/escape hatch; see hold-min-hold-unification-plan.md.
+        "min_hold_frames": 1,
         "min_hold_unframed_us": 22000,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
     },
     "balanced": {
-        "hold_frames": 1.2,
-        "hold_floor_us": 14000,
-        "hold_unframed_us": 26000,
-        "min_hold_frames": 1.2,
-        "min_hold_floor_us": 14000,
+        "min_hold_frames": 1.01,
         "min_hold_unframed_us": 17000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
     "audience_safe": {
-        # Online audience profile (future default). Differentiates from local profiles through
-        # conservative hold/min floors that sit just ABOVE the registration floor a
-        # typical remote (~60 FPS) client needs — NOT a
-        # wide 2-frame margin — because a wide hold/gap trades away articulation and repeat
-        # speed without buying remote audibility (see Appendix A.9 + EXP-4).
-        "hold_frames": 1.2,
-        "hold_floor_us": 18000,       # ~1.2 frame @60fps: visible hold for a remote 60fps client
-        "min_hold_frames": 1.2,
-        "min_hold_floor_us": 18000,   # ~1 remote frame: compressed notes still survive online
+        # Deliberately sharp frame-relative audience profile. At high local FPS this no longer
+        # guarantees a fixed remote-client visibility wall; see floor-removal-three-profile-plan.
+        "min_hold_frames": 1.02,
+        "min_hold_unframed_us": 18000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
-    },
-    "dense_safe": {
-        "hold_frames": 1.2,
-        "hold_floor_us": 11000,
-        "hold_unframed_us": 22000,
-        "min_hold_frames": 1.2,
-        "min_hold_floor_us": 11000,
-        "min_hold_unframed_us": 17000,
-        "spin_threshold_us": 500,
-        "focus_restore_grace_us": 100000,
     },
 }
 
@@ -166,14 +141,12 @@ CLI_PROFILE_NAMES: tuple[str, ...] = (
     "balanced",
     "local-precise",
     "audience-safe",
-    "dense-safe",
 )
 
 _PROFILE_KEY_TO_CLI: dict[str, str] = {
     "balanced": "balanced",
     "local_precise": "local-precise",
     "audience_safe": "audience-safe",
-    "dense_safe": "dense-safe",
 }
 
 def canonical_profile_name(name: str) -> str:
@@ -198,7 +171,9 @@ def merged_timing_profiles(cfg: AppConfig) -> dict[str, dict[str, Any]]:
     merged = {name: dict(profile) for name, profile in DEFAULT_TIMING_PROFILES.items()}
     for raw_name, override in cfg.timing_profiles.items():
         name = normalize_profile_name(str(raw_name))
-        base = dict(merged.get(name, {}))
+        if name not in merged:
+            continue
+        base = dict(merged[name])
         base.update(override)
         merged[name] = base
     return merged

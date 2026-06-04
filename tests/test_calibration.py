@@ -21,7 +21,7 @@ def test_timing_profile_parsing():
     # 1. Test balanced profile (default)
     args = parser.parse_args(["--timing-profile", "balanced"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 26_000
+    assert main.TIMING_POLICY.hold_us == 17_000
     assert main.TIMING_POLICY.min_hold_us == 17_000
     assert not hasattr(main.TIMING_POLICY, "release_gap_us")
 
@@ -32,6 +32,12 @@ def test_local_precise_profile_from_builtin_defaults():
     main.configure_from_args(args, AppConfig())
     assert main.TIMING_POLICY.hold_us == 22_000
     assert main.SLEEP_POLICY.spin_threshold_us == 800
+
+
+def test_removed_dense_safe_profile_is_rejected_by_cli():
+    parser = main.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--timing-profile", "dense-safe"])
 
 
 def test_saved_profile_restored_with_fps_config():
@@ -89,11 +95,16 @@ def test_display_profile_name_no_double_fps_suffix():
 
 
 def test_canonical_profile_name_strips_fps_suffix():
-    from sky_music.config import canonical_profile_name
+    from sky_music.config import AppConfig, canonical_profile_name, merged_timing_profiles
 
     assert canonical_profile_name("remote-safe@60fps") == "audience-safe"
     assert canonical_profile_name("local_precise") == "local-precise"
-    assert canonical_profile_name("dense-safe@120fps") == "dense-safe"
+    assert canonical_profile_name("dense-safe@120fps") == "balanced"
+    assert set(merged_timing_profiles(AppConfig(timing_profiles={"dense_safe": {}}))) == {
+        "local_precise",
+        "balanced",
+        "audience_safe",
+    }
     # Removed profiles canonicalise to the balanced default.
     assert canonical_profile_name("high_fps_precise") == "balanced"
 
@@ -232,7 +243,7 @@ def test_no_fps_config_or_cli_stays_unframed():
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
     assert main.TIMING_POLICY.fps == 0
-    assert main.TIMING_POLICY.hold_us == 26_000
+    assert main.TIMING_POLICY.hold_us == 17_000
 
 def test_hotkeys_default_from_config():
     cfg = AppConfig(hotkeys=HotkeyDefaults(pause="f7", skip="f11"))
@@ -276,7 +287,7 @@ def test_calibrate_advisory_severe_jitter():
     )
     rec = calibrate_profile(inp)
     assert rec.severity == "severe"
-    assert rec.profile_name == "dense-safe"
+    assert rec.profile_name == "local-precise"
     assert rec.tempo_scale == 0.90
 
 
@@ -300,7 +311,7 @@ def test_calibrate_advisory_dense_schedule_without_lateness():
     )
     rec = calibrate_profile(inp)
     assert rec.severity == "moderate"
-    assert rec.profile_name == "dense-safe"
+    assert rec.profile_name == "local-precise"
     assert rec.tempo_scale == 0.95
 
 
@@ -342,7 +353,7 @@ def test_calibrate_hold_uses_frame_timing_policy():
     )
     rec = calibrate_profile(inp)
     assert rec.profile_name == "local-precise"
-    assert rec.hold_us == 35_000
+    assert rec.hold_us == 33_334
 
 
 def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):

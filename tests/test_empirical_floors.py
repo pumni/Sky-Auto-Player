@@ -1,9 +1,9 @@
-"""Regression tests that pin the empirically-measured timing floors (docs Appendix A).
+"""Regression tests that pin the frame-relative timing model.
 
-These lock the in-game-measured standard so a future change to the frame ratios/floors
+These lock the in-game-measured standard so a future change to the frame ratios
 fails loudly instead of silently regressing reliability:
 
-  - visibility (hold/min_hold) floor      = 1.25 x frame   (pure frame-relative)
+  - visibility (hold/min_hold) target     = profile frames (pure frame-relative)
   - frame-aware sizing is disabled at fps=0/None (expert/experiment escape hatch)
 """
 
@@ -29,7 +29,7 @@ def test_frame_timing_defaults_encode_empirical_standard():
 
 @pytest.mark.parametrize(
     ("fps", "expected"),
-    [(30, 41667), (60, 20834), (144, 8680)],
+    [(30, 41668), (60, 20834), (144, 8682)],
 )
 def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
     base = TimingPolicy.from_dict(
@@ -51,13 +51,13 @@ def test_fps_none_keeps_raw_base_for_experiments():
 
 
 def test_builtin_unframed_fallbacks_remain_60fps_safe():
-    # Local hold floors can be sharper with FPS set, but the no-FPS escape hatch keeps
+    # Local holds can be sharper with FPS set, but the no-FPS escape hatch keeps
     # conservative raw values for existing CLI/config behavior.
     from sky_music.config import DEFAULT_TIMING_PROFILES
 
-    for name in ("balanced", "local_precise", "dense_safe", "audience_safe"):
+    for name in ("balanced", "local_precise", "audience_safe"):
         prof = DEFAULT_TIMING_PROFILES[name]
-        assert prof.get("min_hold_unframed_us", prof["min_hold_floor_us"]) >= 16667, name
+        assert prof["min_hold_unframed_us"] >= 16667, name
 
 
 def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
@@ -79,18 +79,15 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("profile", "fps", "hold", "min_hold"),
     [
-        ("local-precise", 30, 35000, 35000),
-        ("local-precise", 60, 17501, 17501),
-        ("local-precise", 144, 7292, 7292),
-        ("dense-safe", 30, 40000, 40000),
-        ("dense-safe", 60, 20001, 20001),
-        ("dense-safe", 144, 11000, 11000),
-        ("balanced", 30, 40000, 40000),
-        ("balanced", 60, 20001, 20001),
-        ("balanced", 144, 14000, 14000),
-        ("audience-safe", 30, 40000, 40000),
-        ("audience-safe", 60, 20001, 20001),
-        ("audience-safe", 144, 18000, 18000),
+        ("local-precise", 30, 33334, 33334),
+        ("local-precise", 60, 16667, 16667),
+        ("local-precise", 144, 6945, 6945),
+        ("balanced", 30, 33668, 33668),
+        ("balanced", 60, 16834, 16834),
+        ("balanced", 144, 7015, 7015),
+        ("audience-safe", 30, 34001, 34001),
+        ("audience-safe", 60, 17001, 17001),
+        ("audience-safe", 144, 7084, 7084),
     ],
 )
 def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
@@ -105,18 +102,15 @@ def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
     policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())
     assert policy.frame_us == 0
-    assert policy.hold_us == 26000
-    assert policy.min_hold_us == 17000
+    assert policy.hold_us == policy.min_hold_us == 17000
 
 
-def test_high_fps_local_profiles_have_distinct_hold_intents():
+def test_high_fps_profiles_follow_declared_frame_intents():
     cfg = AppConfig()
     local = PlaybackSessionContext(profile_name="local-precise", fps=144).resolve_effective_policy(cfg)
     balanced = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
-    dense = PlaybackSessionContext(profile_name="dense-safe", fps=144).resolve_effective_policy(cfg)
+    audience = PlaybackSessionContext(profile_name="audience-safe", fps=144).resolve_effective_policy(cfg)
 
-    # local_precise is pure frame-relative (floor 0) -> sharpest at high FPS; balanced and
-    # dense keep a small absolute body floor above it.
-    assert local.hold_us == 7292
-    assert dense.hold_us == 11000
-    assert balanced.hold_us == 14000
+    assert local.hold_us == 6945
+    assert audience.hold_us == 7084
+    assert balanced.hold_us == 7015

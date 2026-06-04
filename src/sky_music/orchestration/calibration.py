@@ -93,7 +93,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     # 2. Timing Profile and Tempo Scale calibration decision tree
     if inp.failed_release_count > 0 or inp.infeasible_same_key_repeats > 0 or p99 > 15000 or late_10ms > 5:
         severity = "severe"
-        rec_profile = "audience-safe" if inp.fps <= 30 and not schedule_stress else "dense-safe"
+        rec_profile = "audience-safe" if inp.fps <= 30 and not schedule_stress else "local-precise"
         rec_tempo = round(inp.tempo_scale * (0.88 if stress_rate > 0.03 else 0.90), 2)
         reason = (
             f"Severe timing or schedule stress detected "
@@ -103,7 +103,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
         )
     elif p99 > 8000 or late_10ms > 0 or schedule_stress or dense_polyphony:
         severity = "moderate"
-        rec_profile = "dense-safe" if schedule_stress else ("audience-safe" if dense_polyphony else "balanced")
+        rec_profile = "local-precise" if schedule_stress else ("audience-safe" if dense_polyphony else "balanced")
         rec_tempo = round(inp.tempo_scale * 0.95, 2)
         reason = (
             f"Moderate timing or density stress detected "

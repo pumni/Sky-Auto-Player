@@ -37,16 +37,16 @@ uv run python tests/make_test_song.py
 
 Các bài cần dùng (đã có sẵn trong script):
 
-| Song                     | Hình dạng                                           | Dùng cho                              |
-| ------------------------ | --------------------------------------------------- | ------------------------------------- |
-| `TEST_visibility`        | 15 nốt đơn, cách 700 ms                             | sàn hold/visibility (T1)              |
-| `TEST_repeat_gap`        | 1 phím, interval = hold 24 ms + gap giảm 50→5 ms    | cơ chế same-key lịch sử (T2)          |
-| `TEST_repeat_gap_30`     | 1 phím, interval = hold 45 ms + gap 70→15 ms        | same-key mechanism sạch ở 30 FPS (O6) |
-| `TEST_repeat_gap_fine_*` | 1 phím, interval = hold 24 ms + gap 0→20 ms         | đo actual UP→DOWN gap sát biên (O10.4) |
-| `TEST_repeat_staircase`  | 1 phím, interval giảm dần                           | drop same-key A/B (T2, T4)            |
-| `TEST_metro_alt_200/120` | nhịp đều, **đan xen 2 phím**                        | jitter onset / cảm giác nhịp (T3, O4) |
-| `TEST_metro_same_200`    | nhịp đều, 1 phím                                    | survivability same-key remote (O3)    |
-| `TEST_chords`            | hợp âm 2..6 phím                                    | chord remote (O8)                     |
+| Song                     | Hình dạng                                        | Dùng cho                               |
+| ------------------------ | ------------------------------------------------ | -------------------------------------- |
+| `TEST_visibility`        | 15 nốt đơn, cách 700 ms                          | sàn hold/visibility (T1)               |
+| `TEST_repeat_gap`        | 1 phím, interval = hold 24 ms + gap giảm 50→5 ms | cơ chế same-key lịch sử (T2)           |
+| `TEST_repeat_gap_30`     | 1 phím, interval = hold 45 ms + gap 70→15 ms     | same-key mechanism sạch ở 30 FPS (O6)  |
+| `TEST_repeat_gap_fine_*` | 1 phím, interval = hold 24 ms + gap 0→20 ms      | đo actual UP→DOWN gap sát biên (O10.4) |
+| `TEST_repeat_staircase`  | 1 phím, interval giảm dần                        | drop same-key A/B (T2, T4)             |
+| `TEST_metro_alt_200/120` | nhịp đều, **đan xen 2 phím**                     | jitter onset / cảm giác nhịp (T3, O4)  |
+| `TEST_metro_same_200`    | nhịp đều, 1 phím                                 | survivability same-key remote (O3)     |
+| `TEST_chords`            | hợp âm 2..6 phím                                 | chord remote (O8)                      |
 
 Hai bài bổ sung (đã có sẵn trong script):
 
@@ -175,12 +175,12 @@ behavior của game (T3) hoặc trễ mạng, **không sửa được từ playe
 Không phải mục nào trong Part 1 còn là "confirmed truth" theo nghĩa production. Sau refactor, Part 1
 là sổ cái bằng chứng:
 
-| Mục | Mức tin cậy hiện tại | Được dùng để quyết gì |
-| --- | -------------------- | --------------------- |
-| T1  | **Strong production evidence** | `hold/min_hold` frame-visibility floor local. |
-| T2  | **Historical mechanism evidence** | Same-key UP→DOWN có cơ chế thật, nhưng không còn profile knob. |
-| T3  | **Strong negative evidence against sender/lead fixes** | Không sửa onset scatter bằng input lead/frame align; internal bucket là game-side. |
-| T4  | **Limited remote negative evidence** | Sàn audience rộng chưa chứng minh cần trong mạng đã test; không đủ để chốt remote floor. |
+| Mục | Mức tin cậy hiện tại                                   | Được dùng để quyết gì                                                                    |
+| --- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| T1  | **Strong production evidence**                         | `hold/min_hold` frame-visibility floor local.                                            |
+| T2  | **Historical mechanism evidence**                      | Same-key UP→DOWN có cơ chế thật, nhưng không còn profile knob.                           |
+| T3  | **Strong negative evidence against sender/lead fixes** | Không sửa onset scatter bằng input lead/frame align; internal bucket là game-side.       |
+| T4  | **Limited remote negative evidence**                   | Sàn audience rộng chưa chứng minh cần trong mạng đã test; không đủ để chốt remote floor. |
 
 Khi cập nhật `config.py`/`FrameTimingDefaults`, chỉ T1 đang là bằng chứng trực tiếp cho production
 surface còn sống. T2/T3/T4 giữ vai trò giải thích và định hướng protocol cho Part 2.
@@ -199,10 +199,10 @@ surface còn sống. T2/T3/T4 giữ vai trò giải thích và định hướng 
   (Phải đặt CẢ `--hold-ms` lẫn `--min-hold-ms` vì clamp hold hợp nhất lấy `max(min_hold, …)`.)
   Thu mỗi lần, đếm onset.
 - **Đo:** hold nhỏ nhất mà vẫn đủ 15/15 onset.
-- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @30 reliable 32 ms (rớt 31), @60 reliable 16 ms (rớt 15), @144
-  reliable 7 ms (rớt 6) → sàn thật ≈ **0.96–1.01 frame** ở cả ba FPS (tuyến tính sạch). Hold dưới mép
+- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @30 reliable 32 ms (31 rớt), @60 reliable 17 ms, @144
+  reliable 7 ms đạt (1.0 frame) → sàn thật ≈ **1 frame** ở cả ba FPS (tuyến tính sạch). Hold dưới mép
   đăng ký theo xác suất.
-- **Kết luận:** game đọc **state** theo frame, sàn visibility local của nốt đơn = **~1.0 frame**.
+- **Kết luận:** game đọc **state** theo frame, sàn visibility local của nốt đơn = **1.0 frame**.
   Đây là bằng chứng production mạnh cho `hold/min_hold` frame-aware. Giới hạn: T1 không tự chứng minh
   remote audience floor, chord integrity, hay compressed same-key edge case; các phần đó thuộc O3/O8
   và O10.4A nếu cần mechanism.
@@ -270,16 +270,16 @@ Phần này thay các con số đang đoán bằng số đo. **Trạng thái sau
 
 Không phải thí nghiệm nào trong Part 2 cũng có cùng sức nặng. Tạm phân cấp như sau:
 
-| Mục        | Có thể tin tới mức nào?                 | Lý do chính |
-| ---------- | ---------------------------------------- | ----------- |
-| O9         | **Gate bắt buộc**, chưa phải gameplay truth | Nó chỉ chứng minh detector đếm đúng trong điều kiện thu hiện tại. |
-| O3         | **Production decision được**, nếu đủ run | Đo trực tiếp remote no-drop, nhưng phải randomize và có nhiều phiên mạng. |
-| O7         | **Characterization**, không tự chốt hold | IOI jitter mô tả mạng/game, nhưng drop/visibility vẫn phải do O3/O8 quyết. |
-| O8         | **Supporting evidence**                  | Chord đủ/vỡ ở remote khó đo tự động; dùng để củng cố O3/O4, không chốt một mình. |
-| O6/O10.4A | **Mechanism only**                       | Same-key gap là cơ chế game/synthetic, không còn profile field. |
-| O10.2      | **Actionable only nếu raw/no-FPS là mode thật** | Nếu production luôn biết FPS/config FPS, fallback raw không nên được ưu tiên quá mức. |
-| O10.5      | **Engine benchmark**                     | Chọn global sleeper threshold; không phải gameplay floor. |
-| O10.6      | **Blocked**                              | Thiếu wall-clock focus instrumentation. |
+| Mục       | Có thể tin tới mức nào?                         | Lý do chính                                                                           |
+| --------- | ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+| O9        | **Gate bắt buộc**, chưa phải gameplay truth     | Nó chỉ chứng minh detector đếm đúng trong điều kiện thu hiện tại.                     |
+| O3        | **Production decision được**, nếu đủ run        | Đo trực tiếp remote no-drop, nhưng phải randomize và có nhiều phiên mạng.             |
+| O7        | **Characterization**, không tự chốt hold        | IOI jitter mô tả mạng/game, nhưng drop/visibility vẫn phải do O3/O8 quyết.            |
+| O8        | **Supporting evidence**                         | Chord đủ/vỡ ở remote khó đo tự động; dùng để củng cố O3/O4, không chốt một mình.      |
+| O6/O10.4A | **Mechanism only**                              | Same-key gap là cơ chế game/synthetic, không còn profile field.                       |
+| O10.2     | **Actionable only nếu raw/no-FPS là mode thật** | Nếu production luôn biết FPS/config FPS, fallback raw không nên được ưu tiên quá mức. |
+| O10.5     | **Engine benchmark**                            | Chọn global sleeper threshold; không phải gameplay floor.                             |
+| O10.6     | **Blocked**                                     | Thiếu wall-clock focus instrumentation.                                               |
 
 Quy tắc chung: một kết quả chỉ được gọi là “sự thật production” khi nó vừa có **runtime surface còn
 sống**, vừa **đổi được schedule**, vừa **được đo trên bài/corpus đại diện**. Nếu thiếu một trong ba,
@@ -321,8 +321,8 @@ ghi là mechanism, counterfactual, hoặc supporting evidence.
   - `--hold-ms 16 --min-hold-ms 16`;
   - `--hold-ms 20 --min-hold-ms 20`.
     Mỗi mức chạy theo thứ tự randomized, ít nhất 3 run trong mạng tốt và 3 run trong mạng xấu/đông.
-  Mọi command O3 phải ghi rõ `--timing-profile local-precise --fps 144 --debug-csv` cộng với override
-  hold/min_hold tương ứng; không dựa vào default profile.
+    Mọi command O3 phải ghi rõ `--timing-profile local-precise --fps 144 --debug-csv` cộng với override
+    hold/min_hold tương ứng; không dựa vào default profile.
 - **Không sweep repeat-gap:** runtime không còn `--repeat-release-gap-ms`; nếu same-key remote vẫn
   drop, kiểm authored interval/min_hold/tempo trước. `audit_repeat_gap.py --repeat-gap-ms` chỉ là
   counterfactual, không tạo playback khác.
@@ -488,18 +488,18 @@ Trước mỗi run:
 
 #### O10.1 Ma trận uy tín hiện tại
 
-| Field / mechanism                     | Runtime surface hiện tại                     | Trạng thái bằng chứng                                                                  | Việc còn cần nếu muốn gọi là "đã chốt" |
-| ------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------- |
-| `hold_frames`                         | **CÒN SỐNG** trong profile                   | T1 chứng minh visibility floor ≈ 1 frame ở 30/60/144 FPS. `1.05` là margin local-sharp rất sát sàn. | Regression T1 với profile hiện tại ở 30/60/144, mỗi FPS ≥3 run, xác nhận 15/15 onset bằng detector O9. |
-| `hold_floor_us = 0`                   | **CÒN SỐNG** trong profile                   | T1 cho thấy local visibility là frame-relative; không thấy fixed-ms floor vì 7 ms vẫn đủ ở 144 FPS. | Regression sau game update/đổi nhạc cụ. Remote thuộc O3/O8. |
-| `hold_unframed_us`                    | **CÒN SỐNG** raw fallback                    | Fallback khi effective FPS = 0, không phải floor đã đo.                                | O10.2: explicit `--fps 0`, so 18/20/22/24 ms, chọn mức nhỏ nhất 0 drop. |
-| `min_hold_frames`                     | **CÒN SỐNG** trong profile                   | Cùng bản chất visibility như hold; compressed same-key hold vẫn phải sống ≥ 1 frame.   | Nếu tách khỏi `hold_frames`, đo bài same-key có compression; luôn giữ `min_hold_frames <= hold_frames`. |
-| `min_hold_floor_us = 0`               | **CÒN SỐNG** trong profile                   | Cùng lý do với `hold_floor_us = 0`; local visibility không có fixed-ms floor trong T1.  | O3/O8 nếu muốn dùng cho online audience; local regression sau game update. |
-| `min_hold_unframed_us`                | **CÒN SỐNG** raw fallback                    | Raw/no-FPS fallback, không phải số đo độc lập.                                         | Đo cùng O10.2; nếu hold/min_hold tách nhau, phải có bài compression. |
-| actual same-key UP→DOWN gap mechanism | **KHÔNG CÒN** profile/CLI/runtime knob       | T2 gợi ý game mechanism có thật, nhưng O10.4B/corpus cho thấy không phải production lever. | O6/O10.4A chỉ ghi hồ sơ mechanism/counterfactual; không dùng để tune profile nếu không reintroduce architecture. |
-| counterfactual repeat-gap binding      | **Chỉ còn audit script**, không đổi playback | Corpus thật 0 schedule-changing positive interval tới tempo 3.0x.                     | Chạy lại sau corpus lớn hơn/game update. Nếu vẫn 0, tiếp tục bỏ. |
-| `spin_threshold_us`                   | **CÒN SỐNG** runtime infra override          | Tác động sleeper lateness/CPU, không tác động floor game.                              | O10.5 randomized benchmark; mục tiêu chọn global SleepPolicy, không profile semantic. |
-| `focus_restore_grace_us`              | **CÒN SỐNG** runtime safety                  | Thiếu observability wall-clock để đo đúng.                                            | O10.6 thêm instrumentation rồi chọn global safety value. |
+| Field / mechanism                     | Runtime surface hiện tại                     | Trạng thái bằng chứng                                                                               | Việc còn cần nếu muốn gọi là "đã chốt"                                                                           |
+| ------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `hold_frames`                         | **CÒN SỐNG** trong profile                   | T1 chứng minh visibility floor ≈ 1 frame ở 30/60/144 FPS. `1.05` là margin local-sharp rất sát sàn. | Regression T1 với profile hiện tại ở 30/60/144, mỗi FPS ≥3 run, xác nhận 15/15 onset bằng detector O9.           |
+| `hold_floor_us = 0`                   | **CÒN SỐNG** trong profile                   | T1 cho thấy local visibility là frame-relative; không thấy fixed-ms floor vì 7 ms vẫn đủ ở 144 FPS. | Regression sau game update/đổi nhạc cụ. Remote thuộc O3/O8.                                                      |
+| `hold_unframed_us`                    | **CÒN SỐNG** raw fallback                    | Fallback khi effective FPS = 0, không phải floor đã đo.                                             | O10.2: explicit `--fps 0`, so 18/20/22/24 ms, chọn mức nhỏ nhất 0 drop.                                          |
+| `min_hold_frames`                     | **CÒN SỐNG** trong profile                   | Cùng bản chất visibility như hold; compressed same-key hold vẫn phải sống ≥ 1 frame.                | Nếu tách khỏi `hold_frames`, đo bài same-key có compression; luôn giữ `min_hold_frames <= hold_frames`.          |
+| `min_hold_floor_us = 0`               | **CÒN SỐNG** trong profile                   | Cùng lý do với `hold_floor_us = 0`; local visibility không có fixed-ms floor trong T1.              | O3/O8 nếu muốn dùng cho online audience; local regression sau game update.                                       |
+| `min_hold_unframed_us`                | **CÒN SỐNG** raw fallback                    | Raw/no-FPS fallback, không phải số đo độc lập.                                                      | Đo cùng O10.2; nếu hold/min_hold tách nhau, phải có bài compression.                                             |
+| actual same-key UP→DOWN gap mechanism | **KHÔNG CÒN** profile/CLI/runtime knob       | T2 gợi ý game mechanism có thật, nhưng O10.4B/corpus cho thấy không phải production lever.          | O6/O10.4A chỉ ghi hồ sơ mechanism/counterfactual; không dùng để tune profile nếu không reintroduce architecture. |
+| counterfactual repeat-gap binding     | **Chỉ còn audit script**, không đổi playback | Corpus thật 0 schedule-changing positive interval tới tempo 3.0x.                                   | Chạy lại sau corpus lớn hơn/game update. Nếu vẫn 0, tiếp tục bỏ.                                                 |
+| `spin_threshold_us`                   | **CÒN SỐNG** runtime infra override          | Tác động sleeper lateness/CPU, không tác động floor game.                                           | O10.5 randomized benchmark; mục tiêu chọn global SleepPolicy, không profile semantic.                            |
+| `focus_restore_grace_us`              | **CÒN SỐNG** runtime safety                  | Thiếu observability wall-clock để đo đúng.                                                          | O10.6 thêm instrumentation rồi chọn global safety value.                                                         |
 
 #### O10 priority — thứ tự nên làm
 

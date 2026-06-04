@@ -173,7 +173,7 @@ def validate_key_actions(
 
 
 def _has_frame_model(profile: dict, stem: str) -> bool:
-    return f"{stem}_frames" in profile or f"{stem}_floor_us" in profile
+    return f"{stem}_frames" in profile
 
 
 def _frame_coupled_us(
@@ -187,10 +187,10 @@ def _frame_coupled_us(
     if legacy_key in profile and _has_frame_model(profile, stem):
         return int(profile[legacy_key])
     if _has_frame_model(profile, stem):
-        frame_us = round(1_000_000 / fps)
+        # ceil() mirrors FrameTimingPolicy.from_timing_policy materialisation exactly.
+        frame_us = math.ceil(1_000_000 / fps)
         frames = float(profile.get(f"{stem}_frames", default_frames))
-        floor = int(profile.get(f"{stem}_floor_us", profile.get(legacy_key, 0)))
-        return max(math.ceil(frames * frame_us), floor)
+        return math.ceil(frames * frame_us)
     return int(profile[legacy_key])
 
 
@@ -254,15 +254,6 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
         if hold_frames is not None and float(min_hold_frames) > float(hold_frames):
             raise ValueError("min_hold_frames must be <= hold_frames")
 
-    hold_floor = profile.get("hold_floor_us")
-    min_hold_floor = profile.get("min_hold_floor_us")
-    if hold_floor is not None and int(hold_floor) < 0:
-        raise ValueError("hold_floor_us must be >= 0")
-    if min_hold_floor is not None and int(min_hold_floor) < 0:
-        raise ValueError("min_hold_floor_us must be >= 0")
-    if hold_floor is not None and min_hold_floor is not None and int(min_hold_floor) > int(hold_floor):
-        raise ValueError("min_hold_floor_us must be <= hold_floor_us")
-
     min_hold_us = _min_hold_us(profile, fps=fps)
     if min_hold_us is None:
         raise ValueError("min_hold_us must be present")
@@ -276,43 +267,10 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
     if min_hold_us < 10_000 and not frame_model_min_hold:
         raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
 
-
-def validate_audience_safe_profile(profile: dict[str, int]) -> None:
-    hold_floor_us = int(profile.get("hold_floor_us", profile.get("hold_us", 0)))
-    min_hold_floor_us = int(profile.get("min_hold_floor_us", profile.get("min_hold_us", 0)))
-    effective_hold_floor_us = int(profile.get("hold_us", hold_floor_us))
-    effective_min_hold_floor_us = int(profile.get("min_hold_us", min_hold_floor_us))
-
-    # Thresholds encode the audience registration floor + a small remote margin (NOT a wide
-    # 2-frame margin); see config.py audience_safe comment and Appendix A.9 / EXP-4.
-    if min(hold_floor_us, effective_hold_floor_us) < 18_000:
-        raise ValueError("audience-safe profile requires hold_floor_us >= 18000us")
-
-    if min(min_hold_floor_us, effective_min_hold_floor_us) < 18_000:
-        raise ValueError("audience-safe profile requires min_hold_us >= 18000us")
-
-
-validate_audience_safe_base_profile = validate_audience_safe_profile
-
-
-def validate_audience_safe_runtime_policy(
-    policy: FrameTimingPolicy,
-) -> None:
-    if int(policy.min_hold_us) < 18_000:
-        raise ValueError(
-            f"runtime audience_safe min_hold_us {policy.min_hold_us}us below 18000us"
-        )
-
-
 def validate_builtin_timing_profile(
     name: str,
     profile: dict[str, int],
     *,
     selected_fps: int = 60,
 ) -> None:
-    normalized = name.lower().replace("-", "_")
-
     validate_timing_profile(profile, fps=60)
-
-    if normalized == "audience_safe":
-        validate_audience_safe_profile(profile)

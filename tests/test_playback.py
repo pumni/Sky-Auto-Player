@@ -41,6 +41,28 @@ class FakeSleeper:
     def sleep_us(self, duration_us):
         self.clock.sleep_us(max(1, duration_us))
 
+
+class AdvancingReadClock(FakeClock):
+    """Simulation clock that advances during busy-wait clock reads."""
+    def __init__(self, start_us=0, read_step_us=10):
+        super().__init__(start_us)
+        self.read_step_us = read_step_us
+
+    def now_us(self):
+        current_us = self.time_us
+        self.time_us += self.read_step_us
+        return current_us
+
+
+class CountingControls:
+    def __init__(self):
+        self.poll_calls = 0
+
+    def poll(self):
+        self.poll_calls += 1
+        return None
+
+
 def test_dry_run_playback_execution():
     """Verify PlaybackEngine interacts correctly with the InputBackend and dispatches correct batches."""
     song = Song(
@@ -131,6 +153,51 @@ def test_deterministic_playback_with_fake_time():
     res = engine.play()
     assert res == PLAYBACK_FINISHED
     assert clock.now_us() >= 5_020_000
+
+
+def test_runtime_polling_is_throttled_during_approach_phase():
+    song = Song(name="Polling Cadence", notes=())
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=10_000, reason="onset")
+    clock = AdvancingReadClock()
+    controls = CountingControls()
+    engine = PlaybackEngine(
+        song=song,
+        actions=(action,),
+        backend=DryRunBackend(),
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=False,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=500),
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert 2 <= controls.poll_calls <= 12
+
+
+def test_final_spin_does_not_poll_controls_or_focus():
+    song = Song(name="Pure Final Spin", notes=())
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=500, reason="onset")
+    clock = AdvancingReadClock()
+    controls = CountingControls()
+    guard = _CountingFocusGuard(active=True)
+    engine = PlaybackEngine(
+        song=song,
+        actions=(action,),
+        backend=DryRunBackend(),
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=True,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=800),
+        focus_guard=guard,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert controls.poll_calls == 0
+    assert guard.is_active_calls == 1
 
 class MockControls:
     def __init__(self, command=None):
@@ -235,3 +302,83 @@ def test_focus_restore_grace_handles_pause_command():
     assert state.focus_pause_started_us is None
     assert state.manual_pause_started_us is not None
     assert state.pause_time_us > 0
+
+
+class _CountingFocusGuard:
+    """FocusGuard that records how many times is_active() actually runs."""
+    def __init__(self, active: bool = True):
+        self.active = active
+        self.is_active_calls = 0
+    def is_active(self) -> bool:
+        self.is_active_calls += 1
+        return self.active
+    def focus(self) -> bool:
+        return True
+
+
+def _focus_cache_engine(guard, clock):
+    song = Song(name="FocusCache", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
+    sched = build_key_actions(song)
+    return PlaybackEngine(
+        song=song, actions=sched.actions, backend=DryRunBackend(),
+        telemetry_enabled=False, require_focus=True,
+        clock=clock, sleeper=FakeSleeper(clock), focus_guard=guard,
+    )
+
+
+def test_focus_check_is_memoised_within_ttl():
+    """Repeated focus checks inside the TTL window hit the heavy is_active() only once."""
+    clock = FakeClock(start_us=1_000_000)
+    guard = _CountingFocusGuard(active=True)
+    engine = _focus_cache_engine(guard, clock)
+
+    # Many checks at the same instant -> exactly one real is_active() call.
+    for _ in range(50):
+        assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+
+def test_focus_check_refreshes_after_ttl():
+    """Once the TTL elapses, the next check re-queries the guard (so alt-tab is detected)."""
+    clock = FakeClock(start_us=1_000_000)
+    guard = _CountingFocusGuard(active=True)
+    engine = _focus_cache_engine(guard, clock)
+
+    assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+    # Within TTL: still cached.
+    clock.sleep_us(engine._focus_cache_ttl_us - 1)
+    assert engine._focus_is_active() is True
+    assert guard.is_active_calls == 1
+
+    # Past TTL: focus has been lost in the meantime -> re-queried and observed.
+    clock.sleep_us(2)
+    guard.active = False
+    assert engine._focus_is_active() is False
+    assert guard.is_active_calls == 2
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="win32 SendInput backend only")
+def test_send_scan_code_batch_builds_correct_cached_inputs(monkeypatch):
+    """The cached-INPUT fast path must emit the same down/up scan-code events as before."""
+    from sky_music.platform.win32 import inputs
+
+    captured = []
+    monkeypatch.setattr(inputs, "send_input_batch", lambda batch: captured.append(list(batch)))
+
+    inputs.send_scan_code_batch((30, 31), key_up=False)
+    down_batch = captured[-1]
+    assert [ki.ki.wScan for ki in down_batch] == [30, 31]
+    assert all(ki.type == inputs.INPUT_KEYBOARD for ki in down_batch)
+    assert all(ki.ki.dwFlags == inputs.KEYEVENTF_SCANCODE for ki in down_batch)
+
+    inputs.send_scan_code_batch((30,), key_up=True)
+    up_batch = captured[-1]
+    assert up_batch[0].ki.dwFlags == (inputs.KEYEVENTF_SCANCODE | inputs.KEYEVENTF_KEYUP)
+
+    # Same (scan_code, flags) reuses the cached object; different flags do not collide.
+    assert inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE) is inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE)
+    assert inputs._cached_key_input(30, inputs.KEYEVENTF_SCANCODE) is not inputs._cached_key_input(
+        30, inputs.KEYEVENTF_SCANCODE | inputs.KEYEVENTF_KEYUP
+    )

@@ -57,16 +57,17 @@ def test_play_fallback_uses_game_fps_when_no_session():
     assert fallback.fps == 120
 
 
-def test_profile_switch_preserves_fps():
+def test_removed_profile_falls_back_to_balanced_and_preserves_fps():
     cfg = AppConfig()
     balanced = PlaybackSessionContext.balanced(fps=120)
-    dense = balanced.with_profile("dense-safe")
-    assert dense.fps == 120
+    removed = balanced.with_profile("dense-safe")
+    assert removed.profile_name == "balanced"
+    assert removed.fps == 120
     p_bal = balanced.resolve_effective_policy(cfg)
-    p_dense = dense.resolve_effective_policy(cfg)
-    assert p_bal.fps == p_dense.fps == 120
+    p_removed = removed.resolve_effective_policy(cfg)
+    assert p_bal.fps == p_removed.fps == 120
     assert not hasattr(p_bal, "repeat_release_gap_us")
-    assert p_bal.hold_us != p_dense.hold_us
+    assert p_bal.hold_us == p_removed.hold_us
 
 
 def test_no_orphan_timing_policy_wrap_in_src():
