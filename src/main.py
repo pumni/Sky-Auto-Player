@@ -339,8 +339,6 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         ("Profile",              lambda n, d: n),
         ("hold_ms",              lambda n, d: frame_coupled_ms(d, value_key="hold_us", floor_key="hold_floor_us")),
         ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", floor_key="min_hold_floor_us")),
-        ("release_gap_ms",       lambda n, d: f"{d.get('release_gap_us', 0) // 1000}"),
-        ("repeat_gap_ms",        lambda n, d: frame_coupled_ms(d, value_key="repeat_release_gap_us", floor_key="repeat_release_gap_floor_us")),
         ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
         ("conflict_policy",      lambda n, d: d.get("same_key_conflict_policy", "degraded")),
     ]
@@ -589,7 +587,7 @@ def play_selected_song(
     def check_and_abort_violations(violations_tuple, is_dry_run_flag) -> bool:
         if not violations_tuple:
             return True
-        fatal_violations = [v for v in violations_tuple if v.code in ("negative_timestamp", "duplicate_down", "stuck_keys")]
+        fatal_violations = [v for v in violations_tuple if getattr(v, "severity", "fatal") == "fatal"]
         if fatal_violations and not is_dry_run_flag:
             print("\n[FATAL] Real Playback aborted due to severe schedule invariant violations:")
             for violation in fatal_violations:
@@ -796,23 +794,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     timing.add_argument(
         "--hold-ms",
-        type=int,
+        type=float,
         help="Override key hold duration in ms (overrides profile)",
     )
     timing.add_argument(
         "--min-hold-ms",
-        type=int,
+        type=float,
         help="Override minimum key hold duration in ms (overrides profile)",
-    )
-    timing.add_argument(
-        "--release-gap-ms",
-        type=int,
-        help="Override release gap in ms (overrides profile)",
-    )
-    timing.add_argument(
-        "--repeat-release-gap-ms",
-        type=int,
-        help="Override same-key repeat gap in ms (overrides profile)",
     )
     timing.add_argument(
         "--spin-threshold-us",
@@ -821,7 +809,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     timing.add_argument(
         "--focus-restore-grace-ms",
-        type=int,
+        type=float,
         help="Override focus restoration grace period in ms (precise=50, balanced=100, remote/safe=150-200) (overrides profile)",
     )
     timing.add_argument(
@@ -842,7 +830,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="FPS",
         help=(
             "Game frame rate hint for frame-aware timing (e.g. 30, 60, 120). "
-            "Scales hold and release gap via FrameTimingPolicy."
+            "Scales hold timing via FrameTimingPolicy."
         ),
     )
 

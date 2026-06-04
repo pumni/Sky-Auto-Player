@@ -204,20 +204,19 @@ class PlaybackEngine:
                 self.sleeper.sleep(0.005)
                 if self.controls is not None:
                     early_cmd = self.controls.poll()
-                    if early_cmd == "quit":
-                        if self.renderer:
-                            self.renderer.finish(f"Stopped: {self.song.name}")
-                        return True, PLAYBACK_QUIT
-                    elif early_cmd == "panic":
-                        self.backend.release_all()
-                        if self.renderer:
-                            self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status="panic", force=True)
+                    cmd_res = self._handle_commands(early_cmd, state, total_time_seconds)
+                    if cmd_res:
+                        return True, cmd_res
+                    if early_cmd in ("pause", "panic"):
                         break
 
             state.pause_time_us += (self.clock.now_us() - state.focus_pause_started_us)
             state.focus_pause_started_us = None
             if self.renderer:
-                self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status="playing", force=True)
+                status = "paused" if state.manual_pause_started_us is not None else "playing"
+                self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status=status, force=True)
+            if state.manual_pause_started_us is not None:
+                return True, None
         return False, None
 
     def _execute_action(

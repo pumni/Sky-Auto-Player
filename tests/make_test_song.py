@@ -45,8 +45,23 @@ def staircase_gap(key=7, reps=10, hold_ms=24,
       return notes
 
 write("TEST_repeat_gap", staircase_gap())
+write(
+      "TEST_repeat_gap_30",
+      staircase_gap(hold_ms=45, gaps=(70,60,50,45,40,35,30,25,20,15)),
+)
 
-# Nhịp đều, ĐAN XEN 2 phím khác nhau -> không dính repeat_release_gap_floor,
+# Fine-grained repeat-gap probes. Each variant contains the same gap levels in a
+# different order so a result is not confounded with "early vs late in the run".
+# Twenty notes per block produce 19 eligible same-key re-trigger transitions.
+fine_gap_orders = (
+      (0,17,3,14,1,20,5,11,2,8),
+      (20,2,11,0,8,17,1,14,5,3),
+      (5,0,20,2,14,8,3,17,1,11),
+)
+for suffix, gaps in zip(("a", "b", "c"), fine_gap_orders):
+      write(f"TEST_repeat_gap_fine_{suffix}", staircase_gap(reps=20, gaps=gaps))
+
+# Nhịp đều, ĐAN XEN 2 phím khác nhau -> không dính same-key repeat pressure,
 # nên unevenness đo được là THUẦN do frame-sampling/lead, không phải gap floor.
 def metronome_alt(keys=(0, 2), interval_ms=200, count=64):
       return [(i * interval_ms, keys[i % len(keys)]) for i in range(count)]

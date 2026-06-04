@@ -104,6 +104,7 @@ winmm.timeEndPeriod.argtypes = (wintypes.UINT,)
 winmm.timeEndPeriod.restype = wintypes.UINT
 
 TIMER_RESOLUTION_MS = 1
+PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
 _timer_resolution_enabled: bool = False
 
 # Global configuration variables to be updated by main.py
@@ -128,7 +129,7 @@ def enable_high_precision_timers() -> None:
         return
     result = winmm.timeBeginPeriod(TIMER_RESOLUTION_MS)
     if result != 0:
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise OSError(f"timeBeginPeriod({TIMER_RESOLUTION_MS}) failed with MMRESULT {result}")
     _timer_resolution_enabled = True
 
 def disable_high_precision_timers() -> None:
@@ -199,8 +200,8 @@ def get_process_name_by_pid(pid: int) -> str | None:
     if not h_process:
         return None
     try:
-        size = wintypes.DWORD(260)
-        buffer = ctypes.create_unicode_buffer(260)
+        size = wintypes.DWORD(PROCESS_IMAGE_NAME_BUFFER_CHARS)
+        buffer = ctypes.create_unicode_buffer(PROCESS_IMAGE_NAME_BUFFER_CHARS)
         if kernel32.QueryFullProcessImageNameW(h_process, 0, buffer, ctypes.byref(size)):
             path = buffer.value
             return Path(path).name

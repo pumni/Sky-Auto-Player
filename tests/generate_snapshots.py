@@ -79,7 +79,7 @@ def generate_snapshots():
 
     print(f"Generating golden schedule snapshots to: {snapshots_dir.resolve()}")
 
-    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({"input_lead_us": 0}))
+    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({}))
 
     for key, song in songs.items():
         res = build_key_actions(song, policy=policy)

@@ -26,7 +26,6 @@ class ScheduleInvariantViolation:
         "stuck_keys",
         "unsorted_timeline",
         "unpaired_up",
-        "insufficient_release_gap",
         "insufficient_hold",
         "excessive_polyphony"
     ]
@@ -66,7 +65,6 @@ def validate_key_actions(
     violations = []
     active_keys = set()
     active_downs = {} # scan_code -> (at_us, action_idx)
-    last_up_us = {} # scan_code -> at_us
     
     prev_at_us = -1
     for idx, action in enumerate(actions):
@@ -102,27 +100,14 @@ def validate_key_actions(
         if action.kind == "down":
             for sc in action.scan_codes:
                 if sc in active_keys:
+                    severity = "fatal" if policy.same_key_conflict_policy == "strict" else "warning"
                     violations.append(ScheduleInvariantViolation(
                         code="duplicate_down",
                         message=f"Scan code {sc} pressed down at {action.at_us}us while already pressed",
                         at_us=action.at_us,
                         scan_code=sc,
-                        severity="fatal"
+                        severity=severity,
                     ))
-                
-                # Check same-key repeat release gap
-                if sc in last_up_us:
-                    gap = action.at_us - last_up_us[sc]
-                    if gap < policy.repeat_release_gap_us:
-                        severity = "fatal" if policy.same_key_conflict_policy == "strict" else "warning"
-                        violations.append(ScheduleInvariantViolation(
-                            code="insufficient_release_gap",
-                            message=f"Same-key repeat release gap for scan code {sc} is {gap}us, below required {policy.repeat_release_gap_us}us",
-                            at_us=action.at_us,
-                            scan_code=sc,
-                            severity=severity
-                        ))
-                        
                 active_keys.add(sc)
                 active_downs[sc] = (action.at_us, idx)
                 
@@ -157,7 +142,6 @@ def validate_key_actions(
                     
                     active_keys.discard(sc)
                     active_downs.pop(sc, None)
-                    last_up_us[sc] = action.at_us
 
     # 5. Stuck keys at the end of the song
     if active_keys:
@@ -234,16 +218,6 @@ def _min_hold_us(profile: dict, *, fps: int = 60) -> int | None:
     )
 
 
-def _repeat_gap_us(profile: dict, *, fps: int = 60) -> int:
-    return _frame_coupled_us(
-        profile,
-        stem="repeat_release_gap",
-        legacy_key="repeat_release_gap_us",
-        default_frames=1.5,
-        fps=fps,
-    )
-
-
 def validate_hold_ordering(profile: dict[str, int]) -> None:
     """Single source of truth for the hold-duration ordering invariant.
 
@@ -289,67 +263,33 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
     if hold_floor is not None and min_hold_floor is not None and int(min_hold_floor) > int(hold_floor):
         raise ValueError("min_hold_floor_us must be <= hold_floor_us")
 
-    repeat_frames = profile.get("repeat_release_gap_frames")
-    repeat_floor = profile.get("repeat_release_gap_floor_us")
-    if repeat_frames is not None and float(repeat_frames) <= 0:
-        raise ValueError("repeat_release_gap_frames must be > 0")
-    if repeat_floor is not None and int(repeat_floor) < 0:
-        raise ValueError("repeat_release_gap_floor_us must be >= 0")
-
     min_hold_us = _min_hold_us(profile, fps=fps)
     if min_hold_us is None:
         raise ValueError("min_hold_us must be present")
-    repeat_release_gap_us = _repeat_gap_us(profile, fps=fps)
-    cycle_us = min_hold_us + repeat_release_gap_us
 
-    if cycle_us <= frame_us:
+    if min_hold_us <= frame_us:
         raise ValueError(
-            f"Unsafe cycle: {cycle_us:.0f}us <= one frame {frame_us:.0f}us"
-        )
-
-    if fps == 60 and cycle_us < 18_000:
-        raise ValueError(
-            f"60 FPS profile has too little margin: {cycle_us:.0f}us < 18000us"
+            f"Unsafe min_hold_us: {min_hold_us:.0f}us <= one frame {frame_us:.0f}us"
         )
 
     frame_model_min_hold = _has_frame_model(profile, "min_hold") and "min_hold_us" not in profile
     if min_hold_us < 10_000 and not frame_model_min_hold:
         raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
 
-    if repeat_release_gap_us < 6_000:
-        raise ValueError(
-            "repeat_release_gap_us below 6000us is not allowed for built-ins"
-        )
-
 
 def validate_audience_safe_profile(profile: dict[str, int]) -> None:
     hold_floor_us = int(profile.get("hold_floor_us", profile.get("hold_us", 0)))
     min_hold_floor_us = int(profile.get("min_hold_floor_us", profile.get("min_hold_us", 0)))
-    repeat_gap_floor_us = int(
-        profile.get("repeat_release_gap_floor_us", profile.get("repeat_release_gap_us", 0))
-    )
     effective_hold_floor_us = int(profile.get("hold_us", hold_floor_us))
     effective_min_hold_floor_us = int(profile.get("min_hold_us", min_hold_floor_us))
-    effective_repeat_gap_floor_us = int(
-        profile.get("repeat_release_gap_us", repeat_gap_floor_us)
-    )
-    cycle_us = min_hold_floor_us + repeat_gap_floor_us
 
     # Thresholds encode the audience registration floor + a small remote margin (NOT a wide
     # 2-frame margin); see config.py audience_safe comment and Appendix A.9 / EXP-4.
-    if cycle_us < 28_000:
-        raise ValueError("audience-safe profile should have cycle_us >= 28000us")
-
     if min(hold_floor_us, effective_hold_floor_us) < 18_000:
         raise ValueError("audience-safe profile requires hold_floor_us >= 18000us")
 
-    if min(min_hold_floor_us, effective_min_hold_floor_us) < 17_000:
-        raise ValueError("audience-safe profile requires min_hold_us >= 17000us")
-
-    if min(repeat_gap_floor_us, effective_repeat_gap_floor_us) < 22_000:
-        raise ValueError(
-            "audience-safe profile requires repeat_release_gap_us >= 22000us"
-        )
+    if min(min_hold_floor_us, effective_min_hold_floor_us) < 18_000:
+        raise ValueError("audience-safe profile requires min_hold_us >= 18000us")
 
 
 validate_audience_safe_base_profile = validate_audience_safe_profile
@@ -358,21 +298,9 @@ validate_audience_safe_base_profile = validate_audience_safe_profile
 def validate_audience_safe_runtime_policy(
     policy: FrameTimingPolicy,
 ) -> None:
-    cycle_us = int(policy.min_hold_us) + int(policy.repeat_release_gap_us)
-
-    if cycle_us < 28_000:
+    if int(policy.min_hold_us) < 18_000:
         raise ValueError(
-            f"runtime audience_safe cycle_us {cycle_us}us below 28000us"
-        )
-
-    if int(policy.min_hold_us) < 17_000:
-        raise ValueError(
-            f"runtime audience_safe min_hold_us {policy.min_hold_us}us below 17000us"
-        )
-
-    if int(policy.repeat_release_gap_us) < 12_000:
-        raise ValueError(
-            f"runtime audience_safe repeat_release_gap_us {policy.repeat_release_gap_us}us below 12000us"
+            f"runtime audience_safe min_hold_us {policy.min_hold_us}us below 18000us"
         )
 
 

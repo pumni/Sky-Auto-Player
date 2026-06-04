@@ -62,6 +62,9 @@ class PlaybackSessionContext:
         fps_raw = getattr(args, "fps", None)
         fps = int(fps_raw) if fps_raw is not None and int(fps_raw) > 0 else None
 
+        def ms_to_us(value: float | int) -> int:
+            return int(round(float(value) * 1000))
+
         base_dict = profile_dict_for(cfg, profile)
         base_policy = TimingPolicy.from_dict(base_dict)
         conflict: ConflictPolicy = (
@@ -72,15 +75,11 @@ class PlaybackSessionContext:
 
         overrides: list[tuple[str, Any]] = []
         if getattr(args, "hold_ms", None) is not None:
-            overrides.append(("hold_us", args.hold_ms * 1000))
+            overrides.append(("hold_us", ms_to_us(args.hold_ms)))
         if getattr(args, "min_hold_ms", None) is not None:
-            overrides.append(("min_hold_us", args.min_hold_ms * 1000))
-        if getattr(args, "release_gap_ms", None) is not None:
-            overrides.append(("release_gap_us", args.release_gap_ms * 1000))
-        if getattr(args, "repeat_release_gap_ms", None) is not None:
-            overrides.append(("repeat_release_gap_us", args.repeat_release_gap_ms * 1000))
+            overrides.append(("min_hold_us", ms_to_us(args.min_hold_ms)))
         if getattr(args, "focus_restore_grace_ms", None) is not None:
-            overrides.append(("focus_restore_grace_us", args.focus_restore_grace_ms * 1000))
+            overrides.append(("focus_restore_grace_us", ms_to_us(args.focus_restore_grace_ms)))
 
         return cls(
             profile_name=profile,
@@ -135,10 +134,8 @@ class PlaybackSessionContext:
         # resulting risk at playback time.
         from sky_music.domain.validation import validate_builtin_timing_profile
         profile_fields = {
-            "hold_us", "min_hold_us", "release_gap_us",
-            "repeat_release_gap_us",
+            "hold_us", "min_hold_us",
             "hold_frames", "hold_floor_us", "min_hold_frames", "min_hold_floor_us",
-            "repeat_release_gap_frames", "repeat_release_gap_floor_us",
         }
         validate_builtin_timing_profile(
             self.profile_name,

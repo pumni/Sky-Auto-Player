@@ -34,11 +34,6 @@ class FrameTimingDefaults:
     """Frame-aware scaling ratios (defaults match built-in FrameTimingPolicy formulas)."""
 
     min_visible_hold_frames: float = 1.25
-    release_gap_min_frame_ratio: float = 0.15
-    # Same-key release floor, empirically measured (Exp2): reliable repeats need a gap of
-    # max(~1.5 frame, ~17ms fixed). The fixed floor dominates at high FPS.
-    repeat_release_gap_min_frame_ratio: float = 1.5
-    repeat_release_gap_floor_us: int = 18000
     # Compression floor for the key-down (visibility): empirically every key-down, even a
     # compressed one, needs >= 1 frame to register (Exp1). 1.25 = one frame + ~25% margin,
     # matching the hold target, and applied at all FPS (not just <60).
@@ -55,18 +50,12 @@ class FrameTimingDefaults:
 
         return cls(
             min_visible_hold_frames=ratio("min_visible_hold_frames", 1.25),
-            release_gap_min_frame_ratio=ratio("release_gap_min_frame_ratio", 0.15),
-            repeat_release_gap_min_frame_ratio=ratio("repeat_release_gap_min_frame_ratio", 1.5),
-            repeat_release_gap_floor_us=int(ratio("repeat_release_gap_floor_us", 18000)),
             min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 1.25),
         )
 
     def as_policy_kwargs(self) -> dict[str, float]:
         return {
             "min_visible_hold_frames": self.min_visible_hold_frames,
-            "release_gap_min_frame_ratio": self.release_gap_min_frame_ratio,
-            "repeat_release_gap_min_frame_ratio": self.repeat_release_gap_min_frame_ratio,
-            "repeat_release_gap_floor_us": self.repeat_release_gap_floor_us,
             "min_hold_min_frame_ratio": self.min_hold_min_frame_ratio,
         }
 
@@ -76,16 +65,15 @@ class FrameTimingDefaults:
 # Before modifying or creating new timing profiles, you MUST read and adhere
 # to the constraints defined in `docs/timing-principles.md`.
 #
-# Critical mathematical constraint for game engine input polling at 60fps:
-#   The Cycle Rule: (min_hold_us + repeat_release_gap_us) MUST be > 16667 us.
-#   Failure to meet this will cause dropped note repeats (squashed frames).
+# Critical mathematical constraint for game engine input polling:
+#   min_hold_us is the visibility floor for every scheduled key-down.
+#   Same-key repeats whose interval is below min_hold_us are infeasible.
 # ==============================================================================
 DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         # Reference profile = the empirically measured floors themselves (Appendix A): hold is
         # purely frame-relative (visibility = 1 frame, no fixed-ms component), so hold_floor =
-        # min_hold_floor = 0 and the 1.05-frame term governs at every FPS. repeat_gap keeps a
-        # measured same-key wall with a small high-FPS experimental trim. Sharpest profile;
+        # min_hold_floor = 0 and the 1.05-frame term governs at every FPS. Sharpest profile;
         # single notes at high FPS are short.
         "hold_frames": 1.05,
         "hold_floor_us": 0,
@@ -93,9 +81,6 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "min_hold_frames": 1.05,
         "min_hold_floor_us": 0,
         "min_hold_unframed_us": 22000,
-        "release_gap_us": 2500,
-        "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 17000,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
     },
@@ -106,26 +91,19 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "min_hold_frames": 1.2,
         "min_hold_floor_us": 14000,
         "min_hold_unframed_us": 17000,
-        "release_gap_us": 4000,
-        "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 18000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
     "audience_safe": {
         # Online audience profile (future default). Differentiates from local profiles through
-        # conservative hold/min/repeat floors that sit just ABOVE the registration floor a
+        # conservative hold/min floors that sit just ABOVE the registration floor a
         # typical remote (~60 FPS) client needs — NOT a
         # wide 2-frame margin — because a wide hold/gap trades away articulation and repeat
-        # speed without buying remote audibility (see Appendix A.9 + EXP-4). repeat_gap keeps a
-        # touch more margin than hold because same-key re-trigger is the most jitter-fragile.
+        # speed without buying remote audibility (see Appendix A.9 + EXP-4).
         "hold_frames": 1.2,
         "hold_floor_us": 18000,       # ~1.2 frame @60fps: visible hold for a remote 60fps client
         "min_hold_frames": 1.2,
         "min_hold_floor_us": 18000,   # ~1 remote frame: compressed notes still survive online
-        "release_gap_us": 5000,
-        "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 24000,  # top of the measured 100%-reliable @60 band (A.4) + remote margin
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
     },
@@ -136,9 +114,6 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "min_hold_frames": 1.2,
         "min_hold_floor_us": 11000,
         "min_hold_unframed_us": 17000,
-        "release_gap_us": 5000,
-        "repeat_release_gap_frames": 1.5,
-        "repeat_release_gap_floor_us": 18000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
     },
@@ -437,9 +412,6 @@ def save_config(cfg: AppConfig) -> None:
     }
     raw["frame_timing"] = {
         "min_visible_hold_frames": cfg.frame_timing.min_visible_hold_frames,
-        "release_gap_min_frame_ratio": cfg.frame_timing.release_gap_min_frame_ratio,
-        "repeat_release_gap_min_frame_ratio": cfg.frame_timing.repeat_release_gap_min_frame_ratio,
-        "repeat_release_gap_floor_us": cfg.frame_timing.repeat_release_gap_floor_us,
         "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
     }
     raw["timing_profiles"]              = cfg.timing_profiles

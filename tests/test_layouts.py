@@ -29,3 +29,29 @@ def test_legacy_compatibility_keys():
     """Verify prefix fallback mappings (1Key and 2Key) are preserved in layout map."""
     assert SKY_15_KEY_MAP["1Key0"] == "y"
     assert SKY_15_KEY_MAP["2Key14"] == "/"
+
+
+def test_mapped_resolver_loads_user32_once(monkeypatch):
+    import ctypes
+    import sky_music.layouts as layouts
+    from sky_music.domain import NoteKey
+    from sky_music.layouts import DefaultNoteResolver
+
+    class FakeUser32:
+        def MapVirtualKeyW(self, vk, mode):
+            return vk + mode + 1
+
+    loads = []
+
+    def fake_windll(name, use_last_error=True):
+        loads.append((name, use_last_error))
+        return FakeUser32()
+
+    monkeypatch.setattr(layouts, "_USER32", None)
+    monkeypatch.setattr(ctypes, "WinDLL", fake_windll)
+
+    resolver = DefaultNoteResolver(SKY_15_KEY_PROFILE)
+    assert resolver.resolve_scan_code(NoteKey("Key0"), mode="mapped") != 0
+    assert resolver.resolve_scan_code(NoteKey("Key1"), mode="mapped") != 0
+
+    assert loads == [("user32", True)]

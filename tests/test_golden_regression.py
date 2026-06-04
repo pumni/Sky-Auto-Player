@@ -36,8 +36,8 @@ def test_golden_schedules_regression():
     
     assert snapshots_dir.exists(), "Golden schedules directory must exist."
     
-    # Use a policy with 0 input lead to match the old golden snapshots
-    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({"input_lead_us": 0}))
+    # Use a default timing policy to match the old golden snapshots
+    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({}))
 
     for key, song in songs.items():
         snapshot_file = snapshots_dir / f"{key}.json"

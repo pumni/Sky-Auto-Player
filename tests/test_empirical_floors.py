@@ -4,7 +4,6 @@ These lock the in-game-measured standard so a future change to the frame ratios/
 fails loudly instead of silently regressing reliability:
 
   - visibility (hold/min_hold) floor      = 1.25 x frame   (pure frame-relative)
-  - same-key release-gap floor            = max(1.5 x frame, 18000us)
   - frame-aware sizing is disabled at fps=0/None (expert/experiment escape hatch)
 """
 
@@ -26,21 +25,6 @@ def test_frame_timing_defaults_encode_empirical_standard():
     d = FrameTimingDefaults()
     assert d.min_visible_hold_frames == 1.25          # hold target: 1 frame + 25% margin
     assert d.min_hold_min_frame_ratio == 1.25         # compression floor: also >= ~1 frame
-    assert d.repeat_release_gap_min_frame_ratio == 1.5  # repeat gap: frame term
-    assert d.repeat_release_gap_floor_us == 18000     # repeat gap: fixed ~17ms wall
-
-
-@pytest.mark.parametrize(
-    ("fps", "expected"),
-    [(30, 50000), (60, 25001), (144, 18000)],
-)
-def test_repeat_gap_floor_is_max_of_frame_and_fixed(fps, expected):
-    # max(1.5*frame, 18000): frame term dominates at <=60fps, fixed 18000 wall at 144fps.
-    base = TimingPolicy.from_dict(
-        {"min_hold_us": 1000, "repeat_release_gap_us": 1000, "hold_us": 60000}
-    )
-    p = FrameTimingPolicy.from_timing_policy(base, fps=fps)
-    assert p.repeat_release_gap_us == expected
 
 
 @pytest.mark.parametrize(
@@ -49,7 +33,7 @@ def test_repeat_gap_floor_is_max_of_frame_and_fixed(fps, expected):
 )
 def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
     base = TimingPolicy.from_dict(
-        {"min_hold_us": 1000, "repeat_release_gap_us": 1000, "hold_us": 100000}
+        {"min_hold_us": 1000, "hold_us": 100000}
     )
     p = FrameTimingPolicy.from_timing_policy(base, fps=fps)
     assert p.min_hold_us == expected
@@ -57,12 +41,11 @@ def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
 
 def test_fps_none_keeps_raw_base_for_experiments():
     # Frame-aware disabled -> no floors applied, so timing experiments (e.g. probing the
-    # in-game floor with tiny holds/gaps) remain possible.
+    # in-game floor with tiny holds) remain possible.
     base = TimingPolicy.from_dict(
-        {"min_hold_us": 1000, "repeat_release_gap_us": 1000, "hold_us": 2000}
+        {"min_hold_us": 1000, "hold_us": 2000}
     )
     p = FrameTimingPolicy.from_timing_policy(base, fps=None)
-    assert p.repeat_release_gap_us == 1000
     assert p.min_hold_us == 1000
     assert p.hold_us == 2000
 
@@ -75,10 +58,9 @@ def test_builtin_unframed_fallbacks_remain_60fps_safe():
     for name in ("balanced", "local_precise", "dense_safe", "audience_safe"):
         prof = DEFAULT_TIMING_PROFILES[name]
         assert prof.get("min_hold_unframed_us", prof["min_hold_floor_us"]) >= 16667, name
-        assert prof["repeat_release_gap_floor_us"] >= 17000, name
 
 
-def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_path, monkeypatch):
+def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         '{"frame_timing": {"repeat_release_gap_floor_us": 20000}}', encoding="utf-8"
@@ -87,39 +69,37 @@ def test_repeat_release_gap_floor_config_no_longer_overrides_frame_profiles(tmp_
     clear_config_cache()
     try:
         cfg = load_config(force_reload=True)
-        assert cfg.frame_timing.repeat_release_gap_floor_us == 20000
         p = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
-        # Built-in profiles declare their own frame/floor repeat gap; global frame_timing is
-        # retained only as fallback for legacy _us-only policies.
-        assert p.repeat_release_gap_us == 18000
+        assert not hasattr(cfg.frame_timing, "repeat_release_gap_floor_us")
+        assert not hasattr(p, "repeat_release_gap_us")
     finally:
         clear_config_cache()
 
 
 @pytest.mark.parametrize(
-    ("profile", "fps", "hold", "min_hold", "repeat_gap"),
+    ("profile", "fps", "hold", "min_hold"),
     [
-        ("local-precise", 30, 35000, 35000, 50000),
-        ("local-precise", 60, 17501, 17501, 25001),
-        ("local-precise", 144, 7292, 7292, 17000),
-        ("dense-safe", 30, 40000, 40000, 50000),
-        ("dense-safe", 60, 20001, 20001, 25001),
-        ("dense-safe", 144, 11000, 11000, 18000),
-        ("balanced", 30, 40000, 40000, 50000),
-        ("balanced", 60, 20001, 20001, 25001),
-        ("balanced", 144, 14000, 14000, 18000),
-        ("audience-safe", 30, 40000, 40000, 50000),
-        ("audience-safe", 60, 20001, 20001, 25001),
-        ("audience-safe", 144, 18000, 18000, 24000),
+        ("local-precise", 30, 35000, 35000),
+        ("local-precise", 60, 17501, 17501),
+        ("local-precise", 144, 7292, 7292),
+        ("dense-safe", 30, 40000, 40000),
+        ("dense-safe", 60, 20001, 20001),
+        ("dense-safe", 144, 11000, 11000),
+        ("balanced", 30, 40000, 40000),
+        ("balanced", 60, 20001, 20001),
+        ("balanced", 144, 14000, 14000),
+        ("audience-safe", 30, 40000, 40000),
+        ("audience-safe", 60, 20001, 20001),
+        ("audience-safe", 144, 18000, 18000),
     ],
 )
 def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
-    profile, fps, hold, min_hold, repeat_gap
+    profile, fps, hold, min_hold
 ):
     policy = PlaybackSessionContext(profile_name=profile, fps=fps).resolve_effective_policy(AppConfig())
     assert policy.hold_us == hold
     assert policy.min_hold_us == min_hold
-    assert policy.repeat_release_gap_us == repeat_gap
+    assert not hasattr(policy, "repeat_release_gap_us")
 
 
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():

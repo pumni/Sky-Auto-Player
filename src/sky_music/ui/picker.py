@@ -549,11 +549,11 @@ def choose_song_interactively(
                 f"{metadata.name}",
                 f"Time {_format_duration(metadata.duration_seconds)} │ Notes {metadata.note_count} │ Polyphony {poly_str}",
                 (
-                    f"Risk {metadata.risk.upper()} │ Stress: {metadata.timing_stress_rate:.1f}% ({metadata.impossible_repeats} conflicts)"
+                    f"Risk {metadata.risk.upper()} │ Stress: {metadata.timing_stress_rate:.1f}% ({metadata.impossible_repeats} infeasible)"
                     if metadata.analyzed else
                     "Risk: analyzing…"
                 ),
-                f"Min repeat gap: {metadata.min_same_key_gap_ms:.0f}ms │ Peak density: {metadata.peak_notes_per_second_1s:.1f} n/s",
+                f"Min same-key gap: {metadata.min_same_key_gap_ms:.0f}ms │ Peak density: {metadata.peak_notes_per_second_1s:.1f} n/s",
             ]
 
             suggested_line = (

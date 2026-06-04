@@ -23,7 +23,7 @@ def test_timing_profile_parsing():
     main.configure_from_args(args, AppConfig())
     assert main.TIMING_POLICY.hold_us == 26_000
     assert main.TIMING_POLICY.min_hold_us == 17_000
-    assert main.TIMING_POLICY.release_gap_us == 4_000
+    assert not hasattr(main.TIMING_POLICY, "release_gap_us")
 
 
 def test_local_precise_profile_from_builtin_defaults():
@@ -123,14 +123,39 @@ def test_timing_overrides_parsing():
         "--timing-profile", "balanced",
         "--hold-ms", "30",
         "--min-hold-ms", "15",
-        "--release-gap-ms", "5",
-        "--repeat-release-gap-ms", "4"
     ])
     main.configure_from_args(args, AppConfig())
     assert main.TIMING_POLICY.hold_us == 30_000
     assert main.TIMING_POLICY.min_hold_us == 15_000
-    assert main.TIMING_POLICY.release_gap_us == 5_000
-    assert main.TIMING_POLICY.repeat_release_gap_us == 4_000
+
+
+def test_fractional_timing_overrides_parse_as_milliseconds():
+    parser = main.build_arg_parser()
+    args = parser.parse_args([
+        "--timing-profile", "local-precise",
+        "--hold-ms", "10.5",
+        "--min-hold-ms", "7.25",
+        "--focus-restore-grace-ms", "50.5",
+    ])
+
+    main.configure_from_args(args, AppConfig())
+
+    assert main.TIMING_POLICY.hold_us == 10_500
+    assert main.TIMING_POLICY.min_hold_us == 7_250
+    assert main.TIMING_POLICY.focus_restore_grace_us == 50_500
+
+
+def test_repeat_release_gap_override_is_removed_from_cli():
+    parser = main.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--repeat-release-gap-ms", "4"])
+
+
+def test_release_gap_override_is_removed_from_cli():
+    parser = main.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--release-gap-ms", "2.5"])
+
 
 def test_dry_run_simulation_flag():
     parser = main.build_arg_parser()
@@ -279,6 +304,27 @@ def test_calibrate_advisory_dense_schedule_without_lateness():
     assert rec.tempo_scale == 0.95
 
 
+def test_calibration_summary_prefers_infeasible_same_key_alias():
+    from sky_music.orchestration.calibration import calibration_input_from_summary
+
+    inp = calibration_input_from_summary({
+        "profile": "balanced",
+        "fps": 60,
+        "lateness_us": {},
+        "send_duration_us": {},
+        "backend": {},
+        "schedule": {
+            "impossible_same_key_repeats": 0,
+            "infeasible_same_key_repeats": 2,
+            "risky_same_key_repeats": 0,
+            "note_count": 10,
+        },
+    })
+
+    assert inp.impossible_same_key_repeats == 0
+    assert inp.infeasible_same_key_repeats == 2
+
+
 def test_calibrate_hold_uses_frame_timing_policy():
     from sky_music.orchestration.calibration import CalibrationInput, calibrate_profile
 
@@ -311,7 +357,7 @@ def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):
     clear_config_cache()
     cfg = load_config()
     assert cfg.frame_timing.min_hold_min_frame_ratio == 0.75
-    assert cfg.frame_timing.repeat_release_gap_min_frame_ratio == 0.2
+    assert not hasattr(cfg.frame_timing, "repeat_release_gap_min_frame_ratio")
     assert cfg.frame_timing.min_visible_hold_frames == FrameTimingDefaults.min_visible_hold_frames
 
 

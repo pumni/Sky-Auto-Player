@@ -122,20 +122,20 @@ def _evaluate_risk_severity(res: ScheduleMetadata, dense_clusters_list: list[Den
     
     if res.impossible_same_key_repeats > 0:
         severity = "high"
-        reasons_list.append("same-key repeats")
+        reasons_list.append("infeasible same-key repeats")
         recommendations.append(
-            f"{res.impossible_same_key_repeats} repeated notes are too close for the current timing profile."
+            f"{res.impossible_same_key_repeats} same-key repeat(s) are below min_hold and cannot be scheduled without overlap."
         )
         recommendations.append(
-            "Some holds were shortened, which may cause dropped notes."
+            "Reduce tempo or edit the arrangement so the same key has more time between downs."
         )
         
     if res.risky_same_key_repeats > 0:
         if severity == "low":
             severity = "medium"
-        reasons_list.append("risky repeats")
+        reasons_list.append("same-key hold compression")
         recommendations.append(
-            f"Detected {res.risky_same_key_repeats} risky same-key repeat(s) close to min hold."
+            f"Compressed {res.risky_same_key_repeats} same-key hold(s) to release before the next down."
         )
         
     if res.shortest_same_key_interval_us is not None:

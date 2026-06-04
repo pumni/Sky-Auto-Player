@@ -26,8 +26,6 @@ class KeyAction:
 class TimingPolicy:
     hold_us: Microseconds
     min_hold_us: Microseconds
-    release_gap_us: Microseconds
-    repeat_release_gap_us: Microseconds
 
     focus_restore_grace_us: Microseconds = Microseconds(100_000) # Default is overridden in from_dict
 
@@ -36,14 +34,10 @@ class TimingPolicy:
     hold_floor_us: Microseconds | None = None
     min_hold_frames: float = 1.25
     min_hold_floor_us: Microseconds | None = None
-    repeat_release_gap_frames: float = 1.5
-    repeat_release_gap_floor_us: Microseconds | None = None
     hold_override_us: Microseconds | None = None
     min_hold_override_us: Microseconds | None = None
-    repeat_release_gap_override_us: Microseconds | None = None
     hold_uses_frame_model: bool = False
     min_hold_uses_frame_model: bool = False
-    repeat_release_gap_uses_frame_model: bool = False
 
     @classmethod
     def from_dict(cls, p_dict: dict, **kwargs) -> "TimingPolicy":
@@ -87,19 +81,10 @@ class TimingPolicy:
             unframed_key="min_hold_unframed_us",
             default_frames=1.25,
         )
-        repeat_gap_us, repeat_gap_frames, repeat_gap_floor_us, repeat_gap_override_us, repeat_gap_uses_frame_model = frame_coupled(
-            value_key="repeat_release_gap_us",
-            frames_key="repeat_release_gap_frames",
-            floor_key="repeat_release_gap_floor_us",
-            unframed_key="repeat_release_gap_unframed_us",
-            default_frames=1.5,
-        )
         
         return cls(
             hold_us=hold_us,
             min_hold_us=min_hold_us,
-            release_gap_us=Microseconds(int_value("release_gap_us", int(base["release_gap_us"]))),
-            repeat_release_gap_us=repeat_gap_us,
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
@@ -110,14 +95,10 @@ class TimingPolicy:
             hold_floor_us=hold_floor_us,
             min_hold_frames=min_hold_frames,
             min_hold_floor_us=min_hold_floor_us,
-            repeat_release_gap_frames=repeat_gap_frames,
-            repeat_release_gap_floor_us=repeat_gap_floor_us,
             hold_override_us=hold_override_us,
             min_hold_override_us=min_hold_override_us,
-            repeat_release_gap_override_us=repeat_gap_override_us,
             hold_uses_frame_model=hold_uses_frame_model,
             min_hold_uses_frame_model=min_hold_uses_frame_model,
-            repeat_release_gap_uses_frame_model=repeat_gap_uses_frame_model,
             **kwargs
         )
 
@@ -152,8 +133,6 @@ class FrameTimingPolicy:
 
     hold_us: Microseconds
     min_hold_us: Microseconds
-    release_gap_us: Microseconds
-    repeat_release_gap_us: Microseconds
 
     focus_restore_grace_us: Microseconds
 
@@ -172,9 +151,6 @@ class FrameTimingPolicy:
         fps: int | None = None,
         min_visible_hold_frames: float = 1.25,
         same_key_conflict_policy: Literal["degraded", "strict"] | None = None,
-        release_gap_min_frame_ratio: float = 0.15,
-        repeat_release_gap_min_frame_ratio: float = 1.5,
-        repeat_release_gap_floor_us: int = 18000,
         min_hold_min_frame_ratio: float = 1.25,
         *,
         profile_name: str | None = None,
@@ -187,16 +163,6 @@ class FrameTimingPolicy:
                 if policy.min_hold_uses_frame_model
                 else min_hold_min_frame_ratio
             )
-            repeat_gap_frames = (
-                policy.repeat_release_gap_frames
-                if policy.repeat_release_gap_uses_frame_model
-                else repeat_release_gap_min_frame_ratio
-            )
-            repeat_gap_floor_us = (
-                int(policy.repeat_release_gap_floor_us)
-                if policy.repeat_release_gap_uses_frame_model and policy.repeat_release_gap_floor_us is not None
-                else max(int(policy.repeat_release_gap_us), repeat_release_gap_floor_us)
-            )
             eff_hold_us = cls.materialise_frame_floor(
                 hold_frames,
                 int(policy.hold_floor_us if policy.hold_floor_us is not None else policy.hold_us),
@@ -207,39 +173,15 @@ class FrameTimingPolicy:
                 int(policy.min_hold_floor_us if policy.min_hold_floor_us is not None else policy.min_hold_us),
                 int(frame_us),
             )
-            eff_repeat_release_gap_us = cls.materialise_frame_floor(
-                repeat_gap_frames,
-                repeat_gap_floor_us,
-                int(frame_us),
-            )
-
-            if fps < 60:
-                eff_release_gap_us = Microseconds(max(policy.release_gap_us, math.ceil(frame_us * release_gap_min_frame_ratio)))
-
-                # Safety margin Cycle rule clamp (min_hold + repeat_gap >= frame + 5% or 1ms margin).
-                # Now largely superseded by the repeat-gap floor above (which alone keeps the
-                # cycle >= ~2.1 frame), but kept as a harmless backstop for unusual custom ratios.
-                safety_margin_us = max(1000, math.ceil(frame_us * 0.05))
-                required_cycle_us = frame_us + safety_margin_us
-                current_cycle = eff_min_hold_us + eff_repeat_release_gap_us
-                if current_cycle < required_cycle_us:
-                    deficit = required_cycle_us - current_cycle
-                    eff_repeat_release_gap_us = Microseconds(eff_repeat_release_gap_us + deficit)
-            else:
-                eff_release_gap_us = policy.release_gap_us
 
             if policy.hold_override_us is not None:
                 eff_hold_us = policy.hold_override_us
             if policy.min_hold_override_us is not None:
                 eff_min_hold_us = policy.min_hold_override_us
-            if policy.repeat_release_gap_override_us is not None:
-                eff_repeat_release_gap_us = policy.repeat_release_gap_override_us
         else:
             frame_us = Microseconds(0)
             eff_hold_us = policy.hold_us
             eff_min_hold_us = policy.min_hold_us
-            eff_release_gap_us = policy.release_gap_us
-            eff_repeat_release_gap_us = policy.repeat_release_gap_us
             
         conflict_policy = same_key_conflict_policy if same_key_conflict_policy is not None else policy.same_key_conflict_policy
         if conflict_policy not in ("strict", "degraded"):
@@ -250,8 +192,6 @@ class FrameTimingPolicy:
             frame_us=frame_us,
             hold_us=eff_hold_us,
             min_hold_us=eff_min_hold_us,
-            release_gap_us=eff_release_gap_us,
-            repeat_release_gap_us=eff_repeat_release_gap_us,
             focus_restore_grace_us=policy.focus_restore_grace_us,
             min_visible_hold_frames=min_visible_hold_frames,
             same_key_conflict_policy=conflict_policy,
@@ -297,9 +237,14 @@ class ScheduleMetadata:
     compressed_holds: int = 0
     impossible_same_key_repeats: int = 0
     risky_same_key_repeats: int = 0
+    deduplicated_note_count: int = 0
+    duplicate_note_count: int = 0
+    same_key_compressed_holds: int = 0
+    infeasible_same_key_repeats: int = 0
     max_polyphony: int = 0
     note_count: int = 0
     shortest_same_key_interval_us: int | None = None
+    min_same_key_up_gap_us: int | None = None
     warnings: tuple[str, ...] = ()
     duration_us: Microseconds = Microseconds(0)
     diagnostics: tuple[ScheduleDiagnostic, ...] = ()

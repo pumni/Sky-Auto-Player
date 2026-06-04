@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -51,8 +52,6 @@ PERSISTENT_CACHE_PATH = Path(".cache") / "sky_music" / "picker_metadata.sqlite3"
 _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "hold_us",
     "min_hold_us",
-    "release_gap_us",
-    "repeat_release_gap_us",
     "spin_threshold_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",
@@ -60,6 +59,33 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "fps",
 )
 
+# ---------------------------------------------------------------------------
+# Phase 1A – SHA-256 persistent-key RAM cache
+# ---------------------------------------------------------------------------
+# _persistent_cache_key() is called in the render path (peek_cached_song_ui_metadata)
+# for every visible row on every frame repaint.  Computing stat() + json.dumps() +
+# sha256() per call is expensive.  We cache the result keyed by a cheap tuple
+# (resolved_path_str, mtime_ns, size, profile_name, tempo_scale, fps, …).
+# The cache is automatically invalidated when the file's mtime/size changes.
+_pkey_ram_cache: dict[tuple[Any, ...], str] = {}
+_pkey_ram_lock = RLock()
+
+# ---------------------------------------------------------------------------
+# Phase 1B – Persistent SQLite connection + deferred pruning
+# ---------------------------------------------------------------------------
+# Opening a new sqlite3.Connection on every write adds ~1-3 ms of overhead.
+# We keep one connection per thread (thread-local) to eliminate that cost.
+# Pruning (DELETE … ORDER BY … LIMIT 6000) is deferred: run once every
+# _PRUNE_EVERY_N_WRITES writes instead of after each UPSERT.
+_PRUNE_EVERY_N_WRITES: int = 50
+_write_counter: int = 0
+_write_counter_lock = RLock()
+_tls = threading.local()  # thread-local storage for per-thread SQLite connections
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _metadata_to_payload(meta: SongUiMetadata) -> dict[str, Any]:
     payload = asdict(meta)
@@ -98,6 +124,12 @@ def _metadata_from_payload(payload: dict[str, Any]) -> SongUiMetadata | None:
 
 
 def _stable_file_identity(song_path: Path) -> dict[str, Any]:
+    """Return {path, mtime_ns, size} for cache-key construction.
+
+    Note: _persistent_cache_key() now calls song_path.stat() itself and reuses
+    the result, so this helper is only kept for external callers that still need
+    a standalone identity dict.
+    """
     stat = song_path.stat()
     try:
         path_key = str(song_path.resolve())
@@ -124,10 +156,49 @@ def _persistent_cache_key(
     session: PlaybackSessionContext,
     cfg: AppConfig | None,
 ) -> str | None:
+    """Return the SHA-256 cache key for a (song_path, session) pair.
+
+    Phase 1A: The SHA-256 computation (stat + json.dumps + sha256) is expensive
+    and was being called on every frame repaint in the render path.  We now cache
+    the result in a module-level dict keyed by a cheap tuple that encodes all
+    inputs that can change the key.  The cache entry is automatically stale-safe
+    because mtime_ns and size are part of the RAM key – if the file changes the
+    tuple changes and we recompute.
+    """
     try:
+        stat = song_path.stat()
+        # Build a lightweight, hashable RAM key without any SHA-256 work.
+        try:
+            path_str = str(song_path.resolve())
+        except Exception:
+            path_str = str(song_path)
+        ram_key = (
+            path_str,
+            int(stat.st_mtime_ns),
+            int(stat.st_size),
+            session.profile_name,
+            float(session.tempo_scale),
+            session.fps,
+            session.scan_code_mode,
+            session.same_key_conflict_policy,
+            session.policy_overrides,
+            PERSISTENT_CACHE_SCHEMA_VERSION,
+            sys.platform,
+        )
+        with _pkey_ram_lock:
+            cached_key = _pkey_ram_cache.get(ram_key)
+        if cached_key is not None:
+            return cached_key
+
+        # Cache miss – pay the sha256 cost once and store the result.
+        file_identity = {
+            "path": path_str,
+            "mtime_ns": int(stat.st_mtime_ns),
+            "size": int(stat.st_size),
+        }
         payload = {
             "schema": PERSISTENT_CACHE_SCHEMA_VERSION,
-            "file": _stable_file_identity(song_path),
+            "file": file_identity,
             "session": {
                 "profile_name": session.profile_name,
                 "tempo_scale": float(session.tempo_scale),
@@ -140,16 +211,43 @@ def _persistent_cache_key(
             "platform": sys.platform,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        result = hashlib.sha256(encoded).hexdigest()
+
+        with _pkey_ram_lock:
+            # Bound the cache size to avoid unbounded growth in long-running sessions.
+            if len(_pkey_ram_cache) > 2000:
+                _pkey_ram_cache.clear()
+            _pkey_ram_cache[ram_key] = result
+        return result
     except Exception:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Phase 1B – SQLite connection management
+# ---------------------------------------------------------------------------
+
 def _connect_persistent_cache() -> sqlite3.Connection:
+    """Open (or reuse) the thread-local SQLite connection.
+
+    Phase 1B: each thread keeps one connection alive for the lifetime of the
+    process instead of opening/closing on every write.  The WAL journal means
+    concurrent readers never block the writer.
+    """
+    conn: sqlite3.Connection | None = getattr(_tls, "db_conn", None)
+    if conn is not None:
+        # Validate the connection is still usable (handles rare OS-level errors).
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except sqlite3.Error:
+            _tls.db_conn = None
+
     PERSISTENT_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(PERSISTENT_CACHE_PATH, timeout=0.2)
+    conn = sqlite3.connect(PERSISTENT_CACHE_PATH, timeout=0.5, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-4096")  # 4 MB page cache
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS picker_metadata (
@@ -159,8 +257,25 @@ def _connect_persistent_cache() -> sqlite3.Connection:
         )
         """
     )
+    conn.commit()
+    _tls.db_conn = conn
     return conn
 
+
+def _close_persistent_cache_connection() -> None:
+    """Close the thread-local SQLite connection if open (call on thread shutdown)."""
+    conn: sqlite3.Connection | None = getattr(_tls, "db_conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _tls.db_conn = None
+
+
+# ---------------------------------------------------------------------------
+# Public cache API
+# ---------------------------------------------------------------------------
 
 def warm_persistent_metadata_cache(limit: int = 6000) -> int:
     """Load persistent picker metadata into memory.
@@ -175,16 +290,16 @@ def warm_persistent_metadata_cache(limit: int = 6000) -> int:
 
     loaded: dict[str, SongUiMetadata] = {}
     try:
-        with _connect_persistent_cache() as conn:
-            rows = conn.execute(
-                """
-                SELECT cache_key, payload
-                FROM picker_metadata
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (int(limit),),
-            ).fetchall()
+        conn = _connect_persistent_cache()
+        rows = conn.execute(
+            """
+            SELECT cache_key, payload
+            FROM picker_metadata
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
     except Exception:
         rows = []
 
@@ -234,11 +349,11 @@ def hydrate_persistent_metadata_for_paths(
 
     placeholders = ",".join("?" for _ in missing_keys)
     try:
-        with _connect_persistent_cache() as conn:
-            rows = conn.execute(
-                f"SELECT cache_key, payload FROM picker_metadata WHERE cache_key IN ({placeholders})",
-                tuple(missing_keys),
-            ).fetchall()
+        conn = _connect_persistent_cache()
+        rows = conn.execute(
+            f"SELECT cache_key, payload FROM picker_metadata WHERE cache_key IN ({placeholders})",
+            tuple(missing_keys),
+        ).fetchall()
     except Exception:
         return 0
 
@@ -361,6 +476,13 @@ def _store_persistent_metadata(
     cfg: AppConfig | None,
     meta: SongUiMetadata,
 ) -> None:
+    """Upsert analyzed metadata into the SQLite persistent cache.
+
+    Phase 1B changes:
+    - Reuse the thread-local SQLite connection instead of opening a new one.
+    - Defer the expensive pruning DELETE to every _PRUNE_EVERY_N_WRITES writes
+      rather than running it after every UPSERT.
+    """
     # Never persist raw-only stats; only authoritative, fully analyzed metadata
     # belongs in the cross-session SQLite cache.
     if not meta.analyzed:
@@ -375,25 +497,38 @@ def _store_persistent_metadata(
         _persistent_cache[key] = meta
 
     try:
-        with _connect_persistent_cache() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO picker_metadata(cache_key, payload, updated_at)
-                VALUES (?, ?, ?)
-                """,
-                (key, payload, time.time()),
-            )
-            # Opportunistic pruning keeps the cache bounded without blocking normal reads.
-            conn.execute(
-                """
-                DELETE FROM picker_metadata
-                WHERE cache_key NOT IN (
-                    SELECT cache_key FROM picker_metadata
-                    ORDER BY updated_at DESC
-                    LIMIT 6000
+        conn = _connect_persistent_cache()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO picker_metadata(cache_key, payload, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (key, payload, time.time()),
+        )
+        conn.commit()
+
+        # Phase 1B: opportunistic pruning runs only every N writes to avoid the
+        # expensive DELETE … ORDER BY … LIMIT scan after every single UPSERT.
+        global _write_counter
+        with _write_counter_lock:
+            _write_counter += 1
+            should_prune = (_write_counter % _PRUNE_EVERY_N_WRITES) == 0
+
+        if should_prune:
+            try:
+                conn.execute(
+                    """
+                    DELETE FROM picker_metadata
+                    WHERE cache_key NOT IN (
+                        SELECT cache_key FROM picker_metadata
+                        ORDER BY updated_at DESC
+                        LIMIT 6000
+                    )
+                    """
                 )
-                """
-            )
+                conn.commit()
+            except Exception:
+                pass
     except Exception:
         return
 
@@ -438,7 +573,7 @@ def get_song_ui_metadata(
         report = analyze_schedule(sched, raw_notes=song.notes)
 
         min_note_gap = (report.min_any_note_gap_us / 1000.0) if report.min_any_note_gap_us is not None else 0.0
-        min_repeat_gap = (report.min_same_key_gap_us / 1000.0) if report.min_same_key_gap_us is not None else 0.0
+        min_same_key_gap = (report.min_same_key_gap_us / 1000.0) if report.min_same_key_gap_us is not None else 0.0
 
         return SongUiMetadata(
             path=song_path,
@@ -451,7 +586,7 @@ def get_song_ui_metadata(
             note_count=sched.note_count,
             max_polyphony=report.max_polyphony,
             min_note_gap_ms=min_note_gap,
-            min_same_key_gap_ms=min_repeat_gap,
+            min_same_key_gap_ms=min_same_key_gap,
             risk=report.severity,
             recommended_profile=report.suggested_profile,
             recommended_tempo_scale=report.suggested_tempo_scale,
@@ -492,10 +627,14 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
     show Time/Notes/Density/gaps immediately (~1ms) while the much heavier risk
     analysis (~5ms, schedule + analyze) runs in the background. ``analyzed`` is
     False so the UI knows risk/recommendation are still pending.
+
+    Phase 1C: parse_song_file() already sorts notes by time_ms, so we no longer
+    sort the slice three separate times.  We iterate the pre-sorted tuple once
+    to build all needed metrics in O(n) time.
     """
     try:
         song = _song_repository.load(song_path)
-        notes = song.notes
+        notes = song.notes  # already sorted by time_ms from parse_song_file()
         note_count = len(notes)
         if note_count == 0:
             return SongUiMetadata(
@@ -505,23 +644,32 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
                 recommended_tempo_scale=1.0, warnings=(), analyzed=False,
             )
 
-        times = sorted(int(n.time_ms) for n in notes)
+        # Phase 1C: single pass – notes are pre-sorted, so times is already ordered.
+        times: list[int] = [int(n.time_ms) for n in notes]
         duration_seconds = times[-1] / 1000.0
 
-        onsets = sorted(set(times))
-        min_note_gap_ms = float(min(
-            (onsets[i] - onsets[i - 1] for i in range(1, len(onsets))), default=0.0
-        ))
-
+        # Min gap between any two *distinct* onset timestamps + onset_counts in one pass.
         onset_counts: dict[int, int] = {}
+        prev_distinct: int | None = None
+        min_gap_int: int = 0
         for t in times:
             onset_counts[t] = onset_counts.get(t, 0) + 1
+            if prev_distinct is None:
+                prev_distinct = t
+            elif t != prev_distinct:
+                gap = t - prev_distinct
+                if min_gap_int == 0 or gap < min_gap_int:
+                    min_gap_int = gap
+                prev_distinct = t
+        min_note_gap_ms = float(min_gap_int)
+
         max_chord_size = max(onset_counts.values())
         chords_count = sum(1 for c in onset_counts.values() if c > 1)
 
+        # Same-key gap: notes already sorted, so no second sort needed.
         key_last: dict[Any, int] = {}
         same_key_gaps: list[int] = []
-        for note in sorted(notes, key=lambda n: n.time_ms):
+        for note in notes:  # Phase 1C: was sorted(notes, key=lambda n: n.time_ms)
             t = int(note.time_ms)
             if note.key in key_last:
                 same_key_gaps.append(t - key_last[note.key])
@@ -529,9 +677,11 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
         min_same_key_gap_ms = float(min(same_key_gaps)) if same_key_gaps else 0.0
 
         average_notes_per_second = note_count / duration_seconds if duration_seconds > 0 else 0.0
+
+        # Sliding-window peak density (1-second window) – O(n), no extra sort.
         peak = 0
         left = 0
-        for right in range(len(times)):
+        for right in range(note_count):
             while times[right] - times[left] > 1000:
                 left += 1
             peak = max(peak, right - left + 1)
@@ -671,14 +821,21 @@ def peek_cached_song_ui_metadata(
 
 
 def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
-    global _persistent_loaded
+    global _persistent_loaded, _write_counter
     with _cache_lock:
         _metadata_cache.clear()
         _song_repository.clear()
         if clear_persistent:
             _persistent_cache.clear()
             _persistent_loaded = False
+    # Phase 1A: also invalidate the SHA-256 RAM key cache.
+    with _pkey_ram_lock:
+        _pkey_ram_cache.clear()
     if clear_persistent:
+        # Phase 1B: close and discard the thread-local connection before unlinking.
+        _close_persistent_cache_connection()
+        with _write_counter_lock:
+            _write_counter = 0
         try:
             PERSISTENT_CACHE_PATH.unlink(missing_ok=True)
         except Exception:

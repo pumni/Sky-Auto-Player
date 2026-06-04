@@ -75,13 +75,6 @@ def test_metadata_uses_session_fps_for_schedule():
     assert meta_no_fps.duration_seconds != meta_30.duration_seconds
 
 
-def test_repeat_release_gap_scales_with_fps():
-    session = PlaybackSessionContext.balanced(fps=30)
-    policy = session.resolve_effective_policy(AppConfig())
-    # Empirical floor (Exp2): max(base 8000, 1.5*frame=50000, fixed 18000) = 50000 at 30fps.
-    assert policy.repeat_release_gap_us == 50_000
-
-
 def test_balanced_at_30fps_scales_min_hold():
     session = PlaybackSessionContext.balanced(fps=30)
     policy = session.resolve_effective_policy(AppConfig())
@@ -118,7 +111,6 @@ def test_apply_recommendation_to_context_updates_session():
     updated = apply_recommendation_to_context(session, rec)
     assert updated.profile_name == "dense-safe"
     assert updated.tempo_scale == 0.9
-    assert "input_lead_us" not in dict(updated.policy_overrides)
     policy = updated.resolve_effective_policy(AppConfig())
     assert policy.hold_us > 0
 
@@ -147,15 +139,12 @@ def test_strict_timing_profile_validation_enforcement():
             "balanced": {
                 "hold_us": 10000,
                 "min_hold_us": 8000,
-                "release_gap_us": 2000,
-                "repeat_release_gap_us": 4000,
-                "input_lead_us": 3000,
             }
         }
     )
-    # Trying to resolve "balanced" at 60 FPS should fail validation due to min_hold_us < 10000us or unsafe cycle
+    # Trying to resolve "balanced" at 60 FPS should fail validation due to min_hold_us < one frame.
     session = PlaybackSessionContext(profile_name="balanced", fps=60)
-    with pytest.raises(ValueError, match="Unsafe cycle|min_hold_us below 10000us"):
+    with pytest.raises(ValueError, match="Unsafe min_hold_us|min_hold_us below 10000us"):
         session.resolve_effective_policy(cfg_unsafe)
 
     # 2. Test audience-safe overrides strict limit
@@ -163,14 +152,11 @@ def test_strict_timing_profile_validation_enforcement():
         timing_profiles={
             "audience_safe": {
                 "hold_us": 34000,
-                "min_hold_us": 15000,  # Below the 17000us limit for audience-safe!
-                "release_gap_us": 8000,
-                "repeat_release_gap_us": 14000,
-                "input_lead_us": 14000,
+                "min_hold_us": 15000,  # Below the 18000us limit for audience-safe.
             }
         }
     )
     session_audience = PlaybackSessionContext(profile_name="audience-safe", fps=60)
-    with pytest.raises(ValueError, match="audience-safe profile requires min_hold_us >= 17000us"):
+    with pytest.raises(ValueError, match="Unsafe min_hold_us|audience-safe profile requires min_hold_us >= 18000us"):
         session_audience.resolve_effective_policy(cfg_unsafe_audience)
 

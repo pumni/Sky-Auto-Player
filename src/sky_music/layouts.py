@@ -17,6 +17,16 @@ PHYSICAL_SCAN_CODES = {
     'n': 0x31, 'm': 0x32, ',': 0x33, '.': 0x34, '/': 0x35,
 }
 
+_USER32 = None
+
+
+def _map_virtual_key(vk: int) -> int:
+    global _USER32
+    if _USER32 is None:
+        import ctypes
+        _USER32 = ctypes.WinDLL("user32", use_last_error=True)
+    return int(_USER32.MapVirtualKeyW(vk, 0))
+
 SKY_15_KEY_MAP = {
     'Key0': 'y', 'Key1': 'u', 'Key2': 'i', 'Key3': 'o', 'Key4': 'p',
     'Key5': 'h', 'Key6': 'j', 'Key7': 'k', 'Key8': 'l', 'Key9': ';',
@@ -60,9 +70,7 @@ class DefaultNoteResolver(NoteResolver):
         vk = VK_CODES.get(char)
         if vk is not None:
             try:
-                import ctypes
-                user32 = ctypes.WinDLL("user32", use_last_error=True)
-                sc = user32.MapVirtualKeyW(vk, 0)
+                sc = _map_virtual_key(vk)
                 if sc:
                     return int(sc)
             except (AttributeError, OSError):

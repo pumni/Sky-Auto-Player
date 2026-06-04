@@ -64,10 +64,9 @@ def test_profile_switch_preserves_fps():
     assert dense.fps == 120
     p_bal = balanced.resolve_effective_policy(cfg)
     p_dense = dense.resolve_effective_policy(cfg)
-    # At a fixed FPS the same-key release gap is governed by the universal empirical floor
-    # (Exp2), so different profiles converge to the same value rather than differing.
-    assert p_bal.repeat_release_gap_us == p_dense.repeat_release_gap_us
-    assert p_bal.repeat_release_gap_us >= 18000
+    assert p_bal.fps == p_dense.fps == 120
+    assert not hasattr(p_bal, "repeat_release_gap_us")
+    assert p_bal.hold_us != p_dense.hold_us
 
 
 def test_no_orphan_timing_policy_wrap_in_src():
@@ -86,7 +85,7 @@ def test_strict_policy_aborts_build():
         ),
     )
     policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({"input_lead_us": 0}),
+        TimingPolicy.from_dict({}),
         same_key_conflict_policy="strict",
     )
     with pytest.raises(ScheduleBuildError) as exc:

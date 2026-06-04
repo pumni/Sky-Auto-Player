@@ -14,7 +14,13 @@ from sky_music.domain.scheduler_types import TimingPolicy, KeyAction, FrameTimin
 def _frame_policy(d: dict | None = None) -> FrameTimingPolicy:
     return FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict(d or {}))
 from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
-from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_FINISHED, PLAYBACK_QUIT, PLAYBACK_SKIPPED
+from sky_music.orchestration.engine import (
+    PlaybackEngine,
+    PlaybackState,
+    PLAYBACK_FINISHED,
+    PLAYBACK_QUIT,
+    PLAYBACK_SKIPPED,
+)
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
 
@@ -45,7 +51,7 @@ def test_dry_run_playback_execution():
         )
     )
 
-    policy = _frame_policy({"input_lead_us": 0})
+    policy = _frame_policy()
     sched_meta = build_key_actions(song, policy=policy)
     actions = sched_meta.actions
 
@@ -64,7 +70,7 @@ def test_dry_run_playback_execution():
 def test_dry_run_playback_without_focus():
     """Verify that dry-run playback executes successfully without requiring active Sky window focus."""
     song = Song(name="Focusless", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
-    policy = _frame_policy({"input_lead_us": 0})
+    policy = _frame_policy()
     sched_meta = build_key_actions(song, policy=policy)
 
     backend = DryRunBackend()
@@ -80,7 +86,7 @@ def test_telemetry_includes_send_duration_us(tmp_path):
     """Verify that high-precision telemetry logger records and saves the send_duration_us metric."""
     import csv
     song = Song(name="Telemetry", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
-    policy = _frame_policy({"input_lead_us": 0})
+    policy = _frame_policy()
     sched_meta = build_key_actions(song, policy=policy)
 
     backend = DryRunBackend()
@@ -108,7 +114,7 @@ def test_deterministic_playback_with_fake_time():
             Note(time_ms=Millis(5000), key=NoteKey("Key1")),
         )
     )
-    policy = _frame_policy({"input_lead_us": 0, "hold_us": 20000})
+    policy = _frame_policy({"hold_us": 20000})
     sched_meta = build_key_actions(song, policy=policy)
 
     clock = FakeClock()
@@ -132,6 +138,17 @@ class MockControls:
         self.enabled = True
     def poll(self):
         return self.command
+
+
+class SequenceControls:
+    def __init__(self, commands):
+        self.commands = list(commands)
+        self.enabled = True
+
+    def poll(self):
+        if not self.commands:
+            return None
+        return self.commands.pop(0)
 
 def test_playback_quit_command():
     song = Song(name="QuitTest", notes=(Note(time_ms=Millis(1000), key=NoteKey("Key0")),))
@@ -163,3 +180,58 @@ def test_playback_skip_command():
     
     res = engine.play()
     assert res == PLAYBACK_SKIPPED
+
+
+def test_focus_restore_grace_handles_skip_command():
+    song = Song(name="GraceSkip", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
+    sched = build_key_actions(song)
+    clock = FakeClock()
+    sleeper = FakeSleeper(clock)
+    backend = DryRunBackend()
+    controls = SequenceControls(["skip"])
+    engine = PlaybackEngine(
+        song=song,
+        actions=sched.actions,
+        backend=backend,
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=False,
+        clock=clock,
+        sleeper=sleeper,
+        focus_restore_grace_us=50_000,
+    )
+    state = PlaybackState(start_perf=0, focus_pause_started_us=0)
+
+    waiting, command = engine._process_wait_states(state, True, 1.0)
+
+    assert waiting is True
+    assert command == PLAYBACK_SKIPPED
+
+
+def test_focus_restore_grace_handles_pause_command():
+    song = Song(name="GracePause", notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),))
+    sched = build_key_actions(song)
+    clock = FakeClock()
+    sleeper = FakeSleeper(clock)
+    backend = DryRunBackend()
+    controls = SequenceControls(["pause"])
+    engine = PlaybackEngine(
+        song=song,
+        actions=sched.actions,
+        backend=backend,
+        controls=controls,
+        telemetry_enabled=False,
+        require_focus=False,
+        clock=clock,
+        sleeper=sleeper,
+        focus_restore_grace_us=50_000,
+    )
+    state = PlaybackState(start_perf=0, focus_pause_started_us=0)
+
+    waiting, command = engine._process_wait_states(state, True, 1.0)
+
+    assert waiting is True
+    assert command is None
+    assert state.focus_pause_started_us is None
+    assert state.manual_pause_started_us is not None
+    assert state.pause_time_us > 0

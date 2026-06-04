@@ -15,9 +15,18 @@ class CalibrationInput:
     impossible_same_key_repeats: int
     risky_same_key_repeats: int
     failed_release_count: int
+    infeasible_same_key_repeats: int = 0
     compressed_holds: int = 0
     max_polyphony: int = 0
     note_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.infeasible_same_key_repeats == 0 and self.impossible_same_key_repeats > 0:
+            object.__setattr__(
+                self,
+                "infeasible_same_key_repeats",
+                self.impossible_same_key_repeats,
+            )
 
 @dataclass(frozen=True, slots=True)
 class CalibrationRecommendation:
@@ -70,26 +79,26 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     late_10ms = inp.late_over_10ms
     
     schedule_stress = (
-        inp.impossible_same_key_repeats > 0
+        inp.infeasible_same_key_repeats > 0
         or inp.risky_same_key_repeats > 5
         or inp.compressed_holds > 10
     )
     dense_polyphony = inp.max_polyphony > 8
     stress_rate = (
-        (inp.impossible_same_key_repeats + inp.risky_same_key_repeats) / inp.note_count
+        (inp.infeasible_same_key_repeats + inp.risky_same_key_repeats) / inp.note_count
         if inp.note_count > 0
         else 0.0
     )
 
     # 2. Timing Profile and Tempo Scale calibration decision tree
-    if inp.failed_release_count > 0 or inp.impossible_same_key_repeats > 0 or p99 > 15000 or late_10ms > 5:
+    if inp.failed_release_count > 0 or inp.infeasible_same_key_repeats > 0 or p99 > 15000 or late_10ms > 5:
         severity = "severe"
         rec_profile = "audience-safe" if inp.fps <= 30 and not schedule_stress else "dense-safe"
         rec_tempo = round(inp.tempo_scale * (0.88 if stress_rate > 0.03 else 0.90), 2)
         reason = (
             f"Severe timing or schedule stress detected "
             f"(p99={p99/1000:.1f}ms, late >10ms count={late_10ms}, "
-            f"impossible repeats={inp.impossible_same_key_repeats}). "
+            f"infeasible same-key repeats={inp.infeasible_same_key_repeats}). "
             "Recommend safe/dense playback and scaling down tempo."
         )
     elif p99 > 8000 or late_10ms > 0 or schedule_stress or dense_polyphony:
@@ -98,7 +107,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
         rec_tempo = round(inp.tempo_scale * 0.95, 2)
         reason = (
             f"Moderate timing or density stress detected "
-            f"(p99={p99/1000:.1f}ms, risky repeats={inp.risky_same_key_repeats}, "
+            f"(p99={p99/1000:.1f}ms, same-key compressed holds={inp.risky_same_key_repeats}, "
             f"compressed holds={inp.compressed_holds}, max polyphony={inp.max_polyphony}). "
             "Recommend a safer profile and slight tempo reduction."
         )
@@ -149,6 +158,9 @@ def calibration_input_from_summary(summary: dict) -> CalibrationInput:
         p95_send_duration_us=int(dur.get("p95_us", 0)),
         late_over_10ms=int(lat.get("over_10ms", 0)),
         impossible_same_key_repeats=int(sched.get("impossible_same_key_repeats", 0)),
+        infeasible_same_key_repeats=int(
+            sched.get("infeasible_same_key_repeats", sched.get("impossible_same_key_repeats", 0))
+        ),
         risky_same_key_repeats=int(sched.get("risky_same_key_repeats", 0)),
         failed_release_count=int(backend.get("panic_release_failures", 0)),
         compressed_holds=int(sched.get("compressed_holds", 0)),

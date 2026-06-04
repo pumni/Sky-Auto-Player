@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from typing import Literal
+
 from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
 from sky_music.domain.scheduler_types import KeyAction, ScheduleMetadata, Microseconds, FrameTimingPolicy, ScheduleDiagnostic
@@ -18,7 +20,7 @@ def _recommended_tempo_scale_for_repeats(
 ) -> float | None:
     if shortest_interval_us is None or shortest_interval_us <= 0:
         return None
-    min_cycle_us = policy.min_hold_us + policy.repeat_release_gap_us
+    min_cycle_us = int(policy.min_hold_us)
     if shortest_interval_us >= min_cycle_us:
         return None
     suggested = tempo_scale * shortest_interval_us / min_cycle_us
@@ -30,6 +32,72 @@ class ScheduledNoteDraft:
     note_key: NoteKey
     scan_code: int
     source_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedKeyHold:
+    hold_us: int
+    risk: Literal["ok", "moderate", "severe"]
+    effective_delta_us: int | None = None
+    compressed: bool = False
+
+
+def normalise_note_drafts(drafts: list[ScheduledNoteDraft]) -> tuple[ScheduledNoteDraft, ...]:
+    """Remove exact same-key timestamp duplicates while preserving intentional chords."""
+    sorted_drafts = sorted(drafts, key=lambda draft: draft.at_us)
+    deduped_drafts: list[ScheduledNoteDraft] = []
+    seen_note_slots: set[tuple[int, int]] = set()
+    for draft in sorted_drafts:
+        slot = (draft.at_us, draft.scan_code)
+        if slot in seen_note_slots:
+            continue
+        seen_note_slots.add(slot)
+        deduped_drafts.append(draft)
+    return tuple(deduped_drafts)
+
+
+def next_same_key_times(drafts: tuple[ScheduledNoteDraft, ...]) -> dict[int, int | None]:
+    next_time_by_source_index: dict[int, int | None] = {}
+    last_seen_by_key: dict[int, int] = {}
+    for idx in range(len(drafts) - 1, -1, -1):
+        draft = drafts[idx]
+        next_time_by_source_index[draft.source_index] = last_seen_by_key.get(draft.scan_code)
+        last_seen_by_key[draft.scan_code] = draft.at_us
+    return next_time_by_source_index
+
+
+def plan_same_key_hold(
+    *,
+    target_hold_us: int,
+    min_hold_us: int,
+    effective_delta_us: int | None,
+) -> PlannedKeyHold:
+    if effective_delta_us is None:
+        return PlannedKeyHold(hold_us=target_hold_us, risk="ok")
+
+    max_hold_us = effective_delta_us
+    if max_hold_us < min_hold_us:
+        return PlannedKeyHold(
+            hold_us=min_hold_us,
+            risk="severe",
+            effective_delta_us=effective_delta_us,
+            compressed=min_hold_us < target_hold_us,
+        )
+
+    if max_hold_us < target_hold_us:
+        return PlannedKeyHold(
+            hold_us=max_hold_us,
+            risk="moderate",
+            effective_delta_us=effective_delta_us,
+            compressed=True,
+        )
+
+    return PlannedKeyHold(
+        hold_us=target_hold_us,
+        risk="ok",
+        effective_delta_us=effective_delta_us,
+    )
+
 
 def build_key_actions(
     song: Song,
@@ -69,6 +137,7 @@ def build_key_actions(
     impossible_same_key_repeats = 0
     risky_same_key_repeats = 0
     shortest_same_key_interval_us = None
+    min_same_key_up_gap_us = None
     note_count = len(song.notes)
     
     # 1. Normalize and resolve NoteKeys to physical scan codes & Apply tempo scaling
@@ -96,16 +165,13 @@ def build_key_actions(
             source_index=idx
         ))
         
-    # Sort chronologically by original source time
-    drafts.sort(key=lambda d: d.at_us)
+    raw_draft_count = len(drafts)
+    drafts = normalise_note_drafts(drafts)
+    deduplicated_note_count = len(drafts)
+    duplicate_note_count = raw_draft_count - deduplicated_note_count
     
     # 2. Pre-calculate the next occurrence time of the same physical key
-    next_same_key_time = {}
-    last_seen_by_key = {}
-    for idx in range(len(drafts) - 1, -1, -1):
-        draft = drafts[idx]
-        next_same_key_time[draft.source_index] = last_seen_by_key.get(draft.scan_code)
-        last_seen_by_key[draft.scan_code] = draft.at_us
+    next_same_key_time = next_same_key_times(drafts)
         
     raw_events = [] # list of dicts: {"at_us": int, "sc": int, "kind": "down"|"up", "reason": str}
     diagnostics = []
@@ -117,52 +183,52 @@ def build_key_actions(
         down_at_us = draft.at_us
         
         effective_delta_us = None
-        max_hold = None
-        risk = "ok"
-        
         if next_same_info is not None:
             effective_delta_us = next_same_info - down_at_us
             
             if shortest_same_key_interval_us is None or effective_delta_us < shortest_same_key_interval_us:
                 shortest_same_key_interval_us = effective_delta_us
-            
-            # Constraint: Must release phím TRƯỚC KHI bấm lại phím đó lần sau ít nhất policy.repeat_release_gap_us
-            max_hold = effective_delta_us - policy.repeat_release_gap_us
-            
-            if max_hold < policy.min_hold_us:
-                impossible_same_key_repeats += 1
-                risk = "severe"
-                diagnostics.append(ScheduleDiagnostic(
-                    source_index=draft.source_index,
-                    note_key=draft.note_key,
-                    scan_code=draft.scan_code,
-                    code="impossible_repeat",
-                    message=f"Repeat too fast: {effective_delta_us/1000:.1f}ms interval < { (policy.min_hold_us + policy.repeat_release_gap_us)/1000:.1f}ms minimum cycle"
-                ))
-                if policy.same_key_conflict_policy == "strict":
-                    raise ScheduleBuildError(
-                        f"Cannot build schedule under strict policy: same-key repeat interval "
-                        f"{effective_delta_us / 1000:.1f}ms is below minimum cycle "
-                        f"{(policy.min_hold_us + policy.repeat_release_gap_us) / 1000:.1f}ms.",
-                        recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
-                            effective_delta_us, policy, tempo_scale
-                        ),
-                        recommended_profile="dense-safe",
-                    )
-            elif max_hold < policy.hold_us:
-                risky_same_key_repeats += 1
-                risk = "moderate"
-                
-        # Determine actual hold duration — one clamp for EVERY note (repeat or not):
-        #   floor   = policy.min_hold_us  (visible key-down floor, always applied)
-        #   ceiling = policy.hold_us, further capped by same-key max_hold when present
-        # The invariant min_hold_us <= hold_us (enforced at policy build) guarantees a
-        # non-repeat note resolves to exactly hold_us, so behaviour is unchanged for
-        # valid profiles while removing the old two-path inconsistency.
-        ceiling = policy.hold_us if max_hold is None else min(policy.hold_us, max_hold)
-        actual_hold = max(policy.min_hold_us, ceiling)
-        if actual_hold < policy.hold_us:
+
+        planned_hold = plan_same_key_hold(
+            target_hold_us=int(policy.hold_us),
+            min_hold_us=int(policy.min_hold_us),
+            effective_delta_us=effective_delta_us,
+        )
+
+        if planned_hold.risk == "severe":
+            impossible_same_key_repeats += 1
+            diagnostics.append(ScheduleDiagnostic(
+                source_index=draft.source_index,
+                note_key=draft.note_key,
+                scan_code=draft.scan_code,
+                code="impossible_repeat",
+                message=(
+                    f"Repeat too fast: {effective_delta_us / 1000:.1f}ms interval < "
+                    f"{policy.min_hold_us / 1000:.1f}ms min_hold; preserving min_hold means "
+                    "the next same-key down occurs before the previous release."
+                )
+            ))
+            if policy.same_key_conflict_policy == "strict":
+                raise ScheduleBuildError(
+                    f"Cannot build schedule under strict policy: same-key repeat interval "
+                    f"{effective_delta_us / 1000:.1f}ms is below min_hold "
+                    f"{policy.min_hold_us / 1000:.1f}ms.",
+                    recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
+                        effective_delta_us, policy, tempo_scale
+                    ),
+                    recommended_profile="dense-safe",
+                )
+        elif planned_hold.risk == "moderate":
+            risky_same_key_repeats += 1
+
+        actual_hold = planned_hold.hold_us
+        if planned_hold.compressed:
             compressed_holds += 1
+
+        if effective_delta_us is not None:
+            same_key_up_gap_us = effective_delta_us - actual_hold
+            if min_same_key_up_gap_us is None or same_key_up_gap_us < min_same_key_up_gap_us:
+                min_same_key_up_gap_us = same_key_up_gap_us
             
         up_at_us = down_at_us + actual_hold
         
@@ -170,20 +236,6 @@ def build_key_actions(
         raw_events.append({"at_us": down_at_us, "sc": sc, "kind": "down", "reason": "onset"})
         raw_events.append({"at_us": up_at_us, "sc": sc, "kind": "up", "reason": "repeat_release" if next_same_info is not None else "release"})
 
-    # 5.5 Release collision delay: when a standard release coincides with another key's down,
-    # defer release so the new down is not swallowed by release ordering.
-    downs_at_us: dict[int, set[int]] = {}
-    for ev in raw_events:
-        if ev["kind"] == "down":
-            downs_at_us.setdefault(ev["at_us"], set()).add(ev["sc"])
-
-    for ev in raw_events:
-        if ev["kind"] != "up" or ev["reason"] == "repeat_release":
-            continue
-        conflicting = downs_at_us.get(ev["at_us"], set()) - {ev["sc"]}
-        if conflicting:
-            ev["at_us"] += policy.release_gap_us
-        
     # 6. Group simultaneous events into single KeyAction objects
     grouped = {} # key: (at_us, kind, reason) -> list of scan codes
     for ev in raw_events:
@@ -205,14 +257,8 @@ def build_key_actions(
     # 7. Sort final timeline with strict microsecond accuracy & kind prioritization
     def action_priority(action: KeyAction) -> int:
         if action.kind == "up":
-            if action.reason == "repeat_release":
-                return 0 # Release repeat keys first!
-            elif action.reason == "release":
-                return 2 # Safe release after down
-            else:
-                return 3 # Final release last
-        else:
-            return 1 # Down note onset has priority over standard releases
+            return 0
+        return 1
             
     key_actions_list.sort(key=lambda a: (a.at_us, action_priority(a)))
     
@@ -229,11 +275,16 @@ def build_key_actions(
             
     warnings = []
     if impossible_same_key_repeats > 0:
-        warnings.append(f"Detected {impossible_same_key_repeats} impossible same-key repeat(s) scheduled too fast.")
+        warnings.append(
+            f"Detected {impossible_same_key_repeats} infeasible same-key repeat(s): "
+            "authored interval is below min_hold, so degraded playback preserves min_hold and overlaps the next down."
+        )
     if risky_same_key_repeats > 0:
-        warnings.append(f"Detected {risky_same_key_repeats} risky same-key repeat(s) close to min hold.")
+        warnings.append(
+            f"Compressed {risky_same_key_repeats} same-key hold(s) to release before the next down."
+        )
     if compressed_holds > 0:
-        warnings.append(f"Compressed {compressed_holds} note hold(s) due to dense scheduling.")
+        warnings.append(f"Compressed {compressed_holds} note hold(s) due to same-key scheduling pressure.")
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
     playback_duration_us = duration_us
@@ -243,12 +294,17 @@ def build_key_actions(
         actions=tuple(key_actions_list),
         compressed_holds=compressed_holds,
         impossible_same_key_repeats=impossible_same_key_repeats,
+        infeasible_same_key_repeats=impossible_same_key_repeats,
         max_polyphony=max_polyphony,
         note_count=note_count,
+        deduplicated_note_count=deduplicated_note_count,
+        duplicate_note_count=duplicate_note_count,
+        same_key_compressed_holds=compressed_holds,
         duration_us=duration_us,
         warnings=tuple(warnings),
         risky_same_key_repeats=risky_same_key_repeats,
         shortest_same_key_interval_us=shortest_same_key_interval_us,
+        min_same_key_up_gap_us=min_same_key_up_gap_us,
         source_duration_us=source_duration_us,
         playback_duration_us=playback_duration_us,
         diagnostics=tuple(diagnostics),
