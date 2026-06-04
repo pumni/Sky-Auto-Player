@@ -236,7 +236,7 @@ def build_key_actions(
         raw_events.append({"at_us": down_at_us, "sc": sc, "kind": "down", "reason": "onset"})
         raw_events.append({"at_us": up_at_us, "sc": sc, "kind": "up", "reason": "repeat_release" if next_same_info is not None else "release"})
 
-    # 6. Group simultaneous events into single KeyAction objects
+    # 4. Group simultaneous events into single KeyAction objects
     grouped = {} # key: (at_us, kind, reason) -> list of scan codes
     for ev in raw_events:
         g_key = (ev["at_us"], ev["kind"], ev["reason"])
@@ -254,7 +254,7 @@ def build_key_actions(
             reason=reason
         ))
         
-    # 7. Sort final timeline with strict microsecond accuracy & kind prioritization
+    # 5. Sort final timeline with strict microsecond accuracy & kind prioritization
     def action_priority(action: KeyAction) -> int:
         if action.kind == "up":
             return 0
@@ -262,7 +262,7 @@ def build_key_actions(
             
     key_actions_list.sort(key=lambda a: (a.at_us, action_priority(a)))
     
-    # 8. Calculate max polyphony
+    # 6. Calculate max polyphony
     active_keys = set()
     max_polyphony = 0
     for action in key_actions_list:
@@ -287,6 +287,8 @@ def build_key_actions(
         warnings.append(f"Compressed {compressed_holds} note hold(s) due to same-key scheduling pressure.")
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
+    # playback_duration_us is a Phase-5 compatibility alias of duration_us (telemetry/calibration
+    # read it by that name). Keep both in sync; do not "dedupe" without updating consumers.
     playback_duration_us = duration_us
     source_duration_us = Microseconds(max((d.at_us for d in drafts), default=0) + policy.hold_us)
 
@@ -294,6 +296,8 @@ def build_key_actions(
         actions=tuple(key_actions_list),
         compressed_holds=compressed_holds,
         impossible_same_key_repeats=impossible_same_key_repeats,
+        # Phase-5 compatibility aliases (scheduler-core-architecture-plan §Phase 5): telemetry and
+        # calibration prefer these newer names but the values intentionally mirror the legacy ones.
         infeasible_same_key_repeats=impossible_same_key_repeats,
         max_polyphony=max_polyphony,
         note_count=note_count,

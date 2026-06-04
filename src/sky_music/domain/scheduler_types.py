@@ -230,6 +230,8 @@ class ScheduleDiagnostic:
     source_index: int
     note_key: NoteKey
     scan_code: int
+    # Shared diagnostic vocabulary. build_key_actions() only ever emits "impossible_repeat"; the
+    # other codes are produced by domain/validation.py against the built schedule.
     code: Literal["negative_timestamp", "duplicate_down", "stuck_keys", "impossible_repeat", "frame_lateness"]
     message: str
 

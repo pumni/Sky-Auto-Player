@@ -24,11 +24,15 @@ class RealSleeper:
 class SleepPolicy:
     spin_threshold_us: int = 500
     poll_s: float = 0.025
-    min_sleep_s: float = 0.001
+
+# Fallback spin threshold when a caller does not pass one explicitly. Kept equal to
+# SleepPolicy.spin_threshold_us so the bare-call default and the policy default never disagree;
+# the playback engine always forwards the resolved policy value.
+_DEFAULT_SPIN_THRESHOLD_US = SleepPolicy.spin_threshold_us
 
 class PreciseSleeper:
     """Standardized high-precision sleeper using hybrid coarse, medium, yield, and spin phases."""
-    def sleep_step_towards_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = 800) -> None:
+    def sleep_step_towards_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = _DEFAULT_SPIN_THRESHOLD_US) -> None:
         """Sleeps a single step towards target_us, allowing the caller to perform frequent polling."""
         now = clock.now_us()
         remaining_us = target_us - now
@@ -50,7 +54,7 @@ class PreciseSleeper:
             # Busy wait / spin
             pass
 
-    def sleep_until_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = 800) -> None:
+    def sleep_until_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = _DEFAULT_SPIN_THRESHOLD_US) -> None:
         """
         Looping wrapper that sleeps until target_us is reached.
         
