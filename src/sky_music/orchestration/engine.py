@@ -163,7 +163,9 @@ class PlaybackEngine:
                 if self.renderer:
                     self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status="paused", force=True)
             else:
-                state.pause_time_us += (self.clock.now_us() - state.manual_pause_started_us)
+                pause_duration_us = self.clock.now_us() - state.manual_pause_started_us
+                state.pause_time_us += pause_duration_us
+                self.telemetry.record_pause("manual", pause_duration_us)
                 state.manual_pause_started_us = None
                 if self.renderer:
                     self.renderer.render(state.get_elapsed_us(self.clock) / 1_000_000, total_time_seconds, self.song.name, status="playing", force=True)
@@ -208,7 +210,9 @@ class PlaybackEngine:
                     if early_cmd in ("pause", "panic"):
                         break
 
-            state.pause_time_us += (self.clock.now_us() - state.focus_pause_started_us)
+            pause_duration_us = self.clock.now_us() - state.focus_pause_started_us
+            state.pause_time_us += pause_duration_us
+            self.telemetry.record_pause("focus", pause_duration_us)
             state.focus_pause_started_us = None
             if self.renderer:
                 status = "paused" if state.manual_pause_started_us is not None else "playing"
@@ -524,7 +528,7 @@ class PlaybackEngine:
             if exec_result is None:
                 return
             lateness_us = exec_result.lateness_us
-            if exec_result.is_late:
+            if exec_result.is_late and exec_result.runtime_outcome != "deferred_release":
                 max_lateness_us = max(max_lateness_us, lateness_us)
                 if lateness_us > 2_000:
                     late_events_over_2ms += 1
@@ -532,7 +536,11 @@ class PlaybackEngine:
                     late_events_over_5ms += 1
                 if exec_result.is_critically_late:
                     late_events_over_10ms += 1
-            if self.renderer and hasattr(self.renderer, "update_counters"):
+            if (
+                self.renderer
+                and hasattr(self.renderer, "update_counters")
+                and exec_result.runtime_outcome != "deferred_release"
+            ):
                 self.renderer.update_counters(max(0, lateness_us))
 
         try:

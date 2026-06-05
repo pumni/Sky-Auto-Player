@@ -647,23 +647,16 @@ Gates:
 
 Goal: avoid replaying expired pulses back-to-back after a long thread stall.
 
-Do not implement this in earlier phases; first collect truthful telemetry.
-
-Research decision required:
-
-- preserve chronological replay;
-- drop fully expired down/up pairs;
-- or preserve latest intended state per key.
+Rejected decision: rebasing the timeline after a stall causes permanent and cumulative musical
+slowdown. Runtime stalls must never modify the absolute music clock. Only explicit user pause and
+focus-loss pause may shift the timeline.
 
 Any chosen policy must:
 
 - preserve safety;
 - never fabricate extra downs;
 - report dropped/expired generations;
-- be independently configurable or staged until validated.
-
-Tests and acceptance criteria will be written after Phase 4 telemetry shows the real frequency and
-shape of late bursts.
+- preserve the absolute authored timeline without cumulative drift.
 
 ### Phase 7 - In-game validation and margin decision
 

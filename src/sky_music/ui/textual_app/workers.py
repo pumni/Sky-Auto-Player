@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-import sys
 from typing import Any, Protocol
 
 from sky_music.config import AppConfig
@@ -15,6 +14,7 @@ from sky_music.ui.picker_metadata import (
     peek_cached_song_ui_metadata,
     session_to_worker_payload,
     store_computed_song_ui_metadata_payloads,
+    warm_persistent_metadata_cache,
 )
 
 
@@ -38,7 +38,13 @@ class MetadataApp(Protocol):
 
 
 class MetadataCoordinator:
-    """Hydrate raw metadata and compute risk without touching UI off-thread."""
+    """Hydrate raw metadata and compute risk without touching UI off-thread.
+
+    This uses a single-threaded background ThreadPoolExecutor to sequentially
+    process metadata requests. It avoids spawning child processes (which is slow
+    on Windows and has compatibility issues with PyInstaller) and uses debouncing
+    to prevent queue buildup.
+    """
 
     def __init__(
         self,
@@ -49,47 +55,32 @@ class MetadataCoordinator:
         self._app = app
         self._session = session
         self._cfg = cfg
-        self._process_executor: ProcessPoolExecutor | None = None
-        self._thread_executor: ThreadPoolExecutor | None = None
-        self._risk_future: Future[list[dict[str, Any]]] | None = None
         self._closed = False
-        if self._can_spawn_process_worker():
-            try:
-                self._process_executor = ProcessPoolExecutor(max_workers=1)
-                self._risk_executor: ProcessPoolExecutor | ThreadPoolExecutor = self._process_executor
-            except Exception:
-                self._thread_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-textual-risk")
-                self._risk_executor = self._thread_executor
-        else:
-            self._thread_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-textual-risk")
-            self._risk_executor = self._thread_executor
-
-    @staticmethod
-    def _can_spawn_process_worker() -> bool:
-        try:
-            return Path(sys.argv[0]).exists()
-        except Exception:
-            return False
+        
+        # Dedicated sequential coordinator executor
+        self._coord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-metadata-coord")
+        self._coord_future: Future[None] | None = None
 
     def refresh(self, paths: list[Path]) -> None:
-        visible_paths = list(paths)
-        if not visible_paths:
+        """Begin progressive background metadata warming, hydration, and analysis for all paths."""
+        if self._closed:
             return
-        self._app.run_worker(
-            lambda: self._hydrate_then_analyze(visible_paths),
-            name="metadata",
-            group="metadata",
-            exclusive=True,
-            thread=True,
-            exit_on_error=False,
-        )
+        all_paths = list(paths)
+        if not all_paths:
+            return
+
+        # Cancel the pending job if it has not started yet.
+        # This keeps the queue length bounded to at most 1 pending job.
+        if self._coord_future is not None and not self._coord_future.done():
+            self._coord_future.cancel()
+
+        # Submit the new list of paths to be processed in the background thread.
+        self._coord_future = self._coord_executor.submit(self._warm_and_process_all_paths, all_paths)
 
     def close(self) -> None:
         self._closed = True
-        if self._process_executor is not None:
-            self._process_executor.shutdown(wait=False, cancel_futures=True)
-        if self._thread_executor is not None:
-            self._thread_executor.shutdown(wait=False, cancel_futures=True)
+        if self._coord_executor is not None:
+            self._coord_executor.shutdown(wait=False, cancel_futures=True)
 
     def _refresh_ui_from_thread(self) -> None:
         if self._closed:
@@ -103,36 +94,62 @@ class MetadataCoordinator:
         except RuntimeError:
             self._closed = True
 
-    def _hydrate_then_analyze(self, paths: list[Path]) -> None:
-        changed = hydrate_and_fill_raw_metadata(paths, self._session, self._cfg)
-        if changed:
-            self._refresh_ui_from_thread()
+    def _warm_and_process_all_paths(self, paths: list[Path]) -> None:
+        if self._closed:
+            return
 
-        pending = [
-            path
-            for path in paths
-            if (meta := peek_cached_song_ui_metadata(path, self._session, self._cfg)) is None
-            or not meta.analyzed
-        ]
+        # Step 1: Warm SQLite cache for all paths in a single efficient operation
+        try:
+            warm_persistent_metadata_cache(song_paths=paths)
+            self._refresh_ui_from_thread()
+        except Exception:
+            pass
+
+        if self._closed:
+            return
+
+        # Step 2: Hydrate cache from SQLite for specific paths and populate raw note stats
+        try:
+            changed = hydrate_and_fill_raw_metadata(paths, self._session, self._cfg)
+            if changed:
+                self._refresh_ui_from_thread()
+        except Exception:
+            pass
+
+        if self._closed:
+            return
+
+        # Step 3: Find any paths that still need full scheduler analysis
+        pending = []
+        for path in paths:
+            if self._closed:
+                return
+            meta = peek_cached_song_ui_metadata(path, self._session, self._cfg)
+            if meta is None or not meta.analyzed:
+                pending.append(path)
+
         if not pending:
             return
 
-        if self._risk_future is not None and not self._risk_future.done():
-            self._risk_future.cancel()
-        future = self._risk_executor.submit(
-            compute_song_ui_metadata_payloads,
-            [str(path) for path in pending],
-            session_to_worker_payload(self._session),
-            self._cfg,
-        )
-        self._risk_future = future
-        future.add_done_callback(self._store_risk_result)
-
-    def _store_risk_result(self, future: Future[list[dict[str, Any]]]) -> None:
-        try:
-            payloads = future.result()
-            changed = store_computed_song_ui_metadata_payloads(payloads, self._session, self._cfg)
-        except Exception:
-            return
-        if changed:
-            self._refresh_ui_from_thread()
+        # Step 4: Run the heavier scheduler analysis progressively in batches of 10
+        # This avoids blocking and provides incremental UI updates for large libraries
+        batch_size = 10
+        session_payload = session_to_worker_payload(self._session)
+        
+        for i in range(0, len(pending), batch_size):
+            if self._closed:
+                return
+            batch = pending[i : i + batch_size]
+            try:
+                payloads = compute_song_ui_metadata_payloads(
+                    [str(path) for path in batch],
+                    session_payload,
+                    self._cfg,
+                )
+                if self._closed:
+                    return
+                changed_risk = store_computed_song_ui_metadata_payloads(payloads, self._session, self._cfg)
+                if changed_risk:
+                    self._refresh_ui_from_thread()
+            except Exception:
+                continue

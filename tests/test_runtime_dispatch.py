@@ -28,6 +28,33 @@ class FakeSleeper:
         self.clock.time_us += max(1, int(seconds * 1_000_000))
 
 
+class OneShotStallingSleeper(FakeSleeper):
+    def __init__(self, clock: FakeClock, stall_us: int) -> None:
+        super().__init__(clock)
+        self.stall_us = stall_us
+        self.stalled = False
+
+    def sleep(self, seconds: float) -> None:
+        if not self.stalled:
+            self.clock.time_us += self.stall_us
+            self.stalled = True
+            return
+        super().sleep(seconds)
+
+
+class ScheduledStallingSleeper(FakeSleeper):
+    def __init__(self, clock: FakeClock, stalls: tuple[tuple[int, int], ...]) -> None:
+        super().__init__(clock)
+        self.stalls = list(stalls)
+
+    def sleep(self, seconds: float) -> None:
+        if self.stalls and self.clock.time_us >= self.stalls[0][0]:
+            _, stall_us = self.stalls.pop(0)
+            self.clock.time_us += stall_us
+            return
+        super().sleep(seconds)
+
+
 @dataclass(frozen=True, slots=True)
 class TimedCall:
     kind: str
@@ -288,6 +315,107 @@ def test_non_dispatch_records_do_not_pollute_lateness_statistics():
     assert summary["attempted_dispatches"] == 1
 
 
+def test_deferred_release_does_not_pollute_scheduler_lateness_statistics():
+    logger = TelemetryLogger("deferred", enabled=True)
+    logger.record(
+        event_index=0,
+        kind="down",
+        scheduled_us=0,
+        actual_us=100,
+        lateness_us=100,
+        send_duration_us=20,
+        scan_codes=(21,),
+        sent_scan_codes=(21,),
+        reason="onset",
+    )
+    logger.record(
+        event_index=1,
+        kind="up",
+        scheduled_us=1_000,
+        actual_us=11_000,
+        lateness_us=10_000,
+        send_duration_us=20,
+        scan_codes=(21,),
+        sent_scan_codes=(21,),
+        runtime_outcome="deferred_release",
+        deferred_by_us=10_000,
+        reason="release",
+    )
+
+    summary = logger.get_summary()
+
+    assert summary is not None
+    assert summary["lateness_us"]["max_us"] == 100
+    assert summary["deferred_release_count"] == 1
+    assert summary["release_deferral_us"]["max_us"] == 10_000
+
+
+def test_telemetry_reports_backend_dropped_downs_and_catch_up_bursts():
+    logger = TelemetryLogger("catch-up", enabled=True)
+    logger.record(
+        event_index=0,
+        kind="down",
+        scheduled_us=0,
+        actual_us=0,
+        lateness_us=0,
+        send_duration_us=10,
+        scan_codes=(21, 22),
+        sent_scan_codes=(21,),
+        skipped_scan_codes=(22,),
+        reason="onset",
+    )
+    for event_index, scheduled_us in enumerate((100_000, 110_000, 120_000), start=1):
+        logger.record(
+            event_index=event_index,
+            kind="down",
+            scheduled_us=scheduled_us,
+            actual_us=150_000 + event_index,
+            lateness_us=150_000 + event_index - scheduled_us,
+            send_duration_us=10,
+            scan_codes=(22 + event_index,),
+            sent_scan_codes=(22 + event_index,),
+            reason="onset",
+        )
+
+    summary = logger.get_summary()
+
+    assert summary is not None
+    assert summary["runtime_backend_dropped_down_count"] == 1
+    assert summary["catch_up_bursts"] == {
+        "count": 1,
+        "down_dispatch_count": 3,
+        "max_collapsed_dispatches": 3,
+        "max_authored_span_us": 20_000,
+    }
+
+
+def test_telemetry_reports_down_timeline_drift_and_pause_causes():
+    logger = TelemetryLogger("drift", enabled=True)
+    for event_index, actual_us in enumerate((10, 1_020, 2_040)):
+        logger.record(
+            event_index=event_index,
+            kind="down",
+            scheduled_us=event_index * 1_000,
+            actual_us=actual_us,
+            lateness_us=actual_us - event_index * 1_000,
+            send_duration_us=5,
+            scan_codes=(21 + event_index,),
+            sent_scan_codes=(21 + event_index,),
+            reason="sent",
+        )
+    logger.record_pause("focus", 25_000)
+
+    summary = logger.get_summary()
+
+    assert summary is not None
+    assert summary["down_timeline_drift_us"] == 30
+    assert summary["playback_pause"]["focus"] == {
+        "count": 1,
+        "total_us": 25_000,
+        "max_us": 25_000,
+    }
+
+
 def test_runtime_compilation_happens_before_playback_clock_starts(monkeypatch):
     clock = FakeClock()
     backend = TimedBackend(clock)
@@ -316,3 +444,60 @@ def test_runtime_compilation_happens_before_playback_clock_starts(monkeypatch):
     assert summary is not None
     assert summary["lateness_us"]["min_us"] == 0
     assert backend.calls[0].started_us == 25_000
+
+
+def test_late_burst_never_shifts_the_absolute_music_timeline():
+    clock = FakeClock()
+    backend = TimedBackend(clock)
+    engine = PlaybackEngine(
+        song=Song(name="stalled", notes=()),
+        actions=(
+            action(0, "down", 21),
+            action(10_000, "up", 21),
+            action(100_000, "down", 22),
+            action(110_000, "up", 22),
+            action(500_000, "down", 23),
+            action(510_000, "up", 23),
+        ),
+        backend=backend,
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=OneShotStallingSleeper(clock, stall_us=250_000),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        min_hold_us=10_000,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert next(call.started_us for call in backend.calls if call.scan_codes == (23,)) == 500_000
+
+
+def test_repeated_stalls_do_not_accumulate_musical_slowdown():
+    clock = FakeClock()
+    backend = TimedBackend(clock)
+    engine = PlaybackEngine(
+        song=Song(name="repeated-stalls", notes=()),
+        actions=(
+            action(0, "down", 21),
+            action(10_000, "up", 21),
+            action(100_000, "down", 22),
+            action(110_000, "up", 22),
+            action(300_000, "down", 23),
+            action(310_000, "up", 23),
+            action(600_000, "down", 24),
+            action(610_000, "up", 24),
+        ),
+        backend=backend,
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=ScheduledStallingSleeper(
+            clock,
+            stalls=((20_000, 120_000), (200_000, 120_000)),
+        ),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        min_hold_us=10_000,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert next(call.started_us for call in backend.calls if call.scan_codes == (24,)) == 600_000

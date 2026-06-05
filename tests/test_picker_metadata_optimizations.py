@@ -204,3 +204,54 @@ def test_compute_raw_song_ui_metadata_correctness(tmp_path: Path) -> None:
         assert meta.chords_count == expected["chords_count"]
         assert pytest.approx(meta.average_notes_per_second) == expected["average_notes_per_second"]
         assert pytest.approx(meta.peak_notes_per_second_1s) == expected["peak_notes_per_second_1s"]
+
+
+def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> None:
+    from sky_music.ui.picker_metadata import (
+        hydrate_persistent_metadata_for_paths,
+        populate_raw_song_ui_metadata_for_paths,
+        _path_session_ram_cache,
+    )
+    song_path = tmp_path / "dummy_song_background.json"
+    song_path.write_text('{"name": "Background test", "songNotes": []}', encoding="utf-8")
+
+    session = PlaybackSessionContext.balanced()
+    cfg = AppConfig()
+
+    assert len(_path_session_ram_cache) == 0
+
+    # 1. Test raw metadata population seeds the cache
+    populate_raw_song_ui_metadata_for_paths([song_path], session, cfg)
+    assert len(_path_session_ram_cache) == 1
+
+    # Clear RAM cache
+    _path_session_ram_cache.clear()
+
+    # 2. Test persistent metadata hydration seeds the cache
+    # First, let's store it as persistent metadata
+    from sky_music.ui.picker_metadata import store_computed_song_ui_metadata_payloads, SongUiMetadata
+    meta = SongUiMetadata(
+        path=song_path,
+        name="Background test",
+        duration_seconds=10.0,
+        note_count=5,
+        max_polyphony=1,
+        min_note_gap_ms=100.0,
+        min_same_key_gap_ms=100.0,
+        risk="low",
+        recommended_profile="balanced",
+        recommended_tempo_scale=1.0,
+        warnings=(),
+        analyzed=True
+    )
+    from sky_music.ui.picker_metadata import _metadata_to_payload
+    store_computed_song_ui_metadata_payloads([_metadata_to_payload(meta)], session, cfg)
+
+    # Invalidate persistent cache RAM layer to force hit database on hydration
+    from sky_music.ui.picker_metadata import _persistent_cache
+    _persistent_cache.clear()
+    _path_session_ram_cache.clear()
+
+    # Hydrate from SQLite and check if it seeds path+session cache
+    hydrate_persistent_metadata_for_paths([song_path], session, cfg)
+    assert len(_path_session_ram_cache) == 1

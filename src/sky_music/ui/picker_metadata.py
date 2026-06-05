@@ -107,6 +107,20 @@ def _session_signature(session: PlaybackSessionContext) -> tuple[Any, ...]:
     )
 
 
+def _update_path_session_ram_cache(
+    song_path: Path,
+    session: PlaybackSessionContext,
+    ram_key: tuple[Any, ...],
+) -> None:
+    path_str = str(song_path)
+    sig = _session_signature(session)
+    ps_key = (path_str, sig)
+    with _path_session_ram_lock:
+        if len(_path_session_ram_cache) > 5000:
+            _path_session_ram_cache.clear()
+        _path_session_ram_cache[ps_key] = ram_key
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -179,6 +193,8 @@ def _persistent_cache_key(
     song_path: Path,
     session: PlaybackSessionContext,
     cfg: AppConfig | None,
+    *,
+    song_file_key: tuple[Any, ...] | None = None,
 ) -> str | None:
     """Return the SHA-256 cache key for a (song_path, session) pair.
 
@@ -190,16 +206,24 @@ def _persistent_cache_key(
     tuple changes and we recompute.
     """
     try:
-        stat = song_path.stat()
+        if song_file_key is not None:
+            path_str = str(song_file_key[0])
+            mtime_ns = int(song_file_key[1])
+            size = int(song_file_key[2])
+        else:
+            stat = song_path.stat()
+            try:
+                path_str = str(song_path.resolve())
+            except Exception:
+                path_str = str(song_path)
+            mtime_ns = int(stat.st_mtime_ns)
+            size = int(stat.st_size)
+
         # Build a lightweight, hashable RAM key without any SHA-256 work.
-        try:
-            path_str = str(song_path.resolve())
-        except Exception:
-            path_str = str(song_path)
         ram_key = (
             path_str,
-            int(stat.st_mtime_ns),
-            int(stat.st_size),
+            mtime_ns,
+            size,
             session.profile_name,
             float(session.tempo_scale),
             session.fps,
@@ -217,8 +241,8 @@ def _persistent_cache_key(
         # Cache miss – pay the sha256 cost once and store the result.
         file_identity = {
             "path": path_str,
-            "mtime_ns": int(stat.st_mtime_ns),
-            "size": int(stat.st_size),
+            "mtime_ns": mtime_ns,
+            "size": size,
         }
         payload = {
             "schema": PERSISTENT_CACHE_SCHEMA_VERSION,
@@ -280,6 +304,9 @@ def _connect_persistent_cache() -> sqlite3.Connection:
             updated_at REAL NOT NULL
         )
         """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_picker_metadata_updated_at ON picker_metadata(updated_at)"
     )
     conn.commit()
     _tls.db_conn = conn
@@ -423,9 +450,11 @@ def hydrate_persistent_metadata_for_paths(
         _persistent_cache.update(loaded)
         for key, meta in loaded.items():
             try:
-                song_file_key = _song_repository.cache_key(key_to_path[key])
+                song_path = key_to_path[key]
+                song_file_key = _song_repository.cache_key(song_path)
                 ram_key = session.metadata_cache_key(song_file_key, cfg)
                 _metadata_cache[ram_key] = meta
+                _update_path_session_ram_cache(song_path, session, ram_key)
             except Exception:
                 continue
 
@@ -513,21 +542,80 @@ def store_computed_song_ui_metadata_payloads(
     session: PlaybackSessionContext,
     cfg: AppConfig | None = None,
 ) -> int:
-    """Store metadata returned by a worker into parent RAM + SQLite caches."""
+    """Store metadata returned by a worker into parent RAM + SQLite caches.
+
+    Optimized to open a single transaction to execute all batch updates together,
+    yielding a massive speedup on disk writes.
+    """
     stored = 0
-    for payload in payloads:
-        meta = _metadata_from_payload(payload)
-        if meta is None:
-            continue
+    if not payloads:
+        return 0
+
+    try:
+        conn = _connect_persistent_cache()
+        conn.execute("BEGIN")
+
+        for payload in payloads:
+            meta = _metadata_from_payload(payload)
+            if meta is None:
+                continue
+            try:
+                song_file_key = _song_repository.cache_key(meta.path)
+                ram_key = session.metadata_cache_key(song_file_key, cfg)
+                with _cache_lock:
+                    _metadata_cache[ram_key] = meta
+                _update_path_session_ram_cache(meta.path, session, ram_key)
+                
+                # Inline _store_persistent_metadata logic to run inside the batch transaction
+                if meta.analyzed:
+                    key = _persistent_cache_key(meta.path, session, cfg, song_file_key=song_file_key)
+                    if key is not None:
+                        payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
+                        with _cache_lock:
+                            _persistent_cache[key] = meta
+                        
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO picker_metadata(cache_key, payload, updated_at)
+                            VALUES (?, ?, ?)
+                            """,
+                            (key, payload_str, time.time()),
+                        )
+                        stored += 1
+            except Exception:
+                continue
+
+        conn.commit()
+
+        # Opportunistic pruning check after transaction completes
+        if stored > 0:
+            global _write_counter
+            with _write_counter_lock:
+                _write_counter += stored
+                should_prune = (_write_counter // _PRUNE_EVERY_N_WRITES) > ((_write_counter - stored) // _PRUNE_EVERY_N_WRITES)
+            
+            if should_prune:
+                try:
+                    conn.execute(
+                        """
+                        DELETE FROM picker_metadata
+                        WHERE cache_key NOT IN (
+                            SELECT cache_key FROM picker_metadata
+                            ORDER BY updated_at DESC
+                            LIMIT 6000
+                        )
+                        """
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+    except Exception:
         try:
-            song_file_key = _song_repository.cache_key(meta.path)
-            ram_key = session.metadata_cache_key(song_file_key, cfg)
-            with _cache_lock:
-                _metadata_cache[ram_key] = meta
-            _store_persistent_metadata(meta.path, session, cfg, meta)
-            stored += 1
+            conn.rollback()
         except Exception:
-            continue
+            pass
+        return 0
+
     return stored
 
 
@@ -536,6 +624,8 @@ def _store_persistent_metadata(
     session: PlaybackSessionContext,
     cfg: AppConfig | None,
     meta: SongUiMetadata,
+    *,
+    song_file_key: tuple[Any, ...] | None = None,
 ) -> None:
     """Upsert analyzed metadata into the SQLite persistent cache.
 
@@ -549,7 +639,7 @@ def _store_persistent_metadata(
     if not meta.analyzed:
         return
 
-    key = _persistent_cache_key(song_path, session, cfg)
+    key = _persistent_cache_key(song_path, session, cfg, song_file_key=song_file_key)
     if key is None:
         return
 
@@ -598,13 +688,17 @@ def _peek_persistent_metadata(
     song_path: Path,
     session: PlaybackSessionContext,
     cfg: AppConfig | None,
+    *,
+    song_file_key: tuple[Any, ...] | None = None,
 ) -> SongUiMetadata | None:
     # Never load from disk here; this function is used in render paths.
     # It may still return entries hydrated by a targeted background cache read
     # before the full persistent cache warmup has completed.
-    key = _persistent_cache_key(song_path, session, cfg)
+    key = _persistent_cache_key(song_path, session, cfg, song_file_key=song_file_key)
     if key is None:
         return None
+    with _cache_lock:
+        return _persistent_cache.get(key)
     with _cache_lock:
         return _persistent_cache.get(key)
 
@@ -794,6 +888,7 @@ def populate_raw_song_ui_metadata_for_paths(
         ram_key = session.metadata_cache_key(song_file_key, cfg)
         with _cache_lock:
             if _metadata_cache.get(ram_key) is not None:
+                _update_path_session_ram_cache(path, session, ram_key)
                 continue
         meta = compute_raw_song_ui_metadata(path)
         with _cache_lock:
@@ -801,6 +896,7 @@ def populate_raw_song_ui_metadata_for_paths(
             if current is None or not current.analyzed:
                 _metadata_cache[ram_key] = meta
                 filled += 1
+        _update_path_session_ram_cache(path, session, ram_key)
     return filled
 
 
@@ -830,6 +926,7 @@ def get_cached_song_ui_metadata(
         return get_song_ui_metadata(song_path, session, cfg)
 
     ram_key = session.metadata_cache_key(song_file_key, cfg)
+    _update_path_session_ram_cache(song_path, session, ram_key)
     with _cache_lock:
         cached = _metadata_cache.get(ram_key)
     # A raw-only entry (analyzed=False) is not a real hit for callers that need
@@ -837,7 +934,7 @@ def get_cached_song_ui_metadata(
     if cached is not None and cached.analyzed:
         return cached
 
-    persistent = _peek_persistent_metadata(song_path, session, cfg)
+    persistent = _peek_persistent_metadata(song_path, session, cfg, song_file_key=song_file_key)
     if persistent is not None:
         with _cache_lock:
             _metadata_cache[ram_key] = persistent
@@ -846,7 +943,7 @@ def get_cached_song_ui_metadata(
     meta = get_song_ui_metadata(song_path, session, cfg)
     with _cache_lock:
         _metadata_cache[ram_key] = meta
-    _store_persistent_metadata(song_path, session, cfg, meta)
+    _store_persistent_metadata(song_path, session, cfg, meta, song_file_key=song_file_key)
     return meta
 
 
@@ -906,7 +1003,7 @@ def peek_cached_song_ui_metadata(
     if cached is not None:
         return cached
 
-    persistent = _peek_persistent_metadata(song_path, session, cfg)
+    persistent = _peek_persistent_metadata(song_path, session, cfg, song_file_key=song_file_key)
     if persistent is None:
         return None
 

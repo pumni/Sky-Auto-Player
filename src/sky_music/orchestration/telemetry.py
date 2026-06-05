@@ -29,6 +29,10 @@ class TelemetryLogger:
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
         self.schedule_summary: dict | None = None
+        self.pause_durations_us: dict[str, list[int]] = {
+            "manual": [],
+            "focus": [],
+        }
         
         # Unique run ID generation
         if run_id is None:
@@ -92,6 +96,11 @@ class TelemetryLogger:
         """Stores the backend health state at the end of playback."""
         self.backend_health = health
 
+    def record_pause(self, reason: str, duration_us: int) -> None:
+        if not self.enabled:
+            return
+        self.pause_durations_us.setdefault(reason, []).append(max(0, int(duration_us)))
+
     def record_release_outcome(self, outcome) -> None:
         """Stores the final release_all outcome at the end of playback."""
         self.release_outcome = outcome
@@ -129,8 +138,45 @@ class TelemetryLogger:
             if record.get("sent_scan_codes", record["scan_codes"])
             or record.get("skipped_scan_codes", "")
         ]
-        latenesses = [r["lateness_us"] for r in dispatch_records]
+        scheduler_dispatch_records = [
+            record
+            for record in dispatch_records
+            if record.get("runtime_outcome") != "deferred_release"
+        ]
+        latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
+        sent_down_records = [
+            record
+            for record in dispatch_records
+            if record["kind"] == "down" and record.get("sent_scan_codes", "")
+        ]
+        down_timeline_drift_us = (
+            sent_down_records[-1]["lateness_us"] - sent_down_records[0]["lateness_us"]
+            if len(sent_down_records) >= 2
+            else 0
+        )
+
+        # A late catch-up burst is a sequence of distinct authored down dispatches
+        # that the runtime collapses into a <=1ms physical dispatch window.
+        catch_up_bursts: list[list[dict]] = []
+        current_burst: list[dict] = []
+        for previous, current in zip(sent_down_records, sent_down_records[1:]):
+            actual_gap_us = current["actual_us"] - previous["actual_us"]
+            authored_gap_us = current["scheduled_us"] - previous["scheduled_us"]
+            collapsed = (
+                0 <= actual_gap_us <= 1_000
+                and authored_gap_us >= 2_000
+                and current["lateness_us"] > 2_000
+            )
+            if collapsed:
+                if not current_burst:
+                    current_burst = [previous]
+                current_burst.append(current)
+            elif current_burst:
+                catch_up_bursts.append(current_burst)
+                current_burst = []
+        if current_burst:
+            catch_up_bursts.append(current_burst)
 
         over_2ms = sum(1 for lat in latenesses if lat > 2000)
         over_5ms = sum(1 for lat in latenesses if lat > 5000)
@@ -243,6 +289,31 @@ class TelemetryLogger:
                 for record in self.records
                 if record.get("runtime_outcome") == "dropped_conflict"
             ),
+            "runtime_backend_dropped_down_count": sum(
+                max(
+                    0,
+                    len([sc for sc in record["scan_codes"].split(";") if sc])
+                    - len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc]),
+                )
+                for record in self.records
+                if record["kind"] == "down"
+                and record.get("runtime_outcome") not in {"dropped_conflict", "suppressed_stale_up"}
+            ),
+            "catch_up_bursts": {
+                "count": len(catch_up_bursts),
+                "down_dispatch_count": sum(len(burst) for burst in catch_up_bursts),
+                "max_collapsed_dispatches": max(
+                    (len(burst) for burst in catch_up_bursts),
+                    default=0,
+                ),
+                "max_authored_span_us": max(
+                    (
+                        burst[-1]["scheduled_us"] - burst[0]["scheduled_us"]
+                        for burst in catch_up_bursts
+                    ),
+                    default=0,
+                ),
+            },
             "deferred_release_count": sum(
                 1 for record in self.records if int(record.get("deferred_by_us", 0)) > 0
             ),
@@ -253,6 +324,15 @@ class TelemetryLogger:
                     if int(record.get("deferred_by_us", 0)) > 0
                 ]
             ),
+            "down_timeline_drift_us": down_timeline_drift_us,
+            "playback_pause": {
+                reason: {
+                    "count": len(durations),
+                    "total_us": sum(durations),
+                    "max_us": max(durations, default=0),
+                }
+                for reason, durations in self.pause_durations_us.items()
+            },
             "backend": backend_info,
         }
         if self.schedule_summary is not None:
@@ -347,6 +427,20 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             print(f"    * Average: {dur.get('avg_us', 0.0):.1f} us")
             print(f"    * p95: {dur.get('p95_us', 0.0):.1f} us")
             print(f"    * p99: {dur.get('p99_us', 0.0):.1f} us")
+
+            catch_up = data.get("catch_up_bursts", {})
+            print(
+                "  Catch-up Bursts: "
+                f"count={catch_up.get('count', 0)}, "
+                f"down dispatches={catch_up.get('down_dispatch_count', 0)}, "
+                f"max collapsed={catch_up.get('max_collapsed_dispatches', 0)}, "
+                f"max authored span={catch_up.get('max_authored_span_us', 0)} us"
+            )
+            print(
+                "  Runtime Down Drops: "
+                f"conflict={data.get('runtime_conflict_dropped_down_count', 0)}, "
+                f"backend={data.get('runtime_backend_dropped_down_count', 0)}"
+            )
             
             hold = data.get("note_hold_duration_us", {})
             if hold:

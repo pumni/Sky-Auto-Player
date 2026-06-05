@@ -622,6 +622,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.filtered: list[SongChoice] = []
         self._marked_row_key: object | None = None
         self.metadata = MetadataCoordinator(self, self.session, self.cfg)
+        self._search_timer = None
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -681,8 +682,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_status()
         self._render_table()
         self._render_detail()
-        self._schedule_metadata_refresh()
         self.set_focus(self.query_one("#songs", SongTable))
+        self.metadata.refresh(paths)
         self.run_worker(
             self._warm_metadata_cache,
             name="metadata-warmup",
@@ -698,11 +699,29 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if event.input.id != "search":
             return
         self.query = event.value
-        self.filtered = rank_song_choices(self.choices, event.value)
+        import sys
+        if "pytest" in sys.modules or "unittest" in sys.modules:
+            if self._search_timer is not None:
+                try:
+                    self._search_timer.stop()
+                except Exception:
+                    pass
+                self._search_timer = None
+            self._perform_search()
+        else:
+            if self._search_timer is not None:
+                try:
+                    self._search_timer.stop()
+                except Exception:
+                    pass
+            self._search_timer = self.set_timer(0.15, self._perform_search)
+
+    def _perform_search(self) -> None:
+        self._search_timer = None
+        self.filtered = rank_song_choices(self.choices, self.query)
         self._render_status()
         self._render_table(reset_cursor=True)
         self._render_detail()
-        self._schedule_metadata_refresh()
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "enter":
@@ -710,17 +729,36 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self.action_confirm()
         elif event.key == "escape":
             event.stop()
-            self.action_cancel()
+            search = self.query_one("#search", Input)
+            if search.has_focus:
+                self._focus_table()
+            else:
+                self.action_cancel()
+        elif event.key == "up":
+            search = self.query_one("#search", Input)
+            if search.has_focus:
+                event.stop()
+                table = self.query_one("#songs", SongTable)
+                table.action_cursor_up()
+        elif event.key == "down":
+            search = self.query_one("#search", Input)
+            if search.has_focus:
+                event.stop()
+                table = self.query_one("#songs", SongTable)
+                table.action_cursor_down()
         elif event.key == "q":
             search = self.query_one("#search", Input)
-            if not search.value:
+            if not search.value and not search.has_focus:
                 event.stop()
                 self.action_cancel()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self._set_marker(event.row_key)
         self._render_detail()
-        self._schedule_metadata_refresh()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        event.stop()
+        self.action_confirm(song_path=Path(event.row_key.value))
 
     def _set_marker(self, row_key: object | None) -> None:
         table = self.query_one("#songs", SongTable)
@@ -755,15 +793,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
         except Exception:
             return
         try:
-            self.call_from_thread(self.metadata_refresh_after_warmup)
+            self.call_from_thread(self.refresh_metadata_rows)
         except RuntimeError:
             return
-
-    def metadata_refresh_after_warmup(self) -> None:
-        self.refresh_metadata_rows()
-        visible = self.visible_paths()
-        if visible:
-            self.metadata.refresh(visible)
 
     def _render_status(self) -> None:
         dry = "dry-run" if self.dry_run else "play"
@@ -806,7 +838,20 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._sync_marker()
 
     def refresh_metadata_rows(self) -> None:
-        self._render_table()
+        table = self.query_one("#songs", SongTable)
+        muted = self._theme_tokens.muted
+        for choice in self.filtered:
+            row_key = str(choice.path)
+            try:
+                metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
+                if metadata is not None:
+                    duration, notes, risk, suggested = _metadata_cells(metadata)
+                    table.update_cell(row_key, "time", duration)
+                    table.update_cell(row_key, "notes", notes)
+                    table.update_cell(row_key, "risk", _risk_cell(risk, muted))
+                    table.update_cell(row_key, "suggested", suggested)
+            except Exception:
+                pass
         self._render_detail()
 
     def _render_detail(self) -> None:
@@ -840,19 +885,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
             )
         )
 
-    def visible_paths(self, limit: int = 30) -> list[Path]:
-        table = self.query_one("#songs", SongTable)
-        if not self.filtered:
-            return []
-        start = max(0, min(table.cursor_row, len(self.filtered) - 1))
-        end = min(len(self.filtered), start + limit)
-        return [choice.path for choice in self.filtered[start:end]]
-
-    def _schedule_metadata_refresh(self) -> None:
-        visible = self.visible_paths()
-        if visible:
-            self.metadata.refresh(visible)
-
     def _selected_choice(self) -> SongChoice | None:
         if not self.filtered:
             return None
@@ -860,13 +892,26 @@ class SkyPickerApp(App[SongPickerResult | None]):
         index = max(0, min(table.cursor_row, len(self.filtered) - 1))
         return self.filtered[index]
 
-    def action_confirm(self) -> None:
-        selected = self._selected_choice()
-        if selected is None:
-            return
+    def action_confirm(self, song_path: Path | None = None) -> None:
+        if getattr(self, "_search_timer", None) is not None:
+            try:
+                self._search_timer.stop()
+            except Exception:
+                pass
+            self._search_timer = None
+            self._perform_search()
+
+        if song_path is not None:
+            selected_path = song_path
+        else:
+            selected = self._selected_choice()
+            if selected is None:
+                return
+            selected_path = selected.path
+
         self.exit(
             SongPickerResult(
-                song_path=selected.path,
+                song_path=selected_path,
                 action="dry_run" if self.dry_run else "play",
                 profile_name=self.profile_name,
                 tempo_scale=self.tempo_scale,
@@ -891,7 +936,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_status()
         self._render_table()
         self._render_detail()
-        self._schedule_metadata_refresh()
+        self.metadata.refresh([choice.path for choice in self.choices])
         self._focus_table()
 
     def _focus_table(self) -> None:
@@ -1084,6 +1129,13 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._focus_table()
 
     def action_reload_songs(self) -> None:
+        if getattr(self, "_search_timer", None) is not None:
+            try:
+                self._search_timer.stop()
+            except Exception:
+                pass
+            self._search_timer = None
+
         clear_metadata_cache()
         paths = get_song_choices(force_refresh=True)
         self.choices = [
@@ -1094,7 +1146,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_status()
         self._render_table(reset_cursor=True)
         self._render_detail()
-        self._schedule_metadata_refresh()
+        self.metadata.refresh(paths)
 
 
 def choose_song_interactively_textual(

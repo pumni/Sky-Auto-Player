@@ -230,6 +230,10 @@ A short hold may feel attractive for dense songs, but it can make notes vanish i
 
 Do not lower min_hold_us only to make dense songs faster.
 
+Runtime stalls must not shift the absolute music timeline. Only explicit user pause or focus-loss
+pause may add to playback pause time; otherwise repeated stalls would accumulate into audible
+slowdown over the song.
+
 If notes vanish, first consider:
 
 1. increasing min_hold_us;

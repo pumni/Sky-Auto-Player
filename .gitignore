@@ -46,3 +46,5 @@ dist/
 # Cache Files
 .cache/
 .pytest_cache/
+.uv-cache/
+.tmp/

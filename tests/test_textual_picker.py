@@ -440,3 +440,81 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
     assert app.return_value is None
     assert persisted == [("local-precise", 0.88, 30)]
     assert FakeMetadataCoordinator.instances[0].closed is True
+
+
+def test_search_debouncing_behavior(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        import sys
+        from unittest.mock import patch
+        assert app._search_timer is None
+
+        with patch.dict(sys.modules):
+            sys.modules.pop("pytest", None)
+            sys.modules.pop("unittest", None)
+            
+            await pilot.click("#search")
+            await pilot.press("a")
+            assert app._search_timer is not None
+            
+            app.action_confirm()
+            assert app._search_timer is None
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is not None
+    assert app.return_value.song_path == SONGS[0]
+
+
+def test_search_interaction_navigation_and_escape(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        table = app.query_one("#songs")
+        search = app.query_one("#search")
+        
+        assert table.has_focus
+        assert not search.has_focus
+
+        await pilot.click("#search")
+        assert search.has_focus
+        assert not table.has_focus
+
+        assert table.cursor_row == 0
+        await pilot.press("down")
+        assert table.cursor_row == 1
+
+        await pilot.press("up")
+        assert table.cursor_row == 0
+
+        await pilot.press("escape")
+        assert table.has_focus
+        assert not search.has_focus
+
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
+
+def test_double_click_row_selects_song(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        table = app.query_one("#songs")
+        from textual.widgets import DataTable
+        
+        row_keys = list(table._data.keys())
+        event = DataTable.RowSelected(table, cursor_row=1, row_key=row_keys[1])
+        app.post_message(event)
+        await pilot.pause()
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is not None
+    assert app.return_value.song_path == SONGS[1]
