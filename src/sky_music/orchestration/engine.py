@@ -62,6 +62,13 @@ class PlaybackState:
         return max(0, elapsed)
 
 
+@dataclass(slots=True)
+class LoopState:
+    last_runtime_poll_us: int
+    last_render_time_us: int
+    first_action_executed: bool = False
+
+
 class PlaybackEngine:
     """Manages the real-time execution loop of the scheduled KeyActions timeline."""
     _runtime_poll_interval_us = 1_000
@@ -85,6 +92,7 @@ class PlaybackEngine:
         fps: Optional[int] = None,
         min_hold_us: int = 0,
         same_key_conflict_policy: str = "degraded",
+        late_pulse_drop_threshold_us: int | None = None,
     ):
         self.song = song
         self.actions = actions
@@ -94,6 +102,11 @@ class PlaybackEngine:
         self.focus_restore_grace_us = focus_restore_grace_us
         self.min_hold_us = max(0, int(min_hold_us))
         self.same_key_conflict_policy = same_key_conflict_policy
+        self.late_pulse_drop_threshold_us = (
+            None
+            if late_pulse_drop_threshold_us is None
+            else max(0, int(late_pulse_drop_threshold_us))
+        )
         self.controls = controls
         self.renderer = renderer
         self.telemetry = TelemetryLogger(
@@ -322,6 +335,22 @@ class PlaybackEngine:
         state: PlaybackState,
         coordinator: RuntimeDispatchCoordinator,
     ) -> ExecutionResult | None:
+        if self.late_pulse_drop_threshold_us is not None:
+            now_us = state.get_elapsed_us(self.clock)
+            if now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
+                coordinator.drop_expired_downs(batch.intents)
+                self._record_without_dispatch(
+                    idx=batch.source_action_index,
+                    kind="down",
+                    scheduled_us=batch.scheduled_us,
+                    scan_codes=tuple(intent.scan_code for intent in batch.intents),
+                    generation_ids=self._intent_generation_ids(batch.intents),
+                    reason=batch.reason,
+                    runtime_outcome="dropped_expired",
+                    state=state,
+                )
+                return None
+
         playable, conflicts = coordinator.split_down_intents(batch.intents)
         if conflicts:
             self._record_without_dispatch(
@@ -434,44 +463,42 @@ class PlaybackEngine:
         self,
         target_elapsed_us: int,
         state: PlaybackState,
-        first_action_executed: bool,
+        loop_state: LoopState,
         total_time_seconds: float,
-        last_runtime_poll_us: int,
-        last_render_time_us: int,
-    ) -> tuple[str | None, int, int]:
+    ) -> str | None:
         while True:
             elapsed_us = state.get_elapsed_us(self.clock)
             if elapsed_us >= target_elapsed_us:
-                return None, last_runtime_poll_us, last_render_time_us
+                return None
 
             remaining_us = target_elapsed_us - elapsed_us
             target_system_us = state.start_perf + state.pause_time_us + target_elapsed_us
             if remaining_us <= self.sleep_policy.spin_threshold_us:
                 self.precise_sleeper.spin_until_us(target_system_us, self.clock)
-                return None, last_runtime_poll_us, last_render_time_us
+                return None
 
             now_us = self.clock.now_us()
-            if now_us - last_runtime_poll_us >= self._runtime_poll_interval_us:
-                last_runtime_poll_us = now_us
+            if now_us - loop_state.last_runtime_poll_us >= self._runtime_poll_interval_us:
+                loop_state.last_runtime_poll_us = now_us
                 command = self.controls.poll() if self.controls is not None else None
                 cmd_res = self._handle_commands(command, state, total_time_seconds)
                 if cmd_res:
-                    return cmd_res, last_runtime_poll_us, last_render_time_us
+                    return cmd_res
 
                 wait_res, wait_cmd = self._process_wait_states(
-                    state, first_action_executed, total_time_seconds
+                    state, loop_state.first_action_executed, total_time_seconds
                 )
                 if wait_res:
                     if wait_cmd:
-                        return wait_cmd, last_runtime_poll_us, last_render_time_us
+                        return wait_cmd
                     continue
 
                 elapsed_us = state.get_elapsed_us(self.clock)
                 remaining_us = target_elapsed_us - elapsed_us
                 if self.renderer and remaining_us >= 5_000:
                     now_render_us = self.clock.now_us()
-                    if now_render_us - last_render_time_us >= 33_000:
-                        last_render_time_us = now_render_us
+                    if now_render_us - loop_state.last_render_time_us >= 33_000:
+                        loop_state.last_render_time_us = now_render_us
                         self.renderer.render(
                             elapsed_us / 1_000_000,
                             total_time_seconds,
@@ -486,6 +513,52 @@ class PlaybackEngine:
                 self.sleeper,
                 self.sleep_policy.spin_threshold_us,
             )
+
+    def _drain_due(
+        self,
+        now_us: int,
+        state: PlaybackState,
+        coordinator: RuntimeDispatchCoordinator,
+        loop_state: LoopState,
+    ) -> tuple[ExecutionResult | None, ...]:
+        results: list[ExecutionResult | None] = []
+
+        pending = coordinator.pop_due_pending(now_us)
+        if pending:
+            loop_state.first_action_executed = True
+            results.append(self._dispatch_pending_releases(pending, state, coordinator))
+
+        # Focus is intentionally checked in the wait/poll phase, not between every due batch here.
+        # A mid-burst focus loss is cleaned up on the next poll via release_all(); keeping this hot
+        # path free of extra Win32 focus calls preserves dispatch timing for dense due bursts.
+        for batch in coordinator.pop_due_authored(now_us):
+            loop_state.first_action_executed = True
+            if batch.kind == "up":
+                self._request_up_batch(batch, state, coordinator)
+                newly_due = coordinator.pop_due_pending(state.get_elapsed_us(self.clock))
+                results.append(
+                    self._dispatch_pending_releases(newly_due, state, coordinator)
+                )
+            else:
+                results.append(self._dispatch_down_batch(batch, state, coordinator))
+
+        return tuple(results)
+
+    def _log_timing_summary(self) -> None:
+        from sky_music.platform.win32 import inputs
+
+        if not (hasattr(inputs, "PLAYBACK_DEBUG") and inputs.PLAYBACK_DEBUG):
+            return
+
+        summary = self.telemetry.get_summary() or {}
+        lateness = summary.get("lateness_us", {})
+        inputs.debug_log(
+            f"Timing summary (Microsecond Engine): "
+            f"late events over 2ms={lateness.get('over_2ms', 0)}, "
+            f"late events over 5ms={lateness.get('over_5ms', 0)}, "
+            f"late events over 10ms={lateness.get('over_10ms', 0)}, "
+            f"max lateness={lateness.get('max_us', 0.0) / 1_000_000:.6f}s"
+        )
 
     def play(self) -> str:
         # Wait for initial focus if required to prevent "Focus lost" showing immediately at start
@@ -508,34 +581,17 @@ class PlaybackEngine:
         coordinator = RuntimeDispatchCoordinator(self.runtime_schedule, self.min_hold_us)
         self._runtime_coordinator = coordinator
         state = PlaybackState(start_perf=self.clock.now_us())
-        
-        first_action_executed = False
-        last_render_time_us = 0
-        last_runtime_poll_us = -self._runtime_poll_interval_us
+        loop_state = LoopState(
+            last_runtime_poll_us=-self._runtime_poll_interval_us,
+            last_render_time_us=0,
+        )
 
         total_time_seconds = self.total_time_us / 1_000_000
 
-        # Telemetry diagnostic counters
-        late_events_over_2ms = 0
-        late_events_over_5ms = 0
-        late_events_over_10ms = 0
-        max_lateness_us = 0
         def observe_result(exec_result: ExecutionResult | None) -> None:
-            nonlocal late_events_over_2ms
-            nonlocal late_events_over_5ms
-            nonlocal late_events_over_10ms
-            nonlocal max_lateness_us
             if exec_result is None:
                 return
             lateness_us = exec_result.lateness_us
-            if exec_result.is_late and exec_result.runtime_outcome != "deferred_release":
-                max_lateness_us = max(max_lateness_us, lateness_us)
-                if lateness_us > 2_000:
-                    late_events_over_2ms += 1
-                if lateness_us > 5_000:
-                    late_events_over_5ms += 1
-                if exec_result.is_critically_late:
-                    late_events_over_10ms += 1
             if (
                 self.renderer
                 and hasattr(self.renderer, "update_counters")
@@ -548,51 +604,24 @@ class PlaybackEngine:
                 deadline_us = coordinator.next_deadline_us()
                 if deadline_us is None:
                     break
-                command_result, last_runtime_poll_us, last_render_time_us = (
-                    self._wait_until_runtime_deadline(
-                        deadline_us,
-                        state,
-                        first_action_executed,
-                        total_time_seconds,
-                        last_runtime_poll_us,
-                        last_render_time_us,
-                    )
+                command_result = self._wait_until_runtime_deadline(
+                    deadline_us,
+                    state,
+                    loop_state,
+                    total_time_seconds,
                 )
                 if command_result:
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
-
-                pending = coordinator.pop_due_pending(now_us)
-                if pending:
-                    first_action_executed = True
-                    observe_result(self._dispatch_pending_releases(pending, state, coordinator))
-
-                for batch in coordinator.pop_due_authored(now_us):
-                    first_action_executed = True
-                    if batch.kind == "up":
-                        self._request_up_batch(batch, state, coordinator)
-                        newly_due = coordinator.pop_due_pending(state.get_elapsed_us(self.clock))
-                        observe_result(
-                            self._dispatch_pending_releases(newly_due, state, coordinator)
-                        )
-                    else:
-                        observe_result(self._dispatch_down_batch(batch, state, coordinator))
+                for result in self._drain_due(now_us, state, coordinator, loop_state):
+                    observe_result(result)
                 
             if self.renderer:
                 self.renderer.render(total_time_seconds, total_time_seconds, self.song.name, status="done", force=True)
                 self.renderer.finish(f"Finished playing {self.song.name}")
                 
-            # Log summary diagnostic metrics
-            from sky_music.platform.win32 import inputs
-            if hasattr(inputs, "PLAYBACK_DEBUG") and inputs.PLAYBACK_DEBUG:
-                inputs.debug_log(
-                    f"Timing summary (Microsecond Engine): "
-                    f"late events over 2ms={late_events_over_2ms}, "
-                    f"late events over 5ms={late_events_over_5ms}, "
-                    f"late events over 10ms={late_events_over_10ms}, "
-                    f"max lateness={max_lateness_us / 1_000_000:.6f}s"
-                )
+            self._log_timing_summary()
                 
             return PLAYBACK_FINISHED
         except RuntimeSameKeyConflictError:
@@ -604,6 +633,10 @@ class PlaybackEngine:
             
         finally:
             outcome = self._release_all_and_cancel_runtime()
+            if self._runtime_coordinator is not None:
+                self.telemetry.record_generation_status_counts(
+                    self._runtime_coordinator.generation_status_counts()
+                )
             self.telemetry.record_release_outcome(outcome)
             self.telemetry.record_backend_health(self.backend.get_health())
             self.telemetry.save()

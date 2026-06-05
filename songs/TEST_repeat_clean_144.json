@@ -1,0 +1,293 @@
+{
+  "name": "TEST_repeat_clean_144",
+  "songNotes": [
+    {
+      "time": 0,
+      "key": "Key7"
+    },
+    {
+      "time": 20,
+      "key": "Key7"
+    },
+    {
+      "time": 40,
+      "key": "Key7"
+    },
+    {
+      "time": 60,
+      "key": "Key7"
+    },
+    {
+      "time": 80,
+      "key": "Key7"
+    },
+    {
+      "time": 100,
+      "key": "Key7"
+    },
+    {
+      "time": 120,
+      "key": "Key7"
+    },
+    {
+      "time": 140,
+      "key": "Key7"
+    },
+    {
+      "time": 160,
+      "key": "Key7"
+    },
+    {
+      "time": 180,
+      "key": "Key7"
+    },
+    {
+      "time": 200,
+      "key": "Key7"
+    },
+    {
+      "time": 220,
+      "key": "Key7"
+    },
+    {
+      "time": 1740,
+      "key": "Key7"
+    },
+    {
+      "time": 1764,
+      "key": "Key7"
+    },
+    {
+      "time": 1788,
+      "key": "Key7"
+    },
+    {
+      "time": 1812,
+      "key": "Key7"
+    },
+    {
+      "time": 1836,
+      "key": "Key7"
+    },
+    {
+      "time": 1860,
+      "key": "Key7"
+    },
+    {
+      "time": 1884,
+      "key": "Key7"
+    },
+    {
+      "time": 1908,
+      "key": "Key7"
+    },
+    {
+      "time": 1932,
+      "key": "Key7"
+    },
+    {
+      "time": 1956,
+      "key": "Key7"
+    },
+    {
+      "time": 1980,
+      "key": "Key7"
+    },
+    {
+      "time": 2004,
+      "key": "Key7"
+    },
+    {
+      "time": 3528,
+      "key": "Key7"
+    },
+    {
+      "time": 3558,
+      "key": "Key7"
+    },
+    {
+      "time": 3588,
+      "key": "Key7"
+    },
+    {
+      "time": 3618,
+      "key": "Key7"
+    },
+    {
+      "time": 3648,
+      "key": "Key7"
+    },
+    {
+      "time": 3678,
+      "key": "Key7"
+    },
+    {
+      "time": 3708,
+      "key": "Key7"
+    },
+    {
+      "time": 3738,
+      "key": "Key7"
+    },
+    {
+      "time": 3768,
+      "key": "Key7"
+    },
+    {
+      "time": 3798,
+      "key": "Key7"
+    },
+    {
+      "time": 3828,
+      "key": "Key7"
+    },
+    {
+      "time": 3858,
+      "key": "Key7"
+    },
+    {
+      "time": 5388,
+      "key": "Key7"
+    },
+    {
+      "time": 5428,
+      "key": "Key7"
+    },
+    {
+      "time": 5468,
+      "key": "Key7"
+    },
+    {
+      "time": 5508,
+      "key": "Key7"
+    },
+    {
+      "time": 5548,
+      "key": "Key7"
+    },
+    {
+      "time": 5588,
+      "key": "Key7"
+    },
+    {
+      "time": 5628,
+      "key": "Key7"
+    },
+    {
+      "time": 5668,
+      "key": "Key7"
+    },
+    {
+      "time": 5708,
+      "key": "Key7"
+    },
+    {
+      "time": 5748,
+      "key": "Key7"
+    },
+    {
+      "time": 5788,
+      "key": "Key7"
+    },
+    {
+      "time": 5828,
+      "key": "Key7"
+    },
+    {
+      "time": 7368,
+      "key": "Key7"
+    },
+    {
+      "time": 7423,
+      "key": "Key7"
+    },
+    {
+      "time": 7478,
+      "key": "Key7"
+    },
+    {
+      "time": 7533,
+      "key": "Key7"
+    },
+    {
+      "time": 7588,
+      "key": "Key7"
+    },
+    {
+      "time": 7643,
+      "key": "Key7"
+    },
+    {
+      "time": 7698,
+      "key": "Key7"
+    },
+    {
+      "time": 7753,
+      "key": "Key7"
+    },
+    {
+      "time": 7808,
+      "key": "Key7"
+    },
+    {
+      "time": 7863,
+      "key": "Key7"
+    },
+    {
+      "time": 7918,
+      "key": "Key7"
+    },
+    {
+      "time": 7973,
+      "key": "Key7"
+    },
+    {
+      "time": 9528,
+      "key": "Key7"
+    },
+    {
+      "time": 9598,
+      "key": "Key7"
+    },
+    {
+      "time": 9668,
+      "key": "Key7"
+    },
+    {
+      "time": 9738,
+      "key": "Key7"
+    },
+    {
+      "time": 9808,
+      "key": "Key7"
+    },
+    {
+      "time": 9878,
+      "key": "Key7"
+    },
+    {
+      "time": 9948,
+      "key": "Key7"
+    },
+    {
+      "time": 10018,
+      "key": "Key7"
+    },
+    {
+      "time": 10088,
+      "key": "Key7"
+    },
+    {
+      "time": 10158,
+      "key": "Key7"
+    },
+    {
+      "time": 10228,
+      "key": "Key7"
+    },
+    {
+      "time": 10298,
+      "key": "Key7"
+    }
+  ]
+}

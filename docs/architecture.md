@@ -32,10 +32,10 @@ The `PlaybackEngine` compiles the pre-calculated `KeyAction` timeline into per-k
 generations, then enters a highly optimized `while` loop checking `time.perf_counter_ns()`.
 
 The runtime coordinator preserves authored down deadlines while enforcing the resolved
-`min_hold_us` from confirmed down dispatch:
+`min_hold_us` from the down dispatch start:
 
 ```text
-release_not_before = down_dispatch_completed + min_hold_us
+release_not_before = down_dispatch_started + min_hold_us
 effective_release = max(scheduled_release, release_not_before)
 ```
 
@@ -73,8 +73,10 @@ When running with the `--debug-csv` flag (or globally enabled in settings), a CS
 *   `lateness_us`: The delay between when a note was scheduled to play vs. when the OS actually fired it.
 *   `send_duration_us`: How long the `SendInput` call blocked the thread.
 *   `sent_scan_codes` / `skipped_scan_codes`: What the backend actually accepted or skipped.
-*   `confirmed_hold_lower_bound_us`: Conservative hold measured from completed down dispatch to the
-    start of the matching up dispatch.
+*   `note_hold_duration_us`: Observed hold measured start-to-start, matching the runtime visibility
+    contract.
+*   `confirmed_hold_lower_bound_us`: Advisory worst-case diagnostic measured from down dispatch
+    start through matching up dispatch completion.
 *   `runtime_outcome` / `deferred_by_us`: Whether an intent was sent, deferred, suppressed, or
     dropped by an explicit runtime conflict decision.
 

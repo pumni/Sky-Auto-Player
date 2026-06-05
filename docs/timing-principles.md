@@ -192,10 +192,10 @@ same_key_interval_us must be at least min_hold_us.
 
 If the authored same-key interval is below `min_hold_us`, the scheduler cannot both preserve the
 visibility floor and release before the next down. Degraded mode keeps `min_hold_us` and reports the
-overlap; strict mode may reject instead. At runtime, the player anchors `min_hold_us` to confirmed
-down-dispatch completion and defers the matching release per key. If that confirmed hold makes a new
-same-key down infeasible, degraded mode explicitly drops the conflicting new down instead of relying
-on backend duplicate-down filtering.
+overlap; strict mode may reject instead. At runtime, the player anchors `min_hold_us` to the down
+dispatch start and defers the matching release per key. If that confirmed hold makes a new same-key
+down infeasible, degraded mode explicitly drops the conflicting new down instead of relying on
+backend duplicate-down filtering.
 
 A same-key repeat can be dropped, merged, or heard as incomplete if the game does not observe a complete down-up-down sequence.
 
@@ -219,12 +219,30 @@ min_hold_us must be long enough for the game client to observe the key as down.
 The runtime visibility contract is:
 
 ```text
-normal_up_dispatch_started >= down_dispatch_completed + min_hold_us
+normal_up_dispatch_started >= down_dispatch_started + min_hold_us
 ```
 
 This protects the configured visibility floor against differential down/up dispatch lateness without
 globally increasing profile holds. Safety releases caused by pause, focus loss, panic, quit, or an
 exception are intentionally exempt.
+
+> **Anchor correction (2026-06-05).** The floor is measured from the down's dispatch **start**, not
+> its **completion**. The game samples key *state* on frame boundaries, so the observed hold is
+> `up_dispatch_started - down_dispatch_started`: the SendInput latency of the down and of the up go
+> through the same path and cancel. Anchoring to `down_dispatch_completed` (the original
+> `runtime-hold-refactor-plan.md` §3.2/§7.5 wording) silently added one `send_duration` of hold to
+> every note, which pushed same-key releases *past* the next authored down whenever the authored
+> repeat interval sat just above `min_hold` — the common case for `local_precise`, where
+> `hold == min_hold`. That made the runtime drop a repeat the scheduler had deemed feasible
+> (`interval >= min_hold`), producing intermittent missing notes. The start anchor restores the
+> invariant **scheduler-feasible ⇒ runtime-feasible**: by the time the next same-key down is due the
+> release floor has been reached, so the authored up fires first (up-before-down at the shared
+> deadline) and the repeat presses on time. See `tests/test_runtime_dispatch.py`
+> (`test_scheduler_feasible_repeat_is_runtime_feasible_invariant`).
+
+Telemetry preserves both views: `note_hold_duration_us` is the observed start-to-start hold used for
+the visibility contract, while `confirmed_hold_lower_bound_us` is an advisory worst-case diagnostic
+from down dispatch start through matching up dispatch completion.
 
 A short hold may feel attractive for dense songs, but it can make notes vanish if the game does not sample the down state in time.
 
@@ -233,6 +251,17 @@ Do not lower min_hold_us only to make dense songs faster.
 Runtime stalls must not shift the absolute music timeline. Only explicit user pause or focus-loss
 pause may add to playback pause time; otherwise repeated stalls would accumulate into audible
 slowdown over the song.
+
+Late-burst recovery must also preserve that absolute timeline. The optional
+`late_pulse_drop_threshold_us` policy is off by default; when explicitly enabled, a down dispatch
+that is more than the threshold late is recorded as `dropped_expired` instead of being machine-gunned
+into the next frame. Releases are never dropped for being late, because clearing active keys is a
+safety requirement. The threshold boundary is strict: a down exactly at the threshold is still sent.
+
+Focus is checked during the wait/poll phase, not between every batch already due in the same burst.
+If focus is lost mid-burst, the next poll performs `release_all()` and pauses playback. This is an
+intentional hot-path tradeoff: it avoids an extra Win32 focus query per due batch, and the game
+ignores unfocused input while the backend safety release prevents stuck keys.
 
 If notes vanish, first consider:
 

@@ -47,7 +47,83 @@ class InputBackend(Protocol):
         """Returns the current health telemetry of the input backend."""
         ...
 
-class WinSendInputBackend:
+
+class _TrackedKeyState:
+    active_keys: set[int]
+    possibly_active_keys: set[int]
+    failed_release_keys: set[int]
+    last_error: str | None
+
+    def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
+        duplicates = tuple(sc for sc in unique_scan_codes if sc in self.active_keys)
+        to_send = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys)
+        return to_send, duplicates
+
+    def _decide_up(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
+        to_release = tuple(
+            sc
+            for sc in unique_scan_codes
+            if sc in self.active_keys or sc in self.possibly_active_keys
+        )
+        already_released = tuple(
+            sc
+            for sc in unique_scan_codes
+            if sc not in self.active_keys and sc not in self.possibly_active_keys
+        )
+        return to_release, already_released
+
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+        raise NotImplementedError
+
+    def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
+        self.last_error = f"key_down error: {error}"
+
+    def _handle_up_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
+        self.failed_release_keys.update(scan_codes)
+        self.last_error = f"key_up error: {error}"
+
+    def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
+        if not scan_codes:
+            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
+
+        to_send, duplicates = self._decide_down(scan_codes)
+        if not to_send:
+            return InputSendResult(sent=(), skipped_duplicates=duplicates, success=True)
+
+        self.possibly_active_keys.update(to_send)
+        try:
+            self._emit(to_send, key_up=False)
+        except Exception as error:
+            self._handle_down_error(to_send, error)
+            raise
+
+        self.active_keys.update(to_send)
+        self.possibly_active_keys.difference_update(to_send)
+        return InputSendResult(sent=to_send, skipped_duplicates=duplicates, success=True)
+
+    def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
+        if not scan_codes:
+            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
+
+        to_release, already_released = self._decide_up(scan_codes)
+        if not to_release:
+            return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
+
+        try:
+            self._emit(to_release, key_up=True)
+        except Exception as error:
+            self._handle_up_error(to_release, error)
+            raise
+
+        self.active_keys.difference_update(to_release)
+        self.possibly_active_keys.difference_update(to_release)
+        self.failed_release_keys.difference_update(to_release)
+        return InputSendResult(sent=to_release, skipped_duplicates=already_released, success=True)
+
+
+class WinSendInputBackend(_TrackedKeyState):
     """Windows-specific SendInput backend wrapper with safety tracking and panic release."""
     def __init__(self):
         # Dynamically import inputs to avoid cross-import problems
@@ -65,60 +141,19 @@ class WinSendInputBackend:
             failed_release_count=len(self.failed_release_keys),
             last_error=self.last_error
         )
-        
-    def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        if not scan_codes:
-            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
 
-        # Duplicate-down protection: skip keys that are already in active_keys
-        duplicates = tuple(sc for sc in unique_scan_codes if sc in self.active_keys)
-        to_send = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys)
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+        self.inputs_module.send_scan_code_batch(scan_codes, key_up=key_up)
 
-        if not to_send:
-            # All keys are already held — nothing to do
-            return InputSendResult(sent=(), skipped_duplicates=duplicates, success=True)
-
-        # Add targeted keys to possibly_active_keys before injection
-        self.possibly_active_keys.update(to_send)
-
+    def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
+        self.last_error = f"key_down error: {error}"
+        # Best-effort emergency cleanup in case SendInput partially succeeded.
         try:
-            self.inputs_module.send_scan_code_batch(to_send, key_up=False)
-            # Acknowledged: move to active_keys and clear from possibly_active_keys
-            self.active_keys.update(to_send)
-            self.possibly_active_keys.difference_update(to_send)
-            return InputSendResult(sent=to_send, skipped_duplicates=duplicates, success=True)
-        except Exception as e:
-            self.last_error = f"key_down error: {e}"
-            # Best-effort emergency cleanup in case SendInput partially succeeded.
-            try:
-                self.inputs_module.send_scan_code_batch(to_send, key_up=True)
-                self.possibly_active_keys.difference_update(to_send)
-            except Exception as ex:
-                # If cleanup fails, we keep them in possibly_active_keys to track potential sticking
-                self.last_error = f"key_down emergency cleanup failed: {ex}"
-            raise
-        
-    def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        if not scan_codes:
-            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
-        to_release = tuple(sc for sc in unique_scan_codes if sc in self.active_keys or sc in self.possibly_active_keys)
-        # Idempotent: skip keys that are already not held
-        already_released = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys and sc not in self.possibly_active_keys)
-        if to_release:
-            try:
-                self.inputs_module.send_scan_code_batch(to_release, key_up=True)
-                self.active_keys.difference_update(to_release)
-                self.possibly_active_keys.difference_update(to_release)
-                self.failed_release_keys.difference_update(to_release)
-                return InputSendResult(sent=to_release, skipped_duplicates=already_released, success=True)
-            except Exception as e:
-                # Key up failed: transition keys to failed_release_keys
-                self.failed_release_keys.update(to_release)
-                self.last_error = f"key_up error: {e}"
-                raise
-        return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
+            self._emit(scan_codes, key_up=True)
+            self.possibly_active_keys.difference_update(scan_codes)
+        except Exception as cleanup_error:
+            # If cleanup fails, keep them in possibly_active_keys to track potential sticking.
+            self.last_error = f"key_down emergency cleanup failed: {cleanup_error}"
             
     def release_all(self) -> ReleaseAllOutcome:
         import time
@@ -252,54 +287,25 @@ class WinSendInputBackend:
             )
 
 
-class DryRunBackend:
+class DryRunBackend(_TrackedKeyState):
     """Mock backend useful for timing analysis, safety state validation, and testing."""
     def __init__(self):
         self.history = [] # Records tuples of (action_type, scan_codes)
         self.active_keys = set()
         self.possibly_active_keys = set()
         self.failed_release_keys = set()
+        self.last_error: str | None = None
         
     def get_health(self) -> BackendHealth:
         return BackendHealth(
             active_count=len(self.active_keys),
             possibly_active_count=len(self.possibly_active_keys),
             failed_release_count=len(self.failed_release_keys),
-            last_error=None
+            last_error=self.last_error
         )
-        
-    def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        if not scan_codes:
-            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
 
-        # Duplicate-down protection
-        duplicates = tuple(sc for sc in unique_scan_codes if sc in self.active_keys)
-        to_send = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys)
-
-        if not to_send:
-            return InputSendResult(sent=(), skipped_duplicates=duplicates, success=True)
-
-        self.possibly_active_keys.update(to_send)
-        # Simulate success for dry run
-        self.active_keys.update(to_send)
-        self.possibly_active_keys.difference_update(to_send)
-        self.history.append(("down", tuple(sorted(to_send))))
-        return InputSendResult(sent=to_send, skipped_duplicates=duplicates, success=True)
-        
-    def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        if not scan_codes:
-            return InputSendResult(sent=(), skipped_duplicates=(), success=True)
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
-        to_release = tuple(sc for sc in unique_scan_codes if sc in self.active_keys or sc in self.possibly_active_keys)
-        already_released = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys and sc not in self.possibly_active_keys)
-        if to_release:
-            self.active_keys.difference_update(to_release)
-            self.possibly_active_keys.difference_update(to_release)
-            self.failed_release_keys.difference_update(to_release)
-            self.history.append(("up", tuple(sorted(to_release))))
-            return InputSendResult(sent=to_release, skipped_duplicates=already_released, success=True)
-        return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+        self.history.append(("up" if key_up else "down", tuple(sorted(scan_codes))))
             
     def release_all(self) -> ReleaseAllOutcome:
         to_release = self.active_keys | self.possibly_active_keys | self.failed_release_keys

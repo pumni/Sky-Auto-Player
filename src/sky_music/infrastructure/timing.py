@@ -59,15 +59,3 @@ class PreciseSleeper:
             # Busy wait / spin
             pass
 
-    def sleep_until_us(self, target_us: int, clock: Clock, sleeper: Sleeper, spin_threshold_us: int = _DEFAULT_SPIN_THRESHOLD_US) -> None:
-        """
-        Looping wrapper that sleeps until target_us is reached.
-        
-        WARNING: This is a blocking call. During playback, do NOT use this directly in the main
-        playback engine loop since it blocks hotkey polling, pause/resume checks, and state rendering
-        for the entire wait. The engine only uses spin_until_us() for its final sub-millisecond
-        timing window. This function is intended primarily for tests and simulation environments.
-        """
-        while clock.now_us() < target_us:
-            self.sleep_step_towards_us(target_us, clock, sleeper, spin_threshold_us)
-

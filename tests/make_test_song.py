@@ -86,4 +86,47 @@ def rolled_chord(keys=(0, 2, 4, 6), spread_ms=18, blocks=8, block_gap=1500):
 
 write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 
+# Floor probe: same-key repeats whose interval sits JUST above the frame-aware min_hold floor.
+# Canary for the runtime hold-anchor (docs/playback-flow-hardening-plan.md Phase G). Every interval
+# is scheduler-feasible (interval >= min_hold); the pre-fix completion-anchor still dropped repeats
+# whose headroom (interval - min_hold) fell within send_duration + dispatch jitter, while the
+# start-anchor fix removes that systematic loss.
+#   144fps local_precise: min_hold = ceil(1e6/144) = 6945 us (~6.9 ms)
+#   60fps  local_precise: min_hold = ceil(1e6/60)  = 16667 us (~16.7 ms)
+# Headroom per 144fps block: 7ms=55us, 8ms=1055us, 9ms=2055us, 10ms=3055us, 12ms=5055us, ...
+# READING IT: the 8ms+ blocks have >=1ms headroom and are the PASS gate — the fix must lose zero
+# notes there. The first 7ms block has only ~55us headroom: it is the absolute floor edge and is
+# INFORMATIONAL — it can still drop under real dispatch jitter exceeding 55us, which is a
+# tempo/profile signal (timing-principles.md §18), NOT an anchor regression. Drops in the 8ms+
+# blocks WOULD be a regression.
+def repeat_floor(key=7, reps=12, intervals=(7, 8, 9, 10, 12, 15, 20), block_gap=1500):
+      notes, t = [], 0
+      for I in intervals:
+          for _ in range(reps):
+              notes.append((t, key)); t += I
+          t += block_gap            # silence between blocks so onsets separate cleanly
+      return notes
+
+# 84 same-key onsets each; run at the matching --fps so the floor lands where intended.
+write("TEST_repeat_floor_144", repeat_floor())
+write("TEST_repeat_floor_60", repeat_floor(intervals=(17, 18, 19, 20, 22, 25, 30)))
+
+# Tier-2 GROUND-TRUTH probe: same-key repeats that are BOTH (a) sender-clean — headroom
+# (interval - min_hold) far above realistic dispatch jitter so the sender must emit 100% — AND
+# (b) above the game's same-key re-trigger wall (Appendix A.4: ~16-17 ms fixed wall at high FPS),
+# so the GAME can re-trigger every note. Only then does an audio onset count == intended become a
+# valid verdict on the runtime ("did we lose a note in real play?"). Use this for in-game Tier 2;
+# use TEST_repeat_floor_* for sender/anchor diagnostics where the game's own wall would confound.
+def repeat_clean(key=7, reps=12, intervals=(20, 24, 30, 40, 55, 70), block_gap=1500):
+      notes, t = [], 0
+      for I in intervals:
+          for _ in range(reps):
+              notes.append((t, key)); t += I
+          t += block_gap
+      return notes
+
+# 72 same-key onsets each.
+write("TEST_repeat_clean_144", repeat_clean())
+write("TEST_repeat_clean_60", repeat_clean(intervals=(28, 34, 42, 55, 75, 100)))
+
 print("done -> songs/TEST_*.json")

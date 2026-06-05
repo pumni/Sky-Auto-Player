@@ -2,8 +2,17 @@
 
 Date: 2026-06-05
 
-Status: Phases 0-5 implemented on 2026-06-05. Phase 6 late-burst policy and Phase 7 in-game
-validation remain open.
+Status: Phases 0-6 implemented on 2026-06-05. Phase 6 late-burst policy is implemented
+off-by-default via `late_pulse_drop_threshold_us`. Phase 7 in-game validation **PASSED 2026-06-06**
+(start-anchor fix validated in-game @144fps — see `timing-experiments.md` §0.4 "PHASE G RESULT").
+
+> **Post-Phase-5 anchor correction (2026-06-05).** The hold floor is now anchored to the down's
+> dispatch **start**, not its **completion**, contradicting §3.2 / §7.5 below. The completion anchor
+> over-held every note by one `send_duration` and dropped same-key repeats authored just above
+> `min_hold` (intermittent missing notes on `local_precise`, where `hold == min_hold`). The
+> superseding contract is `up_dispatch_started >= down_dispatch_started + min_hold` (see
+> `timing-principles.md` §7). The §3.2/§7.5/Definition-of-Done-#1 wording below is retained as
+> history; read the `_started` anchor.
 
 Related:
 
@@ -925,7 +934,7 @@ The refactor is complete when:
 1. Every normal sent up satisfies:
 
    ```text
-   up_dispatch_started >= down_dispatch_completed + min_hold
+   up_dispatch_started >= down_dispatch_started + min_hold
    ```
 
 2. No unrelated down is delayed by a deferred release.

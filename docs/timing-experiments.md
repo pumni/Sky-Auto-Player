@@ -104,16 +104,47 @@ uv run python tests/analyze_onsets.py labels.txt
 
 # khử nhiễu phía gửi (cần chạy player với --debug-csv, file ở logs/):
 uv run python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.csv
+
+# bài nhiều block (TEST_repeat_clean_*): tách IOI theo từng block (tránh std toàn bài bị phình
+# bởi ~1.5s im lặng giữa các block):
+uv run python tests/analyze_onsets.py labels.txt logs/playback_telemetry_XXXX.csv --per-block
 ```
 
 Đọc kết quả:
 
 - `[GAME] IOI mean/std/spread` — độ đều của nhịp thu được (std nhỏ = đều).
-- `[SENT] IOI std` — độ đều phía player gửi (phải rất nhỏ, ~<0.1 ms).
-- `[GAME-only jitter] std` + `residuals` — phần dao động THUẦN do game. Nếu residuals có **dao
-  động chu kỳ** (lặp +X/−X) → đó là beating của tick nội bộ; nếu ngẫu nhiên → nhiễu thường.
+- `[SENDER AUDIT]` — `intended_down` / `sent_down` / `dropped_conflict` / `dropped_expired` /
+  `suppressed_stale_up`. **Đây là tiền-gate, đọc TRƯỚC.** `[SENT]` chỉ tính các down **thật sự
+  gửi** (`sent_scan_codes` khác rỗng); row `dropped_conflict`/`dropped_expired` bị loại, nếu không
+  sẽ làm nhiễu baseline IOI và phần so audio.
+- `[GATE]` — nếu `sent_down < intended_down` thì **audio KHÔNG hợp lệ làm ground truth**: các note
+  thiếu đã mất *trước khi tới game*, nên không thể kết luận "game làm mất note". Phải đạt
+  `sent_down == intended_down` rồi mới so onset.
+- `[SENT] IOI std` — độ đều phía player gửi (phải rất nhỏ, ~<0.1 ms; chỉ trong cùng một block).
+- `[GAME-only jitter] std` + `residuals` — phần dao động THUẦN do game (chỉ tin khi GATE OK). Nếu
+  residuals có **dao động chu kỳ** (lặp +X/−X) → beating của tick nội bộ; nếu ngẫu nhiên → nhiễu
+  thường.
 
-### 0.5 Two-computer remote setup (host + listener)
+> **Gate Tầng 2 (per-block, không phải toàn bài).** Ở `local_precise @144fps`, `min_hold = 6945 us`.
+> Một block same-key chỉ là gate "phải 12/12 sent" khi **headroom = interval − min_hold > jitter
+> dispatch thật của máy** (đo được ~2.5 ms spike trên máy dev). Vì vậy block **8 ms+** (headroom
+> ≥ 1 ms) là gate hợp lệ; block **7 ms** (~55 us headroom) ở *đúng mép sàn* nên rớt là **tín hiệu
+> tempo/profile (§timing-principles §18), KHÔNG phải lỗi anchor**. Đo thực tế (run1/run2, fix
+> start-anchor): mọi block 8 ms+ đều 12/12; chỉ block 7 ms rớt 4 — khớp đúng dự đoán, tức fix
+> validated ở mức sender cho mọi interval có headroom > jitter.
+
+> **✅ PHASE G RESULT — start-anchor fix VALIDATED in-game (2026-06-06).** Probe ground-truth
+> `TEST_repeat_clean_144` (interval 20/24/30/40/55/70 ms — sender-clean AND above the game
+> re-trigger wall), `local_precise --fps 144`, 2 in-game runs + audio:
+> - **Sender gate:** both runs `intended_down = sent_down = 72`, `dropped_conflict/expired/
+>   suppressed_stale_up = 0` → audio is valid ground truth.
+> - **Game onsets:** both runs **72/72**, all 6 blocks 12/12 — no lost notes, no lost block.
+> - **Sender IOI per block:** 0.0027–0.0243 ms (≪ the 0.05–0.07 ms bar). Whole-song `[SENT] IOI std`
+>   ≈ 382 ms is an artifact of the inter-block silence — read it `--per-block`.
+> - **Game-only jitter per block:** 1.88–5.77 ms std — game/audio/detector side (consistent with
+>   A.10), NOT sender/anchor.
+> Conclusion: the start-anchor fix loses no same-key notes in real play for intervals with headroom
+> above machine jitter; residual rhythm jitter is game-side. No profile-margin change warranted.
 
 - **Máy A (host)**: chạy game Sky + player tool, vào một phòng online, phát nhạc bằng player.
 - **Máy B (listener)**: máy khác, **cùng phòng online**, nghe tiếng đàn của A replicate sang, và

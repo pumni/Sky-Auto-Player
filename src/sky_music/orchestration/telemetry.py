@@ -29,6 +29,7 @@ class TelemetryLogger:
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
         self.schedule_summary: dict | None = None
+        self.generation_status_counts: dict[str, int] = {}
         self.pause_durations_us: dict[str, list[int]] = {
             "manual": [],
             "focus": [],
@@ -104,6 +105,13 @@ class TelemetryLogger:
     def record_release_outcome(self, outcome) -> None:
         """Stores the final release_all outcome at the end of playback."""
         self.release_outcome = outcome
+
+    def record_generation_status_counts(self, counts: dict[str, int]) -> None:
+        """Stores final runtime generation status counts for playback summary diagnostics."""
+        self.generation_status_counts = {
+            str(status): max(0, int(count))
+            for status, count in counts.items()
+        }
 
     def record_schedule_metadata(self, metadata) -> None:
         """Stores scheduler stress metrics for later calibration."""
@@ -197,9 +205,18 @@ class TelemetryLogger:
             elif r["kind"] == "up":
                 for sc in codes:
                     if sc in active_downs:
-                        down_started_us, down_completed_us = active_downs[sc]
+                        down_started_us, _down_completed_us = active_downs[sc]
                         hold_durations.append(r["actual_us"] - down_started_us)
-                        confirmed_hold_lower_bounds.append(r["actual_us"] - down_completed_us)
+                        # Diagnostic worst-case bound from the down dispatch start through the up
+                        # dispatch completion. The runtime visibility guard itself remains
+                        # start-to-start; note_hold_duration_us is the observed hold for that check.
+                        confirmed_hold_lower_bounds.append(
+                            r.get(
+                                "dispatch_completed_us",
+                                r["actual_us"] + r["send_duration_us"],
+                            )
+                            - down_started_us
+                        )
                         del active_downs[sc]
 
         def _pct(values: list[int], pct: float) -> float:
@@ -297,7 +314,13 @@ class TelemetryLogger:
                 )
                 for record in self.records
                 if record["kind"] == "down"
-                and record.get("runtime_outcome") not in {"dropped_conflict", "suppressed_stale_up"}
+                and record.get("runtime_outcome")
+                not in {"dropped_conflict", "dropped_expired", "suppressed_stale_up"}
+            ),
+            "expired_dropped_down_count": sum(
+                len([sc for sc in record["scan_codes"].split(";") if sc])
+                for record in self.records
+                if record.get("runtime_outcome") == "dropped_expired"
             ),
             "catch_up_bursts": {
                 "count": len(catch_up_bursts),
@@ -335,6 +358,15 @@ class TelemetryLogger:
             },
             "backend": backend_info,
         }
+        generation_counts = self.generation_status_counts
+        summary.update(
+            {
+                "cancelled_generation_count": generation_counts.get("cancelled", 0),
+                "dropped_conflict_count": generation_counts.get("dropped_conflict", 0),
+                "dropped_backend_count": generation_counts.get("dropped_backend", 0),
+                "released_count": generation_counts.get("released", 0),
+            }
+        )
         if self.schedule_summary is not None:
             summary["schedule"] = self.schedule_summary
         return summary

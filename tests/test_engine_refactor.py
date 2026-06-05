@@ -326,6 +326,45 @@ class TestWinBackendDuplicateDownProtection:
         assert 0x15 in result.sent
 
 
+def _make_contract_backend(kind: str):
+    if kind == "dry":
+        return DryRunBackend()
+
+    backend = WinSendInputBackend.__new__(WinSendInputBackend)
+    backend.active_keys = set()
+    backend.possibly_active_keys = set()
+    backend.failed_release_keys = set()
+    backend.last_error = None
+
+    def mock_send(scan_codes, key_up=False):
+        return None
+
+    backend.inputs_module = types.SimpleNamespace(send_scan_code_batch=mock_send)
+    return backend
+
+
+@pytest.mark.parametrize("backend_kind", ("dry", "win"))
+def test_tracked_backends_share_down_up_dedup_contract(backend_kind):
+    backend = _make_contract_backend(backend_kind)
+
+    results = [
+        backend.key_down((0x15, 0x16)),
+        backend.key_down((0x16, 0x17)),
+        backend.key_up((0x15, 0x18)),
+        backend.key_up((0x15, 0x17)),
+    ]
+
+    assert [
+        (result.sent, result.skipped_duplicates, result.success)
+        for result in results
+    ] == [
+        ((0x15, 0x16), (), True),
+        ((0x17,), (0x16,), True),
+        ((0x15,), (0x18,), True),
+        ((0x17,), (0x15,), True),
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FrameTimingPolicy via --fps
 # ─────────────────────────────────────────────────────────────────────────────

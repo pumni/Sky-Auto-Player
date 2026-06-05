@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Literal
 
@@ -14,8 +14,19 @@ GenerationStatus = Literal[
     "released",
     "dropped_conflict",
     "dropped_backend",
+    "dropped_expired",
     "cancelled",
 ]
+GENERATION_STATUSES: tuple[GenerationStatus, ...] = (
+    "scheduled",
+    "active",
+    "release_pending",
+    "released",
+    "dropped_conflict",
+    "dropped_backend",
+    "dropped_expired",
+    "cancelled",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +164,11 @@ class RuntimeDispatchCoordinator:
     def is_finished(self) -> bool:
         return self.cursor >= len(self.schedule.batches) and not self.pending_by_generation
 
+    def generation_status_counts(self) -> dict[str, int]:
+        """Return counts for every runtime generation terminal/intermediate status."""
+        counts = Counter(self.status_by_generation.values())
+        return {status: counts[status] for status in GENERATION_STATUSES}
+
     def pop_due_pending(self, now_us: int) -> tuple[PendingRelease, ...]:
         due = sorted(
             (
@@ -202,7 +218,22 @@ class RuntimeDispatchCoordinator:
                 scheduled_down_us=intent.scheduled_us,
                 down_dispatch_started_us=dispatch_started_us,
                 down_dispatch_completed_us=dispatch_completed_us,
-                release_not_before_us=dispatch_completed_us + self.min_hold_us,
+                # Anchor the visibility floor to the down DISPATCH START, not its completion.
+                #
+                # The game samples key STATE on frame boundaries, so the observed hold is
+                # (up_dispatch_started - down_dispatch_started): the SendInput latency of the down
+                # and of the up go through the same path and cancel. Anchoring to completion instead
+                # added one extra `send_duration` of hold on every note, which silently pushed
+                # same-key releases PAST the next authored down whenever the authored repeat interval
+                # sat just above min_hold (the common case for local_precise, where hold == min_hold).
+                # That made the runtime drop a note the scheduler had deemed feasible
+                # (interval >= min_hold) — the intermittent "missing notes" symptom.
+                #
+                # With the start anchor, scheduler feasibility (interval >= min_hold) implies runtime
+                # feasibility: by the time the next same-key down is due, release_not_before has been
+                # reached, so the authored up is released first (up-before-down at the shared
+                # deadline) and the repeat presses on time. See docs/timing-principles.md §7.
+                release_not_before_us=dispatch_started_us + self.min_hold_us,
             )
             self.status_by_generation[intent.generation_id] = "active"
 
@@ -220,6 +251,11 @@ class RuntimeDispatchCoordinator:
             else:
                 playable.append(intent)
         return tuple(playable), tuple(conflicts)
+
+    def drop_expired_downs(self, intents: tuple[RuntimeKeyIntent, ...]) -> None:
+        for intent in intents:
+            if intent.generation_id is not None:
+                self.status_by_generation[intent.generation_id] = "dropped_expired"
 
     def request_releases(
         self,
