@@ -38,8 +38,8 @@ An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape ha
 | Profile | `min_hold_frames` | `min_hold_unframed_us` | Intent |
 | :--- | :---: | :---: | :--- |
 | `local_precise` | 1.0 | 22000 | Sharpest local visibility profile (no margin) |
-| `audience_safe` | 1.02 | 18000 | Audience-tested sharp profile |
-| `balanced` | 1.01 | 17000 | General default with more local-frame body |
+| `audience_safe` | 1.1 | 18000 | Audience-tested sharp profile |
+| `balanced` | 1.05 | 17000 | General default with more local-frame body |
 
 `dense_safe` was removed. Fast repeat or schedule-stress recommendations now select `local_precise` together with tempo reduction.
 

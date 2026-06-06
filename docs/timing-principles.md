@@ -74,8 +74,8 @@ Telemetry shows that the game-observed hold duration tracks completion-to-comple
 The project defines three built-in profiles in [config.py](../src/sky_music/config.py):
 
 * **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0` (zero margin). It represents the absolute physical floor of the game.
-* **`balanced`:** The general default profile. Uses `min_hold_frames = 1.01`, adding a small buffer over the host frame boundary to prevent edge-case misses.
-* **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.02`. 
+* **`balanced`:** The general default profile. Uses `min_hold_frames = 1.05`, adding a small buffer over the host frame boundary to prevent edge-case misses.
+* **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.1`. 
 
 ### Online Audience Considerations
 At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94 ms at 144 FPS). If online listeners are running at 60 FPS, their clients sample at 16.67 ms intervals and will miss these brief events. Thus, when playing in online rooms, users should use `audience_safe` or calibrate their local FPS to match the audience (typically 60 FPS) to ensure remote registration.

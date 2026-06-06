@@ -82,12 +82,12 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
         ("local-precise", 30, 33334, 33334),
         ("local-precise", 60, 16667, 16667),
         ("local-precise", 144, 6945, 6945),
-        ("balanced", 30, 33668, 33668),
-        ("balanced", 60, 16834, 16834),
-        ("balanced", 144, 7015, 7015),
-        ("audience-safe", 30, 34001, 34001),
-        ("audience-safe", 60, 17001, 17001),
-        ("audience-safe", 144, 7084, 7084),
+        ("balanced", 30, 35001, 35001),
+        ("balanced", 60, 17501, 17501),
+        ("balanced", 144, 7293, 7293),
+        ("audience-safe", 30, 36668, 36668),
+        ("audience-safe", 60, 18334, 18334),
+        ("audience-safe", 144, 7640, 7640),
     ],
 )
 def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
@@ -112,5 +112,5 @@ def test_high_fps_profiles_follow_declared_frame_intents():
     audience = PlaybackSessionContext(profile_name="audience-safe", fps=144).resolve_effective_policy(cfg)
 
     assert local.hold_us == 6945
-    assert audience.hold_us == 7084
-    assert balanced.hold_us == 7015
+    assert audience.hold_us == 7640
+    assert balanced.hold_us == 7293

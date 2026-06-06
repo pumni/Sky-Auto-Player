@@ -79,7 +79,7 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
         "focus_restore_grace_us": 50000,
     },
     "balanced": {
-        "min_hold_frames": 1.01,
+        "min_hold_frames": 1.05,
         "min_hold_unframed_us": 17000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 100000,
@@ -87,7 +87,7 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "audience_safe": {
         # Deliberately sharp frame-relative audience profile. At high local FPS this no longer
         # guarantees a fixed remote-client visibility wall; see floor-removal-three-profile-plan.
-        "min_hold_frames": 1.02,
+        "min_hold_frames": 1.1,
         "min_hold_unframed_us": 18000,
         "spin_threshold_us": 500,
         "focus_restore_grace_us": 150000,
