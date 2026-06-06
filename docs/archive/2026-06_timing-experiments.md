@@ -238,7 +238,7 @@ surface còn sống. T2/T3/T4 giữ vai trò giải thích và định hướng 
   (Phải đặt CẢ `--hold-ms` lẫn `--min-hold-ms` vì clamp hold hợp nhất lấy `max(min_hold, …)`.)
   Thu mỗi lần, đếm onset.
 - **Đo:** hold nhỏ nhất mà vẫn đủ 15/15 onset.
-- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @30 reliable 32 ms (31 rớt), @60 reliable 17 ms, @144
+- **✅ KẾT QUẢ ĐÃ ĐO (in-game measurements):** @30 reliable 32 ms (31 rớt), @60 reliable 17 ms, @144
   reliable 7 ms đạt (1.0 frame) → sàn thật ≈ **1 frame** ở cả ba FPS (tuyến tính sạch). Hold dưới mép
   đăng ký theo xác suất.
 - **Kết luận:** game đọc **state** theo frame, sàn visibility local của nốt đơn = **1.0 frame**.
@@ -258,7 +258,7 @@ surface còn sống. T2/T3/T4 giữ vai trò giải thích và định hướng 
   `uv run python -m main --song TEST_repeat_gap --fps 0 --hold-ms 24 --min-hold-ms 24 --debug-csv`.
   Thu, đếm onset MỖI block (mỗi block 10 lần bấm cùng phím).
 - **Đo:** block có gap nhỏ nhất mà vẫn đủ 10/10 onset.
-- **✅ KẾT QUẢ ĐÃ ĐO (result.md):** @60 reliable **24 ms** (1.44 frame), @144 reliable **16 ms** (2.3
+- **✅ KẾT QUẢ ĐÃ ĐO (in-game measurements):** @60 reliable **24 ms** (1.44 frame), @144 reliable **16 ms** (2.3
   frame). Ở 144 gap tin cậy >> 1.5 frame → có vẻ bị **tường thời gian cố định ~16–18 ms** chi phối
   (cùng họ với bucket/cadence nội bộ ở T3), không phải bội số frame thuần.
 - **Kết luận:** mechanism lịch sử gợi ý `actual UP→DOWN gap ≥ max(1.5×frame, ~17–18 ms)`, nhưng
@@ -344,7 +344,7 @@ ghi là mechanism, counterfactual, hoặc supporting evidence.
 
 ### O3 — The real remote no-drop floor (sàn hold/min_hold audience theo số liệu) — **CÒN MỞ**
 
-> **Trạng thái (result.md):** user **gác có chủ đích** để làm chuẩn local trước ("xử lý tốt local thì
+> **Trạng thái (in-game measurements):** user **gác có chủ đích** để làm chuẩn local trước ("xử lý tốt local thì
 > remote cũng tốt"). Sau refactor, audience_safe khác local_precise chỉ ở sàn → đây là nơi DUY NHẤT
 > còn lý do tồn tại của audience_safe; cần O3 để chứng minh sàn hold/min_hold nào thật sự cần.
 

@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: Giao diện Textual đã được triển khai đầy đủ và trở thành mặc định; kế hoạch này là lịch sử. Việc xoá bỏ Classic UI cũ là một task code riêng biệt nằm ngoài phạm vi này.
+
 # Kế hoạch đại tu UI Picker → Textual (bản thực thi)
 
 > **Đối tượng đọc:** AI/kỹ sư **thực thi** refactor. Tài liệu này tự chứa — không cần

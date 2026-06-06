@@ -7,7 +7,7 @@
 > Mục đích: phân loại từng tham số timing theo **tác dụng thật đã đo/đã chứng minh**, để dọn sạch
 > các cần gạt "nêu ra nhưng vô dụng" (lãng phí + khó maintain) TRƯỚC khi tinh chỉnh giá trị.
 > Đây là bản thiết kế cho đợt refactor — chưa implement. Nguồn số đo: [`timing-experiments.md`](timing-experiments.md)
-> (Part 1 T1–T4) và [`result.md`](result.md) (kết quả thực đo của user, 2026-06).
+> (Part 1 T1–T4) và user in-game measurements (kết quả thực đo của user, 2026-06).
 
 > ⚠️ **SUPERSEDED NOTE (2026-06-04).** Kết luận ban đầu trong file này còn giữ `release_gap`.
 > Corpus/timeline audit sau đó cho thấy `release_gap` gần như không bind trên bài thật và làm profile
@@ -56,7 +56,7 @@ Vì nốt đầu (source=0) bị `max(0, …)` ghim về 0 trong khi các nốt 
 cách ĐẦU TIÊN bị nén đúng bằng lead**; mọi khoảng sau không đổi. Nếu nốt đầu có offset > lead thì
 ngay cả gap đầu cũng không đổi → lead **hoàn toàn vô hình**.
 
-### 1.3 Đối chiếu thực đo (O1, result.md)
+### 1.3 Đối chiếu thực đo (O1, in-game measurements)
 
 User đo `--input-lead-ms` ∈ {0, 8, 20} bằng metronome reference: **mọi giá trị cho offset như nhau**
 (~20ms sớm với latency-comp −20ms). Khớp kết luận: offset ~20ms là của DAW/tick game (T3), **không
@@ -274,6 +274,6 @@ for name in ['local_precise','balanced','dense_safe','audience_safe']:
 
 ## 7. Liên quan
 
-- Số đo gốc: [`timing-experiments.md`](timing-experiments.md), [`result.md`](result.md)
+- Số đo gốc: [`timing-experiments.md`](timing-experiments.md), in-game measurements
 - Mô hình giá trị: [`timing-profile-frame-model.md`](timing-profile-frame-model.md)
 - Nguyên tắc & Appendix A: [`timing-principles.md`](timing-principles.md)
