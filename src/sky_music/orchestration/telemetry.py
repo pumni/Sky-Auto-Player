@@ -9,6 +9,9 @@ from sky_music.infrastructure.backend import BackendHealth
 
 class TelemetryLogger:
     """Records precise microsecond timing metrics into clean CSV and companion summary JSON files for calibration."""
+    last_picker_cleanup: dict | None = None
+    last_thread_census: dict | None = None
+
     def __init__(
         self,
         song_name: str,
@@ -463,6 +466,10 @@ class TelemetryLogger:
         )
         if self.schedule_summary is not None:
             summary["schedule"] = self.schedule_summary
+        if TelemetryLogger.last_picker_cleanup is not None:
+            summary["background"] = {
+                "picker_cleanup": TelemetryLogger.last_picker_cleanup
+            }
         return summary
         
     def save(self) -> None:

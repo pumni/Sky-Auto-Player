@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.infrastructure.background import ResourceState, WorkerSnapshot
 from sky_music.ui.picker_metadata import (
     compute_song_ui_metadata_payloads,
     hydrate_and_fill_raw_metadata,
@@ -55,15 +56,27 @@ class MetadataCoordinator:
         self._app = app
         self._session = session
         self._cfg = cfg
-        self._closed = False
+        self._state = ResourceState.OPEN
+        self._last_error: str | None = None
         
         # Dedicated sequential coordinator executor
         self._coord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-metadata-coord")
         self._coord_future: Future[None] | None = None
 
+    @property
+    def name(self) -> str:
+        return "textual-picker-metadata"
+
+    @property
+    def phase(self) -> str:
+        return "picker"
+
+    def _should_stop(self) -> bool:
+        return self._state is not ResourceState.OPEN
+
     def refresh(self, paths: list[Path]) -> None:
         """Begin progressive background metadata warming, hydration, and analysis for all paths."""
-        if self._closed:
+        if self._should_stop():
             return
         all_paths = list(paths)
         if not all_paths:
@@ -77,25 +90,64 @@ class MetadataCoordinator:
         # Submit the new list of paths to be processed in the background thread.
         self._coord_future = self._coord_executor.submit(self._warm_and_process_all_paths, all_paths)
 
+    def cancel(self) -> None:
+        if self._state == ResourceState.OPEN:
+            self._state = ResourceState.CLOSING
+        if self._coord_future is not None and not self._coord_future.done():
+            self._coord_future.cancel()
+
     def close(self, *, wait: bool = False) -> None:
-        self._closed = True
+        if self._state == ResourceState.CLOSED:
+            return
+        if self._state == ResourceState.OPEN:
+            self._state = ResourceState.CLOSING
+        if self._coord_future is not None and not self._coord_future.done():
+            self._coord_future.cancel()
         if self._coord_executor is not None:
-            self._coord_executor.shutdown(wait=wait, cancel_futures=True)
+            try:
+                try:
+                    self._coord_executor.shutdown(wait=wait, cancel_futures=True)
+                except TypeError:
+                    self._coord_executor.shutdown(wait=wait)
+                if wait:
+                    self._state = ResourceState.CLOSED
+            except Exception as exc:
+                self._state = ResourceState.FAILED
+                self._last_error = str(exc)
+                raise exc
+
+    def snapshot(self) -> WorkerSnapshot:
+        pending = 0
+        running = 0
+        if self._coord_future is not None and not self._coord_future.done():
+            if self._coord_future.running():
+                running = 1
+            else:
+                pending = 1
+        return WorkerSnapshot(
+            name=self.name,
+            phase=self.phase,
+            closed=self._state == ResourceState.CLOSED,
+            pending_count=pending,
+            running_count=running,
+            state=self._state.value,
+            last_error=self._last_error,
+        )
 
     def _refresh_ui_from_thread(self) -> None:
-        if self._closed:
+        if self._should_stop():
             return
         loop = getattr(self._app, "_loop", None)
         if loop is not None and loop.is_closed():
-            self._closed = True
+            self._state = ResourceState.CLOSED
             return
         try:
             self._app.call_from_thread(self._app.refresh_metadata_rows)
         except RuntimeError:
-            self._closed = True
+            self._state = ResourceState.CLOSED
 
     def _warm_and_process_all_paths(self, paths: list[Path]) -> None:
-        if self._closed:
+        if self._should_stop():
             return
 
         # Step 1: Warm SQLite cache for all paths in a single efficient operation
@@ -105,7 +157,7 @@ class MetadataCoordinator:
         except Exception:
             pass
 
-        if self._closed:
+        if self._should_stop():
             return
 
         # Step 2: Hydrate cache from SQLite for specific paths and populate raw note stats
@@ -116,13 +168,13 @@ class MetadataCoordinator:
         except Exception:
             pass
 
-        if self._closed:
+        if self._should_stop():
             return
 
         # Step 3: Find any paths that still need full scheduler analysis
         pending = []
         for path in paths:
-            if self._closed:
+            if self._should_stop():
                 return
             meta = peek_cached_song_ui_metadata(path, self._session, self._cfg)
             if meta is None or not meta.analyzed:
@@ -137,7 +189,7 @@ class MetadataCoordinator:
         session_payload = session_to_worker_payload(self._session)
         
         for i in range(0, len(pending), batch_size):
-            if self._closed:
+            if self._should_stop():
                 return
             batch = pending[i : i + batch_size]
             try:
@@ -146,7 +198,7 @@ class MetadataCoordinator:
                     session_payload,
                     self._cfg,
                 )
-                if self._closed:
+                if self._should_stop():
                     return
                 changed_risk = store_computed_song_ui_metadata_payloads(payloads, self._session, self._cfg)
                 if changed_risk:

@@ -7,7 +7,11 @@ from typing import Any, Protocol, Tuple, Optional
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
-from sky_music.infrastructure.realtime import MmcssRegistration, create_realtime_sleeper
+from sky_music.infrastructure.realtime import (
+    MmcssRegistration,
+    RealtimeProcessScope,
+    create_realtime_sleeper,
+)
 from sky_music.orchestration.telemetry import TelemetryLogger
 from sky_music.infrastructure.timing import Clock, Sleeper, PerfCounterClock, RealSleeper, SleepPolicy, PreciseSleeper
 from sky_music.infrastructure.focus import FocusGuard, NoopFocusGuard, Win32SkyFocusGuard
@@ -1078,6 +1082,11 @@ class PlaybackEngine:
             except Exception:
                 pass
 
+        # Verify no picker-phase worker thread survived into playback.  The picker scope is closed
+        # with wait=True before this point; this is the runtime backstop for that contract, catching
+        # drift the compile-time static guard cannot (e.g. a future feature spawning a worker).
+        self._record_thread_census()
+
         # Wait for initial focus if required to prevent "Focus lost" showing immediately at start
         if self.require_focus and not self.focus_guard.is_active():
             self._release_all_and_cancel_runtime()
@@ -1097,18 +1106,60 @@ class PlaybackEngine:
 
         coordinator = RuntimeDispatchCoordinator(self.runtime_schedule, self.min_hold_us)
         self._runtime_coordinator = coordinator
-        state = PlaybackState(start_perf=self.clock.now_us())
-        if self._should_use_dispatch_thread():
-            return self._run_threaded_dispatch(coordinator, state)
 
-        command_source = DirectCommandSource(self.controls)
-        focus_signal = DirectFocusSignal(self)
-        progress_sink = DirectProgressSink(self.renderer, self.song.name)
+        # Pause cyclic GC for the whole dispatch so a mid-send GC pause cannot stall the precise
+        # SendInput loop (thread scheduling is handled by MMCSS, not a process priority bump).
+        # Re-enabled on exit.  The schedule's perf anchor (start_perf) is captured INSIDE the scope,
+        # after the one-shot gc.collect(), so pre-playback collection cannot delay the dispatch
+        # thread start and compress the first onsets.
+        with RealtimeProcessScope():
+            state = PlaybackState(start_perf=self.clock.now_us())
+            if self._should_use_dispatch_thread():
+                return self._run_threaded_dispatch(coordinator, state)
 
-        return self._run_dispatch(
-            coordinator,
-            state,
-            command_source=command_source,
-            focus_signal=focus_signal,
-            progress_sink=progress_sink,
-        )
+            command_source = DirectCommandSource(self.controls)
+            focus_signal = DirectFocusSignal(self)
+            progress_sink = DirectProgressSink(self.renderer, self.song.name)
+
+            return self._run_dispatch(
+                coordinator,
+                state,
+                command_source=command_source,
+                focus_signal=focus_signal,
+                progress_sink=progress_sink,
+            )
+
+    # Picker workers use these thread-name prefixes; none may be alive once playback starts.
+    _PICKER_WORKER_THREAD_PREFIXES = (
+        "sky-metadata-coord",
+        "sky-picker-meta",
+        "sky-picker-cache",
+    )
+
+    def _record_thread_census(self) -> str | None:
+        """Log/record any picker-phase worker threads still alive at playback start.
+
+        Returns the comma-joined offending thread names (or None when clean).  Records structured
+        evidence on ``TelemetryLogger`` alongside the picker-cleanup snapshot.  Diagnostic only:
+        a leak is surfaced loudly but does not abort an otherwise-ready playback.
+        """
+        leaked = [
+            t.name
+            for t in threading.enumerate()
+            if t.is_alive()
+            and any(t.name.startswith(prefix) for prefix in self._PICKER_WORKER_THREAD_PREFIXES)
+        ]
+        from sky_music.orchestration.telemetry import TelemetryLogger
+
+        TelemetryLogger.last_thread_census = {
+            "clean": not leaked,
+            "leaked_threads": leaked,
+        }
+        if leaked:
+            from sky_music.platform.win32 import inputs
+
+            inputs.debug_log(
+                f"[background] WARNING picker worker thread(s) still alive at [play] start: {leaked}"
+            )
+            return ", ".join(leaked)
+        return None

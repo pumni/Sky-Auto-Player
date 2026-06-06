@@ -5,7 +5,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from sky_music.config import AppConfig
+from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import get_song_choices
 from sky_music.ui.picker_metadata import SongUiMetadata
 from sky_music.ui.textual_app import app as app_module
@@ -14,6 +17,8 @@ from sky_music.ui.textual_app.app import (
     SkyPickerApp,
     SongChoice,
     _metadata_cells,
+    _picker_cleanup_failed,
+    choose_song_interactively_textual,
     rank_song_choices,
 )
 from sky_music.ui.picker_theme import THEME_PRESETS, remove_accents
@@ -32,15 +37,39 @@ class FakeMetadataCoordinator:
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         self.refreshed: list[list[Path]] = []
         self.close_waits: list[bool] = []
+        self.shutdown_started = False
         self.closed = False
         self.instances.append(self)
+
+    @property
+    def name(self) -> str:
+        return "textual-picker-metadata"
+
+    @property
+    def phase(self) -> str:
+        return "picker"
 
     def refresh(self, paths: list[Path]) -> None:
         self.refreshed.append(paths)
 
+    def cancel(self) -> None:
+        self.shutdown_started = True
+
     def close(self, *, wait: bool = False) -> None:
         self.close_waits.append(wait)
-        self.closed = True
+        self.shutdown_started = True
+        if wait:
+            self.closed = True
+
+    def snapshot(self) -> WorkerSnapshot:
+        from sky_music.infrastructure.background import WorkerSnapshot
+        return WorkerSnapshot(
+            name=self.name,
+            phase=self.phase,
+            closed=self.closed,
+            pending_count=0,
+            running_count=0,
+        )
 
 
 def run_picker(coro: Any) -> Any:
@@ -254,8 +283,9 @@ def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     app = run_picker(_run_app(actions))
     assert app.return_value is None
     assert persisted == ["local-precise"]
+    assert FakeMetadataCoordinator.instances[0].shutdown_started is True
     assert FakeMetadataCoordinator.instances[0].closed is True
-    assert FakeMetadataCoordinator.instances[0].close_waits == [False]
+    assert FakeMetadataCoordinator.instances[0].close_waits == [True]
     assert len(FakeMetadataCoordinator.instances) >= 2
 
 
@@ -520,3 +550,77 @@ def test_double_click_row_selects_song(monkeypatch) -> None:
     app = run_picker(_run_app(actions))
     assert app.return_value is not None
     assert app.return_value.song_path == SONGS[1]
+
+
+class FailingCloseCoordinator(FakeMetadataCoordinator):
+    """Coordinator whose final close(wait=True) cannot stop its worker."""
+
+    def close(self, *, wait: bool = False) -> None:
+        self.close_waits.append(wait)
+        self.shutdown_started = True
+        raise RuntimeError("boom: executor did not stop")
+
+
+def test_picker_cleanup_failed_predicate() -> None:
+    # Missing record => clean (no picker ran); explicit ok=False or absent ok => failed.
+    assert _picker_cleanup_failed(None) is False
+    assert _picker_cleanup_failed({"ok": True}) is False
+    assert _picker_cleanup_failed({"ok": False}) is True
+    assert _picker_cleanup_failed({}) is True
+
+
+def test_textual_cleanup_failure_is_recorded(monkeypatch) -> None:
+    """on_unmount must record ok=False (with the error) when a worker cannot be stopped."""
+    from sky_music.orchestration.telemetry import TelemetryLogger
+
+    TelemetryLogger.last_picker_cleanup = None
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FailingCloseCoordinator)
+
+    async def scenario() -> None:
+        app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("escape")
+
+    # on_unmount re-raises after recording; tolerate whichever way Textual routes it.
+    try:
+        run_picker(scenario())
+    except Exception:
+        pass
+
+    cleanup = TelemetryLogger.last_picker_cleanup
+    assert cleanup is not None
+    assert cleanup["ok"] is False
+    assert "boom" in (cleanup.get("error") or "")
+
+
+def test_choose_textual_aborts_on_failed_cleanup(monkeypatch) -> None:
+    """A failed cleanup must abort before playback, independent of Textual exception routing."""
+    from sky_music.orchestration.telemetry import TelemetryLogger
+
+    def fake_run(self: SkyPickerApp) -> None:
+        TelemetryLogger.last_picker_cleanup = {"ok": False, "error": "boom", "resources": []}
+        return None
+
+    monkeypatch.setattr(SkyPickerApp, "run", fake_run)
+    with pytest.raises(RuntimeError, match="cleanup failed before playback"):
+        choose_song_interactively_textual()
+
+
+def test_choose_textual_returns_result_on_clean_cleanup(monkeypatch) -> None:
+    from sky_music.orchestration.telemetry import TelemetryLogger
+
+    sentinel = SongPickerResult(
+        song_path=Path("songs/Alpha.json"),
+        action="play",
+        profile_name="balanced",
+        tempo_scale=1.0,
+    )
+
+    def fake_run(self: SkyPickerApp) -> SongPickerResult:
+        TelemetryLogger.last_picker_cleanup = {"ok": True, "resources": []}
+        return sentinel
+
+    monkeypatch.setattr(SkyPickerApp, "run", fake_run)
+    assert choose_song_interactively_textual() is sentinel

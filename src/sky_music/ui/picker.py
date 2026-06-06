@@ -1,6 +1,6 @@
 import os
 import time
-from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -336,29 +336,9 @@ def choose_song_interactively(
     verbose_hud_mode = user_cfg.verbose_hud
     telemetry_mode = user_cfg.telemetry_enabled_by_default
 
-    metadata_process_executor: ProcessPoolExecutor | None = None
-    metadata_thread_executor: ThreadPoolExecutor | None = None
-    metadata_uses_process_pool = True
-    try:
-        # Phase 2B: 2 CPU workers – one processes the selected song immediately
-        # while the second handles the rest of the visible window in parallel.
-        # On Windows the first worker is pre-spawned via worker_process_warmup()
-        # so spawn latency (~200-500 ms) is overlapped with the first UI render.
-        metadata_process_executor = ProcessPoolExecutor(max_workers=2)
-        metadata_executor = metadata_process_executor
-        # Phase 2B: trigger worker spawn NOW so the process is ready by the time
-        # the first real metadata batch arrives.  Fire-and-forget is intentional.
-        try:
-            metadata_process_executor.submit(worker_process_warmup)
-        except Exception:
-            pass
-    except Exception:
-        metadata_uses_process_pool = False
-        metadata_thread_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sky-picker-meta")
-        metadata_executor = metadata_thread_executor
-
-    cache_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-picker-cache")
-    retired_metadata_executors: list[Executor] = []
+    from sky_music.ui.picker_background import ClassicPickerBackgroundHelper
+    bg_helper = ClassicPickerBackgroundHelper()
+    bg_helper.setup_resources(worker_process_warmup)
     app_ref: Any | None = None
 
     commands = [
@@ -877,22 +857,8 @@ def choose_song_interactively(
                     )
                 except Exception:
                     # If a process worker breaks, fall back to thread backend.
-                    nonlocal metadata_uses_process_pool, metadata_process_executor
-                    nonlocal metadata_thread_executor, metadata_executor
-                    if metadata_uses_process_pool:
-                        metadata_uses_process_pool = False
-                        try:
-                            if metadata_process_executor is not None:
-                                retired_metadata_executors.append(metadata_process_executor)
-                                metadata_process_executor.shutdown(wait=False, cancel_futures=True)
-                        except Exception:
-                            pass
-                        metadata_process_executor = None
-                        if metadata_thread_executor is None:
-                            metadata_thread_executor = ThreadPoolExecutor(
-                                max_workers=2, thread_name_prefix="sky-picker-meta"
-                            )
-                        metadata_executor = metadata_thread_executor
+                    if bg_helper.metadata_uses_process_pool:
+                        bg_helper.handle_fallback()
 
                 if getattr(done_app, "is_done", False):
                     return
@@ -920,9 +886,9 @@ def choose_song_interactively(
             return on_done
 
         # Submit priority batch (selected song) if the slot is free.
-        if not priority_running and priority_paths:
+        if not priority_running and priority_paths and bg_helper.metadata_resource is not None:
             worker_paths, worker_session = _metadata_worker_payload(priority_paths, session)
-            pf = metadata_executor.submit(
+            pf = bg_helper.metadata_resource.submit(
                 compute_song_ui_metadata_payloads,
                 worker_paths,
                 worker_session,
@@ -932,9 +898,9 @@ def choose_song_interactively(
             pf.add_done_callback(_make_on_done("priority"))
 
         # Submit bulk batch (remaining visible songs) if the slot is free.
-        if not bulk_running and bulk_paths:
+        if not bulk_running and bulk_paths and bg_helper.metadata_resource is not None:
             worker_paths_bulk, worker_session_bulk = _metadata_worker_payload(bulk_paths, session)
-            bf = metadata_executor.submit(
+            bf = bg_helper.metadata_resource.submit(
                 compute_song_ui_metadata_payloads,
                 worker_paths_bulk,
                 worker_session_bulk,
@@ -997,7 +963,7 @@ def choose_song_interactively(
         # Combined cache-worker pass: disk-cached full metadata first, then cheap
         # raw stats so Time/Notes/density paint within a frame, well before the
         # heavier risk analysis arrives from the process pool.
-        future = cache_executor.submit(hydrate_and_fill_raw_metadata, paths, session, state.user_cfg)
+        future = bg_helper.cache_resource.submit(hydrate_and_fill_raw_metadata, paths, session, state.user_cfg)
         state.metadata_hydration_future = future
 
         def on_done(done_future: Future[int], done_generation: int = generation, done_app: Any = target_app) -> None:
@@ -1073,7 +1039,7 @@ def choose_song_interactively(
         # can derive an adaptive limit (max(500, N * 8)) instead of defaulting
         # to 500 when the library is large.
         song_paths_hint = list(state.song_choices)
-        future = cache_executor.submit(
+        future = bg_helper.cache_resource.submit(
             warm_persistent_metadata_cache,
             None,
             song_paths=song_paths_hint,
@@ -1469,12 +1435,50 @@ def choose_song_interactively(
         except Exception:
             pass
         try:
-            metadata_executor.shutdown(wait=True, cancel_futures=True)
-        except Exception:
-            pass
-        for retired_executor in retired_metadata_executors:
+            bg_helper.close()
+            from sky_music.platform.win32 import inputs
+            if getattr(inputs, "PLAYBACK_DEBUG", False):
+                for snap in bg_helper.picker_scope.snapshots():
+                    inputs.debug_log(
+                        f"[background] picker resource {snap.name} closed={snap.closed} "
+                        f"pending={snap.pending_count} running={snap.running_count}"
+                    )
+            bg_helper.picker_scope.assert_closed()
+            from sky_music.orchestration.telemetry import TelemetryLogger
+            TelemetryLogger.last_picker_cleanup = {
+                "ok": True,
+                "resources": [
+                    {
+                        "name": snap.name,
+                        "phase": snap.phase,
+                        "state": snap.state,
+                        "closed": snap.closed,
+                        "pending_count": snap.pending_count,
+                        "running_count": snap.running_count,
+                    }
+                    for snap in bg_helper.picker_scope.snapshots()
+                ]
+            }
+        except Exception as exc:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log(f"[background] Cleanup error in classic picker: {exc}")
+            from sky_music.orchestration.telemetry import TelemetryLogger
+            resources_list = []
             try:
-                retired_executor.shutdown(wait=True, cancel_futures=True)
+                for snap in bg_helper.picker_scope.snapshots():
+                    resources_list.append({
+                        "name": snap.name,
+                        "phase": snap.phase,
+                        "state": snap.state,
+                        "closed": snap.closed,
+                        "pending_count": snap.pending_count,
+                        "running_count": snap.running_count,
+                    })
             except Exception:
                 pass
-        cache_executor.shutdown(wait=True, cancel_futures=True)
+            TelemetryLogger.last_picker_cleanup = {
+                "ok": False,
+                "resources": resources_list,
+                "error": str(exc),
+            }
+            raise exc

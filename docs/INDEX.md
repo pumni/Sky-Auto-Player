@@ -23,6 +23,7 @@ These files represent the current system state and contracts:
 
 ## 2. Active References & Experiments
 * [2026-06_background-worker-lifecycle-refactor-brief.md](2026-06_background-worker-lifecycle-refactor-brief.md) — Active implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
+* [2026-06_background-worker-lifecycle-hardening-plan.md](2026-06_background-worker-lifecycle-hardening-plan.md) — Follow-up hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
   * **O10.6:** Focus restore grace safety margin (`focus_restore_grace_us`).

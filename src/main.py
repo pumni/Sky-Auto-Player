@@ -1081,11 +1081,33 @@ def _run_textual_selftest() -> int:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             self.closed = False
 
+        @property
+        def name(self) -> str:
+            return "selftest-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
         def refresh(self, _paths: list[Path]) -> None:
             return
 
+        def cancel(self) -> None:
+            pass
+
         def close(self, *, wait: bool = False) -> None:
             self.closed = True
+
+        def snapshot(self) -> object:
+            from sky_music.infrastructure.background import WorkerSnapshot
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                state="closed" if self.closed else "open",
+                pending_count=0,
+                running_count=0,
+            )
 
     async def run_picker_probe() -> None:
         original_get_song_choices = app_module.get_song_choices
@@ -1339,13 +1361,17 @@ def main() -> int:
             cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
             resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
 
-            picker_result = prompt_song_selection(
-                profile=canonical_profile_name(user_cfg.default_timing_profile),
-                tempo=TEMPO_SCALE,
-                dry_run=DRY_RUN_MODE,
-                fps=resolved_fps,
-                scan_code_mode=CURRENT_SCAN_CODE_MODE,
-            )
+            try:
+                picker_result = prompt_song_selection(
+                    profile=canonical_profile_name(user_cfg.default_timing_profile),
+                    tempo=TEMPO_SCALE,
+                    dry_run=DRY_RUN_MODE,
+                    fps=resolved_fps,
+                    scan_code_mode=CURRENT_SCAN_CODE_MODE,
+                )
+            except Exception as exc:
+                print(f"\n[ERROR] Playback aborted due to background worker cleanup failure: {exc}")
+                return 1
             if picker_result is None:
                 return 0
 

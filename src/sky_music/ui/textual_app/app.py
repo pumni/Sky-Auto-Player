@@ -37,6 +37,7 @@ from sky_music.ui.picker_metadata import (
 )
 from sky_music.ui.picker_theme import THEME_PRESETS, get_match_span, remove_accents
 from sky_music.ui.textual_app.workers import MetadataCoordinator
+from sky_music.infrastructure.background import BackgroundScope
 
 
 UNKNOWN_FIELD = "-"
@@ -620,7 +621,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.choices: list[SongChoice] = []
         self.filtered: list[SongChoice] = []
         self._marked_row_key: object | None = None
-        self.metadata = MetadataCoordinator(self, self.session, self.cfg)
+        self.picker_scope = BackgroundScope(phase="picker")
+        self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
         self._search_timer = None
 
     @staticmethod
@@ -689,9 +691,53 @@ class SkyPickerApp(App[SongPickerResult | None]):
         # real-time dispatch thread.  Profile/fps changes still use the non-waiting close path via
         # _replace_metadata_coordinator(), but app shutdown waits for the active job to quiesce.
         try:
-            self.metadata.close(wait=True)
-        except TypeError:
-            self.metadata.close()
+            self.picker_scope.close_all(wait=True)
+            from sky_music.platform.win32 import inputs
+            if getattr(inputs, "PLAYBACK_DEBUG", False):
+                for snap in self.picker_scope.snapshots():
+                    inputs.debug_log(
+                        f"[background] picker resource {snap.name} closed={snap.closed} "
+                        f"pending={snap.pending_count} running={snap.running_count}"
+                    )
+            self.picker_scope.assert_closed()
+            from sky_music.orchestration.telemetry import TelemetryLogger
+            TelemetryLogger.last_picker_cleanup = {
+                "ok": True,
+                "resources": [
+                    {
+                        "name": snap.name,
+                        "phase": snap.phase,
+                        "state": snap.state,
+                        "closed": snap.closed,
+                        "pending_count": snap.pending_count,
+                        "running_count": snap.running_count,
+                    }
+                    for snap in self.picker_scope.snapshots()
+                ]
+            }
+        except Exception as exc:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
+            from sky_music.orchestration.telemetry import TelemetryLogger
+            resources_list = []
+            try:
+                for snap in self.picker_scope.snapshots():
+                    resources_list.append({
+                        "name": snap.name,
+                        "phase": snap.phase,
+                        "state": snap.state,
+                        "closed": snap.closed,
+                        "pending_count": snap.pending_count,
+                        "running_count": snap.running_count,
+                    })
+            except Exception:
+                pass
+            TelemetryLogger.last_picker_cleanup = {
+                "ok": False,
+                "resources": resources_list,
+                "error": str(exc),
+            }
+            raise exc
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "search":
@@ -913,14 +959,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.exit(None)
 
     def _replace_metadata_coordinator(self) -> None:
-        self.metadata.close()
+        self.picker_scope.retire(self.metadata)
+        self.metadata.cancel()
         self.session = PlaybackSessionContext(
             profile_name=self.profile_name,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
         )
-        self.metadata = MetadataCoordinator(self, self.session, self.cfg)
+        self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
         self._render_status()
         self._render_table()
         self._render_detail()
@@ -1137,6 +1184,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.metadata.refresh(paths)
 
 
+def _picker_cleanup_failed(cleanup: dict | None) -> bool:
+    """True when the recorded picker cleanup proves a worker could not be stopped.
+
+    A missing record (``None``) is treated as clean: the unmount path always records a result, so
+    ``None`` only happens when no picker actually ran. Only an explicit ``ok=False`` is an abort.
+    """
+    return bool(cleanup is not None and not cleanup.get("ok", False))
+
+
 def choose_song_interactively_textual(
     theme_name: str | None = None,
     initial_profile: str = "balanced",
@@ -1153,7 +1209,21 @@ def choose_song_interactively_textual(
         initial_dry_run=initial_dry_run,
         scan_code_mode=scan_code_mode,
     )
-    return app.run()
+    # Reset before the run so a stale record from an earlier picker session cannot mask (or fake)
+    # this run's cleanup outcome.  on_unmount() records ok=True/False as it tears the scope down.
+    from sky_music.orchestration.telemetry import TelemetryLogger
+
+    TelemetryLogger.last_picker_cleanup = None
+    result = app.run()
+
+    # Deterministic abort regardless of whether Textual propagates the on_unmount exception:
+    # if a picker worker could not be proven stopped, refuse to enter realtime playback.
+    if _picker_cleanup_failed(TelemetryLogger.last_picker_cleanup):
+        error = TelemetryLogger.last_picker_cleanup.get("error", "unknown error")
+        raise RuntimeError(
+            f"picker background worker cleanup failed before playback: {error}"
+        )
+    return result
 
 
 if __name__ == "__main__":

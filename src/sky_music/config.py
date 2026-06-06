@@ -73,7 +73,7 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         # hold is intentionally omitted from built-ins and derives from min_hold. Declare hold_*
         # explicitly only as an experiment/escape hatch; see hold-min-hold-unification-plan.md.
-        "min_hold_frames": 1,
+        "min_hold_frames": 1.02,
         "min_hold_unframed_us": 22000,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
