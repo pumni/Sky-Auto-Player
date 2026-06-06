@@ -22,8 +22,7 @@ These files represent the current system state and contracts:
 ---
 
 ## 2. Active References & Experiments
-* [2026-06_background-worker-lifecycle-refactor-brief.md](2026-06_background-worker-lifecycle-refactor-brief.md) — Active implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
-* [2026-06_background-worker-lifecycle-hardening-plan.md](2026-06_background-worker-lifecycle-hardening-plan.md) — Follow-up hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
+* [2026-06_wasapi-loopback-measurement-plan.md](2026-06_wasapi-loopback-measurement-plan.md) — Active implementation plan for automated after-send measurement using WASAPI loopback.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
   * **O10.6:** Focus restore grace safety margin (`focus_restore_grace_us`).
@@ -32,6 +31,8 @@ These files represent the current system state and contracts:
 
 ## 3. Historical Archives (`docs/archive/`)
 These files contain completed refactor plans, historic audits, and legacy design documents. They are read-only and include warning stamps specifying discrepancies with the current codebase.
+* `2026-06_background-worker-lifecycle-refactor-brief.md` — Implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
+* `2026-06_background-worker-lifecycle-hardening-plan.md` — Hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
 * `2026-06_completion-anchor-refactor-plan.md` — Implementation plan for completion-anchor.
 * `2026-06_runtime-hold-refactor-plan.md` — Historical scheduler anchor and runtime hold discussion.
 * `2026-06_timing-architecture-audit.md` — Audit that justified the removal of dead knobs.

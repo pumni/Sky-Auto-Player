@@ -73,7 +73,7 @@ DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
     "local_precise": {
         # hold is intentionally omitted from built-ins and derives from min_hold. Declare hold_*
         # explicitly only as an experiment/escape hatch; see hold-min-hold-unification-plan.md.
-        "min_hold_frames": 1.02,
+        "min_hold_frames": 1,
         "min_hold_unframed_us": 22000,
         "spin_threshold_us": 800,
         "focus_restore_grace_us": 50000,
@@ -113,7 +113,7 @@ class AppConfig:
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
     use_dispatch_thread:         bool          = True
-    input_path_warn_us:          int           = 300
+    input_path_warn_us:          int           = 3000
     rt_time_critical:            bool          = False
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)

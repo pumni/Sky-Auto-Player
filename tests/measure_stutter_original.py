@@ -262,143 +262,6 @@ def fmt_t(sec: float) -> str:
     return f"{m}:{s:05.2f}"
 
 
-def analyze_and_report(
-    sent: list[float],
-    heard: list[float],
-    *,
-    fps: int,
-    tol_ms: float = 120.0,
-    gap_ms: float = 30.0,
-    top: int = 15,
-    intended: int | None = None,
-    outcome_counts: dict[str, int] | None = None,
-) -> int:
-    """Run the alignment and output the three decisive verdicts."""
-    if intended is not None and outcome_counts is not None:
-        print(
-            f"[SENDER AUDIT] intended_down={intended} sent_down={outcome_counts['sent']} "
-            f"dropped_conflict={outcome_counts['dropped_conflict']} dropped_expired={outcome_counts['dropped_expired']} "
-            f"suppressed_stale_up={outcome_counts['suppressed_stale_up']}"
-        )
-        if outcome_counts["sent"] != intended:
-            print(
-                f"[GATE] ** sender did NOT emit every intended down ({outcome_counts['sent']}/{intended}). "
-                f"The {intended-outcome_counts['sent']} missing note(s) were lost BEFORE the game — "
-                f"audio is not clean ground truth for an after-send verdict. Investigate the scheduler/"
-                f"runtime drop first. **"
-            )
-        else:
-            print(f"[GATE] OK — sender emitted all {intended} intended downs; audio is valid ground truth.")
-
-    if fps:
-        print(f"[CONTEXT] fps={fps}  one frame = {1e6/fps/1000:.2f} ms")
-
-    if not sent or not heard:
-        print("Not enough data to align (need both sent downs and audio onsets).")
-        return 1
-
-    # ---- VALIDITY GATE: onset count must be plausible vs sent count ----
-    ratio = len(heard) / max(1, len(sent))
-    if not (0.7 <= ratio <= 1.5):
-        print(
-            f"\n[VALIDITY GATE] ** INVALID RECORDING — {len(heard)} onsets for {len(sent)} sent notes "
-            f"(ratio {ratio:.2f}, want 0.7–1.5). The verdicts below are NOT trustworthy. **\n"
-            f"   Too many onsets => sustained/melodic instrument + reverb, captured in-game background\n"
-            f"   music/ambience, or a dense/polyphonic song smearing notes together. Too few => the\n"
-            f"   instrument is too quiet or notes overlap.\n"
-            f"   FIX (per Appendix A.1): re-record with a PERCUSSIVE instrument (fast decay), MUTE the\n"
-            f"   in-game music/ambience, and use a CONTROLLED probe with well-separated notes, e.g.\n"
-            f"   `uv run play --song TEST_metro_alt_200 --fps 144 --timing-profile local-precise --debug-csv`\n"
-            f"   (or TEST_visibility). Validate the mechanism on a clean probe first, THEN dense songs.\n"
-            f"   You can also try tuning the detector (--sensitivity / --min-gap-ms) but a continuous\n"
-            f"   energy bed cannot be fixed by thresholds — fix the recording.\n"
-        )
-
-    # ---- align ----
-    tol = tol_ms / 1000.0
-    offset = best_offset(sent, heard, tol)
-    pairs, missing, extra = match(sent, heard, offset, tol)
-    # Refine: re-centre the offset on the median residual of matched pairs (removes the
-    # coarse-search bias and any constant clock skew), then re-match once.
-    if pairs:
-        med = statistics.median((h - s) for _, _, s, h in pairs)
-        offset += med
-        pairs, missing, extra = match(sent, heard, offset, tol)
-    print(
-        f"\n[ALIGN] recording offset = {offset*1000:.1f} ms; "
-        f"matched {len(pairs)}/{len(sent)} sent downs to onsets "
-        f"(tol ±{tol_ms:.0f} ms); unmatched onsets={len(extra)}"
-    )
-
-    # ---- 1. MISSING NOTES (sent but no audio) ----
-    print(f"\n=== 1. MISSING NOTES (sent by player, NO audio onset) : {len(missing)} ===")
-    if missing:
-        print("   These notes left the player but never sounded -> lost AFTER send (OS delivery or")
-        print("   game saw sub-frame hold). NOTE: a few near same-key fast repeats can be the game's")
-        print("   own re-trigger wall (Appendix A.4), not a bug. Listed as song-relative time:")
-        t0 = sent[0]
-        for si in missing[:top]:
-            print(f"     sent #{si:<4d} at song t={fmt_t(sent[si]-t0)}  (telemetry actual_us={int(sent[si]*1e6)})")
-        if len(missing) > top:
-            print(f"     ... and {len(missing)-top} more")
-    else:
-        print("   none — every sent down produced an audio onset (no notes lost after send).")
-
-    # ---- 2. STUTTER GAPS (audio IOI >> scheduled IOI) ----
-    print(f"\n=== 2. STUTTER GAPS (audio interval much larger than scheduled) ===")
-    # Build consecutive matched pairs to compare IOIs.
-    gap_rows = []
-    for a in range(len(pairs) - 1):
-        si0, _, s0, h0 = pairs[a]
-        si1, _, s1, h1 = pairs[a + 1]
-        if si1 != si0 + 1:
-            continue  # skip across a missing note (IOI undefined)
-        sched_ioi = s1 - s0
-        heard_ioi = h1 - h0
-        excess = heard_ioi - sched_ioi
-        gap_rows.append((excess, s0 - sent[0], sched_ioi, heard_ioi))
-    big = sorted((g for g in gap_rows if g[0] * 1000 >= gap_ms), key=lambda g: -g[0])
-    print(f"   {len(big)} gaps exceed +{gap_ms:.0f} ms over schedule "
-          f"(out of {len(gap_rows)} consecutive intervals)")
-    if big:
-        print(f"   {'song_t':>8}  {'sched_ms':>8}  {'heard_ms':>8}  {'excess_ms':>9}")
-        for excess, songt, sched, heard_ioi in big[:top]:
-            print(f"   {fmt_t(songt):>8}  {sched*1000:>8.1f}  {heard_ioi*1000:>8.1f}  {excess*1000:>+9.1f}")
-        print("   -> Cross-check these timestamps against where you HEARD the hitch.")
-        print("      If telemetry lateness at these rows is small (see logs CSV), the stall is")
-        print("      AFTER send (OS delivery / game). If telemetry is also late there, it is before send.")
-    else:
-        print("   none — no coarse stalls in the audio. The 'nấc' is then either sub-perceptual")
-        print("   timing scatter (see jitter below) or not present in this run.")
-
-    # ---- 3. GAME-ONLY JITTER ----
-    print(f"\n=== 3. GAME-ONLY JITTER (heard - sent, offset removed) ===")
-    resid = [(h - s) for _, _, s, h in pairs]  # h is already offset-removed in match()
-    if len(resid) > 2:
-        mean = statistics.mean(resid)
-        centred = [(r - mean) * 1000 for r in resid]
-        std = statistics.pstdev(centred)
-        spread = max(centred) - min(centred)
-        print(f"   residual std={std:.2f} ms  spread={spread:.2f} ms  (n={len(resid)})")
-        if std < 3.0:
-            print("   -> clean: heard timing tracks sent timing. No after-send timing problem.")
-        elif spread > 30.0:
-            print("   -> large/bimodal scatter (~tens of ms): consistent with the game-side bucket")
-            print("      jumps of Appendix A.10. Perceived as 'uneven', NOT a player-side stall;")
-            print("      not fixable from the player (lead/frame-align were removed for this reason).")
-        else:
-            print("   -> moderate scatter; inspect the STUTTER GAPS and telemetry lateness to localise.")
-    else:
-        print("   not enough matched pairs for jitter stats.")
-
-    print("\nDONE. Decision rule (docs/timing-principles.md §1):")
-    print("  missing>0 with GATE OK            -> notes lost AFTER send (OS delivery / sub-frame at game)")
-    print("  gaps with CLEAN telemetry IOI     -> stall is after send (OS/game), player is innocent")
-    print("  gaps that ALSO show in telemetry  -> stall is before send (scheduler/thread/timer/C-state)")
-    print("  only jitter, no gaps/missing      -> game-side scatter (A.10), not a true stutter")
-    return 0
-
-
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -436,17 +299,132 @@ def main() -> int:
 
     # ---- sent downs + gate ----
     sent, intended, counts = load_sent_downs(args.csv)
-
-    return analyze_and_report(
-        sent,
-        heard,
-        fps=args.fps,
-        tol_ms=args.tol_ms,
-        gap_ms=args.gap_ms,
-        top=args.top,
-        intended=intended,
-        outcome_counts=counts,
+    print(
+        f"[SENDER AUDIT] intended_down={counts['intended']} sent_down={counts['sent']} "
+        f"dropped_conflict={counts['dropped_conflict']} dropped_expired={counts['dropped_expired']} "
+        f"suppressed_stale_up={counts['suppressed_stale_up']}"
     )
+    if counts["sent"] != counts["intended"]:
+        print(
+            f"[GATE] ** sender did NOT emit every intended down ({counts['sent']}/{counts['intended']}). "
+            f"The {counts['intended']-counts['sent']} missing note(s) were lost BEFORE the game — "
+            f"audio is not clean ground truth for an after-send verdict. Investigate the scheduler/"
+            f"runtime drop first. **"
+        )
+    else:
+        print(f"[GATE] OK — sender emitted all {counts['intended']} intended downs; audio is valid ground truth.")
+
+    if args.fps:
+        print(f"[CONTEXT] fps={args.fps}  one frame = {1e6/args.fps/1000:.2f} ms")
+
+    if not sent or not heard:
+        print("Not enough data to align (need both sent downs and audio onsets).")
+        return 1
+
+    # ---- VALIDITY GATE: onset count must be plausible vs sent count ----
+    # If the detector finds far more (or fewer) onsets than notes sent, the recording is not
+    # clean ground truth: a spurious-onset bed lets the matcher attach any note to a nearby blip,
+    # so "missing" and "gaps" become artifacts. This is Appendix A.7 / hypothesis F (measurement
+    # error) and MUST be cleared before any verdict is trusted.
+    ratio = len(heard) / max(1, len(sent))
+    if not (0.7 <= ratio <= 1.5):
+        print(
+            f"\n[VALIDITY GATE] ** INVALID RECORDING — {len(heard)} onsets for {len(sent)} sent notes "
+            f"(ratio {ratio:.2f}, want 0.7–1.5). The verdicts below are NOT trustworthy. **\n"
+            f"   Too many onsets => sustained/melodic instrument + reverb, captured in-game background\n"
+            f"   music/ambience, or a dense/polyphonic song smearing notes together. Too few => the\n"
+            f"   instrument is too quiet or notes overlap.\n"
+            f"   FIX (per Appendix A.1): re-record with a PERCUSSIVE instrument (fast decay), MUTE the\n"
+            f"   in-game music/ambience, and use a CONTROLLED probe with well-separated notes, e.g.\n"
+            f"   `uv run play --song TEST_metro_alt_200 --fps 144 --timing-profile local-precise --debug-csv`\n"
+            f"   (or TEST_visibility). Validate the mechanism on a clean probe first, THEN dense songs.\n"
+            f"   You can also try tuning the detector (--sensitivity / --min-gap-ms) but a continuous\n"
+            f"   energy bed cannot be fixed by thresholds — fix the recording.\n"
+        )
+
+    # ---- align ----
+    tol = args.tol_ms / 1000.0
+    offset = best_offset(sent, heard, tol)
+    pairs, missing, extra = match(sent, heard, offset, tol)
+    # Refine: re-centre the offset on the median residual of matched pairs (removes the
+    # coarse-search bias and any constant clock skew), then re-match once.
+    if pairs:
+        med = statistics.median((h - s) for _, _, s, h in pairs)
+        offset += med
+        pairs, missing, extra = match(sent, heard, offset, tol)
+    print(
+        f"\n[ALIGN] recording offset = {offset*1000:.1f} ms; "
+        f"matched {len(pairs)}/{len(sent)} sent downs to onsets "
+        f"(tol ±{args.tol_ms:.0f} ms); unmatched onsets={len(extra)}"
+    )
+
+    # ---- 1. MISSING NOTES (sent but no audio) ----
+    print(f"\n=== 1. MISSING NOTES (sent by player, NO audio onset) : {len(missing)} ===")
+    if missing:
+        print("   These notes left the player but never sounded -> lost AFTER send (OS delivery or")
+        print("   game saw sub-frame hold). NOTE: a few near same-key fast repeats can be the game's")
+        print("   own re-trigger wall (Appendix A.4), not a bug. Listed as song-relative time:")
+        t0 = sent[0]
+        for si in missing[: args.top]:
+            print(f"     sent #{si:<4d} at song t={fmt_t(sent[si]-t0)}  (telemetry actual_us={int(sent[si]*1e6)})")
+        if len(missing) > args.top:
+            print(f"     ... and {len(missing)-args.top} more")
+    else:
+        print("   none — every sent down produced an audio onset (no notes lost after send).")
+
+    # ---- 2. STUTTER GAPS (audio IOI >> scheduled IOI) ----
+    print(f"\n=== 2. STUTTER GAPS (audio interval much larger than scheduled) ===")
+    # Build consecutive matched pairs to compare IOIs.
+    gap_rows = []
+    for a in range(len(pairs) - 1):
+        si0, _, s0, h0 = pairs[a]
+        si1, _, s1, h1 = pairs[a + 1]
+        if si1 != si0 + 1:
+            continue  # skip across a missing note (IOI undefined)
+        sched_ioi = s1 - s0
+        heard_ioi = h1 - h0
+        excess = heard_ioi - sched_ioi
+        gap_rows.append((excess, s0 - sent[0], sched_ioi, heard_ioi))
+    big = sorted((g for g in gap_rows if g[0] * 1000 >= args.gap_ms), key=lambda g: -g[0])
+    print(f"   {len(big)} gaps exceed +{args.gap_ms:.0f} ms over schedule "
+          f"(out of {len(gap_rows)} consecutive intervals)")
+    if big:
+        print(f"   {'song_t':>8}  {'sched_ms':>8}  {'heard_ms':>8}  {'excess_ms':>9}")
+        for excess, songt, sched, heard_ioi in big[: args.top]:
+            print(f"   {fmt_t(songt):>8}  {sched*1000:>8.1f}  {heard_ioi*1000:>8.1f}  {excess*1000:>+9.1f}")
+        print("   -> Cross-check these timestamps against where you HEARD the hitch.")
+        print("      If telemetry lateness at these rows is small (see logs CSV), the stall is")
+        print("      AFTER send (OS delivery / game). If telemetry is also late there, it is before send.")
+    else:
+        print("   none — no coarse stalls in the audio. The 'nấc' is then either sub-perceptual")
+        print("   timing scatter (see jitter below) or not present in this run.")
+
+    # ---- 3. GAME-ONLY JITTER ----
+    print(f"\n=== 3. GAME-ONLY JITTER (heard - sent, offset removed) ===")
+    resid = [(h - s) for _, _, s, h in pairs]  # h is already offset-removed in match()
+    if len(resid) > 2:
+        mean = statistics.mean(resid)
+        centred = [(r - mean) * 1000 for r in resid]
+        std = statistics.pstdev(centred)
+        spread = max(centred) - min(centred)
+        print(f"   residual std={std:.2f} ms  spread={spread:.2f} ms  (n={len(resid)})")
+        if std < 3.0:
+            print("   -> clean: heard timing tracks sent timing. No after-send timing problem.")
+        elif spread > 30.0:
+            print("   -> large/bimodal scatter (~tens of ms): consistent with the game-side bucket")
+            print("      jumps of Appendix A.10. Perceived as 'uneven', NOT a player-side stall;")
+            print("      not fixable from the player (lead/frame-align were removed for this reason).")
+        else:
+            print("   -> moderate scatter; inspect the STUTTER GAPS and telemetry lateness to localise.")
+    else:
+        print("   not enough matched pairs for jitter stats.")
+
+    print("\nDONE. Decision rule (docs/timing-principles.md §1):")
+    print("  missing>0 with GATE OK            -> notes lost AFTER send (OS delivery / sub-frame at game)")
+    print("  gaps with CLEAN telemetry IOI     -> stall is after send (OS/game), player is innocent")
+    print("  gaps that ALSO show in telemetry  -> stall is before send (scheduler/thread/timer/C-state)")
+    print("  only jitter, no gaps/missing      -> game-side scatter (A.10), not a true stutter")
+    return 0
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ py-modules = ["main", "songs", "ui", "inputs", "scheduler", "build_app"]
 [dependency-groups]
 dev = [
     "pytest-textual-snapshot>=1.1.0",
+    "soundcard>=0.4.6",
 ]
 
 [project.scripts]
