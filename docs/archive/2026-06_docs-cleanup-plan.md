@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: Tài liệu này là kế hoạch dọn dẹp thư mục docs/ thực hiện vào tháng 06/2026. Bản thân nó chứa các tham chiếu cũ và thuật ngữ purge, hiện đã hoàn thành.
+
 # Docs Cleanup Plan — dọn `docs/` về một nguồn sự thật
 
 > Status: PROPOSED (chưa thực thi). Mục tiêu: gỡ thông tin sai/cũ/trùng trong `docs/`, gom về một

@@ -8,8 +8,8 @@ Sky Player is built on a modern, strictly-layered **Domain-Driven Design (DDD)**
 
 The codebase is divided into four distinct layers:
 
-1. **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond [scheduler](file:///d:/Dev/Sky%20Player/src/sky_music/domain/scheduler.py).
-2. **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline), the [RuntimeDispatchCoordinator](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L133) (which manages key generations and anchor timing), and the telemetry/calibration modules.
+1. **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond [scheduler](../src/sky_music/domain/scheduler.py).
+2. **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline), the [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) (which manages key generations and anchor timing), and the telemetry/calibration modules.
 3. **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes window focus tracking, hotkey listeners, real-time sleeper utilities, and MMCSS registrations.
 4. **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes.
 
@@ -38,10 +38,10 @@ Instead of calculating delays on the fly, the entire song is mapped out onto an 
 * **Same-Key Feasibility:** If the same key repeats faster than the target hold, the previous hold is compressed down to `min_hold_us`. If the authored interval is below `min_hold_us`, the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, while `degraded` mode keeps `min_hold_us` and schedules the down events, which will be resolved at runtime.
 
 ### Step 3: Runtime Intent Compilation
-Before playback starts, the raw `KeyAction` timeline is passed to [compile_runtime_intents](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L85), which attaches stable, incrementing generation IDs to every down-up action pair. This yields a structured `RuntimeSchedule`.
+Before playback starts, the raw `KeyAction` timeline is passed to [compile_runtime_intents](../src/sky_music/orchestration/runtime_dispatch.py#L85), which attaches stable, incrementing generation IDs to every down-up action pair. This yields a structured `RuntimeSchedule`.
 
 ### Step 4: The Real-Time Dispatch Loop
-The `PlaybackEngine` feeds this schedule into the [RuntimeDispatchCoordinator](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L133) and runs a dedicated dispatch thread. 
+The `PlaybackEngine` feeds this schedule into the [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) and runs a dedicated dispatch thread. 
 * **Completion Anchor:** To protect key-down visibility against OS injection latency, the coordinator calculates release limits dynamically:
   ```text
   release_not_before_us = down_dispatch_completed_us + min_hold_us
@@ -74,4 +74,4 @@ Running with the `--debug-csv` flag dumps detailed metrics for every event:
 * `observed_hold_us`: The actual duration the key was held, measured from down dispatch completion to up dispatch completion.
 
 ### Calibration Loop
-The orchestration layer analyzes percentiles of telemetry lateness. Users can run calibration via the CLI (`python src/main.py --auto-calibrate`) or interactively in the Textual UI by pressing `C`. Saving the calibration writes the optimal profile and FPS offsets directly to `config.json` to eliminate scheduler jitter on their specific hardware.
+The orchestration layer analyzes percentiles of telemetry lateness. Users can run calibration via the CLI (`python src/main.py --auto-calibrate`) or interactively in the Textual UI by pressing `C`. Saving the calibration writes the optimal profile and FPS offsets directly to `config.json` to reduce scheduler jitter on their specific hardware.

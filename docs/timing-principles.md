@@ -18,7 +18,7 @@ When resolving conflicts, the following hierarchy applies:
 4. **Documentation** — only interpretive; if a document conflicts with 1, 2, or 3, it is outdated/incorrect and must be corrected.
 
 > [!NOTE]
-> [AGENTS.md](file:///d:/Dev/Sky%20Player/AGENTS.md) remains the single source of truth for overall project rules and coding constraints.
+> [AGENTS.md](../AGENTS.md) remains the single source of truth for overall project rules and coding constraints.
 
 ---
 
@@ -60,7 +60,7 @@ If the authored interval is smaller than `min_hold_us`:
 ## 3. The Completion-Anchor Contract
 To guarantee that a note meets the visibility floor regardless of OS dispatch latency, key releases are scheduled relative to down-dispatch completion rather than down-dispatch start.
 
-The runtime visibility contract implemented in [RuntimeDispatchCoordinator](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L133) is:
+The runtime visibility contract implemented in [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) is:
 $$\text{release\_not\_before\_us} = \text{down\_dispatch\_completed\_us} + \text{min\_hold\_us}$$
 $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{release\_not\_before\_us})$$
 
@@ -71,7 +71,7 @@ Telemetry shows that the game-observed hold duration tracks completion-to-comple
 
 ## 4. Profile Classes
 
-The project defines three built-in profiles in [config.py](file:///d:/Dev/Sky%20Player/src/sky_music/config.py):
+The project defines three built-in profiles in [config.py](../src/sky_music/config.py):
 
 * **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0` (zero margin). It represents the absolute physical floor of the game.
 * **`balanced`:** The general default profile. Uses `min_hold_frames = 1.01`, adding a small buffer over the host frame boundary to prevent edge-case misses.
@@ -88,7 +88,7 @@ At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94
 1. **Sender Dispatch is Clean:** Extended test sweeps (88 real songs under varying FPS and send durations) resulted in **0 notes dropped** on the sender side (`dropped_conflict`). Note drops only occur on synthetic test cases deliberately authored below the frame duration.
 2. **Real Songs Do Not Hit the Same-Key Floor:** The minimum same-key interval across the entire song corpus is **76 ms** (in the song `blue`), with a P50 of ~996 ms. Zero transitions occur below 70 ms. Consequently, same-key floor compression is not a cause of note loss in normal gameplay.
 3. **Consistency of Profiles:** Reloading, switching, or persisting profiles results in identical round-trip calibration values (e.g., exactly 6945 $\mu\text{s}$ at 144 FPS), proving that config persistence is robust.
-4. **Game FPS Toggle is Not a Workaround:** Early reports suggested toggling the game FPS (e.g. 144 $\rightarrow$ 60 $\rightarrow$ 144) resolved missing notes. Controlled testing showed this is not a reliable fix and likely only resets a volatile game focus/timing state. Missed notes at high FPS are due to game-side sampling phase alignment or runtime CPU GIL delays, not scheduler math.
+4. **Game FPS Toggle is Not a Workaround:** Early reports suggested toggling the game FPS (e.g. 144 $\rightarrow$ 60 $\rightarrow$ 144) resolved missing notes. Controlled testing showed this is not a reliable fix and likely only resets a volatile game focus/timing state. Missed notes at high FPS are due to game-side sampling phase alignment or runtime thread scheduling delays, not scheduler math.
 5. **Hardened Input Path:** Robustness changes include re-acquiring the active game window handle on play, enforcing a 1 ms timer guard in the dispatch thread, and enabling diagnostic startup telemetry under `PLAYBACK_DEBUG`.
 
 ---
@@ -96,8 +96,8 @@ At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94
 ## 6. Appendix: Retired Knobs
 To clean up the codebase and reduce scheduling overhead, several historical timing knobs were completely removed in June 2026 after empirical testing proved they had no beneficial impact on real playback. 
 
-For historical context and audit details of these knobs, refer to the archived documents in [docs/archive/](file:///d:/Dev/Sky%20Player/docs/archive/):
-* **`input_lead_us`:** Retired because the player generates its own timeline with no external clock reference. A uniform shift is unobservable. See [timing-architecture-audit.md](file:///d:/Dev/Sky%20Player/docs/archive/2026-06_timing-architecture-audit.md).
-* **`chord_merge_window_us`:** Retired because real songs do not contain notes clustered within 5–20 ms; they are either simultaneous or $\ge 100\text{ ms}$ apart. See [timing-experiments.md](file:///d:/Dev/Sky%20Player/docs/archive/2026-06_timing-experiments.md).
+For historical context and audit details of these knobs, refer to the archived documents in [archive/](archive/):
+* **`input_lead_us`:** Retired because the player generates its own timeline with no external clock reference. A uniform shift is unobservable. See [timing-architecture-audit.md](archive/2026-06_timing-architecture-audit.md).
+* **`chord_merge_window_us`:** Retired because real songs do not contain notes clustered within 5–20 ms; they are either simultaneous or $\ge 100\text{ ms}$ apart. See [timing-experiments.md](archive/2026-06_timing-experiments.md).
 * **`frame_align` & `down_only`:** Snapping events to the player's frame grid is useless because the game samples on its own unsynchronized render loop. Snapping introduced offset errors without increasing capture.
 * **`release_gap_us` & `repeat_release_gap_us`:** Removed after corpus audits showed they did not bind on real songs and only inflated scheduler complexity. Same-key repeats are now governed purely by the `min_hold_us` constraint.

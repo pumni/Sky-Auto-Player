@@ -9,20 +9,20 @@ This index defines the structure and hierarchy of truth for the Sky Player proje
 4. **Documentation** — only interpretive; if a document conflicts with 1, 2, or 3, it is OUTDATED/INCORRECT and must be updated.
 
 > [!NOTE]
-> [AGENTS.md](file:///d:/Dev/Sky%20Player/AGENTS.md) remains the single source of truth for project rules.
+> [AGENTS.md](../AGENTS.md) remains the single source of truth for project rules.
 
 ---
 
 ## 1. Canonical Documents
 These files represent the current system state and contracts:
-* [timing-principles.md](file:///d:/Dev/Sky%20Player/docs/timing-principles.md) — Source of truth for timing design, same-key feasibility limits (pure `min_hold` floor, no fixed margin), and the completion-anchor contract.
-* [architecture.md](file:///d:/Dev/Sky%20Player/docs/architecture.md) — Explains the 4-layer DDD codebase design, playback dispatch pipeline (MMCSS + waitable timer + timer-guard), and input hardening.
-* [timing-profile-frame-model.md](file:///d:/Dev/Sky%20Player/docs/timing-profile-frame-model.md) — Pure frame-relative formulas and default profiles (`local_precise`, `balanced`, `audience_safe`).
+* [timing-principles.md](timing-principles.md) — Source of truth for timing design, same-key feasibility limits (pure `min_hold` floor, no fixed margin), and the completion-anchor contract.
+* [architecture.md](architecture.md) — Explains the 4-layer DDD codebase design, playback dispatch pipeline (MMCSS + waitable timer + timer-guard), and input hardening.
+* [timing-profile-frame-model.md](timing-profile-frame-model.md) — Pure frame-relative formulas and default profiles (`local_precise`, `balanced`, `audience_safe`).
 
 ---
 
 ## 2. Active References & Experiments
-* [timing-experiments.md](file:///d:/Dev/Sky%20Player/docs/timing-experiments.md) — Holds only open infrastructure investigation items:
+* [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
   * **O10.6:** Focus restore grace safety margin (`focus_restore_grace_us`).
 
@@ -44,3 +44,4 @@ These files contain completed refactor plans, historic audits, and legacy design
 * `2026-06_timing-guard-binding-audit.md` — Legacy audit of timing guard threads.
 * `2026-06_ui-overhaul-textual-plan.md` — Textual UI plan (Live). *Classic UI removal pending.*
 * `2026-06_timing-experiments.md` — Full history of experiments (O1 - O10.4).
+* `2026-06_docs-cleanup-plan.md` — Meta-plan for documentation cleanup.

@@ -3,8 +3,8 @@
 **Status:** Implemented June 2026. This is the live timing-profile reference.
 
 Related evidence and decisions:
-* [timing-principles.md](file:///d:/Dev/Sky%20Player/docs/timing-principles.md): in-game measurements and historical context.
-* [timing-experiments.md](file:///d:/Dev/Sky%20Player/docs/timing-experiments.md): experiments and A/B observations.
+* [timing-principles.md](timing-principles.md): in-game measurements and historical context.
+* [timing-experiments.md](timing-experiments.md): experiments and A/B observations.
 
 ---
 

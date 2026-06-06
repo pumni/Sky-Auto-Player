@@ -1,6 +1,6 @@
 # Active Timing & Infrastructure Experiments
 
-This document records the open experiments and calibration procedures for Sky Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](file:///d:/Dev/Sky%20Player/docs/archive/2026-06_timing-experiments.md).
+This document records the open experiments and calibration procedures for Sky Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](archive/2026-06_timing-experiments.md).
 
 ---
 
@@ -30,41 +30,46 @@ To record game audio accurately on Windows without background noise:
 ### O10.5 Measuring `spin_threshold_us`
 * **Objective:** Select a global sleeper spin threshold that balances thread lateness against CPU consumption. This is a global engine parameter and does not vary by timing profile.
 * **Tooling Limits:** Current summary telemetry logs lateness but does not record CPU time or tag `spin_threshold_us`. Therefore, run conditions and CPU measurements must be tracked manually.
+* **Warning against Dry-Runs:** Do **NOT** use `--dry-run` to measure spin threshold performance. `_should_use_dispatch_thread()` returns `False` for `DryRunBackend`, which forces execution onto the main thread using `RealSleeper` instead of the production dispatch thread and `WaitableTimerSleeper`. Measuring on dry-runs runs the wrong sleeper path, exaggerating the benefits of spinning. All measurements must be performed on the real threaded path.
 * **Protocol:**
   1. Keep power plan, game FPS, profile, and background processes constant. Use `TEST_metro_alt_120`.
   2. Run the 4 levels in randomized/alternate order (do not run all `0` runs before moving to next levels).
-  3. Phase A uses `--dry-run` to isolate sleeper performance; Phase B confirms the best two levels with real `SendInput` dispatch.
-  4. Perform at least 7 runs per level. Record the median and worst-run p95/p99 lateness.
+  3. Perform at least 7 runs per level on the real threaded backend. Record the median and worst-run p95/p99 lateness.
      ```bash
-     uv run python -m main --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 0 --debug-csv --dry-run
-     uv run python -m main --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 500 --debug-csv --dry-run
-     uv run python -m main --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 800 --debug-csv --dry-run
-     uv run python -m main --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 1200 --debug-csv --dry-run
+     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 0 --debug-csv
+     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 500 --debug-csv
+     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 800 --debug-csv
+     uv run python src/main.py --song TEST_metro_alt_120 --fps 144 --spin-threshold-us 1200 --debug-csv
      ```
-  5. **Metrics:** Down-event IOI std, lateness p95/p99, count of events exceeding 1ms/2ms, worst-case latency spike, and process CPU time.
-* **Decision Rule:** Choose the lowest spin threshold that matches the p95/p99 latency performance of the higher thresholds without a significant worst-case regression. If process CPU telemetry is unavailable, the results remain inconclusive.
+  4. **Metrics:** Down-event IOI std, lateness p95/p99, count of events exceeding 1ms/2ms, worst-case latency spike, and process CPU time.
+* **Null Hypothesis / Decision Rule:** Choose the lowest spin threshold that matches the p95/p99 latency performance of the higher thresholds without a significant worst-case regression.
+  * *Null Hypothesis:* If the p95/p99 lateness and send jitter at `spin_threshold_us = 0` are approximately equal to or show no significant regression compared to `1200`, the spin threshold knob has no gameplay effect and should be retired or fixed to `0` (avoiding CPU busy-waiting).
+  * If process CPU telemetry is unavailable, the results remain inconclusive.
 * **Report Template:**
   ```text
-  O10.5 spin threshold | Phase dry/live | Runs per level: __ | randomized rounds: yes/no
+  O10.5 spin threshold | Phase live | Runs per level: __ | randomized rounds: yes/no
   __ us: median down-IOI std __; median p95/p99 __/__ us; worst max __; CPU time __
-  Decision: global spin_threshold_us = __ / INCONCLUSIVE (missing CPU)
+  Decision: global spin_threshold_us = __ / INCONCLUSIVE (missing CPU) / RETIRE (null hypothesis confirmed)
   ```
 
 ### O10.6 Measuring `focus_restore_grace_us`
 * **Status:** **BLOCKED BY OBSERVABILITY — do not run manually until instrumentation is added.**
 * **Rationale:** The engine pauses the playback timeline when focus is lost, waits for the grace period, and adds the combined pause duration to `pause_time_us`. Since telemetry uses playback time with pauses subtracted, the CSV cannot measure post-focus restoration latency or the exact gap before the first key dispatch.
+* **Warning against Manual Alt-Tab:** Manual focus switches are highly noisy and cannot isolate the grace period. Calibrating this parameter requires programmatic focus loss/restore scenarios (using a test script calling `focusWindow()` or native Windows focus APIs to toggle focus in a loop for 20+ cycles to eliminate human timing jitter).
 * **Prerequisite Instrumentation:** Code must first log wall-clock timestamps for `focus_lost`, `focus_active_detected`, `grace_complete`, and `first_send_after_focus`, and write the configured grace value to the run summary.
 * **Protocol (once instrumented):**
   1. Verify timeline pausing and burst-prevention deterministically with a mock clock/focus guard.
-  2. Run live probes at 0, 25, 50, 100, and 150 ms in randomized order (minimum 20 focus cycles per level).
+  2. Run automated focus toggle scripts at 0, 25, 50, 100, and 150 ms in randomized order (minimum 20 focus cycles per level).
   3. Record audio to verify that the first post-focus note is registered by the game, and use telemetry to measure the actual wall-clock gap.
-  4. Select a global safety grace value (not profile-specific).
-* **Current Fallback:** Maintain the current conservative default value (50/100/150 ms). Do not alter or differentiate this parameter across profiles without instrumented evidence.
+  4. Select a single **global safety grace value** (the current fallback values of 50ms, 100ms, and 150ms stored per-profile in `config.py` are a design inconsistency and should be unified).
+* **Decision Rule & Alternatives:**
+  * *Decision Rule:* If testing shows that setting `focus_restore_grace_us = 0` yields 100% registration of the first post-focus note, the grace parameter has no value and should be removed entirely.
+  * *Alternatives:* If the game drops notes due to focus-switch delays (such as `SetForegroundWindow` race conditions), we should investigate implementing a programmatic focus-confirmation loop using Windows APIs rather than relying on a blind time sleep.
 * **Report Template:**
   ```text
   O10.6 focus grace | cycles/level: __ | randomized: yes/no
   Grace __ ms: accepted first notes __/__ | active->first-send p50/p95 __/__ ms
-  Decision: global focus_restore_grace_us = __ / INCONCLUSIVE
+  Decision: global focus_restore_grace_us = __ / INCONCLUSIVE / REMOVE (grace=0 passes) / CONFIRMATION_LOOP (race detected)
   ```
 
 ---
