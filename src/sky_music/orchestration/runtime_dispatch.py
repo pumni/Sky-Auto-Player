@@ -73,6 +73,7 @@ class PendingRelease:
     scan_code: int
     source_action_index: int
     scheduled_release_us: int
+    down_dispatch_started_us: int
     release_not_before_us: int
     reason: str
 
@@ -218,22 +219,17 @@ class RuntimeDispatchCoordinator:
                 scheduled_down_us=intent.scheduled_us,
                 down_dispatch_started_us=dispatch_started_us,
                 down_dispatch_completed_us=dispatch_completed_us,
-                # Anchor the visibility floor to the down DISPATCH START, not its completion.
+                # Anchor the visibility floor to the down DISPATCH COMPLETION.
                 #
-                # The game samples key STATE on frame boundaries, so the observed hold is
-                # (up_dispatch_started - down_dispatch_started): the SendInput latency of the down
-                # and of the up go through the same path and cancel. Anchoring to completion instead
-                # added one extra `send_duration` of hold on every note, which silently pushed
-                # same-key releases PAST the next authored down whenever the authored repeat interval
-                # sat just above min_hold (the common case for local_precise, where hold == min_hold).
-                # That made the runtime drop a note the scheduler had deemed feasible
-                # (interval >= min_hold) — the intermittent "missing notes" symptom.
+                # Telemetry shows the game-observed hold follows completion-to-completion: a
+                # start-anchored floor subtracts the down SendInput latency from every note, leaving
+                # roughly half of 1-frame local_precise notes below visibility at 144fps. With the
+                # completion anchor, observed hold is min_hold plus the up SendInput duration.
                 #
-                # With the start anchor, scheduler feasibility (interval >= min_hold) implies runtime
-                # feasibility: by the time the next same-key down is due, release_not_before has been
-                # reached, so the authored up is released first (up-before-down at the shared
-                # deadline) and the repeat presses on time. See docs/timing-principles.md §7.
-                release_not_before_us=dispatch_started_us + self.min_hold_us,
+                # Same-key feasibility is kept honest in the scheduler by requiring
+                # interval >= min_hold; the anchor itself is only the visibility rule.
+                # See docs/timing-principles.md §7.
+                release_not_before_us=dispatch_completed_us + self.min_hold_us,
             )
             self.status_by_generation[intent.generation_id] = "active"
 
@@ -277,6 +273,7 @@ class RuntimeDispatchCoordinator:
                 scan_code=intent.scan_code,
                 source_action_index=intent.source_action_index,
                 scheduled_release_us=intent.scheduled_us,
+                down_dispatch_started_us=active.down_dispatch_started_us,
                 release_not_before_us=active.release_not_before_us,
                 reason=intent.reason,
             )

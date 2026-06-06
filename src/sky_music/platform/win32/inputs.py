@@ -7,6 +7,10 @@ from collections.abc import Callable
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 winmm = ctypes.WinDLL("winmm", use_last_error=True)
+try:
+    avrt = ctypes.WinDLL("avrt", use_last_error=True)
+except OSError:
+    avrt = None
 
 SW_RESTORE = 9
 SWP_NOMOVE = 0x0002
@@ -16,6 +20,9 @@ HWND_TOP = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
+CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002
+TIMER_ALL_ACCESS = 0x001F0003
+INFINITE = 0xFFFFFFFF
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -96,12 +103,39 @@ kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
 kernel32.CloseHandle.restype = wintypes.BOOL
+if hasattr(kernel32, "CreateWaitableTimerExW"):
+    kernel32.CreateWaitableTimerExW.argtypes = (
+        ctypes.c_void_p,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    kernel32.CreateWaitableTimerExW.restype = wintypes.HANDLE
+kernel32.SetWaitableTimer.argtypes = (
+    wintypes.HANDLE,
+    ctypes.POINTER(ctypes.c_longlong),
+    wintypes.LONG,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    wintypes.BOOL,
+)
+kernel32.SetWaitableTimer.restype = wintypes.BOOL
+kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+kernel32.WaitForSingleObject.restype = wintypes.DWORD
 kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
 winmm.timeBeginPeriod.argtypes = (wintypes.UINT,)
 winmm.timeBeginPeriod.restype = wintypes.UINT
 winmm.timeEndPeriod.argtypes = (wintypes.UINT,)
 winmm.timeEndPeriod.restype = wintypes.UINT
+if avrt is not None:
+    avrt.AvSetMmThreadCharacteristicsW.argtypes = (
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    avrt.AvSetMmThreadCharacteristicsW.restype = wintypes.HANDLE
+    avrt.AvRevertMmThreadCharacteristics.argtypes = (wintypes.HANDLE,)
+    avrt.AvRevertMmThreadCharacteristics.restype = wintypes.BOOL
 
 TIMER_RESOLUTION_MS = 1
 PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
@@ -138,6 +172,118 @@ def disable_high_precision_timers() -> None:
         return
     winmm.timeEndPeriod(TIMER_RESOLUTION_MS)
     _timer_resolution_enabled = False
+
+
+class _HighResolutionTimerScope:
+    """Defensive 1ms timer-resolution guard for the dispatch thread.
+
+    timeBeginPeriod/timeEndPeriod are refcounted by the OS, so this raw begin/end pair is safe to
+    nest inside the process-wide ``enable_high_precision_timers`` window. It guarantees the dispatch
+    loop always runs at 1ms granularity — the safety net for the ``RealSleeper`` fallback when the
+    high-resolution waitable timer is unavailable — independent of the module's on/off flag, which
+    could otherwise be left coarse by an unbalanced enable/disable elsewhere in the session.
+    """
+
+    __slots__ = ("_active",)
+
+    def __enter__(self) -> "_HighResolutionTimerScope":
+        self._active = False
+        try:
+            if winmm.timeBeginPeriod(TIMER_RESOLUTION_MS) == 0:
+                self._active = True
+        except Exception as exc:
+            debug_log(f"[realtime] timeBeginPeriod guard failed: {exc}")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if not self._active:
+            return
+        try:
+            winmm.timeEndPeriod(TIMER_RESOLUTION_MS)
+        except Exception as exc:
+            debug_log(f"[realtime] timeEndPeriod guard failed: {exc}")
+        finally:
+            self._active = False
+
+
+def high_resolution_timer_scope() -> _HighResolutionTimerScope:
+    """Return a context manager guaranteeing 1ms timer resolution for its body."""
+    return _HighResolutionTimerScope()
+
+
+def reset_window_cache() -> None:
+    """Drop the cached Sky HWND so the next lookup re-enumerates the live window.
+
+    Called at the start of every real playback so a window handle that went stale during the
+    session (game restarted, window re-created, focus juggled) can never carry into the next run —
+    the class of volatile-state fault that otherwise only clears on a full player restart.
+    """
+    global sky
+    sky = None
+
+
+def describe_input_target() -> str:
+    """One-line snapshot of the volatile input-targeting state for play-start diagnostics."""
+    try:
+        foreground = user32.GetForegroundWindow()
+    except Exception:
+        foreground = None
+    try:
+        active = is_sky_active()
+    except Exception:
+        active = None
+    return (
+        f"sky_hwnd={sky}, foreground_hwnd={foreground}, sky_active={active}, "
+        f"timer_res_enabled={_timer_resolution_enabled}"
+    )
+
+def create_high_resolution_waitable_timer() -> int | None:
+    create_timer = getattr(kernel32, "CreateWaitableTimerExW", None)
+    if create_timer is None:
+        return None
+    handle = create_timer(
+        None,
+        None,
+        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+        TIMER_ALL_ACCESS,
+    )
+    if not handle:
+        return None
+    return int(handle)
+
+def set_waitable_timer_relative_us(handle: int, delay_us: int) -> bool:
+    # Negative due time requests a relative interval in 100ns units.
+    due_time = ctypes.c_longlong(-max(1, int(delay_us) * 10))
+    return bool(
+        kernel32.SetWaitableTimer(
+            wintypes.HANDLE(handle),
+            ctypes.byref(due_time),
+            0,
+            None,
+            None,
+            False,
+        )
+    )
+
+def wait_for_timer(handle: int) -> None:
+    kernel32.WaitForSingleObject(wintypes.HANDLE(handle), INFINITE)
+
+def close_handle(handle: int) -> None:
+    kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+def av_set_mm_thread_characteristics(task_name: str) -> int | None:
+    if avrt is None:
+        return None
+    task_index = wintypes.DWORD(0)
+    handle = avrt.AvSetMmThreadCharacteristicsW(task_name, ctypes.byref(task_index))
+    if not handle:
+        return None
+    return int(handle)
+
+def av_revert_mm_thread_characteristics(handle: int) -> None:
+    if avrt is None:
+        return
+    avrt.AvRevertMmThreadCharacteristics(wintypes.HANDLE(handle))
 
 def _retry_wait_seconds(seconds: float) -> None:
     if seconds <= 0:

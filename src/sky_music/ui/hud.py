@@ -2,6 +2,7 @@ import shutil
 import os
 import time
 import re
+from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
 
 PLAYBACK_FINISHED = "finished"
@@ -41,6 +42,7 @@ class ProgressRenderer:
         self.run_id: str = ""
         self.last_lines_printed: int = 0
         self._initialized: bool = False
+        self.input_path_degraded: bool = False
 
     def update_counters(self, lateness_us: int) -> None:
         """Called by PlaybackEngine after each key action to update live timing counters."""
@@ -56,12 +58,22 @@ class ProgressRenderer:
         if lateness_us > self.max_lateness_us:
             self.max_lateness_us = lateness_us
 
-    def render(self, current: float, total: float, song_name: str, status: str = "playing", force: bool = False) -> None:
+    def render(
+        self,
+        current: float,
+        total: float,
+        song_name: str,
+        status: str = "playing",
+        force: bool = False,
+        input_path_degraded: bool = False,
+        backend_health: BackendHealth | None = None,
+    ) -> None:
         now = time.perf_counter()
         if not force and now - self.last_render_at < PROGRESS_RENDER_INTERVAL_SECONDS:
             return
 
         self.last_render_at = now
+        self.input_path_degraded = self.input_path_degraded or input_path_degraded
         
         if not self.run_id:
             self.run_id = time.strftime('%Y%m%d-%H%M%S')
@@ -144,14 +156,12 @@ class ProgressRenderer:
         ]
         song_box = ansi_box("Song", song_lines, border_color=ANSI_CYAN)
         
-        # 3. Retrieve backend health dynamically
-        health = getattr(self, "backend", None)
+        # 3. Render backend health from the dispatch-owned snapshot.
         active_keys = 0
         failed_releases = 0
-        if health is not None and hasattr(health, "get_health"):
-            h = health.get_health()
-            active_keys = h.active_count
-            failed_releases = h.failed_release_count
+        if backend_health is not None:
+            active_keys = backend_health.active_count
+            failed_releases = backend_health.failed_release_count
             
         backend_status = f"{ANSI_RED}stuck keys: {failed_releases}{ANSI_RESET}" if failed_releases > 0 else f"{ANSI_GREEN}healthy{ANSI_RESET}"
         
@@ -214,6 +224,11 @@ class ProgressRenderer:
             status_color = ANSI_MAGENTA
             
         lines = [status_line, controls_line]
+        if self.input_path_degraded:
+            lines.insert(
+                1,
+                f"{ANSI_YELLOW}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{ANSI_RESET}",
+            )
         if self.verbose and getattr(self, "active_policy", None) is not None:
             pol = self.active_policy
             frame_label = f"{pol.frame_us}us" if pol.frame_us > 0 else "N/A"

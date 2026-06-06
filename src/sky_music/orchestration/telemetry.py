@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -28,6 +29,8 @@ class TelemetryLogger:
         self.log_filepath = None
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
+        self.input_path_degraded: bool = False
+        self.input_path_warn_us: int = 300
         self.schedule_summary: dict | None = None
         self.generation_status_counts: dict[str, int] = {}
         self.pause_durations_us: dict[str, list[int]] = {
@@ -74,6 +77,7 @@ class TelemetryLogger:
             "song": self.song_name,
             "event_index": event_index,
             "dispatch_id": event_index if dispatch_id is None else dispatch_id,
+            "evidence_scope": "sendinput_side",
             "kind": kind,
             "scheduled_us": scheduled_us,
             "actual_us": actual_us,
@@ -96,6 +100,10 @@ class TelemetryLogger:
     def record_backend_health(self, health: BackendHealth) -> None:
         """Stores the backend health state at the end of playback."""
         self.backend_health = health
+
+    def record_input_path_health(self, *, degraded: bool, warn_us: int) -> None:
+        self.input_path_degraded = bool(degraded)
+        self.input_path_warn_us = max(0, int(warn_us))
 
     def record_pause(self, reason: str, duration_us: int) -> None:
         if not self.enabled:
@@ -192,6 +200,7 @@ class TelemetryLogger:
 
         hold_durations: list[int] = []
         confirmed_hold_lower_bounds: list[int] = []
+        observed_holds: list[int] = []
         active_downs: dict[int, tuple[int, int]] = {}
         for r in self.records:
             sent_codes = r.get("sent_scan_codes", r["scan_codes"])
@@ -207,9 +216,15 @@ class TelemetryLogger:
                     if sc in active_downs:
                         down_started_us, _down_completed_us = active_downs[sc]
                         hold_durations.append(r["actual_us"] - down_started_us)
-                        # Diagnostic worst-case bound from the down dispatch start through the up
-                        # dispatch completion. The runtime visibility guard itself remains
-                        # start-to-start; note_hold_duration_us is the observed hold for that check.
+                        observed_holds.append(
+                            r.get(
+                                "dispatch_completed_us",
+                                r["actual_us"] + r["send_duration_us"],
+                            )
+                            - _down_completed_us
+                        )
+                        # Compatibility metric from down dispatch start through up dispatch start;
+                        # observed_hold_us is the completion-to-completion visibility metric.
                         confirmed_hold_lower_bounds.append(
                             r.get(
                                 "dispatch_completed_us",
@@ -251,6 +266,9 @@ class TelemetryLogger:
                 res.update({"over_2ms": over_2ms, "over_5ms": over_5ms, "over_10ms": over_10ms})
             return res
 
+        def _scan_count(record: dict, field: str) -> int:
+            return len([sc for sc in str(record.get(field, "")).split(";") if sc])
+
         backend_info: dict = {"panic_release_failures": 0, "failed_release_keys_final": []}
         if self.backend_health is not None:
             backend_info["panic_release_failures"] = self.backend_health.failed_release_count
@@ -261,6 +279,71 @@ class TelemetryLogger:
             backend_info["release_stuck_keys"] = self.release_outcome.stuck_keys
             backend_info["release_inconclusive"] = self.release_outcome.verification_inconclusive
 
+        observed_hold_floor_us = (
+            math.ceil(1_000_000 / self.fps)
+            if self.fps is not None and self.fps > 0
+            else self.min_hold_us
+        )
+        intended_down_count = sum(
+            _scan_count(record, "scan_codes")
+            for record in self.records
+            if record["kind"] == "down"
+        )
+        intended_up_count = sum(
+            _scan_count(record, "scan_codes")
+            for record in self.records
+            if record["kind"] == "up"
+        )
+        sent_down_count = sum(
+            _scan_count(record, "sent_scan_codes")
+            for record in self.records
+            if record["kind"] == "down"
+        )
+        sent_up_count = sum(
+            _scan_count(record, "sent_scan_codes")
+            for record in self.records
+            if record["kind"] == "up"
+        )
+        backend_skipped_down_count = sum(
+            _scan_count(record, "skipped_scan_codes")
+            for record in self.records
+            if record["kind"] == "down"
+        )
+        backend_skipped_up_count = sum(
+            _scan_count(record, "skipped_scan_codes")
+            for record in self.records
+            if record["kind"] == "up"
+        )
+        runtime_conflict_dropped_down_count = sum(
+            _scan_count(record, "scan_codes")
+            for record in self.records
+            if record.get("runtime_outcome") == "dropped_conflict"
+        )
+        expired_dropped_down_count = sum(
+            _scan_count(record, "scan_codes")
+            for record in self.records
+            if record.get("runtime_outcome") == "dropped_expired"
+        )
+        runtime_backend_dropped_down_count = sum(
+            max(
+                0,
+                _scan_count(record, "scan_codes") - _scan_count(record, "sent_scan_codes"),
+            )
+            for record in self.records
+            if record["kind"] == "down"
+            and record.get("runtime_outcome")
+            not in {"dropped_conflict", "dropped_expired", "suppressed_stale_up"}
+        )
+        before_send_missing_down_count = (
+            runtime_conflict_dropped_down_count
+            + expired_dropped_down_count
+            + runtime_backend_dropped_down_count
+        )
+        sender_clean = (
+            intended_down_count == sent_down_count
+            and before_send_missing_down_count == 0
+            and backend_skipped_down_count == 0
+        )
         summary = {
             "run_id": self.run_id,
             "song": self.song_name,
@@ -268,9 +351,52 @@ class TelemetryLogger:
             "fps": self.fps,
             "tempo_scale": self.tempo_scale,
             "total_events": len(self.records),
+            "evidence_boundaries": {
+                "schedule": {
+                    "intended_down_count": intended_down_count,
+                    "intended_up_count": intended_up_count,
+                },
+                "runtime_dispatch": {
+                    "attempted_dispatches": len(dispatch_records),
+                    "runtime_conflict_dropped_down_count": runtime_conflict_dropped_down_count,
+                    "expired_dropped_down_count": expired_dropped_down_count,
+                    "runtime_backend_dropped_down_count": runtime_backend_dropped_down_count,
+                    "before_send_missing_down_count": before_send_missing_down_count,
+                },
+                "sendinput_side": {
+                    "sent_down_count": sent_down_count,
+                    "sent_up_count": sent_up_count,
+                    "backend_skipped_down_count": backend_skipped_down_count,
+                    "backend_skipped_up_count": backend_skipped_up_count,
+                    "sender_clean": sender_clean,
+                },
+                "game_observed": {
+                    "available": False,
+                    "game_acceptance_unknown": True,
+                    "heard_onset_count": None,
+                    "after_send_missing_count": None,
+                    "note": (
+                        "Telemetry stops at the SendInput side. Attach audio/onset evidence "
+                        "before making game-acceptance claims."
+                    ),
+                },
+            },
+            "intended_down_count": intended_down_count,
+            "intended_up_count": intended_up_count,
+            "before_send_missing_down_count": before_send_missing_down_count,
+            "sender_clean": sender_clean,
+            "game_acceptance_unknown": True,
+            "game_observed_onset_count": None,
+            "after_send_missing_count": None,
             "lateness_us": _stats(latenesses, thresholds=True),
             "send_duration_us": _stats(send_durations),
             "note_hold_duration_us": _stats(hold_durations),
+            "observed_hold_us": _stats(observed_holds),
+            "observed_hold_below_frame_count": sum(
+                1
+                for hold_us in observed_holds
+                if observed_hold_floor_us > 0 and hold_us < observed_hold_floor_us
+            ),
             "confirmed_hold_lower_bound_us": _stats(confirmed_hold_lower_bounds),
             "confirmed_hold_shortfall_count": sum(
                 1
@@ -281,47 +407,13 @@ class TelemetryLogger:
             "successful_dispatches": sum(
                 1 for record in self.records if record.get("sent_scan_codes", record["scan_codes"])
             ),
-            "sent_down_count": sum(
-                len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc])
-                for record in self.records
-                if record["kind"] == "down"
-            ),
-            "sent_up_count": sum(
-                len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc])
-                for record in self.records
-                if record["kind"] == "up"
-            ),
-            "backend_skipped_down_count": sum(
-                len([sc for sc in record.get("skipped_scan_codes", "").split(";") if sc])
-                for record in self.records
-                if record["kind"] == "down"
-            ),
-            "backend_skipped_up_count": sum(
-                len([sc for sc in record.get("skipped_scan_codes", "").split(";") if sc])
-                for record in self.records
-                if record["kind"] == "up"
-            ),
-            "runtime_conflict_dropped_down_count": sum(
-                len([sc for sc in record["scan_codes"].split(";") if sc])
-                for record in self.records
-                if record.get("runtime_outcome") == "dropped_conflict"
-            ),
-            "runtime_backend_dropped_down_count": sum(
-                max(
-                    0,
-                    len([sc for sc in record["scan_codes"].split(";") if sc])
-                    - len([sc for sc in record.get("sent_scan_codes", "").split(";") if sc]),
-                )
-                for record in self.records
-                if record["kind"] == "down"
-                and record.get("runtime_outcome")
-                not in {"dropped_conflict", "dropped_expired", "suppressed_stale_up"}
-            ),
-            "expired_dropped_down_count": sum(
-                len([sc for sc in record["scan_codes"].split(";") if sc])
-                for record in self.records
-                if record.get("runtime_outcome") == "dropped_expired"
-            ),
+            "sent_down_count": sent_down_count,
+            "sent_up_count": sent_up_count,
+            "backend_skipped_down_count": backend_skipped_down_count,
+            "backend_skipped_up_count": backend_skipped_up_count,
+            "runtime_conflict_dropped_down_count": runtime_conflict_dropped_down_count,
+            "runtime_backend_dropped_down_count": runtime_backend_dropped_down_count,
+            "expired_dropped_down_count": expired_dropped_down_count,
             "catch_up_bursts": {
                 "count": len(catch_up_bursts),
                 "down_dispatch_count": sum(len(burst) for burst in catch_up_bursts),
@@ -357,6 +449,8 @@ class TelemetryLogger:
                 for reason, durations in self.pause_durations_us.items()
             },
             "backend": backend_info,
+            "input_path_degraded": self.input_path_degraded,
+            "input_path_warn_us": self.input_path_warn_us,
         }
         generation_counts = self.generation_status_counts
         summary.update(
@@ -385,6 +479,7 @@ class TelemetryLogger:
                 "scheduled_us",
                 "actual_us",
                 "dispatch_completed_us",
+                "evidence_scope",
                 "lateness_us",
                 "send_duration_us",
                 "scan_codes",
@@ -444,6 +539,12 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             print(f"\nPlayback: {data.get('song', 'Unknown')} at {data.get('timestamp', 'Unknown')} [Run ID: {data.get('run_id', 'N/A')}]")
             print(f"  Profile: {data.get('profile', 'balanced')} | Tempo Scale: {data.get('tempo_scale', 1.0)}")
             print(f"  Total Event Count: {data.get('total_events', 0)}")
+            print(
+                "  Evidence Boundary: "
+                f"sender_clean={data.get('sender_clean', False)}, "
+                f"before_send_missing_downs={data.get('before_send_missing_down_count', 0)}, "
+                f"game_acceptance_unknown={data.get('game_acceptance_unknown', True)}"
+            )
             
             lat = data.get("lateness_us", {})
             print(f"  Loop Lateness:")

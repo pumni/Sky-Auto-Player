@@ -53,7 +53,7 @@ class FrameTimingDefaults:
             min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 1.25),
         )
 
-    def as_policy_kwargs(self) -> dict[str, float]:
+    def as_policy_kwargs(self) -> dict[str, float | int]:
         return {
             "min_visible_hold_frames": self.min_visible_hold_frames,
             "min_hold_min_frame_ratio": self.min_hold_min_frame_ratio,
@@ -112,6 +112,9 @@ class AppConfig:
     game_fps:                    int           = 60
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
+    use_dispatch_thread:         bool          = True
+    input_path_warn_us:          int           = 300
+    rt_time_critical:            bool          = False
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
     frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
@@ -267,6 +270,7 @@ def argparse_base_defaults() -> dict[str, Any]:
         "tempo_scale": 1.0,
         "debug_csv": False,
         "verbose_hud": False,
+        "no_dispatch_thread": False,
         "theme": None,
         "songs_dir": Path(AppConfig.songs_dir),
         "fps": None,
@@ -340,6 +344,9 @@ def _build_config_from_disk() -> AppConfig:
         game_fps                     = int(raw.get("game_fps", AppConfig.game_fps)),
         telemetry_enabled_by_default = bool(raw.get("telemetry_enabled_by_default", AppConfig.telemetry_enabled_by_default)),
         verbose_hud                  = bool(raw.get("verbose_hud", AppConfig.verbose_hud)),
+        use_dispatch_thread          = bool(raw.get("use_dispatch_thread", AppConfig.use_dispatch_thread)),
+        input_path_warn_us           = max(0, int(raw.get("input_path_warn_us", AppConfig.input_path_warn_us))),
+        rt_time_critical             = bool(raw.get("rt_time_critical", AppConfig.rt_time_critical)),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
@@ -374,6 +381,9 @@ def save_config(cfg: AppConfig) -> None:
     raw["game_fps"]                     = cfg.game_fps
     raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
     raw["verbose_hud"]                  = cfg.verbose_hud
+    raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
+    raw["input_path_warn_us"]           = cfg.input_path_warn_us
+    raw["rt_time_critical"]             = cfg.rt_time_critical
     raw["hotkeys"] = {
         "pause":   cfg.hotkeys.pause,
         "skip":    cfg.hotkeys.skip,
@@ -426,6 +436,9 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
 
     if getattr(args, "verbose_hud", None) == parser_defaults["verbose_hud"]:
         args.verbose_hud = cfg.verbose_hud
+
+    if getattr(args, "no_dispatch_thread", None) == parser_defaults["no_dispatch_thread"]:
+        args.no_dispatch_thread = not cfg.use_dispatch_thread
 
     if getattr(args, "theme", None) == parser_defaults["theme"]:
         args.theme = cfg.theme

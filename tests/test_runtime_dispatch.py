@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
@@ -70,6 +72,30 @@ class TimeCommandControls:
         return command
 
 
+class CaptureRenderer:
+    def __init__(self) -> None:
+        self.input_path_flags: list[bool] = []
+
+    def render(
+        self,
+        elapsed: float,
+        total: float,
+        song_name: str,
+        *,
+        status: str = "playing",
+        force: bool = False,
+        input_path_degraded: bool = False,
+        backend_health: BackendHealth | None = None,
+    ) -> None:
+        self.input_path_flags.append(input_path_degraded)
+
+    def finish(self, message: str) -> None:
+        return
+
+    def update_counters(self, lateness_us: int) -> None:
+        return
+
+
 @dataclass(frozen=True, slots=True)
 class TimedCall:
     kind: str
@@ -123,6 +149,18 @@ class TimedBackend:
             failed_release_count=0,
             last_error=None,
         )
+
+
+class AsymmetricTimedBackend(TimedBackend):
+    def __init__(self, clock: FakeClock, *, down_duration_us: int, up_duration_us: int) -> None:
+        super().__init__(clock)
+        self.down_duration_us = down_duration_us
+        self.up_duration_us = up_duration_us
+
+    def _finish(self, kind: str, scan_codes: tuple[int, ...]) -> None:
+        started_us = self.clock.time_us
+        self.clock.time_us += self.down_duration_us if kind == "down" else self.up_duration_us
+        self.calls.append(TimedCall(kind, scan_codes, started_us, self.clock.time_us))
 
 
 def action(at_us: int, kind: str, *scan_codes: int) -> KeyAction:
@@ -191,11 +229,10 @@ def test_runtime_compiler_preserves_action_batches_and_timestamps():
     ]
 
 
-def test_release_guard_anchors_hold_to_down_dispatch_start():
-    # The visibility floor is measured start-to-start: the up may fire at the authored time even
-    # though the down's SendInput took 300us, because the observed hold (up_start - down_start)
-    # already equals min_hold. Anchoring to the down's *completion* instead would over-hold by one
-    # send_duration and break same-key repeats authored just above min_hold.
+def test_release_guard_anchors_hold_to_down_dispatch_completion():
+    # The game-observed floor is completion-to-completion. The authored up at min_hold is therefore
+    # held until down completion + min_hold, but it is still a normal sent release rather than a
+    # telemetry deferred_release because the authored hold was not below the start-anchored floor.
     backend, engine = play(
         (action(0, "down", 21), action(1_000, "up", 21)),
         min_hold_us=1_000,
@@ -204,17 +241,57 @@ def test_release_guard_anchors_hold_to_down_dispatch_start():
 
     assert [(call.kind, call.started_us, call.completed_us) for call in backend.calls] == [
         ("down", 0, 300),
-        ("up", 1_000, 1_300),
+        ("up", 1_300, 1_600),
     ]
     summary = engine.telemetry.get_summary()
     assert summary is not None
-    assert summary["note_hold_duration_us"]["min_us"] == 1_000
-    assert summary["note_hold_duration_us"]["p50_us"] == 1_000
-    assert summary["confirmed_hold_lower_bound_us"]["min_us"] == 1_300
-    assert summary["confirmed_hold_lower_bound_us"]["p50_us"] == 1_300
+    assert summary["note_hold_duration_us"]["min_us"] == 1_300
+    assert summary["note_hold_duration_us"]["p50_us"] == 1_300
+    assert summary["observed_hold_us"]["min_us"] == 1_300
+    assert summary["observed_hold_us"]["p50_us"] == 1_300
+    assert summary["confirmed_hold_lower_bound_us"]["min_us"] == 1_600
+    assert summary["confirmed_hold_lower_bound_us"]["p50_us"] == 1_600
     assert summary["confirmed_hold_shortfall_count"] == 0
-    # The authored up already satisfies the floor, so no runtime deferral is needed.
     assert summary["deferred_release_count"] == 0
+
+
+def test_observed_hold_never_below_one_frame_under_asymmetric_send_latency():
+    min_hold = 1_000
+    clock = FakeClock()
+    backend = AsymmetricTimedBackend(clock, down_duration_us=250, up_duration_us=20)
+    engine = PlaybackEngine(
+        song=Song(name="asymmetric", notes=()),
+        actions=(
+            action(0, "down", 21),
+            action(min_hold, "up", 21),
+            action(4_000, "down", 22, 23),
+            action(4_000 + min_hold, "up", 22, 23),
+        ),
+        backend=backend,
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        min_hold_us=min_hold,
+        fps=1_000,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    down_completions: dict[int, list[int]] = {}
+    observed: list[int] = []
+    for call in backend.calls:
+        for scan_code in call.scan_codes:
+            if call.kind == "down":
+                down_completions.setdefault(scan_code, []).append(call.completed_us)
+            else:
+                observed.append(call.completed_us - down_completions[scan_code].pop(0))
+
+    assert observed
+    assert all(hold_us >= min_hold for hold_us in observed)
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["observed_hold_below_frame_count"] == 0
 
 
 def test_hold_floor_preserved_when_thread_stalls_during_hold():
@@ -241,42 +318,48 @@ def test_hold_floor_preserved_when_thread_stalls_during_hold():
     assert up.started_us - down.started_us >= 1_000
 
 
-def test_same_key_repeat_at_min_hold_floor_presses_on_time_with_send_latency():
-    # Regression for the intermittent "missing notes" symptom on local_precise: a same-key repeat
-    # whose authored interval equals min_hold is feasible per the scheduler, so the runtime must
-    # release the first note then press the repeat on time — never drop it — even when SendInput
-    # has non-zero latency.
-    backend, engine = play(
-        (
-            action(0, "down", 21),
-            action(1_000, "up", 21),
-            action(1_000, "down", 21),
-            action(2_000, "up", 21),
-        ),
-        min_hold_us=1_000,
-        send_duration_us=300,
-    )
+def test_repeat_below_min_hold_is_flagged_infeasible():
+    # Without a fixed release-latency margin, the scheduler's feasibility floor is exactly min_hold:
+    # a same-key repeat whose interval is below min_hold cannot preserve the hold and is flagged
+    # infeasible; a repeat at/above min_hold is feasible.
+    from sky_music.domain import Note, NoteKey, Millis
+    from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
+    from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 
-    downs = [c for c in backend.calls if c.kind == "down" and c.scan_codes == (21,)]
-    assert len(downs) == 2  # the repeat is NOT dropped
-    assert downs[0].started_us == 0
-    # The repeat presses on the authored timeline (1_000). It may trail by at most one key_up
-    # SendInput latency because release-then-press is inherently sequential on one thread; with the
-    # 300us fake send that is 1_300, on real hardware it is ~tens of microseconds.
-    assert 1_000 <= downs[1].started_us <= 1_000 + 300
-    # gen1 observed a full min_hold before being released for the repeat.
-    up1 = next(c for c in backend.calls if c.kind == "up" and c.scan_codes == (21,))
-    assert up1.started_us - downs[0].started_us >= 1_000
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    assert summary["runtime_conflict_dropped_down_count"] == 0
+    # interval = 1_000us, min_hold = 2_000us -> below the floor.
+    song = Song(
+        name="below-min-hold-repeat",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1), key=NoteKey("Key0")),
+        ),
+    )
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"hold_us": 2_000, "min_hold_us": 2_000}),
+    )
+    degraded = build_key_actions(song, policy=policy)
+    assert degraded.impossible_same_key_repeats == 1
+
+    strict_policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"hold_us": 2_000, "min_hold_us": 2_000}),
+        same_key_conflict_policy="strict",
+    )
+    with pytest.raises(ScheduleBuildError):
+        build_key_actions(song, policy=strict_policy)
+
+    # A repeat exactly at min_hold is now feasible (no synthetic +500us margin on top).
+    feasible_policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"hold_us": 1_000, "min_hold_us": 1_000}),
+    )
+    feasible = build_key_actions(song, policy=feasible_policy)
+    assert feasible.impossible_same_key_repeats == 0
 
 
 def test_scheduler_feasible_repeat_is_runtime_feasible_invariant():
-    # Contract: interval >= min_hold (scheduler-feasible) must NEVER be dropped by the runtime,
-    # for any SendInput latency. This is the invariant that keeps the two layers in agreement.
+    # Contract: a scheduler-feasible repeat (interval >= min_hold, with comfortable headroom) must
+    # NEVER be dropped by the runtime, and completion-to-completion observed hold stays >= min_hold.
     min_hold = 6_945  # local_precise @144fps
-    for extra in (0, 50, 150, 300, 1_000):
+    for extra in (500, 700, 1_000, 2_000):
         for send_duration_us in (0, 100, 250):
             interval = min_hold + extra
             backend, _ = play(
@@ -290,10 +373,13 @@ def test_scheduler_feasible_repeat_is_runtime_feasible_invariant():
                 send_duration_us=send_duration_us,
             )
             downs = [c for c in backend.calls if c.kind == "down"]
+            ups = [c for c in backend.calls if c.kind == "up"]
             assert len(downs) == 2, (
                 f"dropped a scheduler-feasible repeat: interval=min_hold+{extra}, "
                 f"send_duration={send_duration_us}"
             )
+            assert ups[0].completed_us - downs[0].completed_us >= min_hold
+            assert ups[1].completed_us - downs[1].completed_us >= min_hold
 
 
 def _build_repeat_song(name, intervals, *, key=7, reps=12, block_gap=1500):
@@ -349,6 +435,7 @@ def test_repeat_clean_ground_truth_song_never_drops_end_to_end():
         assert summary["sent_down_count"] == len(song.notes), f"fps={fps}"
         assert summary["runtime_conflict_dropped_down_count"] == 0, f"fps={fps}"
         assert summary["confirmed_hold_shortfall_count"] == 0, f"fps={fps}"
+        assert summary["observed_hold_below_frame_count"] == 0, f"fps={fps}"
 
 
 def test_deferred_release_does_not_delay_unrelated_down():
@@ -613,6 +700,91 @@ def test_telemetry_reports_backend_dropped_downs_and_catch_up_bursts():
     }
 
 
+def test_telemetry_evidence_boundaries_keep_sender_clean_separate_from_game_acceptance():
+    logger = TelemetryLogger("evidence-clean", enabled=True)
+    logger.record(
+        event_index=0,
+        kind="down",
+        scheduled_us=0,
+        actual_us=10,
+        lateness_us=10,
+        send_duration_us=5,
+        scan_codes=(21,),
+        sent_scan_codes=(21,),
+        reason="onset",
+    )
+    logger.record(
+        event_index=1,
+        kind="up",
+        scheduled_us=20_000,
+        actual_us=20_010,
+        lateness_us=10,
+        send_duration_us=5,
+        scan_codes=(21,),
+        sent_scan_codes=(21,),
+        reason="release",
+    )
+
+    summary = logger.get_summary()
+
+    assert summary is not None
+    assert summary["intended_down_count"] == 1
+    assert summary["sent_down_count"] == 1
+    assert summary["before_send_missing_down_count"] == 0
+    assert summary["sender_clean"] is True
+    assert summary["game_acceptance_unknown"] is True
+    assert summary["after_send_missing_count"] is None
+    assert summary["evidence_boundaries"]["game_observed"] == {
+        "available": False,
+        "game_acceptance_unknown": True,
+        "heard_onset_count": None,
+        "after_send_missing_count": None,
+        "note": (
+            "Telemetry stops at the SendInput side. Attach audio/onset evidence "
+            "before making game-acceptance claims."
+        ),
+    }
+
+
+def test_telemetry_evidence_boundaries_flag_before_send_missing_downs():
+    logger = TelemetryLogger("evidence-dirty", enabled=True)
+    logger.record(
+        event_index=0,
+        kind="down",
+        scheduled_us=0,
+        actual_us=10,
+        lateness_us=10,
+        send_duration_us=5,
+        scan_codes=(21, 22),
+        sent_scan_codes=(21,),
+        skipped_scan_codes=(22,),
+        reason="partial-send",
+    )
+    logger.record(
+        event_index=1,
+        kind="down",
+        scheduled_us=20_000,
+        actual_us=20_010,
+        lateness_us=10,
+        send_duration_us=0,
+        scan_codes=(23,),
+        sent_scan_codes=(),
+        runtime_outcome="dropped_expired",
+        reason="expired",
+    )
+
+    summary = logger.get_summary()
+
+    assert summary is not None
+    assert summary["intended_down_count"] == 3
+    assert summary["sent_down_count"] == 1
+    assert summary["runtime_backend_dropped_down_count"] == 1
+    assert summary["expired_dropped_down_count"] == 1
+    assert summary["before_send_missing_down_count"] == 2
+    assert summary["sender_clean"] is False
+    assert summary["evidence_boundaries"]["sendinput_side"]["sender_clean"] is False
+
+
 def test_telemetry_reports_down_timeline_drift_and_pause_causes():
     logger = TelemetryLogger("drift", enabled=True)
     for event_index, actual_us in enumerate((10, 1_020, 2_040)):
@@ -804,3 +976,34 @@ def test_late_pulse_drop_policy_keeps_down_exactly_at_threshold():
     summary = engine.telemetry.get_summary()
     assert summary is not None
     assert summary["expired_dropped_down_count"] == 0
+
+
+def test_input_path_health_flags_sustained_slow_send_duration() -> None:
+    clock = FakeClock()
+    renderer = CaptureRenderer()
+    backend = TimedBackend(clock, send_duration_us=400)
+    actions = tuple(
+        action(index * 20_000, "down", 100 + index)
+        for index in range(70)
+    )
+    engine = PlaybackEngine(
+        song=Song(name="slow-input-path", notes=()),
+        actions=actions,
+        backend=backend,
+        renderer=renderer,
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        input_path_warn_us=300,
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+
+    assert engine.input_path_degraded is True
+    assert any(renderer.input_path_flags)
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["input_path_degraded"] is True
+    assert summary["input_path_warn_us"] == 300

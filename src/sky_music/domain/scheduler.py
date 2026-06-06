@@ -91,7 +91,12 @@ def plan_same_key_hold(
         return PlannedKeyHold(hold_us=target_hold_us, risk="ok")
 
     max_hold_us = effective_delta_us
-    if max_hold_us < min_hold_us:
+    # Feasibility floor is exactly min_hold: a same-key repeat whose interval is below the key's own
+    # minimum hold cannot preserve that hold before the next down. No fixed latency margin is added
+    # on top — the runtime completion-anchor owns real dispatch latency, and a fixed 500us guess was
+    # both arbitrary and unhelpful (real songs sit far above this floor; see timing analysis).
+    feasibility_floor_us = min_hold_us
+    if max_hold_us < feasibility_floor_us:
         return PlannedKeyHold(
             hold_us=min_hold_us,
             risk="severe",
@@ -218,7 +223,7 @@ def build_key_actions(
                 code="impossible_repeat",
                 message=(
                     f"Repeat too fast: {effective_delta_us / 1000:.1f}ms interval < "
-                    f"{policy.min_hold_us / 1000:.1f}ms min_hold; preserving min_hold means "
+                    f"{int(policy.min_hold_us) / 1000:.1f}ms min_hold; preserving min_hold means "
                     "the next same-key down occurs before the previous release."
                 )
             ))
@@ -226,7 +231,7 @@ def build_key_actions(
                 raise ScheduleBuildError(
                     f"Cannot build schedule under strict policy: same-key repeat interval "
                     f"{effective_delta_us / 1000:.1f}ms is below min_hold "
-                    f"{policy.min_hold_us / 1000:.1f}ms.",
+                    f"{int(policy.min_hold_us) / 1000:.1f}ms.",
                     recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
                         effective_delta_us, policy, tempo_scale
                     ),
@@ -300,7 +305,8 @@ def build_key_actions(
     if impossible_same_key_repeats > 0:
         warnings.append(
             f"Detected {impossible_same_key_repeats} infeasible same-key repeat(s): "
-            "authored interval is below min_hold, so degraded playback preserves min_hold and overlaps the next down."
+            "authored interval is below min_hold, so degraded playback "
+            "preserves min_hold and overlaps the next down."
         )
     if risky_same_key_repeats > 0:
         warnings.append(

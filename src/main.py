@@ -64,6 +64,7 @@ TEMPO_SCALE = 1.0
 TIMING_PROFILE_NAME = "balanced"
 VERBOSE_HUD = False
 PICKER_UI_MODE = "auto"
+USE_DISPATCH_THREAD = True
 
 def init_debug_log() -> None:
     global DEBUG_LOG_PATH, DEBUG_START_PERF
@@ -521,6 +522,7 @@ class RuntimeSessionState:
     tempo_scale: float = 1.0
     timing_profile_name: str = "balanced"
     verbose_hud: bool = False
+    use_dispatch_thread: bool = True
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
         self.session = session
@@ -538,6 +540,7 @@ def _sync_legacy_runtime_globals() -> None:
     """Keep historical module globals in sync while runtime state is centralized."""
     global CURRENT_SCAN_CODE_MODE, TIMING_POLICY, SLEEP_POLICY, PLAYBACK_SESSION
     global TELEMETRY_CSV_ENABLED, DRY_RUN_MODE, TEMPO_SCALE, TIMING_PROFILE_NAME, VERBOSE_HUD
+    global USE_DISPATCH_THREAD
 
     CURRENT_SCAN_CODE_MODE = RUNTIME_STATE.scan_code_mode
     TIMING_POLICY = RUNTIME_STATE.timing_policy
@@ -548,6 +551,7 @@ def _sync_legacy_runtime_globals() -> None:
     TEMPO_SCALE = RUNTIME_STATE.tempo_scale
     TIMING_PROFILE_NAME = RUNTIME_STATE.timing_profile_name
     VERBOSE_HUD = RUNTIME_STATE.verbose_hud
+    USE_DISPATCH_THREAD = RUNTIME_STATE.use_dispatch_thread
 
 def play_selected_song(
     selected_song: Path,
@@ -748,6 +752,8 @@ def play_selected_song(
         fps=getattr(active_policy, "fps", None),
         min_hold_us=int(active_policy.min_hold_us),
         same_key_conflict_policy=active_policy.same_key_conflict_policy,
+        use_dispatch_thread=USE_DISPATCH_THREAD,
+        input_path_warn_us=user_cfg.input_path_warn_us,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
     result = engine.play()
@@ -887,6 +893,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow hotkeys that overlap with note keys (not recommended)",
     )
+    ctrl.add_argument(
+        "--no-dispatch-thread",
+        action="store_true",
+        help="run playback on the legacy single-thread dispatch path for debugging",
+    )
 
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
     diag = parser.add_argument_group("Safety and diagnostics")
@@ -1024,6 +1035,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     if RUNTIME_STATE.tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
     RUNTIME_STATE.verbose_hud = args.verbose_hud
+    RUNTIME_STATE.use_dispatch_thread = not args.no_dispatch_thread
     PICKER_UI_MODE = args.ui
 
     if PLAYBACK_DEBUG:

@@ -86,19 +86,16 @@ def rolled_chord(keys=(0, 2, 4, 6), spread_ms=18, blocks=8, block_gap=1500):
 
 write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 
-# Floor probe: same-key repeats whose interval sits JUST above the frame-aware min_hold floor.
-# Canary for the runtime hold-anchor (docs/playback-flow-hardening-plan.md Phase G). Every interval
-# is scheduler-feasible (interval >= min_hold); the pre-fix completion-anchor still dropped repeats
-# whose headroom (interval - min_hold) fell within send_duration + dispatch jitter, while the
-# start-anchor fix removes that systematic loss.
+# Floor probe: same-key repeats around the frame-aware min_hold floor. Under the current
+# completion-anchor contract, intervals below min_hold are intentionally infeasible; this probe is
+# now mainly for synthetic boundary/forensics work. Real-song acceptance should use
+# TEST_repeat_clean_* and the corpus gate in tests/acceptance_completion_anchor.py.
 #   144fps local_precise: min_hold = ceil(1e6/144) = 6945 us (~6.9 ms)
 #   60fps  local_precise: min_hold = ceil(1e6/60)  = 16667 us (~16.7 ms)
 # Headroom per 144fps block: 7ms=55us, 8ms=1055us, 9ms=2055us, 10ms=3055us, 12ms=5055us, ...
-# READING IT: the 8ms+ blocks have >=1ms headroom and are the PASS gate — the fix must lose zero
-# notes there. The first 7ms block has only ~55us headroom: it is the absolute floor edge and is
-# INFORMATIONAL — it can still drop under real dispatch jitter exceeding 55us, which is a
-# tempo/profile signal (timing-principles.md §18), NOT an anchor regression. Drops in the 8ms+
-# blocks WOULD be a regression.
+# READING IT: the 7ms block sits just above the min_hold floor at 144fps. Blocks from 8ms upward
+# have increasing headroom and remain useful as stress probes, but production-song gates should
+# avoid the synthetic fragile band.
 def repeat_floor(key=7, reps=12, intervals=(7, 8, 9, 10, 12, 15, 20), block_gap=1500):
       notes, t = [], 0
       for I in intervals:
