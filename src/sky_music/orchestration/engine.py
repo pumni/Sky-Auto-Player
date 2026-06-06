@@ -337,6 +337,12 @@ class PlaybackEngine:
         self._focus_cache_at_us: int = -self._focus_cache_ttl_us - 1
         self._runtime_coordinator: RuntimeDispatchCoordinator | None = None
         self._next_dispatch_id = 0
+        # Sender-warmup instrumentation (observe-only, never affects timing): the start of the
+        # busy-spin before the current deadline, and the completion time of the previous send.
+        # Together they yield per-send pre_send_spin_us (warm-up the core got) and idle_gap_us
+        # (how long the thread slept/idled before that spin — a proxy for CPU coldness).
+        self._wait_spin_start_us = 0
+        self._last_send_completed_us = 0
 
     @property
     def input_path_degraded(self) -> bool:
@@ -557,6 +563,13 @@ class PlaybackEngine:
         lateness_us = send_start_us - action.at_us
         self._record_input_path_send_duration(send_duration_us, send_end_us)
 
+        # Sender-warmup instrumentation (pure arithmetic on already-captured timestamps):
+        #   pre_send_spin_us = how long the core busy-spun right before this send (warm-up window)
+        #   idle_gap_us      = how long the thread idled/slept before that spin (CPU coldness proxy)
+        pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
+        idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
+        self._last_send_completed_us = send_end_us
+
         result = ExecutionResult(
             event_index=idx,
             scheduled_us=action.at_us,
@@ -589,6 +602,8 @@ class PlaybackEngine:
             generation_ids=generation_ids,
             runtime_outcome=runtime_outcome,
             deferred_by_us=deferred_by_us,
+            pre_send_spin_us=pre_send_spin_us,
+            idle_gap_us=idle_gap_us,
         )
         return result
 
@@ -778,11 +793,16 @@ class PlaybackEngine:
         while True:
             elapsed_us = state.get_elapsed_us(self.clock)
             if elapsed_us >= target_elapsed_us:
+                # Already due (we were late): no warm-up spin happened before the send.
+                self._wait_spin_start_us = elapsed_us
                 return None
 
             remaining_us = target_elapsed_us - elapsed_us
             target_system_us = state.start_perf + state.pause_time_us + target_elapsed_us
             if remaining_us <= self.sleep_policy.spin_threshold_us:
+                # Mark when the final busy-spin began; _execute_action uses it to report how long
+                # the core was spinning (warm-up) before SendInput, and how long it idled before that.
+                self._wait_spin_start_us = elapsed_us
                 self.precise_sleeper.spin_until_us(target_system_us, self.clock)
                 return None
 

@@ -70,6 +70,8 @@ class TelemetryLogger:
         generation_ids: tuple[int, ...] = (),
         runtime_outcome: str = "sent",
         deferred_by_us: int = 0,
+        pre_send_spin_us: int = 0,
+        idle_gap_us: int = 0,
     ) -> None:
         if not self.enabled:
             return
@@ -97,6 +99,8 @@ class TelemetryLogger:
             "generation_ids": ";".join(str(generation_id) for generation_id in generation_ids),
             "runtime_outcome": runtime_outcome,
             "deferred_by_us": deferred_by_us,
+            "pre_send_spin_us": pre_send_spin_us,
+            "idle_gap_us": idle_gap_us,
             "reason": reason,
         })
         
@@ -164,6 +168,18 @@ class TelemetryLogger:
         ]
         latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
+        # Sender-warmup split: a send preceded by a long idle gap runs on a core that has likely
+        # downclocked/parked, so we compare send_duration when "cold" vs "warm" to test whether
+        # CPU coldness (caused by sleeping between notes) inflates send latency.
+        SEND_COLD_THRESHOLD_US = 20_000
+        cold_send_durations = [
+            r["send_duration_us"] for r in dispatch_records if r.get("idle_gap_us", 0) > SEND_COLD_THRESHOLD_US
+        ]
+        warm_send_durations = [
+            r["send_duration_us"] for r in dispatch_records if r.get("idle_gap_us", 0) <= SEND_COLD_THRESHOLD_US
+        ]
+        idle_gaps = [r.get("idle_gap_us", 0) for r in dispatch_records]
+        pre_send_spins = [r.get("pre_send_spin_us", 0) for r in dispatch_records]
         sent_down_records = [
             record
             for record in dispatch_records
@@ -393,6 +409,15 @@ class TelemetryLogger:
             "after_send_missing_count": None,
             "lateness_us": _stats(latenesses, thresholds=True),
             "send_duration_us": _stats(send_durations),
+            "send_warmup": {
+                "cold_threshold_us": SEND_COLD_THRESHOLD_US,
+                "cold_send_count": len(cold_send_durations),
+                "warm_send_count": len(warm_send_durations),
+                "send_duration_cold_us": _stats(cold_send_durations),
+                "send_duration_warm_us": _stats(warm_send_durations),
+                "idle_gap_us": _stats(idle_gaps),
+                "pre_send_spin_us": _stats(pre_send_spins),
+            },
             "note_hold_duration_us": _stats(hold_durations),
             "observed_hold_us": _stats(observed_holds),
             "observed_hold_below_frame_count": sum(
@@ -495,6 +520,8 @@ class TelemetryLogger:
                 "generation_ids",
                 "runtime_outcome",
                 "deferred_by_us",
+                "pre_send_spin_us",
+                "idle_gap_us",
                 "reason",
             ]
             with self.log_filepath.open("w", newline="", encoding="utf-8") as f:
