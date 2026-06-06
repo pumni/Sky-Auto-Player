@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: audit lịch sử cơ chế scheduling trước completion-anchor.
+
 # Down / Hold / Up Scheduling Audit
 
 Date: 2026-06-05

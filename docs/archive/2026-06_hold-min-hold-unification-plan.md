@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: kế hoạch đồng nhất hold và min_hold đã thực thi.
+
 # Hold/Min-Hold Unification Plan (Direction B) — Handoff Contract
 
 Date: 2026-06-04

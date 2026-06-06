@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: nhắc tới các knob cũ đã gỡ (input_lead, chord_merge, frame_align, release_gap).
+
 # Timing Architecture Audit — chỉ số nào THẬT, chỉ số nào bỏ
 
 > Mục đích: phân loại từng tham số timing theo **tác dụng thật đã đo/đã chứng minh**, để dọn sạch

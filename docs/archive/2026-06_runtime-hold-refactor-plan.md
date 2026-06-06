@@ -1,18 +1,19 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: nhắc tới cơ chế start-anchor cũ và các tham số timing đã gỡ.
+
 # Runtime Hold Enforcement Refactor Plan
 
 Date: 2026-06-05
 
 Status: Phases 0-6 implemented on 2026-06-05. Phase 6 late-burst policy is implemented
-off-by-default via `late_pulse_drop_threshold_us`. Phase 7 in-game validation **PASSED 2026-06-06**
-(start-anchor fix validated in-game @144fps — see `timing-experiments.md` §0.4 "PHASE G RESULT").
+off-by-default via `late_pulse_drop_threshold_us`.
 
-> **Post-Phase-5 anchor correction (2026-06-05).** The hold floor is now anchored to the down's
-> dispatch **start**, not its **completion**, contradicting §3.2 / §7.5 below. The completion anchor
-> over-held every note by one `send_duration` and dropped same-key repeats authored just above
-> `min_hold` (intermittent missing notes on `local_precise`, where `hold == min_hold`). The
-> superseding contract is `up_dispatch_started >= down_dispatch_started + min_hold` (see
-> `timing-principles.md` §7). The §3.2/§7.5/Definition-of-Done-#1 wording below is retained as
-> history; read the `_started` anchor.
+> **Superseded anchor note (2026-06-06).** The later approved completion-anchor refactor supersedes
+> the post-Phase-5 start-anchor correction. Runtime now anchors the hold floor to down dispatch
+> **completion**, with scheduler same-key feasibility guarded by `release_latency_margin_us`.
+> Read `docs/completion-anchor-refactor-plan.md` and `docs/timing-principles.md` §7 as the current
+> contract. Historical sections below are retained for audit context.
 
 Related:
 

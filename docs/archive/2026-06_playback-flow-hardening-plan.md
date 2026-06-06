@@ -1,3 +1,7 @@
+> ARCHIVED 2026-06 — historical plan/audit. Không phải tài liệu hiện hành.
+> Contract & sự thật hiện tại: ../timing-principles.md và ../architecture.md.
+> CẢNH BÁO lệch code đã biết: nhắc tới release_latency_margin_us đã gỡ khỏi code.
+
 # Playback Flow Hardening & Cleanup Plan
 
 Date: 2026-06-05
@@ -7,10 +11,14 @@ Status: Phases A-F implemented on 2026-06-05. Phase G in-game validation **PASSE
 `timing-experiments.md` §0.4 "PHASE G RESULT"). All phases complete.
 Supersedes nothing; complements the completed runtime-hold anchor correction.
 
+> **Superseded by completion-anchor refactor (2026-06-06).** The Phase G start-anchor conclusion is
+> historical. Current runtime visibility is completion-to-completion, and scheduler feasibility is
+> guarded by `release_latency_margin_us`; see `completion-anchor-refactor-plan.md`.
+
 Related:
 
 - `runtime-hold-refactor-plan.md` (Phases 0–6 done; Phase 7 still open)
-- `timing-principles.md` (§7 visibility contract — now `down_dispatch_started + min_hold`)
+- `timing-principles.md` (§7 visibility contract — now `down_dispatch_completed + min_hold`)
 - `scheduler-core-architecture-plan.md`
 - `timing-experiments.md`
 
