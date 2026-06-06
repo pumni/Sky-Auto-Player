@@ -77,10 +77,10 @@ class MetadataCoordinator:
         # Submit the new list of paths to be processed in the background thread.
         self._coord_future = self._coord_executor.submit(self._warm_and_process_all_paths, all_paths)
 
-    def close(self) -> None:
+    def close(self, *, wait: bool = False) -> None:
         self._closed = True
         if self._coord_executor is not None:
-            self._coord_executor.shutdown(wait=False, cancel_futures=True)
+            self._coord_executor.shutdown(wait=wait, cancel_futures=True)
 
     def _refresh_ui_from_thread(self) -> None:
         if self._closed:

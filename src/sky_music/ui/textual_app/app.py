@@ -34,7 +34,6 @@ from sky_music.ui.picker_metadata import (
     SongUiMetadata,
     clear_metadata_cache,
     peek_cached_song_ui_metadata,
-    warm_persistent_metadata_cache,
 )
 from sky_music.ui.picker_theme import THEME_PRESETS, get_match_span, remove_accents
 from sky_music.ui.textual_app.workers import MetadataCoordinator
@@ -684,16 +683,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_detail()
         self.set_focus(self.query_one("#songs", SongTable))
         self.metadata.refresh(paths)
-        self.run_worker(
-            self._warm_metadata_cache,
-            name="metadata-warmup",
-            group="metadata-warmup",
-            thread=True,
-            exit_on_error=False,
-        )
 
     def on_unmount(self) -> None:
-        self.metadata.close()
+        # Once the picker exits into playback, metadata work must not keep competing with the
+        # real-time dispatch thread.  Profile/fps changes still use the non-waiting close path via
+        # _replace_metadata_coordinator(), but app shutdown waits for the active job to quiesce.
+        try:
+            self.metadata.close(wait=True)
+        except TypeError:
+            self.metadata.close()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "search":
@@ -786,16 +784,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_screen_resume(self, _event: events.ScreenResume) -> None:
         self.call_after_refresh(self._focus_table)
-
-    def _warm_metadata_cache(self) -> None:
-        try:
-            warm_persistent_metadata_cache()
-        except Exception:
-            return
-        try:
-            self.call_from_thread(self.refresh_metadata_rows)
-        except RuntimeError:
-            return
 
     def _render_status(self) -> None:
         dry = "dry-run" if self.dry_run else "play"

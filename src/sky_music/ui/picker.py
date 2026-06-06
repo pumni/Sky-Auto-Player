@@ -1,6 +1,6 @@
 import os
 import time
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -358,6 +358,7 @@ def choose_song_interactively(
         metadata_executor = metadata_thread_executor
 
     cache_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-picker-cache")
+    retired_metadata_executors: list[Executor] = []
     app_ref: Any | None = None
 
     commands = [
@@ -882,6 +883,7 @@ def choose_song_interactively(
                         metadata_uses_process_pool = False
                         try:
                             if metadata_process_executor is not None:
+                                retired_metadata_executors.append(metadata_process_executor)
                                 metadata_process_executor.shutdown(wait=False, cancel_futures=True)
                         except Exception:
                             pass
@@ -1457,8 +1459,22 @@ def choose_song_interactively(
     try:
         return app.run(pre_run=_pre_run)
     finally:
+        # Playback starts immediately after the picker returns.  Background metadata work is useful
+        # while browsing, but leaving process/thread workers alive during precise SendInput playback
+        # creates run-to-run CPU and I/O contention: sometimes the workers have already finished,
+        # sometimes they are still chewing through scheduler analysis.  Quiesce them here so every
+        # playback starts from the same quiet process state.
         try:
-            metadata_executor.shutdown(wait=False, cancel_futures=True)
+            _invalidate_metadata_work()
         except Exception:
             pass
-        cache_executor.shutdown(wait=False, cancel_futures=True)
+        try:
+            metadata_executor.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+        for retired_executor in retired_metadata_executors:
+            try:
+                retired_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
+        cache_executor.shutdown(wait=True, cancel_futures=True)

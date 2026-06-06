@@ -31,13 +31,15 @@ class FakeMetadataCoordinator:
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         self.refreshed: list[list[Path]] = []
+        self.close_waits: list[bool] = []
         self.closed = False
         self.instances.append(self)
 
     def refresh(self, paths: list[Path]) -> None:
         self.refreshed.append(paths)
 
-    def close(self) -> None:
+    def close(self, *, wait: bool = False) -> None:
+        self.close_waits.append(wait)
         self.closed = True
 
 
@@ -55,10 +57,8 @@ async def _run_app(actions: Any) -> SkyPickerApp:
 
 def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
-    warmed: list[bool] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(app_module, "warm_persistent_metadata_cache", lambda: warmed.append(True) or 0)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
@@ -68,7 +68,8 @@ def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert warmed == [True]
+    assert FakeMetadataCoordinator.instances[0].refreshed == [SONGS]
+    assert FakeMetadataCoordinator.instances[0].close_waits == [True]
 
 
 def test_textual_picker_filters_and_selects_current_row(monkeypatch) -> None:
@@ -254,6 +255,7 @@ def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     assert app.return_value is None
     assert persisted == ["local-precise"]
     assert FakeMetadataCoordinator.instances[0].closed is True
+    assert FakeMetadataCoordinator.instances[0].close_waits == [False]
     assert len(FakeMetadataCoordinator.instances) >= 2
 
 

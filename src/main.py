@@ -1084,18 +1084,16 @@ def _run_textual_selftest() -> int:
         def refresh(self, _paths: list[Path]) -> None:
             return
 
-        def close(self) -> None:
+        def close(self, *, wait: bool = False) -> None:
             self.closed = True
 
     async def run_picker_probe() -> None:
         original_get_song_choices = app_module.get_song_choices
-        original_warm_cache = app_module.warm_persistent_metadata_cache
         original_metadata = app_module.MetadataCoordinator
         app_module.get_song_choices = lambda force_refresh=False: [
             Path("songs/Diamonds.json"),
             Path("songs/Dandelions.json"),
         ]
-        app_module.warm_persistent_metadata_cache = lambda: 0
         app_module.MetadataCoordinator = SelftestMetadataCoordinator
         try:
             app = SkyPickerApp(theme_name="aurora")
@@ -1111,7 +1109,6 @@ def _run_textual_selftest() -> int:
                 raise RuntimeError("Textual picker selftest did not exit cleanly")
         finally:
             app_module.get_song_choices = original_get_song_choices
-            app_module.warm_persistent_metadata_cache = original_warm_cache
             app_module.MetadataCoordinator = original_metadata
 
     try:
