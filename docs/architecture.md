@@ -2,14 +2,16 @@
 
 Sky Player is built on a modern, strictly-layered **Domain-Driven Design (DDD)**. The architecture separates the abstract concept of music from the harsh, real-time realities of OS thread scheduling and game engine polling constraints.
 
+---
+
 ## 1. High-Level Architecture
 
 The codebase is divided into four distinct layers:
 
-1.  **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond `scheduler`.
-2.  **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline) and the `Telemetry` & `Calibration` modules.
-3.  **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes focus tracking, hotkey listeners, and the `PreciseSleeper` utility.
-4.  **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes.
+1. **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond [scheduler](file:///d:/Dev/Sky%20Player/src/sky_music/domain/scheduler.py).
+2. **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline), the [RuntimeDispatchCoordinator](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L133) (which manages key generations and anchor timing), and the telemetry/calibration modules.
+3. **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes window focus tracking, hotkey listeners, real-time sleeper utilities, and MMCSS registrations.
+4. **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes.
 
 ---
 
@@ -17,76 +19,59 @@ The codebase is divided into four distinct layers:
 
 The journey from a JSON file to a piano sound in-game follows a strict pipeline:
 
+```mermaid
+graph TD
+    A[JSON Song File] -->|Step 1: Parse & Validate| B(AOT Scheduler)
+    B -->|Step 2: build_key_actions| C(Raw KeyAction Timeline)
+    C -->|Step 3: compile_runtime_intents| D(RuntimeDispatchCoordinator)
+    D -->|Step 4: Real-time Dispatch Loop| E(Dispatch Thread)
+    E -->|Step 5: MMCSS / timer-guard / sleep| F(SendInput Backend)
+```
+
 ### Step 1: Parsing & Resolution
-The `parser` reads the JSON file, strictly validating timestamps and schemas. Unmapped keys or negative timestamps instantly halt execution with clear errors. Keys are resolved into physical **Scan Codes** (ignoring OS keyboard language layouts like AZERTY/QWERTY).
+The parser reads the JSON file, strictly validating timestamps and schemas. Unmapped keys or negative timestamps instantly halt execution with clear errors. Keys are resolved into physical **Scan Codes** (ignoring OS keyboard language layouts).
 
 ### Step 2: The AOT Scheduler (`build_key_actions`)
 Instead of calculating delays on the fly, the entire song is mapped out onto an absolute timeline in **microseconds** *before* playback begins.
-*   **Tempo Scaling:** All timestamps are scaled by `tempo_scale` and converted to microseconds. Notes are emitted at their exact source time — the player generates the whole timeline against no external reference, so there is no uniform "input lead" shift (it was proven a no-op and removed; see `timing-architecture-audit.md`).
-*   **Visibility Hold (`hold_us` / `min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-ins materialise purely as `ceil(profile_frames * frame_us)`; with no FPS they use conservative `*_unframed_us` values. Explicit `_us` overrides remain an expert escape hatch. This is the only timing lever the scheduler enforces.
-*   **Same-Key Feasibility:** If the same key repeats faster than `min_hold_us`, the previous hold is compressed down to `min_hold_us` (never below). If the authored interval is below `min_hold_us` the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, `degraded` mode keeps `min_hold_us` and reports the overlap. There is no separate repeat-gap/chord-merge/frame-align knob — all three were removed after measurement showed they did not change real-song playback.
-*   **Event Grouping:** Notes sharing the exact same timestamp are grouped into a single `SendInput` batch (chords). Notes a few ms apart go out at their own time; the game samples them on the same frame anyway.
+* **Tempo Scaling:** All timestamps are scaled by `tempo_scale` and converted to microseconds.
+* **Visibility Hold (`min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-in holds materialize purely as `ceil(profile_frames * frame_us)`. 
+* **Same-Key Feasibility:** If the same key repeats faster than the target hold, the previous hold is compressed down to `min_hold_us`. If the authored interval is below `min_hold_us`, the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, while `degraded` mode keeps `min_hold_us` and schedules the down events, which will be resolved at runtime.
 
-### Step 3: The Real-Time Engine
-The `PlaybackEngine` compiles the pre-calculated `KeyAction` timeline into per-key runtime
-generations, then enters a highly optimized `while` loop checking `time.perf_counter_ns()`.
+### Step 3: Runtime Intent Compilation
+Before playback starts, the raw `KeyAction` timeline is passed to [compile_runtime_intents](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L85), which attaches stable, incrementing generation IDs to every down-up action pair. This yields a structured `RuntimeSchedule`.
 
-The runtime coordinator preserves authored down deadlines while enforcing the resolved
-`min_hold_us` from the down dispatch start:
+### Step 4: The Real-Time Dispatch Loop
+The `PlaybackEngine` feeds this schedule into the [RuntimeDispatchCoordinator](file:///d:/Dev/Sky%20Player/src/sky_music/orchestration/runtime_dispatch.py#L133) and runs a dedicated dispatch thread. 
+* **Completion Anchor:** To protect key-down visibility against OS injection latency, the coordinator calculates release limits dynamically:
+  ```text
+  release_not_before_us = down_dispatch_completed_us + min_hold_us
+  effective_release_us = max(scheduled_release_us, release_not_before_us)
+  ```
+* **Conflict Resolution:** If a same-key down event is scheduled while the previous generation of that key is still active (e.g. due to compaction or dispatch delay), the coordinator splits the intents. The conflicting new down is dropped as a `dropped_conflict`, while other non-conflicting notes in the chord continue to play.
 
-```text
-release_not_before = down_dispatch_started + min_hold_us
-effective_release = max(scheduled_release, release_not_before)
-```
-
-Releases are deferred per key, so protecting one note's hold does not block unrelated downs.
-Generation identity also prevents a stale up from releasing a later same-key note after a conflict,
-pause, focus loss, or panic release. In degraded mode, a runtime-infeasible same-key down is
-explicitly dropped while other playable chord keys continue.
-
-To achieve microsecond accuracy on Windows (where `time.sleep` is notoriously inaccurate), the engine uses a **Hybrid Sleeper** (`PreciseSleeper`) that steps toward each deadline:
-1.  **Coarse Sleep:** If the next action is >20ms away, it OS-sleeps in chunks (capped at 20ms, waking ~5ms early) so the loop can still poll hotkeys/pause.
-2.  **Medium / Yield:** Between ~5ms and the spin threshold it sleeps in 1ms ticks, then yields the thread (`sleep(0)`).
-3.  **Spin-Lock:** For the final `spin_threshold_us` it busy-waits (spins the CPU) to hit the exact microsecond deadline without context-switching overhead.
-
-The focus check that pauses playback on alt-tab is memoised on a short TTL so its heavy Win32 calls stay out of this spin phase.
+### Step 5: High-Precision Scheduling & Thread Hardening
+To achieve microsecond accuracy on Windows, the dispatch thread employs:
+1. **MMCSS Registration:** Elevates the thread's scheduling priority using Windows Multimedia Class Scheduler Service (MMCSS).
+2. **Timer-Guard:** Utilizes a high-resolution waitable timer scope (1ms resolution) to prevent long scheduler sleeps from drifting.
+3. **Precise Sleeper:** Wakes up early using coarse sleeps, yields using `sleep(0)`, and busy-waits (spins) for the final `spin_threshold_us` to hit deadlines precisely.
 
 ---
 
-## 3. Backend Safety & Anti-Cheat Compliance
-
-The application interacts with the game exclusively through legitimate, public Windows APIs (`User32.SendInput`). It **does not** read game memory, inject DLLs, or hook global processes, making it safe for general use.
-
-### Active State Tracking
-The `WinSendInputBackend` maintains strict state tracking (`active_keys`). 
-*   **Duplicate-Down Protection:** If a scheduled `DOWN` event fires for a key that the system thinks is already down, it is ignored to prevent sticky buffers.
-*   **Multi-Pass Emergency Release:** When the user pauses or alt-tabs, the backend fires an immediate `release_all()`. To counteract OS queue blocking, it executes a 3-pass verification using `GetAsyncKeyState` to ensure the key actually bounced back up.
+## 3. Playback Robustness & Hardening
+To prevent input loss, stuck keys, and timing drift:
+* **Per-Play Window Re-acquire:** On play start, the engine re-acquires the active window handle for the game to ensure input is sent to the correct target.
+* **Active State Tracking:** The backend tracks all physically depressed keys in `active_keys`. If a duplicate down command is sent for an already-held key, the backend filters it out to prevent queue clutter.
+* **Multi-Pass Emergency Release:** When focus is lost or playback is paused, the engine halts the timeline and calls `release_all()`. To counteract OS queue blocking, it executes a 3-pass verification using `GetAsyncKeyState` to guarantee that keys have successfully bounced back up.
 
 ---
 
 ## 4. Telemetry & Auto-Calibration
 
-Because every PC and network environment has different latency profiles, the engine logs its performance to help users find the perfect `FrameTimingPolicy`.
-
 ### Telemetry Logs
-When running with the `--debug-csv` flag (or globally enabled in settings), a CSV is dumped to the `logs/` directory.
-*   `lateness_us`: The delay between when a note was scheduled to play vs. when the OS actually fired it.
-*   `send_duration_us`: How long the `SendInput` call blocked the thread.
-*   `sent_scan_codes` / `skipped_scan_codes`: What the backend actually accepted or skipped.
-*   `note_hold_duration_us`: Observed hold measured start-to-start, matching the runtime visibility
-    contract.
-*   `confirmed_hold_lower_bound_us`: Advisory worst-case diagnostic measured from down dispatch
-    start through matching up dispatch completion.
-*   `runtime_outcome` / `deferred_by_us`: Whether an intent was sent, deferred, suppressed, or
-    dropped by an explicit runtime conflict decision.
+Running with the `--debug-csv` flag dumps detailed metrics for every event:
+* `lateness_us`: The difference between scheduled time and actual send time.
+* `send_duration_us`: Time taken by the `SendInput` OS call.
+* `observed_hold_us`: The actual duration the key was held, measured from down dispatch completion to up dispatch completion.
 
 ### Calibration Loop
-The Orchestration layer includes a `calibration` module that analyzes the P95 and P99 percentiles of the telemetry lateness.
-
-**How to Calibrate via CLI:**
-1. Play a song with `--debug-csv`.
-2. Run `python src/main.py --auto-calibrate` to view recommendations based on jitter. Schedule stress and fast repeats recommend `local-precise` plus a tempo reduction; dense polyphony may recommend `audience-safe`.
-3. Run `python src/main.py --save-calibration` to permanently write the recommended profile and FPS offsets to `config.json`.
-
-**How to Calibrate via UI:**
-In the Interactive Command Palette, press the `C` key to bring up the Calibration screen. If a recent telemetry log exists, the UI will display the measured jitter and allow you to save the recommended profile with a single keystroke.
+The orchestration layer analyzes percentiles of telemetry lateness. Users can run calibration via the CLI (`python src/main.py --auto-calibrate`) or interactively in the Textual UI by pressing `C`. Saving the calibration writes the optimal profile and FPS offsets directly to `config.json` to eliminate scheduler jitter on their specific hardware.

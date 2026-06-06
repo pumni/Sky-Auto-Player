@@ -3,76 +3,74 @@
 **Status:** Implemented June 2026. This is the live timing-profile reference.
 
 Related evidence and decisions:
+* [timing-principles.md](file:///d:/Dev/Sky%20Player/docs/timing-principles.md): in-game measurements and historical context.
+* [timing-experiments.md](file:///d:/Dev/Sky%20Player/docs/timing-experiments.md): experiments and A/B observations.
 
-- `timing-principles.md` Appendix A: in-game measurements and historical context.
-- `timing-experiments.md`: experiments and A/B observations.
-- `floor-removal-three-profile-plan.md`: accepted floor-removal decision and target baselines.
+---
 
-## 1. Core model
+## 1. Core Model
 
-When FPS is known and positive, every built-in hold is materialised only from its declared frame
-ratio:
-
+When FPS is known and positive, every built-in hold is materialized only from its declared frame ratio:
 ```text
 frame_us = ceil(1_000_000 / fps)
 effective_us = ceil(frames * frame_us)
 ```
 
-There is no absolute floor and no `max(frame_term, floor_us)` step. The frame period and the final
-duration are both rounded up so a declared 1.0-frame hold never becomes shorter than a real frame.
+There is no absolute floor and no `max(frame_term, floor_us)` step. The frame period and the final duration are both rounded up so a declared 1.0-frame hold never becomes shorter than a real frame. No fixed scheduling margins or latency buffers are added to this model.
 
-When FPS is `None` or disabled, the profile uses `*_unframed_us`. Explicit `_us` values supplied by
-CLI or config remain absolute overrides and are applied after frame materialisation.
+When FPS is `None` or disabled, the profile uses `*_unframed_us`. Explicit `_us` values supplied by CLI or config remain absolute overrides and are applied after frame materialization.
 
-## 2. Hold unification
+---
 
-Built-ins declare only `min_hold_frames` and `min_hold_unframed_us`. Normal `hold` derives from
-`min_hold`, so built-in effective policies satisfy:
+## 2. Hold Unification
 
+Built-ins declare only `min_hold_frames` and `min_hold_unframed_us`. Normal `hold` derives from `min_hold`, so built-in effective policies satisfy:
 ```text
 hold_us == min_hold_us
 ```
 
-An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape hatch and may separate
-normal hold from minimum compressed hold.
+An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape hatch and may separate normal hold from minimum compressed hold.
 
-## 3. Current profiles
+---
 
-| Profile         | `min_hold_frames` | `min_hold_unframed_us` | Intent                                     |
-| --------------- | ----------------: | ---------------------: | ------------------------------------------ |
-| `local_precise` |               1.0 |                  22000 | Sharpest local visibility profile          |
-| `audience_safe` |              1.02 |                  18000 | Audience-tested sharp profile              |
-| `balanced`      |              1.01 |                  17000 | General default with more local-frame body |
+## 3. Current Profiles
 
-`dense_safe` was removed. Fast repeat or schedule-stress recommendations now select
-`local_precise` together with tempo reduction.
+| Profile | `min_hold_frames` | `min_hold_unframed_us` | Intent |
+| :--- | :---: | :---: | :--- |
+| `local_precise` | 1.0 | 22000 | Sharpest local visibility profile (no margin) |
+| `audience_safe` | 1.02 | 18000 | Audience-tested sharp profile |
+| `balanced` | 1.01 | 17000 | General default with more local-frame body |
 
-## 4. Validation invariants
+`dense_safe` was removed. Fast repeat or schedule-stress recommendations now select `local_precise` together with tempo reduction.
 
-- `min_hold_frames >= 1.0`.
-- If explicitly declared, `0 < min_hold_frames <= hold_frames`.
-- Materialised `min_hold_us` must be greater than the real frame duration.
-- Explicit hold/min-hold ordering remains `0 < min_hold_us <= hold_us`.
-- Unknown legacy keys, including former `*_floor_us` keys, are ignored.
+---
 
-There is no audience-specific absolute-duration validator. `audience_safe` is validated by the same
-frame-relative rules as the other profiles.
+## 4. Validation Invariants
 
-## 5. Accepted audience risk
+* `min_hold_frames >= 1.0`.
+* If explicitly declared, `0 < min_hold_frames <= hold_frames`.
+* Materialized `min_hold_us` must be greater than the real frame duration.
+* Explicit hold/min-hold ordering remains `0 < min_hold_us <= hold_us`.
+* Unknown legacy keys, including former `*_floor_us` keys, are ignored.
 
-Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS,
-`audience_safe` materialises to 7084 us, which may be missed by a remote client sampling around
-60 FPS. This is intentional and must not be silently counteracted by introducing another absolute
-wall under a different name.
+There is no audience-specific absolute-duration validator. `audience_safe` is validated by the same frame-relative rules as the other profiles.
 
-## 6. Regression baselines
+---
+
+## 5. Accepted Audience Risk
+
+Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS, `audience_safe` materializes to 7084 $\mu\text{s}$, which may be missed by a remote client sampling around 60 FPS. This is intentional and must not be silently counteracted by introducing another absolute wall under a different name.
+
+---
+
+## 6. Regression Baselines
 
 The required `hold_us == min_hold_us` values are:
 
-| Profile         |  None | 30 FPS | 60 FPS | 144 FPS |
-| --------------- | ----: | -----: | -----: | ------: |
-| `local_precise` | 22000 |  33334 |  16667 |    6945 |
-| `audience_safe` | 18000 |  34001 |  17001 |    7084 |
-| `balanced`      | 17000 |  33668 |  16834 |    7015 |
+| Profile | None | 30 FPS | 60 FPS | 144 FPS |
+| :--- | :---: | :---: | :---: | :---: |
+| `local_precise` | 22000 | 33334 | 16667 | 6945 |
+| `audience_safe` | 18000 | 34001 | 17001 | 7084 |
+| `balanced` | 17000 | 33668 | 16834 | 7015 |
 
 Golden schedules use `TimingPolicy.from_dict({})` and must not be regenerated for this change.
