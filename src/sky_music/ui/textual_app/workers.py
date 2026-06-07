@@ -58,6 +58,7 @@ class MetadataCoordinator:
         self._cfg = cfg
         self._state = ResourceState.OPEN
         self._last_error: str | None = None
+        self._latest_request_id = 0
         
         # Dedicated sequential coordinator executor
         self._coord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-metadata-coord")
@@ -71,8 +72,12 @@ class MetadataCoordinator:
     def phase(self) -> str:
         return "picker"
 
-    def _should_stop(self) -> bool:
-        return self._state is not ResourceState.OPEN
+    def _should_stop(self, request_id: int | None = None) -> bool:
+        if self._state is not ResourceState.OPEN:
+            return True
+        if request_id is not None and request_id != self._latest_request_id:
+            return True
+        return False
 
     def refresh(self, paths: list[Path]) -> None:
         """Begin progressive background metadata warming, hydration, and analysis for all paths."""
@@ -82,13 +87,16 @@ class MetadataCoordinator:
         if not all_paths:
             return
 
+        self._latest_request_id += 1
+        request_id = self._latest_request_id
+
         # Cancel the pending job if it has not started yet.
         # This keeps the queue length bounded to at most 1 pending job.
         if self._coord_future is not None and not self._coord_future.done():
             self._coord_future.cancel()
 
         # Submit the new list of paths to be processed in the background thread.
-        self._coord_future = self._coord_executor.submit(self._warm_and_process_all_paths, all_paths)
+        self._coord_future = self._coord_executor.submit(self._warm_and_process_all_paths, all_paths, request_id)
 
     def cancel(self) -> None:
         if self._state == ResourceState.OPEN:
@@ -103,14 +111,19 @@ class MetadataCoordinator:
             self._state = ResourceState.CLOSING
         if self._coord_future is not None and not self._coord_future.done():
             self._coord_future.cancel()
+
+        if not wait:
+            # Do not call executor shutdown with wait=False to avoid Python 3.14 manager-thread trap.
+            # Simply request cancellation and transition to CLOSING.
+            return
+
         if self._coord_executor is not None:
             try:
                 try:
                     self._coord_executor.shutdown(wait=wait, cancel_futures=True)
                 except TypeError:
                     self._coord_executor.shutdown(wait=wait)
-                if wait:
-                    self._state = ResourceState.CLOSED
+                self._state = ResourceState.CLOSED
             except Exception as exc:
                 self._state = ResourceState.FAILED
                 self._last_error = str(exc)
@@ -134,8 +147,8 @@ class MetadataCoordinator:
             last_error=self._last_error,
         )
 
-    def _refresh_ui_from_thread(self) -> None:
-        if self._should_stop():
+    def _refresh_ui_from_thread(self, request_id: int | None = None) -> None:
+        if self._should_stop(request_id):
             return
         loop = getattr(self._app, "_loop", None)
         if loop is not None and loop.is_closed():
@@ -146,35 +159,35 @@ class MetadataCoordinator:
         except RuntimeError:
             self._state = ResourceState.CLOSED
 
-    def _warm_and_process_all_paths(self, paths: list[Path]) -> None:
-        if self._should_stop():
+    def _warm_and_process_all_paths(self, paths: list[Path], request_id: int) -> None:
+        if self._should_stop(request_id):
             return
 
         # Step 1: Warm SQLite cache for all paths in a single efficient operation
         try:
             warm_persistent_metadata_cache(song_paths=paths)
-            self._refresh_ui_from_thread()
-        except Exception:
-            pass
+            self._refresh_ui_from_thread(request_id)
+        except Exception as exc:
+            self._last_error = f"Step 1 (warm) failed: {exc}"
 
-        if self._should_stop():
+        if self._should_stop(request_id):
             return
 
         # Step 2: Hydrate cache from SQLite for specific paths and populate raw note stats
         try:
             changed = hydrate_and_fill_raw_metadata(paths, self._session, self._cfg)
             if changed:
-                self._refresh_ui_from_thread()
-        except Exception:
-            pass
+                self._refresh_ui_from_thread(request_id)
+        except Exception as exc:
+            self._last_error = f"Step 2 (hydrate) failed: {exc}"
 
-        if self._should_stop():
+        if self._should_stop(request_id):
             return
 
         # Step 3: Find any paths that still need full scheduler analysis
         pending = []
         for path in paths:
-            if self._should_stop():
+            if self._should_stop(request_id):
                 return
             meta = peek_cached_song_ui_metadata(path, self._session, self._cfg)
             if meta is None or not meta.analyzed:
@@ -189,7 +202,7 @@ class MetadataCoordinator:
         session_payload = session_to_worker_payload(self._session)
         
         for i in range(0, len(pending), batch_size):
-            if self._should_stop():
+            if self._should_stop(request_id):
                 return
             batch = pending[i : i + batch_size]
             try:
@@ -198,10 +211,11 @@ class MetadataCoordinator:
                     session_payload,
                     self._cfg,
                 )
-                if self._should_stop():
+                if self._should_stop(request_id):
                     return
                 changed_risk = store_computed_song_ui_metadata_payloads(payloads, self._session, self._cfg)
                 if changed_risk:
-                    self._refresh_ui_from_thread()
-            except Exception:
+                    self._refresh_ui_from_thread(request_id)
+            except Exception as exc:
+                self._last_error = f"Step 4 (compute) failed for batch {i}: {exc}"
                 continue

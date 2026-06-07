@@ -71,6 +71,56 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     assert coord.snapshot().state == "closed"
 
 
+def test_metadata_coordinator_debounce_request_id(monkeypatch) -> None:
+    import time
+    app = FakeApp()
+    session = PlaybackSessionContext.balanced()
+    cfg = AppConfig()
+    
+    coord = MetadataCoordinator(app, session, cfg)
+    
+    stages_called = []
+    
+    def mock_warm(song_paths):
+        stages_called.append("warm")
+        # Trigger another refresh to increment request_id ONLY for the first request
+        if len(stages_called) == 1:
+            coord.refresh([Path("new/path.json")])
+        
+    def mock_hydrate(paths, sess, c):
+        stages_called.append("hydrate")
+        
+    import sky_music.ui.textual_app.workers as workers_module
+    monkeypatch.setattr(workers_module, "warm_persistent_metadata_cache", mock_warm)
+    monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
+    
+    coord.refresh([Path("first/path.json")])
+    
+    # We need to wait a bit to let the second request actually start before we close,
+    # or just accept that the second one might be cancelled by close().
+    # The key thing to verify is that the first one aborted.
+    
+    # Let's use a flag to wait for the second warm
+    for _ in range(50):
+        if stages_called.count("warm") >= 2:
+            break
+        time.sleep(0.01)
+
+    coord.close(wait=True)
+    
+    assert stages_called[0] == "warm"
+    # The first hydrate should have been skipped.
+    # The second hydrate should have happened (or at least the second warm should have happened)
+    
+    warm_count = stages_called.count("warm")
+    hydrate_count = stages_called.count("hydrate")
+    
+    assert warm_count == 2
+    # Since we waited for the second warm, and then closed with wait=True, 
+    # the second hydrate should also finish.
+    assert hydrate_count == 1
+
+
 def test_telemetry_summary_contains_picker_cleanup() -> None:
     from sky_music.orchestration.telemetry import TelemetryLogger
     
