@@ -2,25 +2,607 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Sky Player - Sky: Children of the Light PC Music Player</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Sky Player - PC Music Sheet Player for Sky: Children of the Light</title>
+
     <meta
       name="description"
-      content="Sky Player is a PC music sheet player for Sky: Children of the Light. It supports JSON, skysheet, and JSON-compatible TXT song files."
+      content="Sky Player is an automatic PC music sheet player for Sky: Children of the Light. It supports JSON, skysheet, and JSON-compatible TXT song files."
     />
-  </head>
-  <body>
-    <main>
-      <h1>Sky Player</h1>
-      <p>
-        Sky Player is an automatic PC music sheet player for Sky: Children of the Light.
-        It supports JSON, skysheet, and JSON-compatible TXT song files.
-      </p>
 
-      <p>
-        <a href="https://github.com/pumzu/Sky-Player">
-          View Sky Player on GitHub
+    <meta name="theme-color" content="#0f172a" />
+
+    <style>
+      :root {
+        --bg: #020617;
+        --bg-soft: #0f172a;
+        --card: rgba(15, 23, 42, 0.72);
+        --card-border: rgba(148, 163, 184, 0.22);
+        --text: #f8fafc;
+        --muted: #cbd5e1;
+        --muted-soft: #94a3b8;
+        --primary: #7dd3fc;
+        --primary-strong: #38bdf8;
+        --secondary: #c084fc;
+        --accent: #facc15;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+        --radius-lg: 28px;
+        --radius-md: 18px;
+        --max-width: 1120px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(125, 211, 252, 0.24), transparent 34rem),
+          radial-gradient(circle at top right, rgba(192, 132, 252, 0.2), transparent 34rem),
+          linear-gradient(180deg, #020617 0%, #0f172a 52%, #020617 100%);
+      }
+
+      body::before {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        content: "";
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 48px 48px;
+        mask-image: linear-gradient(to bottom, black, transparent 78%);
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        position: relative;
+        z-index: 1;
+        width: min(100% - 32px, var(--max-width));
+        margin: 0 auto;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 28px 0;
+      }
+
+      .brand {
+        display: inline-flex;
+        gap: 12px;
+        align-items: center;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+
+      .brand-icon {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 14px;
+        background:
+          linear-gradient(135deg, rgba(125, 211, 252, 0.95), rgba(192, 132, 252, 0.9));
+        box-shadow: 0 12px 36px rgba(56, 189, 248, 0.25);
+      }
+
+      .nav-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 18px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 700;
+        background: rgba(15, 23, 42, 0.56);
+        backdrop-filter: blur(18px);
+        transition:
+          transform 180ms ease,
+          border-color 180ms ease,
+          background 180ms ease;
+      }
+
+      .nav-link:hover {
+        transform: translateY(-2px);
+        border-color: rgba(125, 211, 252, 0.5);
+        background: rgba(15, 23, 42, 0.88);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+        gap: 48px;
+        align-items: center;
+        padding: 78px 0 88px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        width: fit-content;
+        margin-bottom: 22px;
+        padding: 8px 14px;
+        border: 1px solid rgba(125, 211, 252, 0.28);
+        border-radius: 999px;
+        color: #bae6fd;
+        font-size: 14px;
+        font-weight: 700;
+        background: rgba(14, 165, 233, 0.12);
+      }
+
+      .eyebrow-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 24px rgba(250, 204, 21, 0.8);
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(48px, 8vw, 92px);
+        line-height: 0.95;
+        letter-spacing: -0.075em;
+      }
+
+      .gradient-text {
+        color: transparent;
+        background: linear-gradient(135deg, #f8fafc 0%, #7dd3fc 45%, #c084fc 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+      }
+
+      .hero-text {
+        max-width: 680px;
+        margin: 26px 0 0;
+        color: var(--muted);
+        font-size: clamp(18px, 2vw, 21px);
+        line-height: 1.75;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 34px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        padding: 0 22px;
+        border-radius: 999px;
+        font-weight: 800;
+        transition:
+          transform 180ms ease,
+          box-shadow 180ms ease,
+          border-color 180ms ease,
+          background 180ms ease;
+      }
+
+      .button:hover {
+        transform: translateY(-3px);
+      }
+
+      .button-primary {
+        color: #031018;
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        box-shadow: 0 18px 42px rgba(56, 189, 248, 0.25);
+      }
+
+      .button-primary:hover {
+        box-shadow: 0 22px 60px rgba(56, 189, 248, 0.34);
+      }
+
+      .button-secondary {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .button-secondary:hover {
+        border-color: rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .preview-card {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-lg);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent),
+          var(--card);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(26px);
+      }
+
+      .preview-card::before {
+        position: absolute;
+        inset: -1px;
+        pointer-events: none;
+        content: "";
+        background:
+          radial-gradient(circle at 30% 0%, rgba(125, 211, 252, 0.24), transparent 32%),
+          radial-gradient(circle at 90% 10%, rgba(192, 132, 252, 0.22), transparent 30%);
+      }
+
+      .window-bar {
+        position: relative;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .window-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.32);
+      }
+
+      .player {
+        position: relative;
+        padding: 28px;
+      }
+
+      .song-title {
+        margin: 0 0 6px;
+        font-size: 24px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+      }
+
+      .song-subtitle {
+        margin: 0 0 24px;
+        color: var(--muted-soft);
+      }
+
+      .notes {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 12px;
+        margin: 26px 0;
+      }
+
+      .note {
+        aspect-ratio: 1;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      }
+
+      .note.active {
+        background: linear-gradient(135deg, rgba(125, 211, 252, 0.95), rgba(192, 132, 252, 0.95));
+        box-shadow:
+          0 0 28px rgba(125, 211, 252, 0.44),
+          inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      }
+
+      .progress {
+        overflow: hidden;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .progress-value {
+        width: 68%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--primary), var(--secondary));
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .stat {
+        padding: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      .stat strong {
+        display: block;
+        font-size: 18px;
+      }
+
+      .stat span {
+        color: var(--muted-soft);
+        font-size: 13px;
+      }
+
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+        padding: 0 0 88px;
+      }
+
+      .feature-card {
+        padding: 24px;
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-md);
+        background: rgba(15, 23, 42, 0.58);
+        backdrop-filter: blur(18px);
+      }
+
+      .feature-icon {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        margin-bottom: 18px;
+        place-items: center;
+        border-radius: 14px;
+        background: rgba(125, 211, 252, 0.12);
+      }
+
+      .feature-card h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        letter-spacing: -0.03em;
+      }
+
+      .feature-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .footer {
+        padding: 34px 0 46px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        color: var(--muted-soft);
+        text-align: center;
+      }
+
+      .footer a {
+        color: var(--primary);
+        font-weight: 700;
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+          padding-top: 48px;
+        }
+
+        .features {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .page {
+          width: min(100% - 24px, var(--max-width));
+        }
+
+        .nav {
+          gap: 18px;
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .hero {
+          gap: 34px;
+          padding-bottom: 64px;
+        }
+
+        .actions {
+          flex-direction: column;
+        }
+
+        .button {
+          width: 100%;
+        }
+
+        .player {
+          padding: 22px;
+        }
+
+        .notes {
+          gap: 8px;
+        }
+
+        .note {
+          border-radius: 14px;
+        }
+
+        .stats {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="page">
+      <header class="nav" aria-label="Main navigation">
+        <a class="brand" href="/" aria-label="Sky Player home">
+          <span class="brand-icon" aria-hidden="true">♪</span>
+          <span>Sky Player</span>
         </a>
-      </p>
-    </main>
+
+        <a
+          class="nav-link"
+          href="https://github.com/pumzu/Sky-Player"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div>
+            <div class="eyebrow">
+              <span class="eyebrow-dot" aria-hidden="true"></span>
+              PC Music Sheet Player
+            </div>
+
+            <h1 id="hero-title">
+              Play Sky music sheets
+              <span class="gradient-text">beautifully.</span>
+            </h1>
+
+            <p class="hero-text">
+              Sky Player is an automatic PC music sheet player for
+              <strong>Sky: Children of the Light</strong>. Load your song files,
+              play notes with precision, and enjoy a clean desktop-friendly music workflow.
+            </p>
+
+            <div class="actions">
+              <a
+                class="button button-primary"
+                href="https://github.com/pumzu/Sky-Player"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View on GitHub
+              </a>
+
+              <a class="button button-secondary" href="#features">
+                See features
+              </a>
+            </div>
+          </div>
+
+          <aside class="preview-card" aria-label="Sky Player interface preview">
+            <div class="window-bar" aria-hidden="true">
+              <span class="window-dot"></span>
+              <span class="window-dot"></span>
+              <span class="window-dot"></span>
+            </div>
+
+            <div class="player">
+              <p class="song-title">Aurora Theme</p>
+              <p class="song-subtitle">JSON · skysheet · TXT compatible</p>
+
+              <div class="notes" aria-hidden="true">
+                <span class="note active"></span>
+                <span class="note"></span>
+                <span class="note"></span>
+                <span class="note active"></span>
+                <span class="note"></span>
+
+                <span class="note"></span>
+                <span class="note active"></span>
+                <span class="note"></span>
+                <span class="note"></span>
+                <span class="note active"></span>
+
+                <span class="note"></span>
+                <span class="note"></span>
+                <span class="note active"></span>
+                <span class="note"></span>
+                <span class="note"></span>
+              </div>
+
+              <div class="progress" aria-hidden="true">
+                <div class="progress-value"></div>
+              </div>
+
+              <div class="stats">
+                <div class="stat">
+                  <strong>3</strong>
+                  <span>Formats</span>
+                </div>
+                <div class="stat">
+                  <strong>PC</strong>
+                  <span>Optimized</span>
+                </div>
+                <div class="stat">
+                  <strong>Auto</strong>
+                  <span>Playback</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section id="features" class="features" aria-label="Sky Player features">
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">⚡</div>
+            <h2>Automatic playback</h2>
+            <p>
+              Play supported Sky music sheets automatically with a clean and focused workflow.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">🗂️</div>
+            <h2>Multiple file formats</h2>
+            <p>
+              Supports JSON, skysheet, and JSON-compatible TXT song files.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">🖥️</div>
+            <h2>Made for PC</h2>
+            <p>
+              Designed for desktop usage with a simple interface and fast access to your songs.
+            </p>
+          </article>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          Built for Sky music players.
+          <a
+            href="https://github.com/pumzu/Sky-Player"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Explore the project on GitHub
+          </a>.
+        </p>
+      </footer>
+    </div>
   </body>
 </html>
