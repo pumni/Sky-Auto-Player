@@ -46,16 +46,52 @@ def main() -> None:
     ]
     if args.collect_textual or not args.textual_proof:
         cmd.extend(["--collect-all", "textual", "--collect-all", "rich"])
-        cmd.extend(
-            [
-                "--hidden-import",
-                "sky_music.ui.textual_app",
-                "--hidden-import",
-                "sky_music.ui.textual_app.app",
-                "--hidden-import",
-                "sky_music.ui.textual_app.workers",
-            ]
-        )
+
+    # Hidden imports: modules that PyInstaller cannot auto-detect because they are
+    # loaded via lazy/conditional imports (inside if-blocks or function bodies).
+    hidden_imports: list[str] = [
+        # UI – textual app
+        "sky_music.ui.textual_app",
+        "sky_music.ui.textual_app.app",
+        "sky_music.ui.textual_app.workers",
+        # UI – classic prompt-toolkit picker and sub-modules
+        "sky_music.ui.picker",
+        "sky_music.ui.picker_helpers",
+        "sky_music.ui.picker_metadata",
+        "sky_music.ui.picker_theme",
+        "sky_music.ui.hud",
+        "sky_music.ui.text_render",
+        # Platform – Win32 inputs (lazy-imported in backend, focus, realtime, engine, picker)
+        "sky_music.platform.win32",
+        "sky_music.platform.win32.inputs",
+        # Orchestration – calibration and telemetry are lazy-imported
+        "sky_music.orchestration.engine",
+        "sky_music.orchestration.runtime_dispatch",
+        "sky_music.orchestration.calibration",
+        "sky_music.orchestration.telemetry",
+        # Infrastructure – background, hotkeys, doctor use lazy imports or are indirect
+        "sky_music.infrastructure.backend",
+        "sky_music.infrastructure.background",
+        "sky_music.infrastructure.hotkeys",
+        "sky_music.infrastructure.doctor",
+        "sky_music.infrastructure.focus",
+        "sky_music.infrastructure.realtime",
+        "sky_music.infrastructure.timing",
+        # Domain
+        "sky_music.domain.domain",
+        "sky_music.domain.analyzer",
+        "sky_music.domain.parser",
+        "sky_music.domain.scheduler",
+        "sky_music.domain.scheduler_types",
+        "sky_music.domain.session_context",
+        "sky_music.domain.song_repository",
+        "sky_music.domain.validation",
+        # Config and layouts
+        "sky_music.config",
+        "sky_music.layouts",
+    ]
+    for imp in hidden_imports:
+        cmd.extend(["--hidden-import", imp])
     cmd.append(entrypoint)
     subprocess.run(cmd, check=True)
     

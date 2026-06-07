@@ -1,6 +1,6 @@
 """Single source of truth for terminal cell-width math and box sizing.
 
-Every picker module (``picker``, ``picker_layout``, ``picker_theme``) and the
+Every picker module (``picker``, ``picker_theme``) and the
 CLI panels in ``main`` must measure, truncate, and pad text through these
 helpers. Keeping one implementation is what guarantees box borders line up:
 divergent width math across modules is exactly what caused card borders to drift.
@@ -12,10 +12,7 @@ import re
 import unicodedata
 from typing import Literal
 
-try:  # prompt_toolkit is the production source of truth for cell width.
-    from prompt_toolkit.utils import get_cwidth as _pt_cwidth
-except Exception:  # pragma: no cover - fallback for non prompt_toolkit callers/tests
-    _pt_cwidth = None
+from rich.cells import cell_len as _pt_cwidth
 
 # Terminals narrower/wider than this are clamped so every panel renders at the
 # same width regardless of which screen drew it (picker, preflight, comparison).

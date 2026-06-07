@@ -45,7 +45,7 @@ uv run python src/main.py
    - Press `Ctrl+R` to reload songs.
    - Press `q` or `Esc` to quit.
 
-The default picker mode is `--ui auto`. It uses the Textual picker in supported terminals and falls back to the classic prompt-toolkit picker elsewhere. Use `--ui classic` to force the old picker or `--ui textual` to force the new picker. The classic picker is deprecated, but remains available as a compatibility fallback.
+Sky Player uses a beautiful Textual TUI interface for selecting and playing songs. It requires an ANSI-compatible terminal (such as Windows Terminal or the VS Code integrated terminal) to run.
 
 ### ➕ Adding More Songs
 

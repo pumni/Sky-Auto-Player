@@ -42,13 +42,6 @@ def test_cli_theme_argument():
     args = parser.parse_args(["--theme", "cyberpunk"])
     assert args.theme == "cyberpunk"
 
-def test_cli_ui_argument_defaults_to_auto():
-    parser = main.build_arg_parser()
-    args = parser.parse_args([])
-    assert args.ui == "auto"
-    args = parser.parse_args(["--ui", "textual"])
-    assert args.ui == "textual"
-
 
 class DummyStdout:
     def __init__(self, is_tty: bool) -> None:
@@ -60,7 +53,7 @@ class DummyStdout:
 
 def test_supports_textual_requires_tty(monkeypatch):
     monkeypatch.setattr(main.sys, "stdout", DummyStdout(False))
-    assert main._supports_textual() is False
+    assert main._check_textual_support() is not None
 
 
 def test_supports_textual_on_windows_terminal(monkeypatch):
@@ -68,7 +61,7 @@ def test_supports_textual_on_windows_terminal(monkeypatch):
     monkeypatch.setattr(main.sys, "platform", "win32")
     monkeypatch.setenv("WT_SESSION", "test-session")
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
-    assert main._supports_textual() is True
+    assert main._check_textual_support() is None
 
 
 def test_supports_textual_falls_back_on_weak_windows_terminal(monkeypatch):
@@ -76,7 +69,7 @@ def test_supports_textual_falls_back_on_weak_windows_terminal(monkeypatch):
     monkeypatch.setattr(main.sys, "platform", "win32")
     monkeypatch.delenv("WT_SESSION", raising=False)
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
-    assert main._supports_textual() is False
+    assert main._check_textual_support() is not None
 
 
 def test_textual_selftest_argument_is_hidden_and_parses():
@@ -106,7 +99,7 @@ def test_prompt_song_selection_routes_to_textual(monkeypatch):
         assert kwargs["initial_dry_run"] is True
         return expected
 
-    monkeypatch.setattr(main, "PICKER_UI_MODE", "textual")
+    monkeypatch.setattr(main, "_check_textual_support", lambda: None)
     monkeypatch.setattr(textual_app, "choose_song_interactively_textual", fake_textual_picker)
 
     assert main.prompt_song_selection(dry_run=True) == expected

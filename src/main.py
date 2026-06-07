@@ -42,7 +42,7 @@ from sky_music.infrastructure.hotkeys import (
     parse_hotkey,
     hotkey_conflicts_with_note_keys
 )
-from sky_music.ui.picker import (
+from sky_music.ui.picker_helpers import (
     SONG_DIR,
     SUPPORTED_EXTENSIONS,
     get_song_choices,
@@ -63,7 +63,6 @@ DRY_RUN_MODE = False
 TEMPO_SCALE = 1.0
 TIMING_PROFILE_NAME = "balanced"
 VERBOSE_HUD = False
-PICKER_UI_MODE = "auto"
 USE_DISPATCH_THREAD = True
 ENABLE_TIMER_GUARD = True
 ENABLE_WAITABLE_TIMER = True
@@ -1036,17 +1035,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show detailed live timing/backend stats during playback (2-line HUD)",
     )
-    disp.add_argument(
-        "--ui",
-        choices=["auto", "textual", "classic"],
-        default="auto",
-        help="song picker backend (default: auto; classic is a compatibility fallback)",
-    )
+
 
     return parser
 
 def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) -> None:
-    global PLAYBACK_DEBUG, DEBUG_LOG_PATH, PICKER_UI_MODE
+    global PLAYBACK_DEBUG, DEBUG_LOG_PATH
     from sky_music.platform.win32 import inputs
     from sky_music.ui import picker as songs
 
@@ -1066,7 +1060,6 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_timer_guard = not args.no_timer_guard
     RUNTIME_STATE.enable_waitable_timer = not args.no_waitable_timer
     RUNTIME_STATE.enable_gc_pause = not args.no_gc_pause
-    PICKER_UI_MODE = args.ui
 
     if PLAYBACK_DEBUG:
         init_debug_log()
@@ -1088,12 +1081,47 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
         songs.ACTIVE_THEME = args.theme
         songs.save_theme(args.theme)
 
-def _supports_textual() -> bool:
+def _check_textual_support() -> str | None:
+    """Return a human-readable failure reason if Textual cannot run, or None if it can."""
     if not sys.stdout.isatty():
-        return False
+        return (
+            "stdout không phải terminal tương tác (isatty = False). "
+            "Hãy chạy Sky Player trực tiếp trong một cửa sổ terminal, "
+            "không phải qua pipe hay redirect."
+        )
     if sys.platform != "win32":
-        return True
-    return bool(os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM") == "vscode")
+        return None  # non-Windows terminals generally support Textual
+    # For frozen exes (double-click), WT_SESSION is absent even in Windows Terminal.
+    # Check ENABLE_VIRTUAL_TERMINAL_PROCESSING via Win32 API instead.
+    if getattr(sys, "frozen", False):
+        try:
+            import ctypes
+            import ctypes.wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+            STD_OUTPUT_HANDLE = ctypes.c_ulong(-11)
+            handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+            mode = ctypes.wintypes.DWORD()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                if not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+                    return (
+                        "Console hiện tại không hỗ trợ ANSI / Virtual Terminal Processing. "
+                        "Hãy mở ứng dụng từ Windows Terminal (wt.exe) hoặc "
+                        "bật 'Let Windows decide' trong Settings > System > For developers > Terminal."
+                    )
+        except Exception:
+            pass  # cannot query — assume capable
+        return None
+    # Dev/source mode: require WT_SESSION or TERM_PROGRAM
+    if os.environ.get("WT_SESSION"):
+        return None
+    if os.environ.get("TERM_PROGRAM") == "vscode":
+        return None
+    return (
+        "Terminal không được nhận diện là hỗ trợ Textual trên Windows. "
+        "Chạy từ Windows Terminal hoặc VS Code terminal, "
+        "hoặc dùng flag --ui textual để bỏ qua kiểm tra này."
+    )
 
 def _run_textual_selftest() -> int:
     """Headless frozen-exe smoke test for Textual picker packaging."""
@@ -1210,6 +1238,21 @@ def build_playback_controls(args: argparse.Namespace) -> PlaybackControls:
         )
     return controls
 
+def _wait_key_and_exit(code: int = 1) -> None:
+    """Print a 'press any key' prompt then exit — keeps the console window open
+    when the exe is launched by double-click so the user can read the error."""
+    print("\nNhấn phím bất kỳ để thoát...", file=sys.stderr, flush=True)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.getch()
+        else:
+            input()
+    except Exception:
+        pass
+    sys.exit(code)
+
+
 def prompt_song_selection(
     profile: str = "balanced",
     tempo: float = 1.0,
@@ -1228,9 +1271,30 @@ def prompt_song_selection(
         tempo=tempo,
         fps=fps,
     )
-    if PICKER_UI_MODE == "textual" or (PICKER_UI_MODE == "auto" and _supports_textual()):
-        from sky_music.ui.textual_app import choose_song_interactively_textual
+    unsupported_reason = _check_textual_support()
+    if unsupported_reason is not None:
+        print(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║          Sky Player — Yêu cầu hệ thống không đáp ứng        ║\n"
+            "╠══════════════════════════════════════════════════════════════╣\n"
+            f"║  {unsupported_reason[:62]:<62}║\n",
+            file=sys.stderr,
+            end="",
+        )
+        # Word-wrap the reason across multiple rows if it's long
+        remaining = unsupported_reason[62:]
+        while remaining:
+            chunk, remaining = remaining[:62], remaining[62:]
+            print(f"║  {chunk:<62}║", file=sys.stderr)
+        print(
+            "╚══════════════════════════════════════════════════════════════╝\n",
+            file=sys.stderr,
+        )
+        _wait_key_and_exit(1)
 
+    try:
+        from sky_music.ui.textual_app import choose_song_interactively_textual
         return choose_song_interactively_textual(
             theme_name=songs.ACTIVE_THEME,
             initial_profile=session.profile_name,
@@ -1239,42 +1303,29 @@ def prompt_song_selection(
             initial_dry_run=dry_run,
             scan_code_mode=session.scan_code_mode,
         )
-
-    if songs.HAS_PROMPT_TOOLKIT:
-        return songs.choose_song_interactively(
-            initial_profile=session.profile_name,
-            initial_tempo=session.tempo_scale,
-            initial_fps=session.fps,
-            initial_dry_run=dry_run,
-            scan_code_mode=session.scan_code_mode,
+    except ImportError as exc:
+        print(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║        Sky Player — Lỗi tải Textual UI                      ║\n"
+            "╠══════════════════════════════════════════════════════════════╣\n"
+            f"║  Module bị thiếu: {str(exc)[:44]:<44}          ║\n"
+            "║  Đây là lỗi đóng gói. Hãy báo cáo lỗi này.                ║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n",
+            file=sys.stderr,
         )
-
-    # Fallback CLI mode (no prompt_toolkit)
-    song_choices = get_song_choices(force_refresh=True)
-    print_choices_local(song_choices)
-
-    while True:
-        print("Commands: number/name = play, r = refresh, q = quit")
-        selection = input("Select song: ").strip()
-
-        if selection.casefold() in {"q", "quit", "exit", "0"}:
-            return None
-        if selection.casefold() in {"r", "refresh"}:
-            clear_terminal()
-            song_choices = get_song_choices(force_refresh=True)
-            print_choices_local(song_choices)
-            continue
-
-        selected_song = resolve_song_selection(selection, song_choices)
-        if selected_song is not None:
-            return songs.SongPickerResult(
-                song_path=selected_song,
-                action="dry_run" if dry_run else "play",
-                profile_name=profile,
-                tempo_scale=tempo,
-                fps=fps,
-            )
-        print("")
+        _wait_key_and_exit(2)
+    except Exception as exc:
+        print(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║        Sky Player — Textual UI gặp lỗi nghiêm trọng         ║\n"
+            "╠══════════════════════════════════════════════════════════════╣\n"
+            f"║  {str(exc)[:62]:<62}║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n",
+            file=sys.stderr,
+        )
+        _wait_key_and_exit(2)
 
 def print_choices_local(song_choices: list[Path]) -> None:
     if not song_choices:

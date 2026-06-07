@@ -45,6 +45,7 @@ These files contain completed refactor plans, historic audits, and legacy design
 * `2026-06_playback-flow-hardening-plan.md` — Initial hardening proposal.
 * `2026-06_playback-input-investigation-2026-06-06.md` — Investigation of missing notes and FPS toggles (findings folded into Principles §6).
 * `2026-06_timing-guard-binding-audit.md` — Legacy audit of timing guard threads.
-* `2026-06_ui-overhaul-textual-plan.md` — Textual UI plan (Live). *Classic UI removal pending.*
+* `2026-06_ui-overhaul-textual-plan.md` — Textual UI plan (Live).
+* `2026-06_remove-classic-ui-plan.md` — Plan for removing the legacy classic UI (Completed).
 * `2026-06_timing-experiments.md` — Full history of experiments (O1 - O10.4).
 * `2026-06_docs-cleanup-plan.md` — Meta-plan for documentation cleanup.
