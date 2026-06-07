@@ -48,71 +48,28 @@ class WaitableTimerSleeper:
         self.close()
 
 
-class MmcssRegistration:
-    """Boost the calling (dispatch) thread's scheduling via MMCSS.
-
-    The task name only selects a Windows scheduling profile; it does not require the thread to do
-    audio.  We try task profiles strongest-first and register under the best one the machine
-    actually has, so the dispatch thread always gets the highest real-time scheduling guarantee
-    available.  ``Pro Audio`` (High scheduling category) is the strongest and is present on
-    essentially every install; the rest are a safety net for stripped-down systems.  Empirically,
-    ``Low Latency`` is absent on some installs, hence the chain rather than a single name.
-    """
-
-    DEFAULT_TASK_NAMES: tuple[str, ...] = ("Pro Audio", "Low Latency", "Audio", "Games")
-
-    def __init__(self, task_names: tuple[str, ...] = DEFAULT_TASK_NAMES) -> None:
-        self.task_names = task_names
-        self.task_name: str | None = None
-        self.handle: int | None = None
-
-    def __enter__(self) -> Self:
-        for name in self.task_names:
-            try:
-                handle = inputs.av_set_mm_thread_characteristics(name)
-            except Exception as exc:
-                inputs.debug_log(f"[realtime] MMCSS registration failed for {name!r}: {exc}")
-                continue
-            if handle is not None:
-                self.handle = handle
-                self.task_name = name
-                inputs.debug_log(f"[realtime] MMCSS thread registered as {name!r}")
-                return self
-        inputs.debug_log("[realtime] MMCSS registration unavailable; dispatch runs unboosted")
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        if self.handle is None:
-            return
-        try:
-            inputs.av_revert_mm_thread_characteristics(self.handle)
-        except Exception as exc:
-            inputs.debug_log(f"[realtime] MMCSS revert failed: {exc}")
-        finally:
-            self.handle = None
-
-
 class RealtimeProcessScope:
     """Pause cyclic GC for the duration of dispatch, reverting on exit.
 
-    Thread *scheduling* is handled the Windows-sanctioned way by ``MmcssRegistration`` (best
-    available task profile, strongest-first), which raises only the dispatch thread — no
-    process-wide priority class is touched, so other apps and the OS are not starved.  The one
-    source of jitter MMCSS cannot address is Python's cyclic
-    garbage collector firing on the dispatch thread mid-send (which can drop notes), so we collect
-    accumulated picker-era garbage once up front and then pause GC until playback ends.
+    No process-wide priority class or MMCSS boost is touched, so other apps and the OS are not
+    starved.  One source of jitter we can address in Python is cyclic garbage collection firing on
+    the dispatch thread mid-send, so we collect accumulated picker-era garbage once up front and
+    then pause GC until playback ends.
 
     GC is re-enabled in ``__exit__`` so the picker/idle phases keep normal behaviour.
     """
 
-    __slots__ = ("_gc_was_enabled",)
+    __slots__ = ("_enabled", "_gc_was_enabled")
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self._enabled = enabled
+        self._gc_was_enabled = False
 
     def __enter__(self) -> Self:
+        if not self._enabled:
+            inputs.debug_log("[realtime] cyclic GC pause disabled for dispatch")
+            return self
+
         # Collect picker-era garbage first so a full collection cannot fire in the middle of the
         # precise dispatch loop, then pause GC for the run.
         self._gc_was_enabled = gc.isenabled()

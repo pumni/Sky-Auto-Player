@@ -7,10 +7,6 @@ from collections.abc import Callable
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 winmm = ctypes.WinDLL("winmm", use_last_error=True)
-try:
-    avrt = ctypes.WinDLL("avrt", use_last_error=True)
-except OSError:
-    avrt = None
 
 SW_RESTORE = 9
 SWP_NOMOVE = 0x0002
@@ -128,15 +124,6 @@ winmm.timeBeginPeriod.argtypes = (wintypes.UINT,)
 winmm.timeBeginPeriod.restype = wintypes.UINT
 winmm.timeEndPeriod.argtypes = (wintypes.UINT,)
 winmm.timeEndPeriod.restype = wintypes.UINT
-if avrt is not None:
-    avrt.AvSetMmThreadCharacteristicsW.argtypes = (
-        wintypes.LPCWSTR,
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    avrt.AvSetMmThreadCharacteristicsW.restype = wintypes.HANDLE
-    avrt.AvRevertMmThreadCharacteristics.argtypes = (wintypes.HANDLE,)
-    avrt.AvRevertMmThreadCharacteristics.restype = wintypes.BOOL
-
 TIMER_RESOLUTION_MS = 1
 PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
 _timer_resolution_enabled: bool = False
@@ -270,20 +257,6 @@ def wait_for_timer(handle: int) -> None:
 
 def close_handle(handle: int) -> None:
     kernel32.CloseHandle(wintypes.HANDLE(handle))
-
-def av_set_mm_thread_characteristics(task_name: str) -> int | None:
-    if avrt is None:
-        return None
-    task_index = wintypes.DWORD(0)
-    handle = avrt.AvSetMmThreadCharacteristicsW(task_name, ctypes.byref(task_index))
-    if not handle:
-        return None
-    return int(handle)
-
-def av_revert_mm_thread_characteristics(handle: int) -> None:
-    if avrt is None:
-        return
-    avrt.AvRevertMmThreadCharacteristics(wintypes.HANDLE(handle))
 
 def _retry_wait_seconds(seconds: float) -> None:
     if seconds <= 0:

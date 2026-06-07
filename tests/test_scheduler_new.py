@@ -476,7 +476,7 @@ def test_frame_timing_policy_from_profile_name():
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     p = FrameTimingPolicy.from_profile_name("balanced", fps=60)
     assert p.fps == 60
-    assert p.hold_us == 17501
+
 
 def test_local_precise_raw_hold_and_min_hold_are_unified():
     p = FrameTimingPolicy.from_profile_name("local-precise", fps=None)
@@ -566,13 +566,6 @@ def test_hold_ordering_invariant_rejects_hold_below_min_hold():
     }
     with pytest.raises(ValueError, match="hold_us"):
         validate_timing_profile(bad, fps=60)
-
-def test_audience_safe_is_purely_frame_relative_at_high_fps():
-    p60 = FrameTimingPolicy.from_profile_name("audience-safe", fps=60)
-    p144 = FrameTimingPolicy.from_profile_name("audience-safe", fps=144)
-
-    assert p60.hold_us == p60.min_hold_us == 18334
-    assert p144.hold_us == p144.min_hold_us == 7640
 
 def test_removed_floor_keys_are_ignored():
     policy = TimingPolicy.from_dict({

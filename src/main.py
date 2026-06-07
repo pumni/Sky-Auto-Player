@@ -65,6 +65,9 @@ TIMING_PROFILE_NAME = "balanced"
 VERBOSE_HUD = False
 PICKER_UI_MODE = "auto"
 USE_DISPATCH_THREAD = True
+ENABLE_TIMER_GUARD = True
+ENABLE_WAITABLE_TIMER = True
+ENABLE_GC_PAUSE = True
 
 def init_debug_log() -> None:
     global DEBUG_LOG_PATH, DEBUG_START_PERF
@@ -523,6 +526,9 @@ class RuntimeSessionState:
     timing_profile_name: str = "balanced"
     verbose_hud: bool = False
     use_dispatch_thread: bool = True
+    enable_timer_guard: bool = True
+    enable_waitable_timer: bool = True
+    enable_gc_pause: bool = True
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
         self.session = session
@@ -540,7 +546,7 @@ def _sync_legacy_runtime_globals() -> None:
     """Keep historical module globals in sync while runtime state is centralized."""
     global CURRENT_SCAN_CODE_MODE, TIMING_POLICY, SLEEP_POLICY, PLAYBACK_SESSION
     global TELEMETRY_CSV_ENABLED, DRY_RUN_MODE, TEMPO_SCALE, TIMING_PROFILE_NAME, VERBOSE_HUD
-    global USE_DISPATCH_THREAD
+    global USE_DISPATCH_THREAD, ENABLE_TIMER_GUARD, ENABLE_WAITABLE_TIMER, ENABLE_GC_PAUSE
 
     CURRENT_SCAN_CODE_MODE = RUNTIME_STATE.scan_code_mode
     TIMING_POLICY = RUNTIME_STATE.timing_policy
@@ -552,6 +558,9 @@ def _sync_legacy_runtime_globals() -> None:
     TIMING_PROFILE_NAME = RUNTIME_STATE.timing_profile_name
     VERBOSE_HUD = RUNTIME_STATE.verbose_hud
     USE_DISPATCH_THREAD = RUNTIME_STATE.use_dispatch_thread
+    ENABLE_TIMER_GUARD = RUNTIME_STATE.enable_timer_guard
+    ENABLE_WAITABLE_TIMER = RUNTIME_STATE.enable_waitable_timer
+    ENABLE_GC_PAUSE = RUNTIME_STATE.enable_gc_pause
 
 def play_selected_song(
     selected_song: Path,
@@ -754,6 +763,9 @@ def play_selected_song(
         same_key_conflict_policy=active_policy.same_key_conflict_policy,
         use_dispatch_thread=USE_DISPATCH_THREAD,
         input_path_warn_us=user_cfg.input_path_warn_us,
+        enable_timer_guard=ENABLE_TIMER_GUARD,
+        enable_waitable_timer=ENABLE_WAITABLE_TIMER,
+        enable_gc_pause=ENABLE_GC_PAUSE,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
     result = engine.play()
@@ -898,6 +910,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run playback on the legacy single-thread dispatch path for debugging",
     )
+    ctrl.add_argument(
+        "--no-timer-guard",
+        action="store_true",
+        help="debug only: do not assert the 1ms timer-resolution guard in the dispatch thread",
+    )
+    ctrl.add_argument(
+        "--no-waitable-timer",
+        action="store_true",
+        help="debug only: use the sleep/yield/spin sleeper instead of the high-resolution waitable timer",
+    )
+    ctrl.add_argument(
+        "--no-gc-pause",
+        action="store_true",
+        help="debug only: do not collect and pause cyclic GC during playback",
+    )
 
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
     diag = parser.add_argument_group("Safety and diagnostics")
@@ -1036,6 +1063,9 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
         raise ValueError("tempo_scale must be > 0")
     RUNTIME_STATE.verbose_hud = args.verbose_hud
     RUNTIME_STATE.use_dispatch_thread = not args.no_dispatch_thread
+    RUNTIME_STATE.enable_timer_guard = not args.no_timer_guard
+    RUNTIME_STATE.enable_waitable_timer = not args.no_waitable_timer
+    RUNTIME_STATE.enable_gc_pause = not args.no_gc_pause
     PICKER_UI_MODE = args.ui
 
     if PLAYBACK_DEBUG:

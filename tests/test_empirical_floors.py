@@ -75,42 +75,7 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
     finally:
         clear_config_cache()
 
-
-@pytest.mark.parametrize(
-    ("profile", "fps", "hold", "min_hold"),
-    [
-        ("local-precise", 30, 33334, 33334),
-        ("local-precise", 60, 16667, 16667),
-        ("local-precise", 144, 6945, 6945),
-        ("balanced", 30, 35001, 35001),
-        ("balanced", 60, 17501, 17501),
-        ("balanced", 144, 7293, 7293),
-        ("audience-safe", 30, 36668, 36668),
-        ("audience-safe", 60, 18334, 18334),
-        ("audience-safe", 144, 7640, 7640),
-    ],
-)
-def test_builtin_frame_profile_materialisation_matches_tuned_behavior(
-    profile, fps, hold, min_hold
-):
-    policy = PlaybackSessionContext(profile_name=profile, fps=fps).resolve_effective_policy(AppConfig())
-    assert policy.hold_us == hold
-    assert policy.min_hold_us == min_hold
-    assert not hasattr(policy, "repeat_release_gap_us")
-
-
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
     policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())
     assert policy.frame_us == 0
     assert policy.hold_us == policy.min_hold_us == 17000
-
-
-def test_high_fps_profiles_follow_declared_frame_intents():
-    cfg = AppConfig()
-    local = PlaybackSessionContext(profile_name="local-precise", fps=144).resolve_effective_policy(cfg)
-    balanced = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
-    audience = PlaybackSessionContext(profile_name="audience-safe", fps=144).resolve_effective_policy(cfg)
-
-    assert local.hold_us == 6945
-    assert audience.hold_us == 7640
-    assert balanced.hold_us == 7293

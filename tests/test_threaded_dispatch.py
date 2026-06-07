@@ -349,11 +349,6 @@ def test_threaded_dispatch_tolerates_short_cpu_bound_control_poll() -> None:
 def test_threaded_dispatch_tolerates_realtime_primitive_fallbacks(monkeypatch) -> None:
     monkeypatch.setattr(inputs, "create_high_resolution_waitable_timer", lambda: None)
 
-    def fail_mmcss(task_name: str) -> int | None:
-        raise OSError("MMCSS unavailable")
-
-    monkeypatch.setattr(inputs, "av_set_mm_thread_characteristics", fail_mmcss)
-
     backend = ThreadRecordingBackend()
     engine = PlaybackEngine(
         song=Song(name="threaded-fallback", notes=()),
@@ -367,3 +362,38 @@ def test_threaded_dispatch_tolerates_realtime_primitive_fallbacks(monkeypatch) -
     engine.play()
 
     assert any(call.kind == "down" for call in backend.calls)
+
+
+def test_threaded_dispatch_ablation_flags_skip_realtime_primitives(monkeypatch) -> None:
+    def fail_waitable_timer() -> int | None:
+        raise AssertionError("waitable timer should be disabled")
+
+    def fail_timer_guard():
+        raise AssertionError("timer guard should be disabled")
+
+    monkeypatch.setattr(inputs, "create_high_resolution_waitable_timer", fail_waitable_timer)
+    monkeypatch.setattr(inputs, "high_resolution_timer_scope", fail_timer_guard)
+
+    backend = ThreadRecordingBackend()
+    engine = PlaybackEngine(
+        song=Song(name="threaded-ablation", notes=()),
+        actions=(action(0, "down", 21),),
+        backend=backend,
+        require_focus=False,
+        telemetry_enabled=True,
+        sleep_policy=SleepPolicy(spin_threshold_us=500),
+        use_dispatch_thread=True,
+        enable_timer_guard=False,
+        enable_waitable_timer=False,
+        enable_gc_pause=False,
+    )
+
+    engine.play()
+
+    assert any(call.kind == "down" for call in backend.calls)
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["runtime_options"]["use_dispatch_thread"] is True
+    assert summary["runtime_options"]["timer_guard"] is False
+    assert summary["runtime_options"]["waitable_timer"] is False
+    assert summary["runtime_options"]["gc_pause"] is False

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from collections import deque
+from contextlib import nullcontext
 import queue
 import threading
 import time
@@ -8,7 +9,6 @@ from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.realtime import (
-    MmcssRegistration,
     RealtimeProcessScope,
     create_realtime_sleeper,
 )
@@ -280,6 +280,9 @@ class PlaybackEngine:
         late_pulse_drop_threshold_us: int | None = None,
         use_dispatch_thread: bool = True,
         input_path_warn_us: int = 300,
+        enable_timer_guard: bool = True,
+        enable_waitable_timer: bool = True,
+        enable_gc_pause: bool = True,
     ):
         self.song = song
         self.actions = actions
@@ -296,6 +299,9 @@ class PlaybackEngine:
         )
         self.use_dispatch_thread = use_dispatch_thread
         self.input_path_warn_us = max(0, int(input_path_warn_us))
+        self.enable_timer_guard = bool(enable_timer_guard)
+        self.enable_waitable_timer = bool(enable_waitable_timer)
+        self.enable_gc_pause = bool(enable_gc_pause)
         self._send_duration_window: deque[int] = deque(maxlen=64)
         self._input_path_degraded = False
         self._input_path_warn_started_us: int | None = None
@@ -311,6 +317,14 @@ class PlaybackEngine:
             tempo_scale=tempo_scale,
             fps=fps,
             min_hold_us=self.min_hold_us,
+        )
+        self.telemetry.record_runtime_options(
+            {
+                "use_dispatch_thread": self.use_dispatch_thread,
+                "timer_guard": self.enable_timer_guard,
+                "waitable_timer": self.enable_waitable_timer,
+                "gc_pause": self.enable_gc_pause,
+            }
         )
         self.require_focus = require_focus
         self.clock = clock if clock is not None else PerfCounterClock()
@@ -1017,13 +1031,26 @@ class PlaybackEngine:
             from sky_music.platform.win32 import inputs
 
             original_sleeper = self.sleeper
-            realtime_sleeper = create_realtime_sleeper(original_sleeper)
+            realtime_sleeper = (
+                create_realtime_sleeper(original_sleeper)
+                if self.enable_waitable_timer
+                else original_sleeper
+            )
             self.sleeper = realtime_sleeper
             try:
                 # high_resolution_timer_scope() is the defensive 1ms-timer safety net for the
-                # RealSleeper fallback; MMCSS raises the dispatch thread's scheduling class. Both are
-                # re-asserted per run so no volatile session state can leave dispatch coarse.
-                with inputs.high_resolution_timer_scope(), MmcssRegistration():
+                # RealSleeper fallback. It is re-asserted per run so no volatile session state can
+                # leave dispatch coarse.
+                if not self.enable_waitable_timer:
+                    inputs.debug_log("[realtime] high-resolution waitable timer disabled")
+                timer_scope = (
+                    inputs.high_resolution_timer_scope()
+                    if self.enable_timer_guard
+                    else nullcontext()
+                )
+                if not self.enable_timer_guard:
+                    inputs.debug_log("[realtime] timer guard disabled")
+                with timer_scope:
                     dispatch_result.result = self._run_dispatch(
                         coordinator,
                         state,
@@ -1128,11 +1155,11 @@ class PlaybackEngine:
         self._runtime_coordinator = coordinator
 
         # Pause cyclic GC for the whole dispatch so a mid-send GC pause cannot stall the precise
-        # SendInput loop (thread scheduling is handled by MMCSS, not a process priority bump).
+        # SendInput loop. No process priority class or MMCSS boost is used.
         # Re-enabled on exit.  The schedule's perf anchor (start_perf) is captured INSIDE the scope,
         # after the one-shot gc.collect(), so pre-playback collection cannot delay the dispatch
         # thread start and compress the first onsets.
-        with RealtimeProcessScope():
+        with RealtimeProcessScope(enabled=self.enable_gc_pause):
             state = PlaybackState(start_perf=self.clock.now_us())
             if self._should_use_dispatch_thread():
                 return self._run_threaded_dispatch(coordinator, state)

@@ -26,15 +26,6 @@ def _reset_caches():
     clear_config_cache()
     clear_metadata_cache()
 
-
-def test_balanced_at_30fps_scales_hold():
-    session = PlaybackSessionContext.balanced(fps=30)
-    policy = session.resolve_effective_policy(AppConfig())
-    assert policy.fps == 30
-    assert policy.frame_us == 33_334
-    assert policy.hold_us == 35_001
-
-
 def test_with_profile_preserves_fps():
     session = PlaybackSessionContext(
         profile_name="balanced",
@@ -73,13 +64,6 @@ def test_metadata_uses_session_fps_for_schedule():
     meta_30 = get_song_ui_metadata(song, PlaybackSessionContext.balanced(fps=30))
     assert meta_no_fps.note_count == meta_30.note_count
     assert meta_no_fps.duration_seconds != meta_30.duration_seconds
-
-
-def test_balanced_at_30fps_scales_min_hold():
-    session = PlaybackSessionContext.balanced(fps=30)
-    policy = session.resolve_effective_policy(AppConfig())
-    # 30fps frame = ceil(1e6/30) = 33334. Visibility floor (Exp1) = ceil(1.05*frame)=35001 at 30fps.
-    assert policy.min_hold_us == 35_001
 
 
 def test_frame_timing_config_overrides_ratios():

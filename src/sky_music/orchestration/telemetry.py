@@ -34,6 +34,7 @@ class TelemetryLogger:
         self.release_outcome = None
         self.input_path_degraded: bool = False
         self.input_path_warn_us: int = 300
+        self.runtime_options: dict[str, object] = {}
         self.schedule_summary: dict | None = None
         self.generation_status_counts: dict[str, int] = {}
         self.pause_durations_us: dict[str, list[int]] = {
@@ -111,6 +112,10 @@ class TelemetryLogger:
     def record_input_path_health(self, *, degraded: bool, warn_us: int) -> None:
         self.input_path_degraded = bool(degraded)
         self.input_path_warn_us = max(0, int(warn_us))
+
+    def record_runtime_options(self, options: dict[str, object]) -> None:
+        """Store runtime ablation/debug switches for the telemetry summary."""
+        self.runtime_options = dict(options)
 
     def record_pause(self, reason: str, duration_us: int) -> None:
         if not self.enabled:
@@ -479,6 +484,7 @@ class TelemetryLogger:
             "backend": backend_info,
             "input_path_degraded": self.input_path_degraded,
             "input_path_warn_us": self.input_path_warn_us,
+            "runtime_options": self.runtime_options,
         }
         generation_counts = self.generation_status_counts
         summary.update(

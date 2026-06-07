@@ -34,6 +34,23 @@ def test_local_precise_profile_from_builtin_defaults():
     assert main.SLEEP_POLICY.spin_threshold_us == 800
 
 
+def test_runtime_ablation_flags_configure_debug_switches():
+    parser = main.build_arg_parser()
+    args = parser.parse_args([
+        "--no-dispatch-thread",
+        "--no-timer-guard",
+        "--no-waitable-timer",
+        "--no-gc-pause",
+    ])
+
+    main.configure_from_args(args, AppConfig())
+
+    assert main.USE_DISPATCH_THREAD is False
+    assert main.ENABLE_TIMER_GUARD is False
+    assert main.ENABLE_WAITABLE_TIMER is False
+    assert main.ENABLE_GC_PAUSE is False
+
+
 def test_removed_dense_safe_profile_is_rejected_by_cli():
     parser = main.build_arg_parser()
     with pytest.raises(SystemExit):
