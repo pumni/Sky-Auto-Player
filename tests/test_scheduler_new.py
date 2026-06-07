@@ -464,7 +464,7 @@ def test_explicit_hold_declarations_remain_escape_hatches(
     if "hold_frames" in hold_declaration:
         effective = FrameTimingPolicy.from_timing_policy(policy, fps=60)
         assert effective.hold_us == 33_334
-        assert effective.min_hold_us == 20_001
+        assert effective.min_hold_us == 20_000
 
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")

@@ -152,7 +152,7 @@ class FrameTimingPolicy:
 
     @staticmethod
     def materialise_frame_us(frames: float, frame_us: int) -> Microseconds:
-        return Microseconds(math.ceil(frames * frame_us))
+        return Microseconds(round(frames * frame_us))
 
     @classmethod
     def from_timing_policy(

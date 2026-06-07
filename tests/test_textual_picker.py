@@ -185,6 +185,27 @@ def test_textual_theme_tokens_cover_all_picker_presets() -> None:
     assert set(TEXTUAL_THEME_TOKENS) == set(THEME_PRESETS)
 
 
+def test_textual_background_mode_applies_screen_class(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        assert app.screen.has_class("background-painted")
+        assert not app.screen.has_class("background-transparent")
+        await pilot.press("escape")
+
+    app = SkyPickerApp(background_mode="painted", initial_dry_run=True, cfg=AppConfig())
+    async def run() -> SkyPickerApp:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await actions(app, pilot)
+        return app
+
+    result = run_picker(run())
+    assert result.return_value is None
+
+
 def test_table_arrow_moves_one_row_from_initial_focus(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
@@ -266,6 +287,68 @@ def test_textual_metadata_cells_gate_risk_until_analyzed() -> None:
     assert _metadata_cells(raw) == ("1:02", "12", "...", "...")
 
 
+def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    metadata = SongUiMetadata(
+        path=SONGS[0],
+        name="Alpha",
+        duration_seconds=62.0,
+        note_count=12,
+        max_polyphony=1,
+        min_note_gap_ms=20.0,
+        min_same_key_gap_ms=35.0,
+        risk="high",
+        recommended_profile="safe",
+        recommended_tempo_scale=0.9,
+        warnings=("same-key repeats too tight for the current profile", "high peak density"),
+        analyzed=True,
+    )
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(app_module, "peek_cached_song_ui_metadata", lambda *_args, **_kwargs: metadata)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        detail = app.query_one("#detail")
+        rendered = str(detail.render())
+        assert "warning" in rendered
+        assert "same-key repeats too tight" in rendered
+        assert "+1 more" in rendered
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
+
+def test_detail_panel_shows_empty_and_no_match_states(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def empty_actions(app: SkyPickerApp, pilot: Any) -> None:
+        rendered = str(app.query_one("#detail").render())
+        assert "No songs found" in rendered
+        assert "Supported:" in rendered
+        assert "Ctrl+R" in rendered
+        await pilot.press("escape")
+
+    empty_app = run_picker(_run_app(empty_actions))
+    assert empty_app.return_value is None
+
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+
+    async def no_match_actions(app: SkyPickerApp, pilot: Any) -> None:
+        app.query = "zzzz"
+        app._perform_search()
+        rendered = str(app.query_one("#detail").render())
+        assert 'No matches for "zzzz"' in rendered
+        assert "Clear search" in rendered
+        await pilot.press("escape")
+
+    no_match_app = run_picker(_run_app(no_match_actions))
+    assert no_match_app.return_value is None
+
+
 def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     persisted: list[str] = []
@@ -345,6 +428,64 @@ def test_command_palette_toggles_dry_run(monkeypatch) -> None:
     assert app.return_value is None
 
 
+def test_command_palette_filters_and_runs_match(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        app.action_open_commands()
+        await pilot.pause()
+        assert type(app.screen).__name__ == "CommandModal"
+        for key in ("t", "h", "e", "m", "e"):
+            await pilot.press(key)
+        await pilot.pause()
+        palette_text = str(app.screen.query_one("#modal-options").render())
+        assert "Change Theme" in palette_text
+        assert "Adjust Tempo" not in palette_text
+        await pilot.press("enter")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "OptionModal"
+        await pilot.press("escape")
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
+
+def test_footer_commands_hint_opens_palette_on_click(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        opened = await pilot.click(app_module.CustomFooter, offset=(2, 0))
+        assert opened is True
+        await pilot.pause()
+        assert type(app.screen).__name__ == "CommandModal"
+        await pilot.press("escape")
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
+
+def test_command_palette_hides_bottom_detail_panel(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        app.action_open_commands()
+        await pilot.pause()
+        assert len(list(app.screen.query("#modal-description"))) == 0
+        assert len(list(app.screen.query("#modal-divider"))) == 0
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
+
 def test_preview_detail_toggle(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
@@ -395,6 +536,12 @@ def test_help_and_calibration_modals_open(monkeypatch) -> None:
         app.action_open_help()
         await pilot.pause()
         assert type(app.screen).__name__ == "InfoModal"
+        help_text = str(app.screen.query_one("#info").render())
+        assert help_text.index("Navigation") < help_text.index("Playback")
+        assert "/         Commands" in help_text
+        assert "Open command palette" in help_text
+        assert "System" in help_text
+        assert "Open this help modal" in help_text
         await pilot.press("escape")
         app.action_open_calibration()
         await pilot.pause()
@@ -624,3 +771,76 @@ def test_choose_textual_returns_result_on_clean_cleanup(monkeypatch) -> None:
 
     monkeypatch.setattr(SkyPickerApp, "run", fake_run)
     assert choose_song_interactively_textual() is sentinel
+
+
+def test_custom_footer() -> None:
+    from sky_music.ui.textual_app.app import CustomFooter
+    from rich.text import Text
+    footer = CustomFooter()
+    footer.set_theme(key_color="#ff0000", muted_color="#0000ff")
+    assert footer.key_color == "#ff0000"
+    assert footer.muted_color == "#0000ff"
+    rendered = footer.render()
+    assert isinstance(rendered.plain, str)
+    # Check that it contains the keywords
+    plain = rendered.plain.lower()
+    assert "commands" in plain
+    assert "play" in plain
+    assert "cancel" in plain
+    assert "navigate" in plain
+
+
+def test_risk_cell_semantic_colors() -> None:
+    from sky_music.ui.textual_app.app import _risk_cell
+    from sky_music.ui.picker_theme import THEME_PRESETS
+    theme = THEME_PRESETS["aurora"]
+    # LOW risk uses theme.success
+    low_cell = _risk_cell("LOW", "muted", theme)
+    assert low_cell.style == f"bold {theme.success}"
+    
+    # MED/MEDIUM risk uses theme.warning
+    med_cell = _risk_cell("MED", "muted", theme)
+    assert med_cell.style == f"bold {theme.warning}"
+    
+    # HIGH risk uses theme.danger
+    high_cell = _risk_cell("HIGH", "muted", theme)
+    assert high_cell.style == f"bold {theme.danger}"
+    
+    # Non-standard uses muted
+    other_cell = _risk_cell("OTHER", "muted", theme)
+    assert other_cell.style == "muted"
+
+
+def test_classic_risk_cell_uses_style_not_color_only() -> None:
+    from sky_music.ui.textual_app.app import _risk_cell
+    from sky_music.ui.picker_theme import THEME_PRESETS
+
+    classic = THEME_PRESETS["classic"]
+
+    assert _risk_cell("LOW", "muted", classic).style == classic.foreground
+    assert _risk_cell("MED", "muted", classic).style == f"bold {classic.foreground}"
+    assert _risk_cell("HIGH", "muted", classic).style == f"bold reverse {classic.foreground}"
+
+
+def test_responsive_columns_dynamic_width(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    from textual.geometry import Size
+    monkeypatch.setattr(SkyPickerApp, "size", Size(100, 20))
+    monkeypatch.setattr(app_module.SongTable, "size", Size(100, 20))
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        table = app.query_one("#songs")
+        app._apply_responsive_columns()
+        
+        # Verify that dynamic title width has been updated
+        title_col = next((c for c in table.ordered_columns if c.key.value == "title"), None)
+        assert title_col is not None
+        assert title_col.width == 43
+
+        await pilot.press("escape")
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None

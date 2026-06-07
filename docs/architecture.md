@@ -34,7 +34,7 @@ The parser reads the JSON file, strictly validating timestamps and schemas. Unma
 ### Step 2: The AOT Scheduler (`build_key_actions`)
 Instead of calculating delays on the fly, the entire song is mapped out onto an absolute timeline in **microseconds** *before* playback begins.
 * **Tempo Scaling:** All timestamps are scaled by `tempo_scale` and converted to microseconds.
-* **Visibility Hold (`min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-in holds materialize purely as `ceil(profile_frames * frame_us)`. 
+* **Visibility Hold (`min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-in holds materialize purely as `round(profile_frames * frame_us)`. 
 * **Same-Key Feasibility:** If the same key repeats faster than the target hold, the previous hold is compressed down to `min_hold_us`. If the authored interval is below `min_hold_us`, the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, while `degraded` mode keeps `min_hold_us` and schedules the down events, which will be resolved at runtime.
 
 ### Step 3: Runtime Intent Compilation

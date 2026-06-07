@@ -13,10 +13,10 @@ Related evidence and decisions:
 When FPS is known and positive, every built-in hold is materialized only from its declared frame ratio:
 ```text
 frame_us = ceil(1_000_000 / fps)
-effective_us = ceil(frames * frame_us)
+effective_us = round(frames * frame_us)
 ```
 
-There is no absolute floor and no `max(frame_term, floor_us)` step. The frame period and the final duration are both rounded up so a declared 1.0-frame hold never becomes shorter than a real frame. No fixed scheduling margins or latency buffers are added to this model.
+There is no absolute floor and no `max(frame_term, floor_us)` step. The frame period is rounded up so a declared 1.0-frame hold never becomes shorter than a real frame. The final duration is rounded to the nearest microsecond. No fixed scheduling margins or latency buffers are added to this model.
 
 When FPS is `None` or disabled, the profile uses `*_unframed_us`. Explicit `_us` values supplied by CLI or config remain absolute overrides and are applied after frame materialization.
 
@@ -39,7 +39,7 @@ An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape ha
 | :--- | :---: | :---: | :--- |
 | `local_precise` | 1.0 | 22000 | Sharpest local visibility profile (no margin) |
 | `audience_safe` | 1.1 | 18000 | Audience-tested sharp profile |
-| `balanced` | 1.05 | 17000 | General default with more local-frame body |
+| `balanced` | 1.02 | 17000 | General default with more local-frame body |
 
 `dense_safe` was removed. Fast repeat or schedule-stress recommendations now select `local_precise` together with tempo reduction.
 
@@ -59,7 +59,7 @@ There is no audience-specific absolute-duration validator. `audience_safe` is va
 
 ## 5. Accepted Audience Risk
 
-Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS, `audience_safe` materializes to 7084 $\mu\text{s}$, which may be missed by a remote client sampling around 60 FPS. This is intentional and must not be silently counteracted by introducing another absolute wall under a different name.
+Removing the absolute floor makes high-FPS local holds shorter in absolute time. At 144 FPS, `balanced` materializes to 7084 $\mu\text{s}$, which may be missed by a remote client sampling around 60 FPS. This is intentional and must not be silently counteracted by introducing another absolute wall under a different name.
 
 ---
 
@@ -70,7 +70,7 @@ The required `hold_us == min_hold_us` values are:
 | Profile | None | 30 FPS | 60 FPS | 144 FPS |
 | :--- | :---: | :---: | :---: | :---: |
 | `local_precise` | 22000 | 33334 | 16667 | 6945 |
-| `audience_safe` | 18000 | 34001 | 17001 | 7084 |
-| `balanced` | 17000 | 33668 | 16834 | 7015 |
+| `audience_safe` | 18000 | 36667 | 18334 | 7640 |
+| `balanced` | 17000 | 34001 | 17000 | 7084 |
 
 Golden schedules use `TimingPolicy.from_dict({})` and must not be regenerated for this change.

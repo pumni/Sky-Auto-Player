@@ -43,6 +43,23 @@ def test_cli_theme_argument():
     assert args.theme == "cyberpunk"
 
 
+def test_cli_ui_background_argument_and_config_default():
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--ui-background", "painted"])
+    assert args.ui_background == "painted"
+
+    default_args = parser.parse_args([])
+    main.apply_config_defaults(default_args, AppConfig(ui_background_mode="painted"))
+    assert default_args.ui_background == "painted"
+
+def test_cli_check_input_path_argument():
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--check-input-path"])
+    assert args.check_input_path is True
+    main.configure_from_args(args, AppConfig())
+    assert main.RUNTIME_STATE.check_input_path is True
+
+
 class DummyStdout:
     def __init__(self, is_tty: bool) -> None:
         self.is_tty = is_tty

@@ -29,7 +29,7 @@ def test_frame_timing_defaults_encode_empirical_standard():
 
 @pytest.mark.parametrize(
     ("fps", "expected"),
-    [(30, 41668), (60, 20834), (144, 8682)],
+    [(30, 41668), (60, 20834), (144, 8681)],
 )
 def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
     base = TimingPolicy.from_dict(

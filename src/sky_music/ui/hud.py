@@ -4,12 +4,36 @@ import time
 import re
 from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.ui.text_render import (
+    ansi_box,
+    ansi_gradient_box,
+    clamp_terminal_width,
+    truncate_cells,
+    visible_width,
+)
 
 PLAYBACK_FINISHED = "finished"
 PLAYBACK_SKIPPED = "skipped"
 PLAYBACK_QUIT = "quit"
 PLAYBACK_POLL_SECONDS = 0.025
 PROGRESS_RENDER_INTERVAL_SECONDS = 0.10
+
+
+def _hex_to_ansi(hex_color: str) -> str:
+    """Convert a CSS hex color (#rrggbb or #rgb) to an ANSI 24-bit fg escape.
+
+    Returns bright-cyan as a safe fallback for malformed input so the HUD
+    always renders even when given an unexpected color string.
+    """
+    c = hex_color.lstrip("#")
+    try:
+        if len(c) == 3:
+            c = "".join(ch * 2 for ch in c)
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        return f"\033[38;2;{r};{g};{b}m"
+    except (ValueError, IndexError):
+        return "\033[96m"  # bright cyan fallback
+
 
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
@@ -19,6 +43,7 @@ def format_duration(seconds: float) -> str:
         return f"{hours}:{minutes:02}:{sec:02}"
     return f"{minutes}:{sec:02}"
 
+
 class ProgressRenderer:
     def __init__(
         self,
@@ -26,19 +51,38 @@ class ProgressRenderer:
         verbose: bool = False,
         profile_name: str = "balanced",
         tempo_scale: float = 1.0,
+        accent_hex: str | None = None,
+        theme_name: str = "aurora",
     ) -> None:
         self.controls = controls
         self.verbose = verbose
         self.profile_name = profile_name
         self.tempo_scale = tempo_scale
+        self.theme_name = theme_name
         self.last_render_at: float = 0.0
-        
+
+        from sky_music.ui.picker_theme import get_theme_preset
+        theme = get_theme_preset(theme_name)
+
+        # Convert hex colors from theme to ANSI escapes
+        self._accent_ansi = _hex_to_ansi(accent_hex) if accent_hex else _hex_to_ansi(theme.accent)
+        self._muted_ansi = _hex_to_ansi(theme.muted)
+        self._success_ansi = _hex_to_ansi(theme.success)
+        self._warning_ansi = _hex_to_ansi(theme.warning)
+        self._danger_ansi = _hex_to_ansi(theme.danger)
+        self._foreground_ansi = _hex_to_ansi(theme.foreground)
+        self._divider_ansi = _hex_to_ansi(theme.divider)
+        self._key_ansi = _hex_to_ansi(theme.key)
+        self._use_gradient_border = theme.use_gradient_border
+        self._gradient = theme.gradient
+        self._modal_title = theme.modal_title
+
         # Live timing counters updated by PlaybackEngine
         self.late_2ms: int = 0
         self.late_5ms: int = 0
         self.late_10ms: int = 0
         self.max_lateness_us: int = 0
-        
+
         self.run_id: str = ""
         self.last_lines_printed: int = 0
         self._initialized: bool = False
@@ -57,6 +101,57 @@ class ProgressRenderer:
             self.late_2ms += 1
         if lateness_us > self.max_lateness_us:
             self.max_lateness_us = lateness_us
+
+    def _control_hint(self, key: str, label: str, key_color: str, bold: str, reset: str) -> str:
+        return f"{key_color}{bold}{key}{reset} {label}"
+
+    def _build_controls_line(self, status: str, width: int, key_color: str, bold: str, muted: str, reset: str) -> str:
+        if self.controls is None or not self.controls.enabled:
+            return f"{muted}hotkeys disabled{reset}"
+
+        def hint(key: str, label: str) -> str:
+            return self._control_hint(key, label, key_color, bold, reset)
+
+        if status == "waiting_for_focus":
+            full = [
+                hint(self.controls.refocus.display, "refocus"),
+                hint(self.controls.quit.display, "quit"),
+                hint("D", "dry-run"),
+                hint(self.controls.panic.display, "panic"),
+            ]
+            compact = [full[0], full[1], full[3]]
+            minimal = [full[0], full[1]]
+        elif status == "focus_lost":
+            full = [
+                hint(self.controls.refocus.display, "refocus"),
+                hint(self.controls.quit.display, "quit"),
+                hint(self.controls.panic.display, "panic"),
+            ]
+            compact = full
+            minimal = [full[0], full[1]]
+        elif status == "paused":
+            full = [
+                hint(self.controls.pause.display, "resume"),
+                hint(self.controls.skip.display, "skip"),
+                hint(self.controls.quit.display, "quit"),
+                hint(self.controls.refocus.display, "refocus"),
+                hint(self.controls.panic.display, "panic"),
+            ]
+            compact = [full[0], full[1], full[2], full[4]]
+            minimal = [full[0], full[1], full[2]]
+        else:
+            full = [
+                hint(self.controls.pause.display, "pause"),
+                hint(self.controls.skip.display, "skip"),
+                hint(self.controls.quit.display, "quit"),
+                hint(self.controls.refocus.display, "refocus"),
+                hint(self.controls.panic.display, "panic"),
+            ]
+            compact = [full[0], full[1], full[2], full[4]]
+            minimal = [full[0], full[1], full[2]]
+
+        pieces = full if width >= 90 else compact if width >= 70 else minimal
+        return "  ·  ".join(pieces)
 
     def render(
         self,
@@ -79,84 +174,65 @@ class ProgressRenderer:
             self.run_id = time.strftime('%Y%m%d-%H%M%S')
             
         terminal_width = shutil.get_terminal_size((100, 20)).columns
-        width = min(80, terminal_width)
-        
-        # ANSI Colors
+        width = clamp_terminal_width(terminal_width)
+
+        # ANSI Colors — fixed semantic colours
         ANSI_RESET = "\033[0m"
         ANSI_BOLD = "\033[1m"
-        ANSI_CYAN = "\033[96m"
-        ANSI_MAGENTA = "\033[95m"
-        ANSI_GREEN = "\033[92m"
-        ANSI_YELLOW = "\033[93m"
-        ANSI_RED = "\033[91m"
-        ANSI_GRAY = "\033[90m"
+        ANSI_ACCENT = self._accent_ansi   # theme-synced border / info colour
+        ANSI_GREEN = self._success_ansi   # theme-synced success colour
+        ANSI_YELLOW = self._warning_ansi  # theme-synced warning colour
+        ANSI_RED = self._danger_ansi      # theme-synced error colour
+        ANSI_GRAY = self._muted_ansi      # theme-synced muted/gray colour
+        ANSI_DIVIDER = self._divider_ansi
+        ANSI_KEY = self._key_ansi
         
-        def len_ansi(s: str) -> int:
-            return len(re.sub(r'\033\[[0-9;]*m', '', s))
-            
-        def pad_ansi(s: str, w: int) -> str:
-            cur_len = len_ansi(s)
-            if cur_len < w:
-                return s + " " * (w - cur_len)
-            return s
-            
-        def ansi_box(title: str, lines: list[str], border_color: str = ANSI_CYAN) -> list[str]:
-            top_left = "╭"
-            top_right = "╮"
-            bottom_left = "╰"
-            bottom_right = "╯"
-            horiz = "─"
-            vert = "│"
-            
-            title_part = f"{horiz} {title} "
-            top_line = f"{border_color}{top_left}{title_part}{horiz * (width - len(title_part) - 2)}{top_right}{ANSI_RESET}"
-            bottom_line = f"{border_color}{bottom_left}{horiz * (width - 2)}{bottom_right}{ANSI_RESET}"
-            
-            out = [top_line]
-            for line in lines:
-                padded = pad_ansi(line, width - 4)
-                out.append(f"{border_color}{vert}{ANSI_RESET} {padded} {border_color}{vert}{ANSI_RESET}")
-            out.append(bottom_line)
-            return out
-
-        # 1. Header Box
+        # 1. Resolve header label & status color
         if status == "playing":
             header_label = "Playing"
+            status_color = ANSI_ACCENT
         elif status == "paused":
             header_label = "Paused"
+            status_color = ANSI_YELLOW
         elif status == "focus_lost":
             header_label = "Focus Lost"
+            status_color = ANSI_RED
         elif status == "waiting_for_focus":
             header_label = "Waiting for Focus"
+            status_color = ANSI_YELLOW
         elif status == "refocus":
             header_label = "Refocusing"
+            status_color = ANSI_ACCENT
         elif status == "panic":
             header_label = "Panic Release"
+            status_color = ANSI_YELLOW  # panic release is warning color
         elif status == "done":
             header_label = "Done"
+            status_color = ANSI_ACCENT
         else:
             header_label = status.replace("_", " ").title()
-            
-        header_line = f"{header_label} │ profile {ANSI_CYAN}{self.profile_name}{ANSI_RESET} │ tempo {ANSI_CYAN}{self.tempo_scale:.2f}x{ANSI_RESET} │ run {ANSI_CYAN}{self.run_id}{ANSI_RESET}"
-        header_box = ansi_box("SKY MUSIC HELPER", [header_line], border_color=ANSI_CYAN)
-        
-        # 2. Song Box
+            status_color = ANSI_ACCENT
+
+        # Header session status line
+        session_line = f"{ANSI_BOLD}{header_label}{ANSI_RESET}  ·  profile {ANSI_ACCENT}{self.profile_name}{ANSI_RESET}  ·  tempo {ANSI_ACCENT}{self.tempo_scale:.2f}×{ANSI_RESET}  ·  theme {ANSI_ACCENT}{self.theme_name}{ANSI_RESET}"
+
+        # 2. Song progress with remaining time (ETA)
         total_time_str = format_duration(total)
         current_time_str = format_duration(current)
-        time_text = f"{current_time_str} / {total_time_str}"
-        
-        bar_width = width - len(time_text) - 8
+        remaining = max(0.0, total - current)
+        remaining_str = format_duration(remaining)
+        time_text = f"{current_time_str} / {total_time_str}  ·  ETA {remaining_str}"
+
+        # The inner width is width - 4
+        bar_width = max(10, width - 4 - visible_width(time_text) - 2)
         fraction = current / max(total, 0.001)
         filled = min(bar_width, int(round(fraction * bar_width)))
-        bar = f"{ANSI_GREEN}█{ANSI_RESET}" * filled + f"{ANSI_GRAY}░{ANSI_RESET}" * (bar_width - filled)
-        
-        song_lines = [
-            f"{ANSI_BOLD}{song_name}{ANSI_RESET}",
-            f"{bar}  {time_text}"
-        ]
-        song_box = ansi_box("Song", song_lines, border_color=ANSI_CYAN)
-        
-        # 3. Render backend health from the dispatch-owned snapshot.
+        bar = f"{ANSI_ACCENT}█{ANSI_RESET}" * filled + f"{ANSI_GRAY}░{ANSI_RESET}" * (bar_width - filled)
+
+        song_title_line = f"♪ {ANSI_BOLD}{truncate_cells(song_name, width - 8)}{ANSI_RESET}"
+        song_progress_line = f"{bar}  {time_text}"
+
+        # 3. Backend status
         active_keys = 0
         failed_releases = 0
         if backend_health is not None:
@@ -164,84 +240,61 @@ class ProgressRenderer:
             failed_releases = backend_health.failed_release_count
             
         backend_status = f"{ANSI_RED}stuck keys: {failed_releases}{ANSI_RESET}" if failed_releases > 0 else f"{ANSI_GREEN}healthy{ANSI_RESET}"
-        
-        # 4. Status Box
+
         if status == "waiting_for_focus":
             status_line = f"{ANSI_YELLOW}Playback has not started yet. Bring Sky window to foreground.{ANSI_RESET}"
-            if self.controls is not None and self.controls.enabled:
-                controls_line = (
-                    f"{ANSI_BOLD}{self.controls.refocus.display}{ANSI_RESET} refocus │ "
-                    f"{ANSI_BOLD}{self.controls.quit.display}{ANSI_RESET} quit │ "
-                    f"{ANSI_BOLD}D{ANSI_RESET} dry-run │ "
-                    f"{ANSI_BOLD}{self.controls.panic.display}{ANSI_RESET} panic"
-                )
-            else:
-                controls_line = "hotkeys disabled"
-            status_color = ANSI_YELLOW
-            
         elif status == "focus_lost":
             status_line = f"{ANSI_RED}Playback is paused and tracked keys were released.{ANSI_RESET}"
-            if self.controls is not None and self.controls.enabled:
-                controls_line = (
-                    f"{ANSI_BOLD}{self.controls.refocus.display}{ANSI_RESET} refocus │ "
-                    f"{ANSI_BOLD}{self.controls.quit.display}{ANSI_RESET} quit │ "
-                    f"{ANSI_BOLD}{self.controls.panic.display}{ANSI_RESET} panic"
-                )
-            else:
-                controls_line = "hotkeys disabled"
-            status_color = ANSI_RED
-            
         elif status == "paused":
             status_line = f"{ANSI_YELLOW}Playback is paused and tracked keys were released.{ANSI_RESET}"
-            if self.controls is not None and self.controls.enabled:
-                controls_line = (
-                    f"{ANSI_BOLD}{self.controls.pause.display}{ANSI_RESET} resume │ "
-                    f"{ANSI_BOLD}{self.controls.skip.display}{ANSI_RESET} skip │ "
-                    f"{ANSI_BOLD}{self.controls.quit.display}{ANSI_RESET} quit │ "
-                    f"{ANSI_BOLD}{self.controls.refocus.display}{ANSI_RESET} refocus │ "
-                    f"{ANSI_BOLD}{self.controls.panic.display}{ANSI_RESET} panic"
-                )
-            else:
-                controls_line = "hotkeys disabled"
-            status_color = ANSI_YELLOW
-            
-        else: # playing, done, refocus, panic
+        else:
             if self.verbose:
-                status_line = f"backend {backend_status} │ late >2ms:{self.late_2ms}  >5ms:{self.late_5ms}  >10ms:{self.late_10ms} │ active keys: {active_keys}"
+                status_line = f"backend {backend_status}  ·  late >2ms:{self.late_2ms}  >5ms:{self.late_5ms}  >10ms:{self.late_10ms}  ·  active keys: {active_keys}"
             else:
-                status_line = f"backend {backend_status} │ late >5ms: {self.late_5ms} │ active keys: {active_keys}"
-                
-            if self.controls is not None and self.controls.enabled:
-                controls_line = (
-                    f"{ANSI_BOLD}{self.controls.pause.display}{ANSI_RESET} pause │ "
-                    f"{ANSI_BOLD}{self.controls.skip.display}{ANSI_RESET} skip │ "
-                    f"{ANSI_BOLD}{self.controls.quit.display}{ANSI_RESET} quit │ "
-                    f"{ANSI_BOLD}{self.controls.refocus.display}{ANSI_RESET} refocus │ "
-                    f"{ANSI_BOLD}{self.controls.panic.display}{ANSI_RESET} panic"
-                )
-            else:
-                controls_line = "hotkeys disabled"
-            status_color = ANSI_MAGENTA
-            
-        lines = [status_line, controls_line]
+                status_line = f"backend {backend_status}  ·  late >5ms: {self.late_5ms}  ·  active keys: {active_keys}"
+
+        # 4. Controls line
+        controls_line = self._build_controls_line(status, width, ANSI_KEY, ANSI_BOLD, ANSI_GRAY, ANSI_RESET)
+
+        # Assemble the single HUD card lines
+        divider = f"{ANSI_DIVIDER}{'─' * (width - 4)}{ANSI_RESET}"
+        hud_body_lines = [
+            session_line,
+            divider,
+            song_title_line,
+            song_progress_line,
+            divider,
+        ]
+
+        # Insert input path warning if degraded
         if self.input_path_degraded:
-            lines.insert(
-                1,
-                f"{ANSI_YELLOW}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{ANSI_RESET}",
+            hud_body_lines.append(
+                f"{ANSI_YELLOW}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{ANSI_RESET}"
             )
+
+        # Insert timing info if verbose
         if self.verbose and getattr(self, "active_policy", None) is not None:
             pol = self.active_policy
             frame_label = f"{pol.frame_us}us" if pol.frame_us > 0 else "N/A"
             fps_label = f"{pol.fps}fps" if pol.fps > 0 else "N/A"
-
             hold_info = f"hold/min: {pol.hold_us}/{pol.min_hold_us}us"
-            
-            timing_line = f"{ANSI_GRAY}Timing: {fps_label} ({frame_label}) │ {hold_info}{ANSI_RESET}"
-            lines.insert(1, timing_line)
+            timing_line = f"{ANSI_GRAY}Timing: {fps_label} ({frame_label})  ·  {hold_info}{ANSI_RESET}"
+            hud_body_lines.append(timing_line)
 
-        status_box = ansi_box("Status", lines, border_color=status_color)
-        
-        hud_lines = header_box + [""] + song_box + [""] + status_box
+        hud_body_lines.append(status_line)
+        hud_body_lines.append(controls_line)
+
+        # If healthy state and theme gradient is enabled, draw gradient border
+        if self._use_gradient_border and status in {"playing", "done", "refocus"}:
+            hud_lines = ansi_gradient_box(
+                "SKY MUSIC HELPER",
+                hud_body_lines,
+                width=width,
+                gradient=self._gradient,
+                title_color=self._modal_title,
+            )
+        else:
+            hud_lines = ansi_box("SKY MUSIC HELPER", hud_body_lines, width=width, border_color=status_color)
         
         if self._initialized and self.last_lines_printed > 0:
             print(f"\033[{self.last_lines_printed}A", end="", flush=True)

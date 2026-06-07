@@ -107,6 +107,7 @@ class AppConfig:
     """
 
     theme:                       str           = "aurora"
+    ui_background_mode:          str           = "transparent"
     default_timing_profile:      str           = "balanced"
     default_tempo_scale:         float         = 1.0
     game_fps:                    int           = 60
@@ -272,6 +273,7 @@ def argparse_base_defaults() -> dict[str, Any]:
         "verbose_hud": False,
         "no_dispatch_thread": False,
         "theme": None,
+        "ui_background": None,
         "songs_dir": Path(AppConfig.songs_dir),
         "fps": None,
         "allow_title_fallback": False,
@@ -339,6 +341,7 @@ def _build_config_from_disk() -> AppConfig:
 
     return AppConfig(
         theme                        = str(raw.get("theme", AppConfig.theme)),
+        ui_background_mode           = str(raw.get("ui_background_mode", AppConfig.ui_background_mode)),
         default_timing_profile       = default_timing_profile,
         default_tempo_scale          = float(raw.get("default_tempo_scale", AppConfig.default_tempo_scale)),
         game_fps                     = int(raw.get("game_fps", AppConfig.game_fps)),
@@ -376,6 +379,7 @@ def save_config(cfg: AppConfig) -> None:
     
     # Update known keys
     raw["theme"]                        = cfg.theme
+    raw["ui_background_mode"]           = cfg.ui_background_mode
     raw["default_timing_profile"]       = canonical_profile_name(cfg.default_timing_profile)
     raw["default_tempo_scale"]          = cfg.default_tempo_scale
     raw["game_fps"]                     = cfg.game_fps
@@ -442,6 +446,9 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
 
     if getattr(args, "theme", None) == parser_defaults["theme"]:
         args.theme = cfg.theme
+
+    if getattr(args, "ui_background", None) == parser_defaults["ui_background"]:
+        args.ui_background = cfg.ui_background_mode
 
     if getattr(args, "songs_dir", None) == parser_defaults["songs_dir"]:
         args.songs_dir = Path(cfg.songs_dir)

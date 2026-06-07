@@ -528,6 +528,7 @@ class RuntimeSessionState:
     enable_timer_guard: bool = True
     enable_waitable_timer: bool = True
     enable_gc_pause: bool = True
+    check_input_path: bool = False
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
         self.session = session
@@ -572,6 +573,7 @@ def play_selected_song(
     from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
     from sky_music.orchestration.engine import PlaybackEngine
     from sky_music.ui.hud import ProgressRenderer
+    from sky_music.ui.textual_app import TEXTUAL_THEME_TOKENS
 
     try:
         song = get_shared_song_repository().load(selected_song)
@@ -732,11 +734,17 @@ def play_selected_song(
     telemetry_enabled = TELEMETRY_CSV_ENABLED or user_cfg.telemetry_enabled_by_default or PLAYBACK_DEBUG or force_dry_run
 
     backend = DryRunBackend() if is_dry_run else WinSendInputBackend()
+    # Resolve the accent colour for the active theme so the HUD borders match
+    # the picker's colour scheme rather than always rendering in bright-cyan.
+    _active_theme_name = (user_cfg.theme or "aurora").casefold()
+    _theme_tokens = TEXTUAL_THEME_TOKENS.get(_active_theme_name, TEXTUAL_THEME_TOKENS["aurora"])
     renderer = ProgressRenderer(
         controls,
         verbose=verbose_hud_mode,
         profile_name=current_profile,
         tempo_scale=current_tempo,
+        accent_hex=_theme_tokens.accent,
+        theme_name=_active_theme_name,
     )
     renderer.active_policy = active_policy
 
@@ -761,7 +769,7 @@ def play_selected_song(
         min_hold_us=int(active_policy.min_hold_us),
         same_key_conflict_policy=active_policy.same_key_conflict_policy,
         use_dispatch_thread=USE_DISPATCH_THREAD,
-        input_path_warn_us=user_cfg.input_path_warn_us,
+        input_path_warn_us=user_cfg.input_path_warn_us if RUNTIME_STATE.check_input_path else 0,
         enable_timer_guard=ENABLE_TIMER_GUARD,
         enable_waitable_timer=ENABLE_WAITABLE_TIMER,
         enable_gc_pause=ENABLE_GC_PAUSE,
@@ -943,6 +951,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="check keyboard layout mapping and physically held note keys only",
     )
     diag.add_argument(
+        "--check-input-path",
+        action="store_true",
+        help="monitor input path duration and warn if degraded (OS-side/Filter Keys)",
+    )
+    diag.add_argument(
         "--selftest-textual",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -1026,6 +1039,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="song picker TUI theme (default: saved or aurora)",
     )
     disp.add_argument(
+        "--ui-background",
+        choices=["transparent", "painted"],
+        default=None,
+        help="song picker background mode (default: saved or transparent)",
+    )
+    disp.add_argument(
         "--no-clear",
         action="store_true",
         help="do not clear the terminal between songs",
@@ -1060,6 +1079,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_timer_guard = not args.no_timer_guard
     RUNTIME_STATE.enable_waitable_timer = not args.no_waitable_timer
     RUNTIME_STATE.enable_gc_pause = not args.no_gc_pause
+    RUNTIME_STATE.check_input_path = args.check_input_path
 
     if PLAYBACK_DEBUG:
         init_debug_log()
@@ -1259,6 +1279,7 @@ def prompt_song_selection(
     dry_run: bool = False,
     fps: int | None = None,
     scan_code_mode: str = "physical",
+    background_mode: str | None = None,
 ) -> "SongPickerResult | None":
     from sky_music.ui import picker as songs
     session = merge_session_with_overrides(
@@ -1297,6 +1318,7 @@ def prompt_song_selection(
         from sky_music.ui.textual_app import choose_song_interactively_textual
         return choose_song_interactively_textual(
             theme_name=songs.ACTIVE_THEME,
+            background_mode=background_mode,
             initial_profile=session.profile_name,
             initial_tempo=session.tempo_scale,
             initial_fps=session.fps,
@@ -1449,6 +1471,7 @@ def main() -> int:
                     dry_run=DRY_RUN_MODE,
                     fps=resolved_fps,
                     scan_code_mode=CURRENT_SCAN_CODE_MODE,
+                    background_mode=args.ui_background,
                 )
             except Exception as exc:
                 print(f"\n[ERROR] Playback aborted due to background worker cleanup failure: {exc}")
