@@ -1139,8 +1139,7 @@ def _check_textual_support() -> str | None:
         return None
     return (
         "Terminal không được nhận diện là hỗ trợ Textual trên Windows. "
-        "Chạy từ Windows Terminal hoặc VS Code terminal, "
-        "hoặc dùng flag --ui textual để bỏ qua kiểm tra này."
+        "Chạy từ Windows Terminal. "
     )
 
 def _run_textual_selftest() -> int:
