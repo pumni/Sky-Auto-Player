@@ -738,15 +738,22 @@ def play_selected_song(
     # the picker's colour scheme rather than always rendering in bright-cyan.
     _active_theme_name = (user_cfg.theme or "aurora").casefold()
     _theme_tokens = TEXTUAL_THEME_TOKENS.get(_active_theme_name, TEXTUAL_THEME_TOKENS["aurora"])
-    renderer = ProgressRenderer(
-        controls,
-        verbose=verbose_hud_mode,
-        profile_name=current_profile,
-        tempo_scale=current_tempo,
-        accent_hex=_theme_tokens.accent,
-        theme_name=_active_theme_name,
-    )
-    renderer.active_policy = active_policy
+
+    use_textual_ui = (_check_textual_support() is None)
+
+    if use_textual_ui:
+        from sky_music.ui.textual_app.playback_app import SnapshotRenderer, run_playback_textual
+        renderer = SnapshotRenderer()
+    else:
+        renderer = ProgressRenderer(
+            controls,
+            verbose=verbose_hud_mode,
+            profile_name=current_profile,
+            tempo_scale=current_tempo,
+            accent_hex=_theme_tokens.accent,
+            theme_name=_active_theme_name,
+        )
+        renderer.active_policy = active_policy
 
     # Clear preflight/countdown output so the live HUD starts on a clean terminal.
     # ProgressRenderer only erases its own previously-rendered lines; static print()
@@ -775,7 +782,18 @@ def play_selected_song(
         enable_gc_pause=ENABLE_GC_PAUSE,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
-    result = engine.play()
+
+    if use_textual_ui:
+        result = run_playback_textual(
+            engine,
+            renderer,
+            theme_name=_active_theme_name,
+            song_name=song.name,
+            total_us=sched_meta.playback_duration_us,
+        )
+    else:
+        result = engine.play()
+
     clear_terminal()
     return result
 
