@@ -189,3 +189,6 @@ class InfoModal(PickerModal[None]):
         if event.key in {"escape", "enter"}:
             event.stop()
             self.dismiss(None)
+
+    def dismiss(self, result: Any = None) -> None:
+        super().dismiss(result)

@@ -1481,6 +1481,40 @@ def main() -> int:
                     return 0
             return 0
 
+        if _check_textual_support() is None:
+            from sky_music.ui import picker as songs
+            from sky_music.ui.textual_app import run_sky_app_unified
+
+            cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
+            resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+
+            session = merge_session_with_overrides(
+                PLAYBACK_SESSION or PlaybackSessionContext.balanced(
+                    tempo_scale=TEMPO_SCALE,
+                    fps=resolved_fps,
+                    scan_code_mode=CURRENT_SCAN_CODE_MODE,
+                ),
+                profile=canonical_profile_name(user_cfg.default_timing_profile),
+                tempo=TEMPO_SCALE,
+                fps=resolved_fps,
+            )
+
+            try:
+                return run_sky_app_unified(
+                    theme_name=songs.ACTIVE_THEME,
+                    background_mode=args.ui_background,
+                    initial_profile=session.profile_name,
+                    initial_tempo=session.tempo_scale,
+                    initial_fps=session.fps,
+                    initial_dry_run=DRY_RUN_MODE,
+                    scan_code_mode=session.scan_code_mode,
+                    controls=controls,
+                    countdown_seconds=args.countdown,
+                )
+            except Exception as exc:
+                print(f"\n[ERROR] Playback aborted due to background worker cleanup failure: {exc}")
+                return 1
+
         while True:
             # Resolve initial FPS prioritizing active CLI overrides, then persistent config defaults
             cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
