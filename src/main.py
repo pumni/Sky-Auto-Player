@@ -1359,6 +1359,13 @@ def print_choices_local(song_choices: list[Path]) -> None:
         print(f"  {index:>2}) {path.stem}")
 
 def main() -> int:
+    if getattr(sys, "frozen", False):
+        # Ensure the working directory is the exe's folder so relative paths work
+        os.chdir(Path(sys.executable).parent)
+
+    if "--selftest-textual" in sys.argv:
+        return _run_textual_selftest()
+
     if sys.platform == 'win32':
         try:
             sys.stdout.reconfigure(encoding='utf-8')
@@ -1369,9 +1376,6 @@ def main() -> int:
     user_cfg = load_config()
     parser = build_arg_parser()
     args = parser.parse_args()
-
-    if getattr(args, "selftest_textual", False):
-        return _run_textual_selftest()
 
     apply_config_defaults(args, user_cfg)
     configure_from_args(args, user_cfg)
@@ -1431,6 +1435,7 @@ def main() -> int:
 
     if not song_choices and args.song is None:
         print_choices_local(song_choices)
+        _wait_key_and_exit(1)
         return 1
 
     try:
@@ -1533,6 +1538,18 @@ def main() -> int:
     finally:
         disable_high_precision_timers()
 
+def write_crash_log(exc: BaseException) -> None:
+    import traceback
+    import time
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / f"crash_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    path.write_text(
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        encoding="utf-8",
+    )
+    print(f"Crash log: {path.resolve()}", file=sys.stderr)
+
 if __name__ == '__main__':
     # Required for safe ProcessPoolExecutor startup on Windows and harmless
     # for normal `uv run python src/main.py` execution.
@@ -1541,4 +1558,16 @@ if __name__ == '__main__':
         multiprocessing.freeze_support()
     except Exception:
         pass
-    raise SystemExit(main())
+
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"\n[CRITICAL] Sky Player crashed: {exc}", file=sys.stderr)
+        write_crash_log(exc)
+        if getattr(sys, "frozen", False):
+            _wait_key_and_exit(1)
+        raise
+    finally:
+        flush_debug_log()
