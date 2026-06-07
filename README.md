@@ -1,3 +1,5 @@
+# Sky Player
+
 An automatic music player designed for **Sky: Children of the Light** on PC. It reads JSON, skysheet, or JSON-compatible txt song files downloaded from specy/skyMusic and simulates keyboard keypresses in real-time.
 
 > [!WARNING]
