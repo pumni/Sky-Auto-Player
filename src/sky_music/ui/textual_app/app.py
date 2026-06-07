@@ -33,7 +33,7 @@ from sky_music.config import (
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.ui.picker import FPS_OPTIONS, PROFILES_INFO, TEMPO_OPTIONS, SongPickerResult
-from sky_music.ui.picker_helpers import SONG_DIR, SUPPORTED_EXTENSIONS, get_song_choices, save_theme
+from sky_music.ui.picker_helpers import get_song_choices, save_theme
 from sky_music.ui.picker_metadata import (
     SongUiMetadata,
     clear_metadata_cache,
@@ -41,12 +41,9 @@ from sky_music.ui.picker_metadata import (
 )
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
-    ThemePreset,
-    get_match_span,
     remove_accents,
     pad_text,
 )
-from sky_music.ui.text_render import cell_width, truncate_cells
 from sky_music.ui.textual_app.keymap import COMMANDS
 from sky_music.ui.textual_app.display_widgets import DetailPanel, GradientHeader
 from sky_music.ui.textual_app.modals import CommandModal, InfoModal, OptionModal, PickerOption
@@ -54,10 +51,19 @@ from sky_music.ui.textual_app.theme_css import APP_CSS, TEXTUAL_THEME_TOKENS, Te
 from sky_music.ui.textual_app.widgets import CustomFooter
 from sky_music.ui.textual_app.workers import MetadataCoordinator
 from sky_music.infrastructure.background import BackgroundScope
+from sky_music.ui.textual_app.renderers import (
+    UNKNOWN_FIELD,
+    PENDING_FIELD,
+    _title_cell,
+    _risk_style,
+    _risk_cell,
+    _format_duration,
+    _metadata_cells,
+    _warning_summary,
+    build_empty_detail_text,
+    build_detail_text,
+)
 
-
-UNKNOWN_FIELD = "-"
-PENDING_FIELD = "..."
 FUZZY_SCORE_CUTOFF = 60.0
 
 
@@ -96,68 +102,6 @@ def rank_song_choices(
 
     ranked_indices = sorted(scores, key=lambda index: (-scores[index], index))
     return [choices[index] for index in ranked_indices]
-
-
-def _title_cell(title: str, normalized_query: str, match_style: str = "bold #fbbf24") -> Text:
-    text = Text(title)
-    if not normalized_query:
-        return text
-    span = get_match_span(title, normalized_query)
-    if span is None:
-        return text
-    start, end = span
-    text.stylize(match_style, start, end)
-    return text
-
-
-def _risk_style(risk: str, muted: str, theme: ThemePreset) -> str:
-    risk_upper = risk.upper()
-    if theme.name == "classic":
-        if risk_upper in ("LOW", "SUCCESS"):
-            return theme.foreground
-        if risk_upper in ("MED", "MEDIUM", "WARN", "WARNING"):
-            return f"bold {theme.foreground}"
-        if risk_upper in ("HIGH", "DANGER", "ERROR"):
-            return f"bold reverse {theme.foreground}"
-        return muted
-
-    if risk_upper in ("LOW", "SUCCESS"):
-        return f"bold {theme.success}"
-    elif risk_upper in ("MED", "MEDIUM", "WARN", "WARNING"):
-        return f"bold {theme.warning}"
-    elif risk_upper in ("HIGH", "DANGER", "ERROR"):
-        return f"bold {theme.danger}"
-    return muted
-
-
-def _risk_cell(risk: str, muted: str, theme: ThemePreset) -> Text:
-    """Colour-code the difficulty/risk column using theme semantic colors/styles."""
-    return Text(risk, style=_risk_style(risk, muted, theme))
-
-
-def _format_duration(seconds: float) -> str:
-    total_seconds = max(0, int(round(seconds)))
-    minutes, sec = divmod(total_seconds, 60)
-    return f"{minutes}:{sec:02d}"
-
-
-def _metadata_cells(metadata: SongUiMetadata | None) -> tuple[str, str, str, str]:
-    if metadata is None:
-        return UNKNOWN_FIELD, UNKNOWN_FIELD, UNKNOWN_FIELD, "loading"
-
-    duration = _format_duration(metadata.duration_seconds)
-    notes = str(metadata.note_count)
-    if not metadata.analyzed:
-        return duration, notes, PENDING_FIELD, PENDING_FIELD
-    return duration, notes, metadata.risk.upper(), metadata.recommended_profile
-
-
-def _warning_summary(warnings: tuple[str, ...], *, max_width: int = 72) -> str:
-    if not warnings:
-        return ""
-    first = " ".join(warnings[0].split())
-    suffix = f"  +{len(warnings) - 1} more" if len(warnings) > 1 else ""
-    return truncate_cells(first, max(8, max_width - cell_width(suffix))) + suffix
 
 
 class SongTable(DataTable[str]):
@@ -686,79 +630,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         selected = self._selected_choice()
         if selected is None:
-            txt = Text()
-            if not self.choices:
-                supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-                txt.append(f"No songs found in {SONG_DIR}", style=f"bold {t.foreground}")
-                txt.append("\n")
-                txt.append(f"Supported: {supported}", style=t.muted)
-                txt.append("\n")
-                txt.append("Press Ctrl+R to reload", style=t.muted)
-            elif self.query.strip():
-                txt.append(f'No matches for "{self.query.strip()}"', style=f"bold {t.foreground}")
-                txt.append("\n")
-                txt.append("Clear search or press Ctrl+R to reload", style=t.muted)
-            else:
-                txt.append("No song selected", style=t.muted)
-            detail.update(txt)
+            detail.update(build_empty_detail_text(t, bool(self.choices), self.query))
             return
 
         metadata = peek_cached_song_ui_metadata(selected.path, self.session, self.cfg)
-        if metadata is None:
-            txt = Text()
-            txt.append(selected.path.stem, style=f"bold {t.foreground}")
-            txt.append("\n")
-            txt.append("analyzing…", style=t.muted)
-            detail.update(txt)
-            return
-
-        analyzed = metadata.analyzed
-        risk = metadata.risk.upper() if analyzed else "…"
-        suggested = metadata.recommended_profile if analyzed else "…"
-        risk_style = _risk_style(risk, t.muted, t) if analyzed else t.muted
-
-        def label(s: str) -> tuple[str, str]:
-            return (s, t.accent_dim)
-
-        def value(s: str, style: str | None = None) -> tuple[str, str]:
-            return (s, style or t.foreground)
-
-        txt = Text()
-        # Row 0: song title (bold, prominent)
-        txt.append(selected.path.stem, style=f"bold {t.foreground}")
-        txt.append("\n")
-        # Row 1: time · notes · risk
-        txt.append_text(Text.assemble(
-            label("time "), value(_format_duration(metadata.duration_seconds), t.accent),
-            label("  notes "), value(str(metadata.note_count)),
-            label("  risk "), value(risk, risk_style),
-        ))
-        txt.append("\n")
-        # Row 2: suggested profile · recommended tempo
-        txt.append_text(Text.assemble(
-            label("suggested "), value(suggested, t.accent),
-            label("  tempo "), value(f"{metadata.recommended_tempo_scale:.2f}×"),
-        ))
-        txt.append("\n")
-        # Row 3: density stats
-        txt.append_text(Text.assemble(
-            label("avg "), value(f"{metadata.average_notes_per_second:.1f}/s"),
-            label("  peak "), value(f"{metadata.peak_notes_per_second_1s:.1f}/s"),
-            label("  chords "), value(str(metadata.chords_count)),
-        ))
-        txt.append("\n")
-        # Row 4: gap stats
-        txt.append_text(Text.assemble(
-            label("min gap "), value(f"{metadata.min_note_gap_ms:.1f}ms"),
-            label("  same-key "), value(f"{metadata.min_same_key_gap_ms:.1f}ms"),
-        ))
-        warning = _warning_summary(metadata.warnings)
-        if warning:
-            txt.append("\n")
-            txt.append_text(Text.assemble(
-                label("warning "), value(warning, t.warning),
-            ))
-        detail.update(txt)
+        detail.update(build_detail_text(selected.path, metadata, t))
 
     def _selected_choice(self) -> SongChoice | None:
         if not self.filtered:
