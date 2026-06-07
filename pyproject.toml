@@ -16,7 +16,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["main", "songs", "ui", "inputs", "scheduler", "build_app"]
+packages = ["sky_music", "sky_music.domain", "sky_music.infrastructure", "sky_music.orchestration", "sky_music.platform", "sky_music.platform.win32", "sky_music.ui", "sky_music.ui.textual_app"]
+py-modules = ["main", "build_app"]
 
 [dependency-groups]
 dev = [

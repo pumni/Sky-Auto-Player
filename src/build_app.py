@@ -2,7 +2,18 @@ import argparse
 import subprocess
 import shutil
 import sys
+import tomllib
 from pathlib import Path
+
+def get_project_version() -> str:
+    """Read the version from pyproject.toml."""
+    try:
+        # Use UTF-8 for reading pyproject.toml just in case
+        with open("pyproject.toml", "rb") as f:
+            data = tomllib.load(f)
+            return data.get("project", {}).get("version", "unknown")
+    except Exception:
+        return "unknown"
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build the Sky Player executable.")
@@ -16,6 +27,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include PyInstaller collect-all flags for textual and rich (default for release builds)",
     )
+    parser.add_argument(
+        "--no-version-name",
+        action="store_true",
+        help="do not include the version in the output folder name (defaults to Sky-Player)",
+    )
     return parser
 
 def main() -> None:
@@ -27,7 +43,22 @@ def main() -> None:
             pass
 
     args = build_arg_parser().parse_args()
+    version = get_project_version()
     entrypoint = "src/sky_music/ui/textual_app/app.py" if args.textual_proof else "src/main.py"
+    
+    # Best practice: versioned output folder for distribution, but stable EXE name inside is usually preferred.
+    # However, PyInstaller's --name controls both. We'll use versioned name for the folder by default.
+    app_name = f"Sky-Player-{version}" if (version != "unknown" and not args.no_version_name) else "Sky-Player"
+
+    print(f"[+] Bắt đầu đóng gói Sky Player v{version}...")
+    
+    # Check if pyinstaller is available
+    try:
+        import PyInstaller
+    except ImportError:
+        print("[!] LỖI: Không tìm thấy PyInstaller trong môi trường hiện tại.")
+        print("    Vui lòng cài đặt bằng: uv add --dev pyinstaller")
+        sys.exit(1)
 
     print("[+] Đang dọn dẹp các thư mục build cũ...")
     for folder in ["build", "dist"]:
@@ -36,40 +67,34 @@ def main() -> None:
             shutil.rmtree(path)
             
     print("[+] Đang chạy PyInstaller để đóng gói ứng dụng...")
+    # Khởi tạo lệnh PyInstaller sử dụng sys.executable để đảm bảo dùng đúng venv
     cmd = [
-        "pyinstaller",
+        sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--onedir",
         "--console",
-        "--name", "Sky-Player",
+        "--name", app_name,
         "--paths", "./src",
+        # Tự động gom toàn bộ logic nội bộ của dự án
+        "--collect-all", "sky_music",
+        # Đảm bảo metadata (version) có sẵn cho importlib.metadata
+        "--collect-metadata", "sky-player",
     ]
+    
+    # Luôn collect textual và rich nếu không phải proof build, hoặc nếu được yêu cầu
     if args.collect_textual or not args.textual_proof:
         cmd.extend(["--collect-all", "textual", "--collect-all", "rich"])
 
-    # Hidden imports: modules that PyInstaller cannot auto-detect because they are
-    # loaded via lazy/conditional imports (inside if-blocks or function bodies).
+    # Hidden imports dự phòng cho các module lazy-load/dynamic load
+    # Mặc dù --collect-all sky_music đã lấy hết file, nhưng hidden-import giúp 
+    # PyInstaller hiểu mối liên kết giữa các module khi dùng import động.
     hidden_imports: list[str] = [
-        # UI – textual app
-        "sky_music.ui.textual_app",
-        "sky_music.ui.textual_app.app",
-        "sky_music.ui.textual_app.workers",
-        # UI – classic prompt-toolkit picker and sub-modules
-        "sky_music.ui.picker",
-        "sky_music.ui.picker_helpers",
-        "sky_music.ui.picker_metadata",
-        "sky_music.ui.picker_theme",
-        "sky_music.ui.hud",
-        "sky_music.ui.text_render",
-        # Platform – Win32 inputs (lazy-imported in backend, focus, realtime, engine, picker)
         "sky_music.platform.win32",
         "sky_music.platform.win32.inputs",
-        # Orchestration – calibration and telemetry are lazy-imported
         "sky_music.orchestration.engine",
         "sky_music.orchestration.runtime_dispatch",
         "sky_music.orchestration.calibration",
         "sky_music.orchestration.telemetry",
-        # Infrastructure – background, hotkeys, doctor use lazy imports or are indirect
         "sky_music.infrastructure.backend",
         "sky_music.infrastructure.background",
         "sky_music.infrastructure.hotkeys",
@@ -77,26 +102,17 @@ def main() -> None:
         "sky_music.infrastructure.focus",
         "sky_music.infrastructure.realtime",
         "sky_music.infrastructure.timing",
-        # Domain
-        "sky_music.domain.domain",
-        "sky_music.domain.analyzer",
-        "sky_music.domain.parser",
-        "sky_music.domain.scheduler",
-        "sky_music.domain.scheduler_types",
-        "sky_music.domain.session_context",
-        "sky_music.domain.song_repository",
-        "sky_music.domain.validation",
-        # Config and layouts
-        "sky_music.config",
-        "sky_music.layouts",
     ]
     for imp in hidden_imports:
         cmd.extend(["--hidden-import", imp])
+        
     cmd.append(entrypoint)
+    
+    print(f"[+] Thực thi: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     
-    print("[+] Đang sao chép thư mục bài hát (songs) và tài liệu hướng dẫn...")
-    dist_dir = Path("dist/Sky-Player")
+    dist_dir = Path("dist") / app_name
+    print(f"[+] Đang sao chép tài nguyên vào {dist_dir}...")
     
     songs_dir = Path("songs")
     if songs_dir.exists():
@@ -107,8 +123,9 @@ def main() -> None:
         shutil.copy2(readme_file, dist_dir / "README.md")
         
     print("\n===================================================")
-    print("[v] THÀNH CÔNG: Đã đóng gói xong ứng dụng!")
-    print(f"Thư mục ứng dụng hoàn chỉnh nằm tại:\n  {dist_dir.resolve()}")
+    print(f"[v] THÀNH CÔNG: Đã đóng gói xong Sky Player v{version}!")
+    print(f"Thư mục ứng dụng: {dist_dir.resolve()}")
+    print(f"File thực thi: {app_name}.exe")
     print("===================================================\n")
 
 if __name__ == "__main__":
