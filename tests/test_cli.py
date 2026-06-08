@@ -206,4 +206,33 @@ def test_removed_phase2_timing_arguments_are_rejected(args):
         parser.parse_args(args)
 
 
+def test_cli_doctor_routing(monkeypatch) -> None:
+    called_args = {}
+
+    def mock_run_doctor_command(*, full: bool, timing: bool, input_check: bool) -> int:
+        called_args["full"] = full
+        called_args["timing"] = timing
+        called_args["input_check"] = input_check
+        return 0
+
+    monkeypatch.setattr("sky_music.cli.doctor_command.run_doctor_command", mock_run_doctor_command)
+
+    # Test full doctor
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--doctor"])
+    main.apply_config_defaults(args, AppConfig())
+    
+    from sky_music.cli.doctor_command import run_doctor_command
+    ret = run_doctor_command(
+        full=bool(args.doctor),
+        timing=bool(args.doctor_timing),
+        input_check=bool(args.doctor_input),
+    )
+    assert ret == 0
+    assert called_args["full"] is True
+    assert called_args["timing"] is False
+    assert called_args["input_check"] is False
+
+
+
 

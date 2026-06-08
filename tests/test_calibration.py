@@ -429,10 +429,14 @@ def test_apply_calibration_loads_latest_summary(tmp_path, monkeypatch):
         "schedule": {"impossible_same_key_repeats": 0, "risky_same_key_repeats": 0},
     })
 
-    main.PLAYBACK_SESSION = None
-    assert main._apply_calibration_from_telemetry(AppConfig()) is True
-    assert main.PLAYBACK_SESSION is not None
-    assert main.TIMING_PROFILE_NAME == "local-precise@60fps"
+    from sky_music.cli.calibration_command import apply_calibration_from_telemetry
+    from sky_music.orchestration.runtime_session import RuntimeSessionState
+
+    state = RuntimeSessionState()
+    res = apply_calibration_from_telemetry(AppConfig(), state)
+    assert res.applied is True
+    assert state.session is not None
+    assert state.timing_profile_name == "local-precise@60fps"
 
 
 def test_save_calibration_persists_profile_tempo_and_fps(tmp_path, monkeypatch):
@@ -452,8 +456,13 @@ def test_save_calibration_persists_profile_tempo_and_fps(tmp_path, monkeypatch):
         "schedule": {"impossible_same_key_repeats": 0, "risky_same_key_repeats": 0},
     })
 
-    cfg = AppConfig()
-    assert main._apply_calibration_from_telemetry(cfg, persist=True) is True
+    from sky_music.cli.calibration_command import apply_calibration_from_telemetry
+    from sky_music.orchestration.runtime_session import RuntimeSessionState
+
+    state = RuntimeSessionState()
+    res = apply_calibration_from_telemetry(AppConfig(), state, persist=True)
+    assert res.applied is True
+
     saved = load_config(force_reload=True)
     assert saved.default_timing_profile == "balanced"
     assert saved.default_tempo_scale == 0.95
@@ -487,8 +496,13 @@ def test_apply_calibration_uses_explicit_summary_path(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    main.PLAYBACK_SESSION = None
-    assert main._apply_calibration_from_telemetry(AppConfig(), summary_path=explicit) is True
-    assert main.PLAYBACK_SESSION is not None
-    assert main.PLAYBACK_SESSION.fps == 30
-    assert main.PLAYBACK_SESSION.profile_name == "audience-safe"
+    from sky_music.cli.calibration_command import apply_calibration_from_telemetry
+    from sky_music.orchestration.runtime_session import RuntimeSessionState
+
+    state = RuntimeSessionState()
+    res = apply_calibration_from_telemetry(AppConfig(), state, summary_path=explicit)
+    assert res.applied is True
+    assert state.session is not None
+    assert state.session.fps == 30
+    assert state.session.profile_name == "audience-safe"
+

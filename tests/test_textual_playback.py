@@ -1050,7 +1050,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
         should_fail = True
         def __init__(self, *args, **kwargs) -> None:
             self.closed = False
-            print("MOCK INIT! should_fail =", MockMetadataCoordinator.should_fail, "ID:", id(self))
         @property
         def name(self) -> str:
             return "mock-metadata"
@@ -1062,13 +1061,10 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
         def cancel(self) -> None:
             pass
         def close(self, *, wait: bool = False) -> None:
-            print("MOCK CLOSE CALLED! should_fail =", MockMetadataCoordinator.should_fail, "ID:", id(self))
             if MockMetadataCoordinator.should_fail:
                 MockMetadataCoordinator.should_fail = False
-                print("MOCK CLOSE RAISING RUNTIMEERROR!")
                 raise RuntimeError("Simulation of worker closing failure!")
             self.closed = True
-            print("MOCK CLOSE SUCCESSFUL!")
         def snapshot(self) -> Any:
             from sky_music.infrastructure.background import WorkerSnapshot
             return WorkerSnapshot(
@@ -1083,7 +1079,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
-        print("MOCK PREPARE_PLAYBACK CALLED!")
         song = Song(name="Mock Song", notes=())
         sched_meta = ScheduleMetadata(
             actions=(),
@@ -1138,34 +1133,25 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
     import sky_music.orchestration.engine as engine_module
     monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
 
-    import traceback
     class CleanupTracker:
         def __get__(self, instance, owner):
             return getattr(self, "_val", None)
         def __set__(self, instance, value):
             self._val = value
-            print("SETTING last_picker_cleanup to:", value)
-            traceback.print_stack()
     
     monkeypatch.setattr(TelemetryLogger, "last_picker_cleanup", CleanupTracker())
 
     async def run_integration_test() -> None:
-        print("APP_MODULE:", app_module)
-        print("METADATA_COORDINATOR IN APP_MODULE:", getattr(app_module, "MetadataCoordinator", None))
-        print("MOCK_METADATA_COORDINATOR:", MockMetadataCoordinator)
         app = SkyPickerApp(
             initial_dry_run=True,
             unified_mode=True,
             countdown_seconds=0,
             cfg=AppConfig(),
         )
-        print("APP UNIFIED MODE:", app.unified_mode)
         async with app.run_test() as pilot:
             await pilot.pause()
-            print("BEFORE ENTER - last_picker_cleanup:", TelemetryLogger.last_picker_cleanup)
             await pilot.press("enter")
             await pilot.pause(0.5)
-            print("AFTER ENTER - last_picker_cleanup:", TelemetryLogger.last_picker_cleanup)
             assert TelemetryLogger.last_picker_cleanup is not None
             assert TelemetryLogger.last_picker_cleanup.get("ok") is False
             assert app.playback_mode == "error"
@@ -1219,7 +1205,6 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
 
     def mock_prepare_playback_error(song_path, session, cfg, is_dry_run=False):
-        print("MOCK_PREPARE_PLAYBACK_ERROR CALLED!")
         return PlaybackError(code="test_error", message="Mocked playback error description")
 
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback_error)
@@ -1233,12 +1218,8 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            print("CHOICES:", app.choices)
-            print("FILTERED:", app.filtered)
-            print("BEFORE ENTER - SCREEN:", app.screen, "STACK:", app.screen_stack)
             await pilot.press("enter")
             await pilot.pause(0.5)
-            print("AFTER ENTER - SCREEN:", app.screen, "STACK:", app.screen_stack)
             assert app.playback_mode == "error"
             card = app.query_one("#playback-card")
             assert "Mocked playback error description" in str(card.render())
