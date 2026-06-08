@@ -1,7 +1,7 @@
 import shutil
 import os
 import time
-import re
+from sky_music.config import resolve_game_fps
 from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
 from sky_music.ui.text_render import (
@@ -275,8 +275,10 @@ class ProgressRenderer:
         # Insert timing info if verbose
         if self.verbose and getattr(self, "active_policy", None) is not None:
             pol = self.active_policy
-            frame_label = f"{pol.frame_us}us" if pol.frame_us > 0 else "N/A"
-            fps_label = f"{pol.fps}fps" if pol.fps > 0 else "N/A"
+            fps = resolve_game_fps(getattr(pol, "fps", None))
+            frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
+            frame_label = f"{frame_us}us"
+            fps_label = f"{fps}fps"
             hold_info = f"hold/min: {pol.hold_us}/{pol.min_hold_us}us"
             timing_line = f"{ANSI_GRAY}Timing: {fps_label} ({frame_label})  ·  {hold_info}{ANSI_RESET}"
             hud_body_lines.append(timing_line)

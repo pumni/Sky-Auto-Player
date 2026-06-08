@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import json
 import pytest
-from sky_music.config import AppConfig, clear_config_cache, HotkeyDefaults
+from sky_music.config import AppConfig, clear_config_cache, HotkeyDefaults, resolve_game_fps
 
 src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
@@ -30,7 +30,8 @@ def test_local_precise_profile_from_builtin_defaults():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--timing-profile", "local-precise"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 22_000
+    assert main.TIMING_POLICY.fps == 60
+    assert main.TIMING_POLICY.hold_us == 16_667
     assert main.SLEEP_POLICY.spin_threshold_us == 800
 
 
@@ -253,14 +254,30 @@ def test_config_fps_override_by_cli():
     main.configure_from_args(args, cfg)
     assert main.TIMING_POLICY.fps == 30
 
-def test_no_fps_config_or_cli_stays_unframed():
-    cfg = AppConfig(game_fps=0) # Assume 0 means disabled in config too
+def test_no_fps_config_or_cli_defaults_to_60fps():
+    cfg = AppConfig(game_fps=0)
     parser = main.build_arg_parser()
     args = parser.parse_args([])
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TIMING_POLICY.fps == 0
-    assert main.TIMING_POLICY.hold_us == 17_000
+    assert main.TIMING_POLICY.fps == 60
+
+
+def test_resolve_game_fps_never_zero():
+    assert resolve_game_fps(0) == 60
+    assert resolve_game_fps(None) == 60
+    assert resolve_game_fps(-5) == 60
+    assert resolve_game_fps(144) == 144
+
+
+def test_config_load_migrates_zero_fps(tmp_path, monkeypatch):
+    import sky_music.config as config_module
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({"game_fps": 0}), encoding="utf-8")
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_file)
+    clear_config_cache()
+    assert config_module.load_config(force_reload=True).game_fps == 60
 
 def test_hotkeys_default_from_config():
     cfg = AppConfig(hotkeys=HotkeyDefaults(pause="f7", skip="f11"))

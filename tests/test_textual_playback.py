@@ -233,6 +233,803 @@ def test_unified_workflow_integration(monkeypatch) -> None:
     asyncio.run(run_integration_test())
 
 
+def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        song = Song(name="Mock Song", notes=())
+        policy = FrameTimingPolicy(
+            fps=60,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=song,
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    focus_calls: list[str] = []
+
+    class MockFocusGuard:
+        def focus(self) -> bool:
+            focus_calls.append("focus")
+            return True
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            return "finished"
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
+    monkeypatch.setattr(app_module, "Win32SkyFocusGuard", MockFocusGuard)
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_focus_test() -> None:
+        app = SkyPickerApp(
+            initial_dry_run=False,
+            unified_mode=True,
+            countdown_seconds=0,
+            cfg=AppConfig(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+
+    asyncio.run(run_focus_test())
+    assert focus_calls == ["focus"]
+
+
+def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        song = Song(name="Mock Song", notes=())
+        policy = FrameTimingPolicy(
+            fps=60,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=song,
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            time.sleep(0.5)
+            return "finished"
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_lock_test(size: tuple[int, int]) -> None:
+        app = SkyPickerApp(
+            initial_dry_run=True,
+            unified_mode=True,
+            countdown_seconds=0,
+            cfg=AppConfig(),
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            table = app.query_one("#songs")
+            search = app.query_one("#search")
+            card = app.query_one("#playback-card")
+            songs_h_before = table.region.height
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert app.playback_mode == "playing"
+            assert search.disabled is True
+            assert table.disabled is True
+            assert card.region.bottom <= app.screen.region.bottom
+            assert card.region.bottom == app.screen.region.bottom - 1
+            assert table.region.bottom <= card.region.y
+            assert table.region.height < songs_h_before
+            assert card.styles.background == table.styles.background
+            cursor_row = table.cursor_row
+            await pilot.press("down")
+            await pilot.pause(0.1)
+            assert table.cursor_row == cursor_row
+            await pilot.pause(0.6)
+            assert app.playback_mode == "picker"
+            assert search.disabled is False
+            assert table.disabled is False
+
+    asyncio.run(run_lock_test((100, 30)))
+    asyncio.run(run_lock_test((60, 24)))
+
+
+def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        policy = FrameTimingPolicy(
+            fps=60,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=Song(name="Mock Song", notes=()),
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            time.sleep(0.5)
+            return "finished"
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_growth_test(size: tuple[int, int]) -> None:
+        app = SkyPickerApp(
+            initial_dry_run=False,
+            unified_mode=True,
+            countdown_seconds=3,
+            cfg=AppConfig(),
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            card = app.query_one("#playback-card", PlaybackCard)
+            songs = app.query_one("#songs")
+            assert app.playback_mode == "countdown"
+            card_height_countdown = card.region.height
+            songs_height_countdown = songs.region.height
+
+            card._tick_countdown()
+            card._tick_countdown()
+            card._tick_countdown()
+            await pilot.pause(0.2)
+
+            assert app.playback_mode == "playing"
+            assert card.region.bottom == app.screen.region.bottom - 1
+            assert card.region.bottom <= app.screen.region.bottom
+            assert card.region.height > card_height_countdown
+            assert songs.region.height < songs_height_countdown
+            assert songs.region.bottom <= card.region.y
+
+    asyncio.run(run_growth_test((100, 30)))
+    asyncio.run(run_growth_test((60, 24)))
+
+
+def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        policy = FrameTimingPolicy(
+            fps=60,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=Song(name="Mock Song", notes=()),
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            time.sleep(0.5)
+            return "finished"
+
+    hotkey_down = {"value": False}
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: hotkey_down["value"])
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_debug_growth_test(size: tuple[int, int]) -> None:
+        hotkey_down["value"] = False
+        app = SkyPickerApp(
+            initial_dry_run=True,
+            unified_mode=True,
+            countdown_seconds=0,
+            cfg=AppConfig(),
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            card = app.query_one("#playback-card", PlaybackCard)
+            songs = app.query_one("#songs")
+            card_height_before = card.region.height
+            songs_height_before = songs.region.height
+
+            hotkey_down["value"] = True
+            card._poll()
+            await pilot.pause(0.1)
+
+            assert card.debug_mode is True
+            assert card.region.bottom == app.screen.region.bottom - 1
+            assert card.region.bottom <= app.screen.region.bottom
+            assert card.region.height > card_height_before
+            assert songs.region.height < songs_height_before
+            assert songs.region.bottom <= card.region.y
+
+    asyncio.run(run_debug_growth_test((100, 30)))
+    asyncio.run(run_debug_growth_test((60, 24)))
+
+
+def test_timing_line_no_bare_na() -> None:
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
+
+    framed = PlaybackCard(
+        theme_name="aurora",
+        song_name="Mock Song",
+        active_policy=FrameTimingPolicy(
+            fps=60,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        ),
+        debug_mode=True,
+    )
+    framed._mode = "playing"
+    framed_render = str(framed.render())
+    assert "Timing:" in framed_render
+    assert "60fps" in framed_render
+    assert "N/A" not in framed_render
+
+    fallback = PlaybackCard(
+        theme_name="aurora",
+        song_name="Mock Song",
+        active_policy=FrameTimingPolicy(
+            fps=0,
+            frame_us=0,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        ),
+        debug_mode=True,
+    )
+    fallback._mode = "playing"
+    fallback_render = str(fallback.render())
+    assert "Timing:" in fallback_render
+    assert "60fps" in fallback_render
+    assert "unframed" not in fallback_render
+    assert "N/A" not in fallback_render
+
+
+def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        policy = FrameTimingPolicy(
+            fps=session.fps,
+            frame_us=16666,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=Song(name="Mock Song", notes=()),
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            time.sleep(0.2)
+            return "finished"
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_no_unframed_test() -> None:
+        app = SkyPickerApp(
+            initial_dry_run=True,
+            unified_mode=True,
+            countdown_seconds=0,
+            cfg=AppConfig(game_fps=0),
+        )
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            assert app.fps == 60
+            app._render_status()
+            status_text = str(app.query_one("#appbar").render())
+            assert "60fps" in status_text
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            card = app.query_one("#playback-card", PlaybackCard)
+            rendered = str(card.render())
+            for banned in ("unframed", "auto", "N/A"):
+                assert banned not in status_text
+                assert banned not in rendered
+            assert "60fps" in rendered
+
+    asyncio.run(run_no_unframed_test())
+
+
+def test_config_path_is_cwd_independent(tmp_path, monkeypatch) -> None:
+    import sky_music.config as config_module
+
+    canonical_path = config_module.CONFIG_PATH
+    assert canonical_path.is_absolute()
+    monkeypatch.chdir(tmp_path)
+    assert config_module.CONFIG_PATH == canonical_path
+
+
+def test_header_fps_matches_policy_fps(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+
+    class MockMetadataCoordinator:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        @property
+        def name(self) -> str:
+            return "mock-metadata"
+
+        @property
+        def phase(self) -> str:
+            return "picker"
+
+        def refresh(self, paths) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self, *, wait: bool = False) -> None:
+            self.closed = True
+
+        def snapshot(self) -> Any:
+            return WorkerSnapshot(
+                name=self.name,
+                phase=self.phase,
+                closed=self.closed,
+                pending_count=0,
+                running_count=0,
+            )
+
+    def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
+        fps = session.fps or 0
+        policy = FrameTimingPolicy(
+            fps=fps,
+            frame_us=16666 if fps else 0,
+            hold_us=100000,
+            min_hold_us=50000,
+            focus_restore_grace_us=2000000,
+        )
+        return PlaybackPlan(
+            actions=(),
+            sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),
+            session=session,
+            active_policy=policy,
+            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
+            song=Song(name="Mock Song", notes=()),
+            risk_report=ScheduleRiskReport(
+                severity="low",
+                impossible_repeats=0,
+                impossible_same_key_repeats=0,
+                compressed_holds=0,
+                max_polyphony=1,
+                min_any_note_gap_us=None,
+                min_same_key_gap_us=None,
+                dense_clusters=(),
+                recommendations=(),
+            ),
+            cfg=cfg,
+        )
+
+    class MockTelemetry:
+        def record_schedule_metadata(self, sched_meta) -> None:
+            pass
+
+    class MockPlaybackEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            time.sleep(0.2)
+            return "finished"
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
+    monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: False)
+
+    import sky_music.orchestration.engine as engine_module
+    monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+
+    async def run_match_test() -> None:
+        app = SkyPickerApp(
+            initial_dry_run=True,
+            initial_fps=60,
+            unified_mode=True,
+            countdown_seconds=0,
+            cfg=AppConfig(game_fps=60),
+        )
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            card = app.query_one("#playback-card", PlaybackCard)
+            assert app.fps == card.active_policy.fps
+            assert "60fps" in str(card.render())
+
+    asyncio.run(run_match_test())
+
+
 def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
     from sky_music.ui.textual_app import app as app_module
     from sky_music.orchestration.telemetry import TelemetryLogger
@@ -371,11 +1168,13 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
             print("AFTER ENTER - last_picker_cleanup:", TelemetryLogger.last_picker_cleanup)
             assert TelemetryLogger.last_picker_cleanup is not None
             assert TelemetryLogger.last_picker_cleanup.get("ok") is False
-            from sky_music.ui.textual_app.modals import InfoModal
-            assert isinstance(app.screen, InfoModal)
-            await pilot.press("enter")
+            assert app.playback_mode == "error"
+            card = app.query_one("#playback-card")
+            assert "Failed to stop background workers" in str(card.render())
             await pilot.pause(0.2)
             await pilot.press("escape")
+            await pilot.pause(0.2)
+            assert app.playback_mode == "picker"
 
     asyncio.run(run_integration_test())
 
@@ -440,11 +1239,13 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
             await pilot.press("enter")
             await pilot.pause(0.5)
             print("AFTER ENTER - SCREEN:", app.screen, "STACK:", app.screen_stack)
-            from sky_music.ui.textual_app.modals import InfoModal
-            assert isinstance(app.screen, InfoModal)
-            await pilot.press("enter")
+            assert app.playback_mode == "error"
+            card = app.query_one("#playback-card")
+            assert "Mocked playback error description" in str(card.render())
             await pilot.pause()
             await pilot.press("escape")
+            await pilot.pause(0.2)
+            assert app.playback_mode == "picker"
 
     asyncio.run(run_integration_test())
 
@@ -560,15 +1361,16 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause(0.5)
-            from sky_music.ui.textual_app.modals import OptionModal
-            assert isinstance(app.screen, OptionModal)
+            assert app.playback_mode == "risk"
+            card = app.query_one("#playback-card")
+            assert "Risk Level: HIGH" in str(card.render())
             await pilot.press("down")
             await pilot.press("down")
             await pilot.press("down")
             await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause(0.5)
-            assert not isinstance(app.screen, OptionModal)
+            assert app.playback_mode == "picker"
             await pilot.press("escape")
 
     async def run_risk_proceed_test() -> None:
@@ -648,9 +1450,10 @@ def test_debug_stats_calculation() -> None:
 
 def test_playback_screen_toggle_debug(monkeypatch) -> None:
     from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
     from sky_music.config import AppConfig
-    from sky_music.ui.textual_app.playback_app import PlaybackScreen
+    from sky_music.ui.textual_app.playback_app import PlaybackCard
     from pathlib import Path
     from typing import Any
 
@@ -748,6 +1551,8 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
 
     import sky_music.orchestration.engine as engine_module
     monkeypatch.setattr(engine_module, "PlaybackEngine", MockPlaybackEngine)
+    hotkey_down = {"value": False}
+    monkeypatch.setattr(playback_module, "is_hotkey_down", lambda hotkey: hotkey_down["value"])
 
     async def run_toggle_test() -> None:
         app = SkyPickerApp(
@@ -761,26 +1566,35 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             await pilot.press("enter")
             await pilot.pause(0.2)
             
-            # Now we should be on PlaybackScreen
-            assert isinstance(app.screen, PlaybackScreen)
-            screen: PlaybackScreen = app.screen
-            
-            # Default debug mode should be False, and panel is hidden
+            assert app.playback_mode == "playing"
+            screen = app.query_one("#playback-card", PlaybackCard)
+
+            # Default debug mode should be False, and the debug stats line is absent
             assert screen.debug_mode is False
-            panel = screen.query_one("#debug-panel")
-            assert panel.styles.display == "none"
-            
-            # Press F2 to toggle debug mode
+            assert "p95" not in str(screen.render())
+
+            # Textual F2 no longer toggles; debug uses global hotkey polling.
             await pilot.press("f2")
             await pilot.pause(0.1)
+            assert screen.debug_mode is False
+            assert "p95" not in str(screen.render())
+
+            hotkey_down["value"] = True
+            screen._poll()
             assert screen.debug_mode is True
-            assert panel.styles.display == "block"
-            
-            # Press F2 again to toggle back
-            await pilot.press("f2")
-            await pilot.pause(0.1)
+            assert "p95" in str(screen.render())
+
+            screen._poll()
+            assert screen.debug_mode is True
+
+            hotkey_down["value"] = False
+            screen._poll()
+            assert screen.debug_mode is True
+
+            hotkey_down["value"] = True
+            screen._poll()
             assert screen.debug_mode is False
-            assert panel.styles.display == "none"
+            assert "p95" not in str(screen.render())
             
             # Press F9 to exit screen cleanly
             await pilot.press("f9")
@@ -796,7 +1610,7 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
     from sky_music.config import AppConfig
-    from sky_music.ui.textual_app.playback_app import PlaybackScreen
+    from sky_music.ui.textual_app.playback_app import PlaybackCard, PlaybackScreen
     from pathlib import Path
     from typing import Any
 
@@ -935,11 +1749,10 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             await pilot.press("enter")
             await pilot.pause(0.2)
 
-            assert isinstance(app.screen, PlaybackScreen)
-            screen: PlaybackScreen = app.screen
+            assert app.playback_mode == "playing"
+            screen = app.query_one("#playback-card", PlaybackCard)
             assert screen.debug_mode is True
-            panel = screen.query_one("#debug-panel")
-            assert panel.styles.display == "block"
+            assert "p95" in str(screen.render())
 
             # Press F9 to exit cleanly
             await pilot.press("f9")
@@ -947,7 +1760,3 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             await pilot.press("escape")
 
     asyncio.run(run_debug_on_test())
-
-
-
-

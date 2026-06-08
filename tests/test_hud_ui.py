@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.ui.hud import ProgressRenderer
 from sky_music.ui.text_render import strip_ansi
 
@@ -42,3 +43,22 @@ def test_hud_controls_focus_waiting_keeps_refocus_on_narrow_width() -> None:
     assert "Q quit" in minimal
     assert "dry-run" not in minimal
     assert "panic" not in minimal
+
+
+def test_verbose_hud_timing_uses_fps_fallback_not_na(capsys) -> None:
+    renderer = ProgressRenderer(controls=_controls(), verbose=True)
+    renderer.active_policy = FrameTimingPolicy(
+        fps=0,
+        frame_us=0,
+        hold_us=10_000,
+        min_hold_us=10_000,
+        focus_restore_grace_us=100_000,
+        profile_name="fallback",
+    )
+
+    renderer.render(0.0, 1.0, "Test Song", force=True)
+    output = strip_ansi(capsys.readouterr().out)
+
+    assert "Timing:" in output
+    assert "60fps" in output
+    assert "N/A" not in output

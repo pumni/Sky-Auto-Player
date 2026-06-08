@@ -4,13 +4,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from sky_music.config import VALID_FPS
 from sky_music.ui.picker_helpers import (
     load_saved_theme,
     save_theme,
-    SONG_DIR,
 )
 
 ACTIVE_THEME: str = load_saved_theme()
+
+__all__ = [
+    "ACTIVE_THEME",
+    "FPS_OPTIONS",
+    "PROFILES_INFO",
+    "SongPickerResult",
+    "TEMPO_OPTIONS",
+    "get_profiles_info",
+    "save_theme",
+]
 
 @dataclass(frozen=True, slots=True)
 class SongPickerResult:
@@ -19,7 +29,7 @@ class SongPickerResult:
     action: Literal["play", "dry_run"]
     profile_name: str
     tempo_scale: float
-    fps: int | None = None
+    fps: int = 60
     verbose_hud: bool | None = None
     telemetry_enabled: bool | None = None
 
@@ -29,7 +39,7 @@ PROFILES_INFO = [
     ("audience-safe", "Audience Safe: helps online players hear notes clearly"),
 ]
 
-def get_profiles_info(fps: int | None) -> list[tuple[str, str]]:
+def get_profiles_info(fps: int) -> list[tuple[str, str]]:
     return list(PROFILES_INFO)
 
 TEMPO_OPTIONS = [
@@ -41,13 +51,7 @@ TEMPO_OPTIONS = [
 ]
 
 FPS_OPTIONS = [
-    (None, "Auto (No forced sync)"),
-    (30, "30 FPS (Mobile/Emulator)"),
-    (60, "60 FPS (Standard)"),
-    (90, "90 FPS (High Performance)"),
-    (120, "120 FPS (High Refresh)"),
-    (144, "144 FPS (High Refresh)"),
-    (165, "165 FPS (High Refresh)"),
-    (240, "240 FPS (Ultra Refresh)"),
+    (fps, f"{fps} FPS" + (" (Standard)" if fps == 60 else ""))
+    for fps in VALID_FPS
 ]
 

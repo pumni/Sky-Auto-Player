@@ -16,10 +16,9 @@ from sky_music.config import (
     persist_calibration_defaults,
     persist_default_profile,
     persist_playback_defaults,
-    spin_threshold_for_profile,
+    resolve_game_fps,
     sky_process_names_csv,
     canonical_profile_name,
-    display_profile_name,
     CLI_PROFILE_NAMES,
 )
 from sky_music.domain.session_context import (
@@ -34,9 +33,9 @@ from sky_music.platform.win32.inputs import (
 from sky_music.ui.hud import (
     PLAYBACK_SKIPPED,
     PLAYBACK_QUIT,
-    ProgressRenderer,
     clear_terminal
 )
+from sky_music.ui.picker import SongPickerResult
 from sky_music.infrastructure.hotkeys import (
     PlaybackControls,
     parse_hotkey,
@@ -427,11 +426,10 @@ def _apply_calibration_from_telemetry(
     rec = calibrate_profile(inp)
     base = PLAYBACK_SESSION or PlaybackSessionContext.balanced(
         tempo_scale=cfg.default_tempo_scale,
-        fps=cfg.game_fps if cfg.game_fps > 0 else None,
+        fps=resolve_game_fps(cfg.game_fps),
     )
     updated = apply_recommendation_to_context(base, rec)
-    if inp.fps > 0:
-        updated = updated.with_fps(inp.fps)
+    updated = updated.with_fps(resolve_game_fps(inp.fps))
     RUNTIME_STATE.apply_session(updated, cfg)
     RUNTIME_STATE.telemetry_csv_enabled = TELEMETRY_CSV_ENABLED
     RUNTIME_STATE.dry_run = DRY_RUN_MODE
@@ -592,7 +590,7 @@ def play_selected_song(
     user_cfg = load_config()
     base_session = PLAYBACK_SESSION or PlaybackSessionContext.balanced(
         tempo_scale=TEMPO_SCALE,
-        fps=user_cfg.game_fps if user_cfg.game_fps > 0 else None,
+        fps=resolve_game_fps(user_cfg.game_fps),
         scan_code_mode=CURRENT_SCAN_CODE_MODE,
     )
     session = merge_session_with_overrides(
@@ -1486,7 +1484,7 @@ def main() -> int:
             from sky_music.ui.textual_app import run_sky_app_unified
 
             cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
-            resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+            resolved_fps = resolve_game_fps(args.fps if cli_fps_explicit else user_cfg.game_fps)
 
             session = merge_session_with_overrides(
                 PLAYBACK_SESSION or PlaybackSessionContext.balanced(
@@ -1518,7 +1516,7 @@ def main() -> int:
         while True:
             # Resolve initial FPS prioritizing active CLI overrides, then persistent config defaults
             cli_fps_explicit = any(arg.startswith("--fps") for arg in sys.argv)
-            resolved_fps = args.fps if cli_fps_explicit else (user_cfg.game_fps if user_cfg.game_fps > 0 else None)
+            resolved_fps = resolve_game_fps(args.fps if cli_fps_explicit else user_cfg.game_fps)
 
             try:
                 picker_result = prompt_song_selection(

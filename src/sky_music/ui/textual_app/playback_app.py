@@ -5,19 +5,26 @@ from dataclasses import dataclass
 import threading
 from typing import TYPE_CHECKING, Any
 
-from textual import work
+from rich.text import Text
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Static
 from textual.screen import Screen
 
-from sky_music.config import load_config
-from sky_music.ui.hud import format_duration
+from sky_music.config import load_config, resolve_game_fps
+from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
+from sky_music.ui.hud import format_duration, _hex_to_ansi
+from sky_music.ui.picker_theme import get_theme_preset
+from sky_music.ui.text_render import ansi_box, ansi_gradient_box, truncate_cells, visible_width
 from sky_music.ui.textual_app.theme_css import TEXTUAL_THEME_TOKENS, TextualThemeTokens
 
 if TYPE_CHECKING:
     from sky_music.infrastructure.backend import BackendHealth
+    from sky_music.infrastructure.hotkeys import HotkeyBinding
     from sky_music.orchestration.engine import PlaybackEngine
+    from sky_music.domain.validation import ScheduleInvariantViolation
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
 
 @dataclass(frozen=True, slots=True)
 class PlaybackSnapshot:
@@ -131,6 +138,419 @@ class SnapshotRenderer:
     def get_snapshot(self) -> PlaybackSnapshot | None:
         with self._lock:
             return self.snapshot
+
+
+_ANSI_RESET = "\033[0m"
+_ANSI_BOLD = "\033[1m"
+
+
+class PlaybackCard(Static):
+    """In-place playback surface rendered as the legacy gradient HUD box.
+
+    Reuses ``ansi_gradient_box``/``ansi_box`` from the console HUD so the in-app
+    card is visually identical to the old terminal HUD, displayed inside Textual
+    via ``Text.from_ansi`` rather than printed with cursor-move escapes.
+    """
+
+    can_focus = True
+
+    def __init__(
+        self,
+        *,
+        theme_name: str,
+        song_name: str = "",
+        total_us: int = 0,
+        renderer: SnapshotRenderer | None = None,
+        violations: tuple[ScheduleInvariantViolation, ...] = (),
+        active_policy: FrameTimingPolicy | None = None,
+        profile_name: str = "balanced",
+        tempo_scale: float = 1.0,
+        debug_mode: bool = False,
+        id: str = "playback-card",
+    ) -> None:
+        super().__init__("", id=id)
+        name = (theme_name or "aurora").casefold()
+        if name not in TEXTUAL_THEME_TOKENS:
+            name = "aurora"
+        self.theme_name = name
+        self._preset = get_theme_preset(name)
+        self.song_name = song_name
+        self.total_us = total_us
+        self.renderer = renderer or SnapshotRenderer()
+        self.violations = violations
+        self.active_policy = active_policy
+        self.profile_name = profile_name
+        self.tempo_scale = tempo_scale
+        self.debug_mode = debug_mode
+
+        self._mode = "idle"
+        self._snapshot: PlaybackSnapshot | None = None
+        self._idle_message = "Preparing playback"
+        self._error_title = ""
+        self._error_message = ""
+        self._risk_severity = ""
+        self._risk_recommendations: tuple[str, ...] = ()
+        self._risk_options: tuple[str, ...] = ()
+        self._risk_selected = 0
+        self._countdown_remaining = 0
+        self._countdown_callback: Any | None = None
+        self._playback_result_callback: Any | None = None
+        self._timer: Any | None = None
+        self._poll_timer: Any | None = None
+        self._debug_hotkey: HotkeyBinding | None = None
+        self._debug_was_down = False
+        self._exited = False
+        self.engine: PlaybackEngine | None = None
+
+    # ----- Textual hooks -----------------------------------------------------
+    def on_mount(self) -> None:
+        self.show_idle("Preparing playback")
+
+    def on_key(self, event: events.Key) -> None:
+        handler = getattr(self.app, "handle_playback_card_key", None)
+        if callable(handler) and handler(event.key):
+            event.stop()
+
+    def render(self) -> Text:
+        return Text.from_ansi("\n".join(self._compose_lines()))
+
+    def _compose_lines(self) -> list[str]:
+        width = self._box_width()
+        body = self._build_body(width)
+        preset = self._preset
+        use_gradient = (
+            preset.use_gradient_border
+            and self._mode in {"playing", "countdown"}
+            and self._effective_status() in {"playing", "done", "refocus", "countdown"}
+        )
+        if use_gradient:
+            lines = ansi_gradient_box(
+                "SKY MUSIC HELPER",
+                body,
+                width=width,
+                gradient=preset.gradient,
+                title_color=preset.modal_title,
+            )
+        else:
+            lines = ansi_box(
+                "SKY MUSIC HELPER",
+                body,
+                width=width,
+                border_color=_hex_to_ansi(self._border_color()),
+            )
+        return lines
+
+    def _rerender(self) -> None:
+        lines = self._compose_lines()
+        self.styles.height = len(lines)
+        self.refresh(layout=True)
+
+    # ----- mode setters ------------------------------------------------------
+    def show_idle(self, message: str) -> None:
+        self._mode = "idle"
+        self._idle_message = message
+        self._rerender()
+
+    def show_error(self, title: str, message: str) -> None:
+        self._mode = "error"
+        self._error_title = title
+        self._error_message = message
+        self._rerender()
+        self.focus()
+
+    def show_risk(
+        self,
+        severity: str,
+        recommendations: tuple[str, ...],
+        options: tuple[str, ...],
+        selected_index: int,
+    ) -> None:
+        self._mode = "risk"
+        self._risk_severity = severity
+        self._risk_recommendations = recommendations
+        self._risk_options = options
+        self._risk_selected = selected_index
+        self._rerender()
+        self.focus()
+
+    def start_countdown(self, seconds: int, callback: Any) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+        self._mode = "countdown"
+        self._countdown_remaining = seconds
+        self._countdown_callback = callback
+        self._rerender()
+        self._timer = self.set_interval(1.0, self._tick_countdown)
+        self.focus()
+
+    def _tick_countdown(self) -> None:
+        self._countdown_remaining -= 1
+        if self._countdown_remaining <= 0:
+            if self._timer is not None:
+                self._timer.stop()
+                self._timer = None
+            callback = self._countdown_callback
+            self._countdown_callback = None
+            if callable(callback):
+                callback()
+            return
+        self._rerender()
+
+    def start_playback(
+        self,
+        *,
+        engine: PlaybackEngine,
+        renderer: SnapshotRenderer,
+        song_name: str,
+        total_us: int,
+        violations: tuple[ScheduleInvariantViolation, ...],
+        active_policy: FrameTimingPolicy,
+        profile_name: str,
+        tempo_scale: float,
+        debug_mode: bool,
+        result_callback: Any,
+    ) -> None:
+        self.engine = engine
+        self.renderer = renderer
+        self.song_name = song_name
+        self.total_us = total_us
+        self.violations = violations
+        self.active_policy = active_policy
+        self.profile_name = profile_name
+        self.tempo_scale = tempo_scale
+        self.debug_mode = debug_mode
+        controls = getattr(self.app, "controls", None)
+        self._debug_hotkey = getattr(controls, "toggle_debug", None) or parse_hotkey("f2")
+        self._debug_was_down = False
+        self._playback_result_callback = result_callback
+        self._exited = False
+        self._mode = "playing"
+        self._snapshot = None
+        self._rerender()
+        self.run_engine()
+        self._poll_timer = self.set_interval(0.1, self._poll)
+        self.focus()
+
+    @work(thread=True, exclusive=True)
+    def run_engine(self) -> None:
+        try:
+            if self.engine is None:
+                raise RuntimeError("Playback engine is not configured")
+            result = self.engine.play()
+            self.app.call_from_thread(self._safe_finish, result)
+        except Exception:
+            self.app.call_from_thread(self._safe_finish, "quit")
+
+    def _safe_finish(self, result: str) -> None:
+        if self._exited:
+            return
+        self._exited = True
+        if self._poll_timer is not None:
+            self._poll_timer.stop()
+            self._poll_timer = None
+        callback = self._playback_result_callback
+        if callable(callback):
+            callback(result)
+
+    def _poll(self) -> None:
+        self._poll_debug_hotkey()
+        snap = self.renderer.get_snapshot()
+        if snap is not None:
+            self._snapshot = snap
+            self._rerender()
+
+    def _poll_debug_hotkey(self) -> None:
+        hotkey = self._debug_hotkey
+        if hotkey is None:
+            return
+        is_down = is_hotkey_down(hotkey)
+        if is_down and not self._debug_was_down:
+            self.toggle_debug()
+        self._debug_was_down = is_down
+
+    def toggle_debug(self) -> None:
+        self.debug_mode = not self.debug_mode
+        self._rerender()
+
+    # ----- rendering helpers -------------------------------------------------
+    def _box_width(self) -> int:
+        width = self.size.width or 0
+        if width <= 0:
+            try:
+                width = self.app.size.width
+            except Exception:
+                width = 72
+        return max(40, min(width, 100))
+
+    def _effective_status(self) -> str:
+        if self._mode == "playing" and self._snapshot is not None:
+            return self._snapshot.status
+        return self._mode
+
+    def _border_color(self) -> str:
+        preset = self._preset
+        return {
+            "paused": preset.warning,
+            "focus_lost": preset.danger,
+            "waiting_for_focus": preset.warning,
+            "panic": preset.warning,
+            "error": preset.danger,
+            "risk": preset.warning,
+        }.get(self._effective_status(), preset.accent)
+
+    def _build_body(self, width: int) -> list[str]:
+        if self._mode == "error":
+            return self._error_body()
+        if self._mode == "risk":
+            return self._risk_body()
+        if self._mode == "countdown":
+            return self._countdown_body()
+        if self._mode == "playing":
+            return self._playing_body(width)
+        return ["", self._idle_message]
+
+    def _error_body(self) -> list[str]:
+        danger = _hex_to_ansi(self._preset.danger)
+        muted = _hex_to_ansi(self._preset.muted)
+        return [
+            f"{_ANSI_BOLD}{self._error_title}{_ANSI_RESET}",
+            "",
+            f"{danger}{self._error_message}{_ANSI_RESET}",
+            "",
+            f"{muted}Esc return{_ANSI_RESET}",
+        ]
+
+    def _risk_body(self) -> list[str]:
+        preset = self._preset
+        muted = _hex_to_ansi(preset.muted)
+        accent = _hex_to_ansi(preset.accent)
+        color = {"high": preset.danger, "medium": preset.warning, "low": preset.success}.get(
+            self._risk_severity, preset.accent
+        )
+        body = [f"{_ANSI_BOLD}{_hex_to_ansi(color)}Risk Level: {self._risk_severity.upper()}{_ANSI_RESET}", ""]
+        for rec in self._risk_recommendations:
+            body.append(f"{muted}• {rec}{_ANSI_RESET}")
+        if self._risk_recommendations:
+            body.append("")
+        for index, label in enumerate(self._risk_options):
+            if index == self._risk_selected:
+                body.append(f"{accent}{_ANSI_BOLD}❯ {index + 1}. {label}{_ANSI_RESET}")
+            else:
+                body.append(f"  {index + 1}. {label}")
+        body.append("")
+        body.append(f"{muted}↑↓/Enter or 1-5  ·  Esc cancel{_ANSI_RESET}")
+        return body
+
+    def _countdown_body(self) -> list[str]:
+        preset = self._preset
+        accent = _hex_to_ansi(preset.accent)
+        muted = _hex_to_ansi(preset.muted)
+        return [
+            f"{_ANSI_BOLD}Preparing Playback{_ANSI_RESET}",
+            "",
+            f"{accent}{_ANSI_BOLD}Playing in {self._countdown_remaining}...{_ANSI_RESET}",
+            "",
+            f"{muted}Sky will be focused for playback{_ANSI_RESET}",
+        ]
+
+    def _playing_body(self, width: int) -> list[str]:
+        """Mirror ``ProgressRenderer.render`` body assembly for visual parity."""
+        preset = self._preset
+        accent = _hex_to_ansi(preset.accent)
+        green = _hex_to_ansi(preset.success)
+        yellow = _hex_to_ansi(preset.warning)
+        red = _hex_to_ansi(preset.danger)
+        gray = _hex_to_ansi(preset.muted)
+        divider_c = _hex_to_ansi(preset.divider)
+        key_c = _hex_to_ansi(preset.key)
+
+        snap = self._snapshot
+        current = snap.current if snap else 0.0
+        total = snap.total if snap else (self.total_us / 1_000_000)
+        status = snap.status if snap else "playing"
+        degraded = snap.input_path_degraded if snap else False
+
+        status_labels = {
+            "playing": "Playing",
+            "paused": "Paused",
+            "focus_lost": "Focus Lost",
+            "waiting_for_focus": "Waiting for Focus",
+            "refocus": "Refocusing",
+            "panic": "Panic Release",
+            "done": "Done",
+        }
+        header_label = status_labels.get(status, status.replace("_", " ").title())
+
+        session_line = (
+            f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  profile {accent}{self.profile_name}{_ANSI_RESET}"
+            f"  ·  tempo {accent}{self.tempo_scale:.2f}×{_ANSI_RESET}  ·  theme {accent}{self.theme_name}{_ANSI_RESET}"
+        )
+
+        total_str = format_duration(total)
+        current_str = format_duration(current)
+        remaining_str = format_duration(max(0.0, total - current))
+        time_text = f"{current_str} / {total_str}  ·  ETA {remaining_str}"
+
+        bar_width = max(10, width - 4 - visible_width(time_text) - 2)
+        fraction = current / max(total, 0.001)
+        filled = min(bar_width, int(round(fraction * bar_width)))
+        bar = f"{accent}█{_ANSI_RESET}" * filled + f"{gray}░{_ANSI_RESET}" * (bar_width - filled)
+
+        song_title_line = f"♪ {_ANSI_BOLD}{truncate_cells(self.song_name, width - 8)}{_ANSI_RESET}"
+        song_progress_line = f"{bar}  {time_text}"
+
+        divider = f"{divider_c}{'─' * (width - 4)}{_ANSI_RESET}"
+        body = [session_line, divider, song_title_line, song_progress_line, divider]
+
+        if self.violations:
+            messages = ", ".join(v.message for v in self.violations)
+            body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
+        if degraded:
+            body.append(
+                f"{yellow}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{_ANSI_RESET}"
+            )
+
+        stats = self.renderer.debug_stats()
+        backend = (
+            f"{red}stuck keys: {stats.stuck_keys}{_ANSI_RESET}"
+            if stats.stuck_keys > 0
+            else f"{green}healthy{_ANSI_RESET}"
+        )
+
+        if status == "waiting_for_focus":
+            status_line = f"{yellow}Playback has not started yet. Bring Sky window to foreground.{_ANSI_RESET}"
+        elif status in {"focus_lost", "paused"}:
+            tone = red if status == "focus_lost" else yellow
+            status_line = f"{tone}Playback is paused and tracked keys were released.{_ANSI_RESET}"
+        elif self.debug_mode:
+            status_line = (
+                f"backend {backend}  ·  late >2ms:{stats.late_2ms}  >5ms:{stats.late_5ms}  "
+                f">10ms:{stats.late_10ms}  ·  active keys: {stats.active_keys}"
+            )
+        else:
+            status_line = f"backend {backend}  ·  late >5ms: {stats.late_5ms}  ·  active keys: {stats.active_keys}"
+
+        if self.debug_mode:
+            max_ms = stats.max_lateness_us / 1000.0
+            body.append(
+                f"{gray}max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · "
+                f"p95 {stats.p95_ms:.1f}ms · jitter {stats.jitter_ms:.1f}ms{_ANSI_RESET}"
+            )
+            if self.active_policy is not None:
+                pol = self.active_policy
+                fps = resolve_game_fps(getattr(pol, "fps", None))
+                frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
+                timing_label = f"{fps}fps ({frame_us}us)"
+                body.append(f"{gray}Timing: {timing_label}  ·  hold/min: {pol.hold_us}/{pol.min_hold_us}us{_ANSI_RESET}")
+
+        body.append(status_line)
+        debug_display = self._debug_hotkey.display if self._debug_hotkey is not None else "F2"
+        body.append(
+            f"{key_c}{_ANSI_BOLD}F8{_ANSI_RESET} pause  ·  {key_c}{_ANSI_BOLD}F9{_ANSI_RESET} skip  ·  "
+            f"{key_c}{_ANSI_BOLD}F10{_ANSI_RESET} quit  ·  "
+            f"{key_c}{_ANSI_BOLD}{debug_display}{_ANSI_RESET} {'normal' if self.debug_mode else 'debug'}"
+        )
+        return body
 
 BASE_CSS = """
 Screen {
@@ -501,15 +921,15 @@ class PlaybackScreen(Screen[str]):
             
             # Line 3: Timing: {fps}fps ({frame_us}us) · hold/min {hold}/{min}us · {profile} {tempo}×
             if self.active_policy is not None:
-                fps = getattr(self.active_policy, "fps", "N/A")
-                frame_us = getattr(self.active_policy, "frame_us", "N/A")
-                hold_us = getattr(self.active_policy, "hold_us", "N/A")
-                min_hold = getattr(self.active_policy, "min_hold_us", "N/A")
+                fps = resolve_game_fps(getattr(self.active_policy, "fps", None))
+                frame_us = getattr(self.active_policy, "frame_us", 0) or int(round(1_000_000 / fps))
+                hold_us = getattr(self.active_policy, "hold_us", 0)
+                min_hold = getattr(self.active_policy, "min_hold_us", 0)
             else:
-                fps = "N/A"
-                frame_us = "N/A"
-                hold_us = "N/A"
-                min_hold = "N/A"
+                fps = resolve_game_fps(None)
+                frame_us = int(round(1_000_000 / fps))
+                hold_us = 0
+                min_hold = 0
             timing_str = (
                 f"Timing: {fps}fps ({frame_us}us) · hold/min {hold_us}/{min_hold}us · "
                 f"{self.profile_name} {self.tempo_scale:.2f}×"
@@ -553,4 +973,3 @@ class CountdownScreen(Screen[None]):
             self.dismiss(None)
         else:
             self.update_timer_label()
-

@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH: Path = Path("config.json")
 SCHEMA_VERSION: int = 2
+DEFAULT_GAME_FPS: int = 60
+VALID_FPS: tuple[int, ...] = (30, 60, 90, 120, 144, 165, 240)
+CONFIG_PATH: Path = Path(__file__).resolve().parents[2] / "config.json"
 
 
 @dataclass
@@ -110,7 +112,7 @@ class AppConfig:
     ui_background_mode:          str           = "transparent"
     default_timing_profile:      str           = "balanced"
     default_tempo_scale:         float         = 1.0
-    game_fps:                    int           = 60
+    game_fps:                    int           = DEFAULT_GAME_FPS
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
     use_dispatch_thread:         bool          = True
@@ -205,9 +207,16 @@ def sky_process_names_csv(cfg: AppConfig | None = None) -> str:
     return ",".join(names)
 
 
+def resolve_game_fps(value: int | None) -> int:
+    """Return the effective game FPS; never returns 0/None."""
+    if value is None or int(value) <= 0:
+        return DEFAULT_GAME_FPS
+    return int(value)
+
+
 def normalize_fps_value(fps: int | None) -> int:
-    """Return the persisted FPS value; 0 means frame-aware scaling is disabled."""
-    return int(fps) if fps is not None and int(fps) > 0 else 0
+    """Return the persisted FPS value; defaults to 60 when unset or invalid."""
+    return resolve_game_fps(fps)
 
 
 def persist_default_profile(cfg: AppConfig, profile_name: str) -> None:
@@ -344,7 +353,7 @@ def _build_config_from_disk() -> AppConfig:
         ui_background_mode           = str(raw.get("ui_background_mode", AppConfig.ui_background_mode)),
         default_timing_profile       = default_timing_profile,
         default_tempo_scale          = float(raw.get("default_tempo_scale", AppConfig.default_tempo_scale)),
-        game_fps                     = int(raw.get("game_fps", AppConfig.game_fps)),
+        game_fps                     = resolve_game_fps(raw.get("game_fps", AppConfig.game_fps)),
         telemetry_enabled_by_default = bool(raw.get("telemetry_enabled_by_default", AppConfig.telemetry_enabled_by_default)),
         verbose_hud                  = bool(raw.get("verbose_hud", AppConfig.verbose_hud)),
         use_dispatch_thread          = bool(raw.get("use_dispatch_thread", AppConfig.use_dispatch_thread)),
@@ -457,7 +466,7 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
         args.allow_title_fallback = cfg.allow_title_fallback
 
     if getattr(args, "fps", None) == parser_defaults["fps"]:
-        args.fps = cfg.game_fps
+        args.fps = resolve_game_fps(cfg.game_fps)
 
     if getattr(args, "pause_key", None) == parser_defaults["pause_key"]:
         args.pause_key = cfg.hotkeys.pause

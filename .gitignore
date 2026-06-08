@@ -50,3 +50,4 @@ windows_version_info.txt
 .pytest_cache/
 .uv-cache/
 .tmp/
+.ruff_cache/

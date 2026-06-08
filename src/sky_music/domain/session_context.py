@@ -11,6 +11,7 @@ from sky_music.config import (
     display_profile_name,
     load_config,
     profile_dict_for,
+    resolve_game_fps,
     spin_threshold_for_profile,
 )
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
@@ -28,7 +29,7 @@ class PlaybackSessionContext:
 
     profile_name: str
     tempo_scale: float = 1.0
-    fps: int | None = None
+    fps: int = 60
     scan_code_mode: str = "physical"
     same_key_conflict_policy: ConflictPolicy = "degraded"
     policy_overrides: tuple[tuple[str, Any], ...] = ()
@@ -37,8 +38,7 @@ class PlaybackSessionContext:
         object.__setattr__(self, "profile_name", canonical_profile_name(self.profile_name))
         if self.tempo_scale <= 0:
             raise ValueError("tempo_scale must be > 0")
-        if self.fps is not None and self.fps <= 0:
-            object.__setattr__(self, "fps", None)
+        object.__setattr__(self, "fps", resolve_game_fps(self.fps))
 
     @classmethod
     def balanced(
@@ -50,7 +50,7 @@ class PlaybackSessionContext:
         return cls(
             profile_name="balanced",
             tempo_scale=tempo_scale,
-            fps=fps,
+            fps=resolve_game_fps(fps),
             scan_code_mode=scan_code_mode,
         )
 
@@ -60,7 +60,7 @@ class PlaybackSessionContext:
         cfg = cfg or load_config()
         profile = canonical_profile_name(args.timing_profile)
         fps_raw = getattr(args, "fps", None)
-        fps = int(fps_raw) if fps_raw is not None and int(fps_raw) > 0 else None
+        fps = resolve_game_fps(fps_raw)
 
         def ms_to_us(value: float | int) -> int:
             return int(round(float(value) * 1000))
@@ -99,7 +99,7 @@ class PlaybackSessionContext:
         return replace(self, tempo_scale=tempo_scale)
 
     def with_fps(self, fps: int | None) -> PlaybackSessionContext:
-        normalized = int(fps) if fps is not None and int(fps) > 0 else None
+        normalized = resolve_game_fps(fps)
         return replace(self, fps=normalized)
 
     def with_scan_code_mode(self, mode: str) -> PlaybackSessionContext:
@@ -143,7 +143,7 @@ class PlaybackSessionContext:
         validate_builtin_timing_profile(
             self.profile_name,
             {k: v for k, v in p_dict.items() if k in profile_fields},
-            selected_fps=self.fps if self.fps is not None else 60,
+            selected_fps=self.fps,
         )
 
         for key, value in self.policy_overrides:

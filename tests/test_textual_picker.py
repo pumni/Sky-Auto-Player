@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from sky_music.config import AppConfig
+from sky_music.infrastructure.background import WorkerSnapshot
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import get_song_choices
 from sky_music.ui.picker_metadata import SongUiMetadata
@@ -390,7 +391,6 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
         assert app.tempo_scale == 0.90
         app.action_open_fps()
         await pilot.pause()
-        await pilot.press("down")
         await pilot.press("enter")
         assert app.fps == 30
         app.action_open_theme()
@@ -407,6 +407,14 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
     assert persisted_tempo == [0.90]
     assert persisted_fps == [30]
     assert persisted_theme == ["minimalist"]
+
+
+def test_fps_menu_has_no_auto() -> None:
+    from sky_music.ui.picker import FPS_OPTIONS
+
+    values = [value for value, _label in FPS_OPTIONS]
+    assert None not in values
+    assert all(isinstance(value, int) and value > 0 for value in values)
 
 
 def test_command_palette_toggles_dry_run(monkeypatch) -> None:
@@ -775,7 +783,6 @@ def test_choose_textual_returns_result_on_clean_cleanup(monkeypatch) -> None:
 
 def test_custom_footer() -> None:
     from sky_music.ui.textual_app.app import CustomFooter
-    from rich.text import Text
     footer = CustomFooter()
     footer.set_theme(key_color="#ff0000", muted_color="#0000ff")
     assert footer.key_color == "#ff0000"

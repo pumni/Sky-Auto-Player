@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Literal
 
+from sky_music.config import resolve_game_fps
+
 @dataclass(frozen=True, slots=True)
 class CalibrationInput:
     profile_name: str
@@ -126,7 +128,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     base = TimingPolicy.from_profile_name(rec_profile, cfg)
     effective = FrameTimingPolicy.from_timing_policy(
         base,
-        fps=inp.fps if inp.fps > 0 else None,
+        fps=resolve_game_fps(inp.fps),
         profile_name=rec_profile,
         **cfg.frame_timing.as_policy_kwargs(),
     )
@@ -146,7 +148,7 @@ def calibration_input_from_summary(summary: dict) -> CalibrationInput:
     lat = summary.get("lateness_us", {})
     dur = summary.get("send_duration_us", {})
     backend = summary.get("backend", {})
-    fps_val = int(summary.get("fps") or 60)
+    fps_val = resolve_game_fps(summary.get("fps"))
     sched = summary.get("schedule", {})
 
     return CalibrationInput(

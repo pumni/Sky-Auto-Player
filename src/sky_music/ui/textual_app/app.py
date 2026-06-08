@@ -8,7 +8,7 @@ try:
 except Exception:
     VERSION = "0.1.0"
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -16,7 +16,8 @@ from rapidfuzz import fuzz, process
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
-from sky_music.ui.textual_app.playback_app import CountdownScreen, PlaybackScreen, SnapshotRenderer
+from sky_music.infrastructure.focus import Win32SkyFocusGuard
+from sky_music.ui.textual_app.playback_app import PlaybackCard, SnapshotRenderer
 from sky_music.ui.textual_app.playback_controller import prepare_playback, rebuild_with, PlaybackPlan, PlaybackError
 from textual.binding import Binding
 from textual.containers import Container
@@ -34,6 +35,7 @@ from sky_music.config import (
     persist_default_fps,
     persist_default_profile,
     persist_default_tempo,
+    resolve_game_fps,
     save_config,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
@@ -158,6 +160,12 @@ class CalibrationChoice:
     fps: int
 
 
+@dataclass(frozen=True, slots=True)
+class PendingRiskDecision:
+    decision: str
+    label: str
+
+
 class SearchInput(Input):
     """Custom search input that shifts focus back to the song table on escape key."""
     def on_key(self, event: events.Key) -> None:
@@ -179,41 +187,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     CSS = APP_CSS + "\n" + """
 #playback-card {
-    width: 66;
-    height: auto;
-    padding: 1 2;
-    border: round #38506f;
-    background: #080e1c;
-}
-#song-name {
-    text-align: center;
-    text-style: bold;
-    margin-bottom: 1;
-}
-#progress-bar {
-    text-align: center;
-    margin-bottom: 1;
-}
-#time-info {
-    text-align: center;
-    margin-bottom: 1;
-}
-#status-info {
-    text-align: center;
-    text-style: bold;
-    margin-bottom: 1;
-}
-#countdown-timer {
-    text-align: center;
-    text-style: bold;
-    margin-bottom: 1;
-}
-#warning-info {
-    text-align: center;
-    margin-bottom: 1;
-}
-#hotkeys-info {
-    text-align: center;
+    dock: bottom;
+    width: 100%;
+    padding: 0;
+    background: transparent;
 }
 """
 
@@ -248,10 +225,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.theme_name = theme_name
         self.profile_name = canonical_profile_name(initial_profile)
         self.tempo_scale = initial_tempo
-        self.fps = initial_fps
         self.dry_run = initial_dry_run
         self.scan_code_mode = scan_code_mode
         self.cfg = cfg or load_config()
+        self.fps = resolve_game_fps(initial_fps if initial_fps is not None else self.cfg.game_fps)
         self.verbose_hud = self.cfg.verbose_hud
         self.telemetry_enabled = self.cfg.telemetry_enabled_by_default
         self.active_theme = self._normalize_theme_name(theme_name or self.cfg.theme)
@@ -260,6 +237,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.show_notes = True
         self.show_risk = True
         self.show_suggested = True
+        self.playback_mode = "picker"
+        self._risk_decisions: tuple[PendingRiskDecision, ...] = ()
+        self._risk_index = 0
+        self._risk_plan: PlaybackPlan | None = None
+        self._risk_picker_result: SongPickerResult | None = None
         self._transitioning_to_playback = False
         self.session = PlaybackSessionContext(
             profile_name=self.profile_name,
@@ -333,6 +315,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
             detail = DetailPanel(id="detail")
             detail.border_title = "Details"
             yield detail
+            playback_card = PlaybackCard(theme_name=self.active_theme, id="playback-card")
+            playback_card.styles.display = "none"
+            yield playback_card
             yield CustomFooter()
 
     def on_mount(self) -> None:
@@ -514,6 +499,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_detail()
 
     def on_key(self, event: events.Key) -> None:
+        if self.handle_playback_card_key(event.key):
+            event.stop()
+            return
         if event.key == "enter":
             event.stop()
             self.action_confirm()
@@ -548,6 +536,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         event.stop()
+        if self.playback_mode != "picker":
+            return
         self.action_confirm(song_path=Path(event.row_key.value))
 
     def _set_marker(self, row_key: object | None) -> None:
@@ -589,7 +579,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             pass
 
     def _render_status(self) -> None:
-        fps = "auto" if self.fps is None else f"{self.fps}fps"
+        fps = f"{self.fps}fps"
         # Core session params — always shown.
         parts = [self.profile_name, f"{self.tempo_scale:.2f}×", fps, self.active_theme]
         # Only append non-default flags so the status bar stays uncluttered.
@@ -771,7 +761,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def action_open_fps(self) -> None:
         options = [
-            PickerOption("auto" if value is None else value, f"{'Auto' if value is None else value} - {desc}")
+            PickerOption(value, f"{value} - {desc}")
             for value, desc in FPS_OPTIONS
         ]
         self.push_screen(OptionModal("FPS", options, theme_name=self.active_theme), self._apply_fps)
@@ -780,7 +770,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if value is None:
             self._focus_table()
             return
-        self.fps = None if value == "auto" else int(value)
+        self.fps = resolve_game_fps(int(value))
         persist_default_fps(self.cfg, self.fps)
         self._replace_metadata_coordinator()
 
@@ -956,7 +946,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         )
         self.profile_name = canonical_profile_name(value.profile_name)
         self.tempo_scale = value.tempo_scale
-        self.fps = value.fps if value.fps > 0 else None
+        self.fps = resolve_game_fps(value.fps)
         self._replace_metadata_coordinator()
 
     def action_toggle_dry_run(self) -> None:
@@ -1031,6 +1021,130 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.metadata.refresh([choice.path for choice in self.choices])
         self._focus_table()
 
+    def handle_playback_card_key(self, key: str) -> bool:
+        if self.playback_mode == "risk":
+            if key == "up":
+                self._move_risk_selection(-1)
+                return True
+            if key == "down":
+                self._move_risk_selection(1)
+                return True
+            if key in {"1", "2", "3", "4", "5"}:
+                self._handle_risk_decision_by_index(int(key) - 1)
+                return True
+            if key == "enter":
+                self._handle_risk_decision_by_index(self._risk_index)
+                return True
+            if key == "escape":
+                self._handle_risk_decision("cancel")
+                return True
+        if self.playback_mode == "playing":
+            if key in {"up", "down", "enter"}:
+                return True
+        if self.playback_mode in {"error", "countdown"}:
+            if key == "escape":
+                self._restore_picker_after_playback()
+                return True
+            if key in {"up", "down", "enter"}:
+                return True
+        return False
+
+    def _set_picker_locked(self, locked: bool) -> None:
+        search = self.query_one("#search", SearchInput)
+        table = self.query_one("#songs", SongTable)
+        search.disabled = locked
+        table.disabled = locked
+
+    def _show_playback_card(self, mode: str) -> PlaybackCard:
+        self.playback_mode = mode
+        detail = self.query_one("#detail", DetailPanel)
+        footer = self.query_one(CustomFooter)
+        card = self.query_one("#playback-card", PlaybackCard)
+        detail.styles.display = "none"
+        footer.styles.display = "none"
+        card.styles.display = "block"
+        self._set_picker_locked(mode == "playing")
+        card.focus()
+        return card
+
+    def _restore_picker_after_playback(self) -> None:
+        self.playback_mode = "picker"
+        self._risk_decisions = ()
+        self._risk_index = 0
+        self._risk_plan = None
+        self._risk_picker_result = None
+        self._transitioning_to_playback = False
+        self.query_one("#playback-card", PlaybackCard).styles.display = "none"
+        self.query_one("#detail", DetailPanel).styles.display = "block"
+        self.query_one(CustomFooter).styles.display = "block"
+        self._set_picker_locked(False)
+        self._render_detail()
+        self._focus_table()
+
+    def _show_playback_error(self, title: str, message: str) -> None:
+        card = self._show_playback_card("error")
+        card.show_error(title, message)
+
+    def _handle_risk_decision_by_index(self, index: int) -> None:
+        if not 0 <= index < len(self._risk_decisions):
+            return
+        self._handle_risk_decision(self._risk_decisions[index].decision)
+
+    def _move_risk_selection(self, delta: int) -> None:
+        if not self._risk_decisions or self._risk_plan is None:
+            return
+        self._risk_index = (self._risk_index + delta) % len(self._risk_decisions)
+        self._render_risk_card(self._risk_plan)
+
+    def _render_risk_card(self, plan: PlaybackPlan) -> None:
+        card = self._show_playback_card("risk")
+        card.show_risk(
+            plan.risk_report.severity,
+            tuple(plan.risk_report.recommendations),
+            tuple(decision.label for decision in self._risk_decisions),
+            self._risk_index,
+        )
+
+    def _handle_risk_decision(self, decision: str | None) -> None:
+        plan = self._risk_plan
+        picker_result = self._risk_picker_result
+        if plan is None or picker_result is None:
+            self._restore_picker_after_playback()
+            return
+
+        is_dry_run = (picker_result.action == "dry_run")
+        if decision == "proceed":
+            self.execute_playback_plan(plan, picker_result)
+        elif decision == "switch_profile":
+            rebuilt = rebuild_with(plan, profile=plan.risk_report.suggested_profile, is_dry_run=is_dry_run)
+            if isinstance(rebuilt, PlaybackError):
+                self._show_playback_error("Playback Error", rebuilt.message)
+            else:
+                updated_picker_result = replace(picker_result, profile_name=plan.risk_report.suggested_profile)
+                try:
+                    user_cfg = load_config()
+                    persist_default_profile(user_cfg, plan.risk_report.suggested_profile)
+                except Exception:
+                    pass
+                self.execute_playback_plan(rebuilt, updated_picker_result)
+        elif decision == "scale_tempo":
+            new_tempo = plan.risk_report.suggested_tempo_scale
+            rebuilt = rebuild_with(plan, tempo=new_tempo, is_dry_run=is_dry_run)
+            if isinstance(rebuilt, PlaybackError):
+                self._show_playback_error("Playback Error", rebuilt.message)
+            else:
+                updated_picker_result = replace(picker_result, tempo_scale=new_tempo)
+                self.execute_playback_plan(rebuilt, updated_picker_result)
+        elif decision == "dry_run":
+            rebuilt = rebuild_with(plan, is_dry_run=True)
+            if isinstance(rebuilt, PlaybackError):
+                self._show_playback_error("Playback Error", rebuilt.message)
+            else:
+                updated_picker_result = replace(picker_result, action="dry_run")
+                self.execute_playback_plan(rebuilt, updated_picker_result)
+        else:
+            self._restore_picker_after_playback()
+
     def start_playback_workflow(self, picker_result: SongPickerResult) -> None:
         is_dry_run = (picker_result.action == "dry_run")
         session = PlaybackSessionContext(
@@ -1042,76 +1156,24 @@ class SkyPickerApp(App[SongPickerResult | None]):
         res = prepare_playback(picker_result.song_path, session, self.cfg, is_dry_run=is_dry_run)
 
         if isinstance(res, PlaybackError):
-            def reset_flag(_: Any = None) -> None:
-                self._transitioning_to_playback = False
-            self.call_after_refresh(self.push_screen, InfoModal("Playback Error", f"[bold {self._theme_tokens.danger}]{res.message}[/]", theme_name=self.active_theme), reset_flag)
+            self._show_playback_error("Playback Error", res.message)
             return
 
         if res.risk_report.severity != "low":
-            from sky_music.ui.textual_app.modals import OptionModal, PickerOption
-
-            danger_color = {
-                "high": self._theme_tokens.danger,
-                "medium": self._theme_tokens.warning,
-                "low": self._theme_tokens.success,
-            }.get(res.risk_report.severity, self._theme_tokens.accent)
-
-            info_text = f"[bold {danger_color}]Risk Level: {res.risk_report.severity.upper()}[/]\n\n"
-            info_text += "\n".join(f"• {rec}" for rec in res.risk_report.recommendations)
-
-            options = [
-                PickerOption("proceed", "Proceed with current settings"),
-                PickerOption("switch_profile", f"Switch to recommended '{res.risk_report.suggested_profile}' profile"),
-                PickerOption("scale_tempo", f"Scale tempo down to {res.risk_report.suggested_tempo_scale:.2f}x"),
-                PickerOption("dry_run", "Dry-run first (simulate, no keystrokes)"),
-                PickerOption("cancel", "Cancel and return to picker"),
-            ]
-
-            from dataclasses import replace
-
-            def handle_risk_decision(decision: Any) -> None:
-                if decision == "proceed":
-                    self.execute_playback_plan(res, picker_result)
-                elif decision == "switch_profile":
-                    rebuilt = rebuild_with(res, profile=res.risk_report.suggested_profile, is_dry_run=is_dry_run)
-                    if isinstance(rebuilt, PlaybackError):
-                        def reset_flag(_: Any = None) -> None:
-                            self._transitioning_to_playback = False
-                        self.call_after_refresh(self.push_screen, InfoModal("Playback Error", f"[bold {self._theme_tokens.danger}]{rebuilt.message}[/]", theme_name=self.active_theme), reset_flag)
-                    else:
-                        updated_picker_result = replace(picker_result, profile_name=res.risk_report.suggested_profile)
-                        try:
-                            user_cfg = load_config()
-                            persist_default_profile(user_cfg, res.risk_report.suggested_profile)
-                        except Exception:
-                            pass
-                        self.execute_playback_plan(rebuilt, updated_picker_result)
-                elif decision == "scale_tempo":
-                    new_tempo = res.risk_report.suggested_tempo_scale
-                    rebuilt = rebuild_with(res, tempo=new_tempo, is_dry_run=is_dry_run)
-                    if isinstance(rebuilt, PlaybackError):
-                        def reset_flag(_: Any = None) -> None:
-                            self._transitioning_to_playback = False
-                        self.call_after_refresh(self.push_screen, InfoModal("Playback Error", f"[bold {self._theme_tokens.danger}]{rebuilt.message}[/]", theme_name=self.active_theme), reset_flag)
-                    else:
-                        updated_picker_result = replace(picker_result, tempo_scale=new_tempo)
-                        self.execute_playback_plan(rebuilt, updated_picker_result)
-                elif decision == "dry_run":
-                    rebuilt = rebuild_with(res, is_dry_run=True)
-                    if isinstance(rebuilt, PlaybackError):
-                        def reset_flag(_: Any = None) -> None:
-                            self._transitioning_to_playback = False
-                        self.call_after_refresh(self.push_screen, InfoModal("Playback Error", f"[bold {self._theme_tokens.danger}]{rebuilt.message}[/]", theme_name=self.active_theme), reset_flag)
-                    else:
-                        updated_picker_result = replace(picker_result, action="dry_run")
-                        self.execute_playback_plan(rebuilt, updated_picker_result)
-                elif decision == "cancel" or decision is None:
-                    self._transitioning_to_playback = False
-
-            self.push_screen(
-                OptionModal("Playback Risk Warnings", options, info_text=info_text, theme_name=self.active_theme),
-                handle_risk_decision
+            self._risk_plan = res
+            self._risk_picker_result = picker_result
+            self._risk_decisions = (
+                PendingRiskDecision("proceed", "Proceed with current settings"),
+                PendingRiskDecision(
+                    "switch_profile",
+                    f"Switch to recommended '{res.risk_report.suggested_profile}' profile",
+                ),
+                PendingRiskDecision("scale_tempo", f"Scale tempo down to {res.risk_report.suggested_tempo_scale:.2f}x"),
+                PendingRiskDecision("dry_run", "Dry-run first (simulate, no keystrokes)"),
+                PendingRiskDecision("cancel", "Cancel and return to picker"),
             )
+            self._risk_index = 0
+            self._render_risk_card(res)
         else:
             self.execute_playback_plan(res, picker_result)
 
@@ -1122,9 +1184,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if _picker_cleanup_failed(TelemetryLogger.last_picker_cleanup):
             error_msg = TelemetryLogger.last_picker_cleanup.get("error", "Unknown error during picker cleanup")
             self.rearm()
-            def reset_flag(_: Any = None) -> None:
-                self._transitioning_to_playback = False
-            self.call_after_refresh(self.push_screen, InfoModal("Cleanup Error", f"[bold {self._theme_tokens.danger}]Failed to stop background workers: {error_msg}[/]", theme_name=self.active_theme), reset_flag)
+            self._show_playback_error("Cleanup Error", f"Failed to stop background workers: {error_msg}")
             return
 
         from sky_music.orchestration.engine import PlaybackEngine
@@ -1175,11 +1235,19 @@ class SkyPickerApp(App[SongPickerResult | None]):
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
+        def handle_playback_result(result: Any) -> None:
+            self.rearm()
+            self._restore_picker_after_playback()
+            if result == "quit":
+                self.exit(0)
+            else:
+                self.update_session_state(picker_result)
+
         def run_playback() -> None:
-            playback_screen = PlaybackScreen(
+            card = self._show_playback_card("playing")
+            card.start_playback(
                 engine=engine,
                 renderer=renderer,
-                theme_name=self.active_theme,
                 song_name=plan.song.name,
                 total_us=plan.sched_meta.playback_duration_us,
                 violations=plan.violations,
@@ -1187,21 +1255,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 profile_name=plan.session.display_profile_label(),
                 tempo_scale=plan.session.tempo_scale,
                 debug_mode=self.verbose_hud,
+                result_callback=handle_playback_result,
             )
 
-            def handle_playback_result(result: Any) -> None:
-                self.rearm()
-                self._transitioning_to_playback = False
-                if result == "quit":
-                    self.exit(0)
-                else:
-                    self.update_session_state(picker_result)
-
-            self.push_screen(playback_screen, handle_playback_result)
-
+        if not is_dry_run:
+            Win32SkyFocusGuard().focus()
         if not is_dry_run and self.countdown_seconds > 0:
-            countdown_screen = CountdownScreen(self.countdown_seconds, self.active_theme)
-            self.push_screen(countdown_screen, lambda _: run_playback())
+            card = self._show_playback_card("countdown")
+            card.start_countdown(self.countdown_seconds, run_playback)
         else:
             run_playback()
 
