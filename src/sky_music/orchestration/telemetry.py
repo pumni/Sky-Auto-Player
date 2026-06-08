@@ -73,12 +73,18 @@ class TelemetryLogger:
         deferred_by_us: int = 0,
         pre_send_spin_us: int = 0,
         idle_gap_us: int = 0,
+        visible_lateness_us: int | None = None,
     ) -> None:
         if not self.enabled:
             return
             
         scan_codes_str = ";".join(str(sc) for sc in scan_codes)
         sent_scan_codes = scan_codes if sent_scan_codes is None else sent_scan_codes
+        visible_lat = (
+            visible_lateness_us
+            if visible_lateness_us is not None
+            else (dispatch_completed_us - scheduled_us if dispatch_completed_us is not None else (actual_us + send_duration_us - scheduled_us))
+        )
         self.records.append({
             "song": self.song_name,
             "event_index": event_index,
@@ -93,6 +99,7 @@ class TelemetryLogger:
                 else dispatch_completed_us
             ),
             "lateness_us": lateness_us,
+            "visible_lateness_us": visible_lat,
             "send_duration_us": send_duration_us,
             "scan_codes": scan_codes_str,
             "sent_scan_codes": ";".join(str(sc) for sc in sent_scan_codes),
@@ -172,6 +179,7 @@ class TelemetryLogger:
             if record.get("runtime_outcome") != "deferred_release"
         ]
         latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
+        visible_latenesses = [r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
         # Sender-warmup split: a send preceded by a long idle gap runs on a core that has likely
         # downclocked/parked, so we compare send_duration when "cold" vs "warm" to test whether
@@ -218,9 +226,7 @@ class TelemetryLogger:
         if current_burst:
             catch_up_bursts.append(current_burst)
 
-        over_2ms = sum(1 for lat in latenesses if lat > 2000)
-        over_5ms = sum(1 for lat in latenesses if lat > 5000)
-        over_10ms = sum(1 for lat in latenesses if lat > 10000)
+
 
         hold_durations: list[int] = []
         confirmed_hold_lower_bounds: list[int] = []
@@ -287,7 +293,11 @@ class TelemetryLogger:
                 "avg_us": float(sum(values) / len(values)),
             }
             if thresholds:
-                res.update({"over_2ms": over_2ms, "over_5ms": over_5ms, "over_10ms": over_10ms})
+                res.update({
+                    "over_2ms": sum(1 for v in values if v > 2000),
+                    "over_5ms": sum(1 for v in values if v > 5000),
+                    "over_10ms": sum(1 for v in values if v > 10000),
+                })
             return res
 
         def _scan_count(record: dict, field: str) -> int:
@@ -413,6 +423,7 @@ class TelemetryLogger:
             "game_observed_onset_count": None,
             "after_send_missing_count": None,
             "lateness_us": _stats(latenesses, thresholds=True),
+            "visible_lateness_us": _stats(visible_latenesses, thresholds=True),
             "send_duration_us": _stats(send_durations),
             "send_warmup": {
                 "cold_threshold_us": SEND_COLD_THRESHOLD_US,
@@ -519,6 +530,7 @@ class TelemetryLogger:
                 "dispatch_completed_us",
                 "evidence_scope",
                 "lateness_us",
+                "visible_lateness_us",
                 "send_duration_us",
                 "scan_codes",
                 "sent_scan_codes",

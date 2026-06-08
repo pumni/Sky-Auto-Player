@@ -144,20 +144,20 @@ class RuntimeDispatchCoordinator:
         }
         self.pending_by_generation: dict[int, PendingRelease] = {}
 
-    def next_authored_us(self) -> int | None:
+    def next_authored_us(self, dispatch_lead_us: int = 0) -> int | None:
         if self.cursor >= len(self.schedule.batches):
             return None
-        return self.schedule.batches[self.cursor].scheduled_us
+        return max(0, self.schedule.batches[self.cursor].scheduled_us - dispatch_lead_us)
 
     def next_pending_release_us(self) -> int | None:
         if not self.pending_by_generation:
             return None
         return min(pending.effective_release_us for pending in self.pending_by_generation.values())
 
-    def next_deadline_us(self) -> int | None:
+    def next_deadline_us(self, dispatch_lead_us: int = 0) -> int | None:
         deadlines = [
             deadline
-            for deadline in (self.next_authored_us(), self.next_pending_release_us())
+            for deadline in (self.next_authored_us(dispatch_lead_us), self.next_pending_release_us())
             if deadline is not None
         ]
         return min(deadlines, default=None)
@@ -187,11 +187,11 @@ class RuntimeDispatchCoordinator:
             self.pending_by_generation.pop(pending.generation_id, None)
         return tuple(due)
 
-    def pop_due_authored(self, now_us: int) -> tuple[RuntimeActionBatch, ...]:
+    def pop_due_authored(self, now_us: int, dispatch_lead_us: int = 0) -> tuple[RuntimeActionBatch, ...]:
         due: list[RuntimeActionBatch] = []
         while (
             self.cursor < len(self.schedule.batches)
-            and self.schedule.batches[self.cursor].scheduled_us <= now_us
+            and self.schedule.batches[self.cursor].scheduled_us <= now_us + dispatch_lead_us
         ):
             due.append(self.schedule.batches[self.cursor])
             self.cursor += 1

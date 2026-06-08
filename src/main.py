@@ -509,6 +509,7 @@ class PlaybackOverrides:
     profile: str | None = None
     tempo: float | None = None
     fps: int | None = None
+    dispatch_lead_us: int = 0
 
 
 @dataclass
@@ -584,6 +585,7 @@ def play_selected_song(
     force_profile = overrides.profile if overrides else None
     force_tempo = overrides.tempo if overrides else None
     force_fps = overrides.fps if overrides else None
+    dispatch_lead_us = overrides.dispatch_lead_us if overrides else 0
     if force_profile is not None:
         force_profile = canonical_profile_name(force_profile)
 
@@ -717,6 +719,26 @@ def play_selected_song(
                 if not check_and_abort_violations(violations, is_dry_run):
                     return PLAYBACK_QUIT
 
+    # Calculate summary metrics
+    max_chord = max((len(a.scan_codes) for a in actions if a.kind == "down"), default=0)
+    down_timestamps = sorted(list(set(a.at_us for a in actions if a.kind == "down")))
+    min_timestamp_gap_us = min((b - a for a, b in zip(down_timestamps, down_timestamps[1:])), default=0)
+    
+    min_ts_gap_str = f"{min_timestamp_gap_us / 1000:.1f} ms" if min_timestamp_gap_us > 0 else "N/A"
+    min_sk_gap_us = sched_meta.shortest_same_key_interval_us
+    min_sk_gap_str = f"{min_sk_gap_us / 1000:.1f} ms" if min_sk_gap_us is not None else "N/A"
+    
+    print()
+    print("  \033[1m\033[36mSchedule Summary:\033[0m")
+    print(f"    Notes                       : {sched_meta.note_count}")
+    print(f"    Timeline groups             : {len(actions)}")
+    print(f"    Max chord                   : {max_chord}")
+    print(f"    Min timestamp gap           : {min_ts_gap_str}")
+    print(f"    Min same-key gap            : {min_sk_gap_str}")
+    print(f"    Infeasible same-key repeats : {sched_meta.infeasible_same_key_repeats}")
+    print(f"    Duplicate same-key slots    : {sched_meta.duplicate_note_count}")
+    print()
+
     # Preflight check and window readiness
     if not _mini_preflight(is_dry_run, profile=current_profile, tempo=current_tempo, controls=controls):
         return PLAYBACK_QUIT
@@ -778,6 +800,7 @@ def play_selected_song(
         enable_timer_guard=ENABLE_TIMER_GUARD,
         enable_waitable_timer=ENABLE_WAITABLE_TIMER,
         enable_gc_pause=ENABLE_GC_PAUSE,
+        dispatch_lead_us=dispatch_lead_us,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 
@@ -879,6 +902,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--same-key-conflict-policy",
         choices=["degraded", "strict"],
         help="degraded = warn and compress timing (default), strict = reject and abort playback",
+    )
+    timing.add_argument(
+        "--dispatch-lead-us",
+        type=int,
+        default=0,
+        help="Fixed lead time in microseconds to trigger input dispatch earlier (default: 0)",
     )
     timing.add_argument(
         "--fps",
@@ -1471,7 +1500,10 @@ def main() -> int:
                     selected_song,
                     args.countdown,
                     controls=controls,
-                    overrides=PlaybackOverrides(dry_run=DRY_RUN_MODE),
+                    overrides=PlaybackOverrides(
+                        dry_run=DRY_RUN_MODE,
+                        dispatch_lead_us=args.dispatch_lead_us,
+                    ),
                 )
                 if result == PLAYBACK_QUIT:
                     return 0
@@ -1546,6 +1578,7 @@ def main() -> int:
                     profile=picker_result.profile_name,
                     tempo=picker_result.tempo_scale,
                     fps=picker_result.fps,
+                    dispatch_lead_us=args.dispatch_lead_us,
                 )
             )
             if result == PLAYBACK_QUIT:

@@ -126,6 +126,39 @@ def test_telemetry_includes_send_duration_us(tmp_path):
         rows = list(reader)
         assert len(rows) == 2
         assert "send_duration_us" in rows[0]
+        assert "visible_lateness_us" in rows[0]
+
+def test_dispatch_lead_time_triggering_earlier():
+    """Verify that dispatch_lead_us triggers authored dispatches earlier by the lead time."""
+    song = Song(
+        name="LeadTimeSong",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(100), key=NoteKey("Key1")),
+        )
+    )
+    policy = _frame_policy({"hold_us": 20000, "min_hold_us": 20000})
+    sched_meta = build_key_actions(song, policy=policy)
+
+    clock = FakeClock()
+    sleeper = FakeSleeper(clock)
+    backend = DryRunBackend()
+
+    engine = PlaybackEngine(
+        song=song, actions=sched_meta.actions, backend=backend,
+        telemetry_enabled=True, require_focus=False,
+        clock=clock, sleeper=sleeper,
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        dispatch_lead_us=10000,  # 10ms lead time
+    )
+
+    res = engine.play()
+    assert res == PLAYBACK_FINISHED
+
+    records = engine.telemetry.records
+    key1_downs = [r for r in records if r["kind"] == "down" and r["event_index"] == 2]  # event_index 2 is Note 2 down (event 0: down 0, event 1: up 0, event 2: down 1)
+    assert key1_downs
+    assert key1_downs[0]["actual_us"] == 90000
 
 def test_deterministic_playback_with_fake_time():
     """Verify that using FakeClock and FakeSleeper runs a long playback instantly with microsecond precision."""

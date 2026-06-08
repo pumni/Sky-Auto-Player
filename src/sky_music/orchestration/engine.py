@@ -220,6 +220,7 @@ class ExecutionResult:
     is_late: bool              # True when lateness_us > 0
     is_critically_late: bool   # True when lateness_us > 10_000 (10 ms)
     dispatch_completed_us: int = 0
+    visible_lateness_us: int = 0
     sent_scan_codes: tuple[int, ...] = ()
     skipped_scan_codes: tuple[int, ...] = ()
     runtime_outcome: str = "sent"
@@ -283,6 +284,7 @@ class PlaybackEngine:
         enable_timer_guard: bool = True,
         enable_waitable_timer: bool = True,
         enable_gc_pause: bool = True,
+        dispatch_lead_us: int = 0,
     ):
         self.song = song
         self.actions = actions
@@ -302,6 +304,7 @@ class PlaybackEngine:
         self.enable_timer_guard = bool(enable_timer_guard)
         self.enable_waitable_timer = bool(enable_waitable_timer)
         self.enable_gc_pause = bool(enable_gc_pause)
+        self.dispatch_lead_us = max(0, int(dispatch_lead_us))
         self._send_duration_window: deque[int] = deque(maxlen=64)
         self._input_path_degraded = False
         self._input_path_warn_started_us: int | None = None
@@ -583,6 +586,7 @@ class PlaybackEngine:
         pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
         idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
         self._last_send_completed_us = send_end_us
+        visible_lateness_us = send_end_us - action.at_us
 
         result = ExecutionResult(
             event_index=idx,
@@ -593,6 +597,7 @@ class PlaybackEngine:
             is_late=lateness_us > 0,
             is_critically_late=lateness_us > 10_000,
             dispatch_completed_us=send_end_us,
+            visible_lateness_us=visible_lateness_us,
             sent_scan_codes=send_result.sent,
             skipped_scan_codes=send_result.skipped_duplicates,
             runtime_outcome=runtime_outcome,
@@ -618,6 +623,7 @@ class PlaybackEngine:
             deferred_by_us=deferred_by_us,
             pre_send_spin_us=pre_send_spin_us,
             idle_gap_us=idle_gap_us,
+            visible_lateness_us=visible_lateness_us,
         )
         return result
 
@@ -885,7 +891,7 @@ class PlaybackEngine:
         # Focus is intentionally checked in the wait/poll phase, not between every due batch here.
         # A mid-burst focus loss is cleaned up on the next poll via release_all(); keeping this hot
         # path free of extra Win32 focus calls preserves dispatch timing for dense due bursts.
-        for batch in coordinator.pop_due_authored(now_us):
+        for batch in coordinator.pop_due_authored(now_us, self.dispatch_lead_us):
             loop_state.first_action_executed = True
             if batch.kind == "up":
                 self._request_up_batch(batch, state, coordinator)
@@ -937,7 +943,7 @@ class PlaybackEngine:
 
         try:
             while not coordinator.is_finished():
-                deadline_us = coordinator.next_deadline_us()
+                deadline_us = coordinator.next_deadline_us(self.dispatch_lead_us)
                 if deadline_us is None:
                     break
                 command_result = self._wait_until_runtime_deadline(
