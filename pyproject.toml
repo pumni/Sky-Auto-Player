@@ -23,7 +23,9 @@ py-modules = ["main", "build_app"]
 [dependency-groups]
 dev = [
     "pyinstaller>=6.0.0",
+    "pyright>=1.1.410",
     "pytest-textual-snapshot>=1.1.0",
+    "ruff>=0.15.16",
     "soundcard>=0.4.6",
 ]
 

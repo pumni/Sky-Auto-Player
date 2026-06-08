@@ -4,12 +4,9 @@ from dataclasses import dataclass
 from typing import Literal, NewType
 import math
 
-from sky_music.domain.domain import NoteKey
+from sky_music.domain.domain import NoteKey, ScanCode, Microseconds
 
 from sky_music.config import AppConfig
-
-Microseconds = NewType("Microseconds", int)
-ScanCode = NewType("ScanCode", int)
 
 ActionKind = Literal["down", "up"]
 

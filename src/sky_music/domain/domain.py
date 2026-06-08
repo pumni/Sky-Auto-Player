@@ -4,6 +4,7 @@ from typing import Literal, NewType
 Millis = NewType("Millis", int)
 ScanCode = NewType("ScanCode", int)
 NoteKey = NewType("NoteKey", str)
+Microseconds = NewType("Microseconds", int)
 
 @dataclass(frozen=True, slots=True)
 class Note:

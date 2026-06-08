@@ -4,9 +4,28 @@ import time
 from pathlib import Path
 from collections.abc import Callable
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-winmm = ctypes.WinDLL("winmm", use_last_error=True)
+import sys
+
+if sys.platform == "win32":
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    winmm = ctypes.WinDLL("winmm", use_last_error=True)
+else:
+    class _MockWinFunction:
+        def __init__(self, name: str):
+            self._name = name
+            self.argtypes = None
+            self.restype = None
+        def __call__(self, *args, **kwargs):
+            return 0
+
+    class _MockDLL:
+        def __getattr__(self, name: str):
+            return _MockWinFunction(name)
+
+    user32 = _MockDLL()
+    kernel32 = _MockDLL()
+    winmm = _MockDLL()
 
 SW_RESTORE = 9
 SWP_NOMOVE = 0x0002

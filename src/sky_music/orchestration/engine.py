@@ -5,8 +5,8 @@ import queue
 import threading
 import time
 from typing import Any, Protocol, Tuple, Optional
-from sky_music.domain.domain import Song
-from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+from sky_music.domain.domain import Song, ScanCode, Microseconds
+from sky_music.domain.scheduler_types import KeyAction
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.realtime import (
     RealtimeProcessScope,

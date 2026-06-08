@@ -581,3 +581,32 @@ def test_unknown_profile_name_falls_back_to_balanced():
     # Removed/unknown profile names canonicalise to balanced rather than erroring.
     ctx = PlaybackSessionContext(profile_name="high-fps-precise", fps=120)
     assert ctx.profile_name == "balanced"
+
+def test_degraded_same_key_behavior_timeline():
+    song = Song(
+        name="DegradedTimeline",
+        notes=(
+            Note(time_ms=Millis(0), key=NoteKey("Key0")),
+            Note(time_ms=Millis(5), key=NoteKey("Key0")),
+        ),
+    )
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"hold_us": 20_000, "min_hold_us": 10_000}),
+        same_key_conflict_policy="degraded",
+    )
+    res = build_key_actions(song, policy=policy)
+    
+    actions = res.actions
+    assert len(actions) == 4
+    
+    assert actions[0].kind == "down"
+    assert actions[0].at_us == 0
+    
+    assert actions[1].kind == "down"
+    assert actions[1].at_us == 5000
+    
+    assert actions[2].kind == "up"
+    assert actions[2].at_us == 10000
+    
+    assert actions[3].kind == "up"
+    assert actions[3].at_us == 25000

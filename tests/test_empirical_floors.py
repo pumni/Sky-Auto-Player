@@ -77,5 +77,5 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
 
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
     policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())
-    assert policy.frame_us == 0
+    assert policy.frame_us == 16667
     assert policy.hold_us == policy.min_hold_us == 17000

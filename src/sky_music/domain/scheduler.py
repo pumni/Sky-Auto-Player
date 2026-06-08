@@ -1,13 +1,12 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from sky_music.domain.domain import Song, InstrumentProfile, NoteKey
+from sky_music.domain.domain import Song, InstrumentProfile, NoteKey, Microseconds
 from sky_music.layouts import NoteResolver, DefaultNoteResolver
 from sky_music.domain.scheduler_types import (
     ActionKind,
     FrameTimingPolicy,
     KeyAction,
-    Microseconds,
     ScheduleDiagnostic,
     ScheduleMetadata,
 )
@@ -133,6 +132,13 @@ def build_key_actions(
       - actions: tuple of sorted KeyAction objects
 
     Caller must pass a resolved FrameTimingPolicy (e.g. via PlaybackSessionContext.resolve_effective_policy).
+
+    ### Same-Key Conflict Policies:
+    - **strict**: If a same-key repeat interval is shorter than the minimum hold time (min_hold_us),
+      raises a ScheduleBuildError and refuses to schedule.
+    - **degraded**: Preserves the minimum hold time of the previous note, pushing its release to
+      `down_at_us + min_hold_us`. Since the next same-key press occurs before this release, the subsequent
+      press will conflict and be dropped at runtime (dropped_conflict) to avoid stuck keys.
     """
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")

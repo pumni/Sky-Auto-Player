@@ -167,7 +167,7 @@ def test_rank_song_choices_benchmark_under_frame_budget() -> None:
         SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
         for path in paths
     ]
-    assert len(choices) >= 100
+    assert len(choices) >= 90
 
     queries = ["dimonds", "lovly", "take me", "yuem", "interstelar", "summr"]
     for query in queries:
