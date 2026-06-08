@@ -327,6 +327,14 @@ def build_key_actions(
     playback_duration_us = duration_us
     source_duration_us = Microseconds(max((d.at_us for d in drafts), default=0) + policy.hold_us)
 
+    rec_tempo_scale = None
+    rec_profile = None
+    if impossible_same_key_repeats > 0 and shortest_same_key_interval_us is not None:
+        rec_tempo_scale = _recommended_tempo_scale_for_repeats(
+            shortest_same_key_interval_us, policy, tempo_scale
+        )
+        rec_profile = "local-precise"
+
     return ScheduleMetadata(
         actions=tuple(key_actions_list),
         compressed_holds=compressed_holds,
@@ -349,4 +357,6 @@ def build_key_actions(
         diagnostics=tuple(diagnostics),
         frame_us=policy.frame_us,
         fps=policy.fps,
+        recommended_profile=rec_profile,
+        recommended_tempo_scale=rec_tempo_scale,
     )

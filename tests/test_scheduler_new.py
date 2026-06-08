@@ -610,3 +610,6 @@ def test_degraded_same_key_behavior_timeline():
     
     assert actions[3].kind == "up"
     assert actions[3].at_us == 25000
+
+    assert res.recommended_profile == "local-precise"
+    assert res.recommended_tempo_scale == 0.5
