@@ -1540,6 +1540,7 @@ def main() -> int:
                     scan_code_mode=session.scan_code_mode,
                     controls=controls,
                     countdown_seconds=args.countdown,
+                    dispatch_lead_us=args.dispatch_lead_us,
                 )
             except Exception as exc:
                 print(f"\n[ERROR] Playback aborted due to background worker cleanup failure: {exc}")

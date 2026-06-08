@@ -217,6 +217,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         unified_mode: bool = False,
         controls: PlaybackControls | None = None,
         countdown_seconds: int = 3,
+        dispatch_lead_us: int = 0,
     ) -> None:
         super().__init__()
         self.unified_mode = unified_mode
@@ -243,6 +244,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._risk_plan: PlaybackPlan | None = None
         self._risk_picker_result: SongPickerResult | None = None
         self._transitioning_to_playback = False
+        self.dispatch_lead_us = dispatch_lead_us
         self.session = PlaybackSessionContext(
             profile_name=self.profile_name,
             tempo_scale=self.tempo_scale,
@@ -1232,6 +1234,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_timer_guard=enable_timer_guard,
             enable_waitable_timer=enable_waitable_timer,
             enable_gc_pause=enable_gc_pause,
+            dispatch_lead_us=self.dispatch_lead_us,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
@@ -1360,6 +1363,7 @@ def run_sky_app_unified(
     scan_code_mode: str = "physical",
     controls: PlaybackControls | None = None,
     countdown_seconds: int = 3,
+    dispatch_lead_us: int = 0,
 ) -> int:
     app = SkyPickerApp(
         theme_name=theme_name,
@@ -1372,6 +1376,7 @@ def run_sky_app_unified(
         unified_mode=True,
         controls=controls,
         countdown_seconds=countdown_seconds,
+        dispatch_lead_us=dispatch_lead_us,
     )
     from sky_music.orchestration.telemetry import TelemetryLogger
     TelemetryLogger.last_picker_cleanup = None

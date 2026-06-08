@@ -851,3 +851,67 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
+
+
+def test_dispatch_lead_us_propagates_to_playback_engine(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    captured_kwargs = {}
+
+    class MockPlaybackEngine:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+            class MockTelemetry:
+                def record_schedule_metadata(self, meta: Any) -> None:
+                    pass
+            self.telemetry = MockTelemetry()
+
+        def play(self) -> str:
+            return "done"
+
+    monkeypatch.setattr("sky_music.orchestration.engine.PlaybackEngine", MockPlaybackEngine)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        from sky_music.ui.textual_app.playback_controller import prepare_playback, PlaybackError
+        from sky_music.domain import Song, Note, NoteKey, Millis
+        from sky_music.domain.session_context import PlaybackSessionContext
+        from sky_music.ui.picker import SongPickerResult
+
+        song = Song(
+            name="Test Song",
+            notes=(
+                Note(time_ms=Millis(0), key=NoteKey("Key0")),
+                Note(time_ms=Millis(100), key=NoteKey("Key1")),
+            ),
+        )
+        session = PlaybackSessionContext.balanced()
+        plan = prepare_playback(song, session, app.cfg, is_dry_run=True)
+        assert not isinstance(plan, PlaybackError)
+
+        picker_result = SongPickerResult(
+            song_path=SONGS[0],
+            action="dry_run",
+            profile_name="balanced",
+            tempo_scale=1.0,
+            fps=60,
+        )
+
+        app.execute_playback_plan(plan, picker_result)
+        await pilot.pause()
+
+        assert captured_kwargs.get("dispatch_lead_us") == 45600
+
+        await pilot.press("escape")
+
+    async def _run_app_with_lead_us(actions_fn: Any) -> SkyPickerApp:
+        app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig(), dispatch_lead_us=45600)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await actions_fn(app, pilot)
+        return app
+
+    app = run_picker(_run_app_with_lead_us(actions))
+    assert app.return_value is None
+
