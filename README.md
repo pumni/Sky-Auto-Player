@@ -2,9 +2,9 @@
 
 An automatic music player designed for **Sky: Children of the Light** on PC. It reads JSON, skysheet, or JSON-compatible txt song files downloaded from specy/skyMusic and simulates keyboard keypresses in real-time.
 
-[Website](https://pumzu.github.io/Sky-Player/) ·
-[GitHub Repository](https://github.com/pumzu/Sky-Player) ·
-[Download Latest Release](https://github.com/pumzu/Sky-Player/releases/latest)
+[Website](https://pumni.github.io/Sky-Player/) ·
+[GitHub Repository](https://github.com/pumni/Sky-Player) ·
+[Download Latest Release](https://github.com/pumni/Sky-Player/releases/latest)
 
 > [!WARNING]
 > Automatically playing music sheets or using simulated keystrokes might violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
@@ -15,7 +15,7 @@ An automatic music player designed for **Sky: Children of the Light** on PC. It 
 
 ### 🚀 Option 1: Standalone Release (Recommended)
 
-1. Go to the [Releases](https://github.com/pumznguyen/Sky-Player/releases) page on GitHub.
+1. Go to the [Releases](https://github.com/pumni/Sky-Player/releases) page on GitHub.
 2. Download the latest `Sky-Player.zip` package.
 3. Extract the ZIP file anywhere on your PC.
 4. Launch your **Sky game**, then double-click `Sky-Player.exe` inside the extracted folder to start playing!
