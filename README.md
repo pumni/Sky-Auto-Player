@@ -60,14 +60,6 @@ Sky Player uses a beautiful Textual TUI interface for selecting and playing song
 
 ---
 
-## ⚙️ Advanced Settings & CLI
+## License
 
-Most settings—including timing profiles, calibration, and FPS adjustments—can be managed effortlessly inside the app using the **Command Palette** (press `/` while in the menu).
-
-If you need to run system diagnostics, generate telemetry logs, or use advanced command-line overrides, you can view all available CLI arguments by running:
-
-```bash
-Sky-Player.exe --help
-# or
-uv run python src/main.py --help
-```
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
