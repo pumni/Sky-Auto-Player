@@ -394,11 +394,21 @@ def test_focus_check_refreshes_after_ttl():
 
 @pytest.mark.skipif(sys.platform != "win32", reason="win32 SendInput backend only")
 def test_send_scan_code_batch_builds_correct_cached_inputs(monkeypatch):
-    """The cached-INPUT fast path must emit the same down/up scan-code events as before."""
+    """The cached-INPUT fast path must emit the same down/up scan-code events as before.
+
+    Since the Phase-1.3 batch-array cache, send_scan_code_batch calls user32.SendInput directly
+    with a cached ctypes array instead of routing through send_input_batch, so the capture seam
+    is the SendInput call itself.
+    """
     from sky_music.platform.win32 import inputs
 
     captured = []
-    monkeypatch.setattr(inputs, "send_input_batch", lambda batch: captured.append(list(batch)))
+
+    def fake_send_input(count, input_array, struct_size):
+        captured.append([input_array[i] for i in range(count)])
+        return count
+
+    monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
 
     inputs.send_scan_code_batch((30, 31), key_up=False)
     down_batch = captured[-1]

@@ -104,6 +104,27 @@ def main() -> None:
     print(f"  avg CPU per batch        : {drain_ms * 1000.0 / n_batches:8.3f} us/batch")
 
     # ---- Structural fidelity under the full engine (fake clock) ----
+    def run_engine_play() -> None:
+        c = FakeClock()
+        b = TimedBackend(c, send_duration_us=0)
+        eng = PlaybackEngine(
+            song=song,
+            actions=actions,
+            backend=b,
+            telemetry_enabled=True,
+            require_focus=False,
+            clock=c,
+            sleeper=FakeSleeper(c),
+            sleep_policy=SleepPolicy(spin_threshold_us=-1),
+            min_hold_us=int(policy.min_hold_us),
+        )
+        eng.play()
+
+    play_ms = _bench(run_engine_play, 5)
+    print("Playback Engine — full loop CPU (fake clock, no sleep):")
+    print(f"  full engine play         : {play_ms:8.3f} ms over {n_batches} batches")
+    print(f"  avg CPU per batch        : {play_ms * 1000.0 / n_batches:8.3f} us/batch")
+
     clock = FakeClock()
     backend = TimedBackend(clock, send_duration_us=0)
     engine = PlaybackEngine(
@@ -139,6 +160,71 @@ def main() -> None:
     print(f"  confirmed hold shortfall : {summary['confirmed_hold_shortfall_count']}")
     print(f"  sent down/up             : {summary['sent_down_count']} / {summary['sent_up_count']}")
     print("=" * 70)
+
+    # ---- Micro-benchmarks for hot path overheads ----
+    def _bench_micro(fn, repeats: int = 100, inner_iters: int = 100) -> float:
+        best = float("inf")
+        for _ in range(repeats):
+            t0 = time.perf_counter()
+            for _ in range(inner_iters):
+                fn()
+            duration = time.perf_counter() - t0
+            best = min(best, duration / inner_iters)
+        return best * 1_000_000.0  # us
+
+    print("Micro-benchmarks (best of N, us per call):")
+
+    # 1. record_input_path_send_duration cost (lives on DispatchHealthMonitor since Phase 6)
+    # input_path_warn_us must be > 0 to avoid early-out, and deque is full.
+    from sky_music.infrastructure.focus import NoopFocusGuard
+    from sky_music.orchestration.dispatch_loop import DispatchHealthMonitor
+
+    monitor = DispatchHealthMonitor(
+        backend=backend,
+        clock=clock,
+        focus_guard=NoopFocusGuard(),
+        require_focus=False,
+        input_path_warn_us=1000,
+    )
+    for _ in range(64):
+        monitor.record_input_path_send_duration(500, 0)
+
+    def run_record_duration():
+        monitor.record_input_path_send_duration(600, 1000)
+
+    duration_cost = _bench_micro(run_record_duration)
+    print(f"  _record_input_path_send_duration : {duration_cost:8.3f} us")
+
+    # 2. telemetry.record cost (enabled)
+    from sky_music.orchestration.telemetry import TelemetryLogger
+    tel = TelemetryLogger("bench", enabled=True)
+    def run_telemetry_record():
+        tel.record(
+            event_index=1,
+            kind="down",
+            scheduled_us=1000,
+            actual_us=1005,
+            lateness_us=5,
+            send_duration_us=500,
+            scan_codes=(21, 22),
+            reason="onset",
+        )
+    telemetry_cost = _bench_micro(run_telemetry_record)
+    print(f"  telemetry.record (enabled)       : {telemetry_cost:8.3f} us")
+
+    # 3. send_scan_code_batch struct/array build cost
+    import sky_music.platform.win32.inputs as win32_inputs
+    from unittest.mock import patch
+
+    chord = (21, 22, 23)
+    def run_send_batch():
+        win32_inputs.send_scan_code_batch(chord, key_up=False)
+
+    with patch.object(win32_inputs.user32, "SendInput", return_value=3):
+        send_batch_cost = _bench_micro(run_send_batch)
+    print(f"  send_scan_code_batch (3 keys)    : {send_batch_cost:8.3f} us")
+    print("=" * 70)
+
     print("NOTE: lateness here reflects only fake-clock model error; real OS-scheduler")
     print("jitter requires a live Windows run. Drift==0 and stable IOI confirm the")
     print("absolute-timeline invariant holds structurally (no rebase, no slowdown).")
@@ -146,3 +232,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

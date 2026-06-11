@@ -10,6 +10,10 @@ if sys.platform == "win32":
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     winmm = ctypes.WinDLL("winmm", use_last_error=True)
+    try:
+        avrt = ctypes.WinDLL("avrt", use_last_error=True)
+    except OSError:
+        avrt = None
 else:
     class _MockWinFunction:
         def __init__(self, name: str):
@@ -26,6 +30,7 @@ else:
     user32 = _MockDLL()
     kernel32 = _MockDLL()
     winmm = _MockDLL()
+    avrt = _MockDLL()
 
 SW_RESTORE = 9
 SWP_NOMOVE = 0x0002
@@ -38,6 +43,9 @@ KEYEVENTF_SCANCODE = 0x0008
 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002
 TIMER_ALL_ACCESS = 0x001F0003
 INFINITE = 0xFFFFFFFF
+WAIT_OBJECT_0 = 0
+WAIT_TIMEOUT = 0x00000102
+WAIT_FAILED = 0xFFFFFFFF
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -139,10 +147,30 @@ kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
 kernel32.WaitForSingleObject.restype = wintypes.DWORD
 kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
-winmm.timeBeginPeriod.argtypes = (wintypes.UINT,)
-winmm.timeBeginPeriod.restype = wintypes.UINT
-winmm.timeEndPeriod.argtypes = (wintypes.UINT,)
-winmm.timeEndPeriod.restype = wintypes.UINT
+if sys.platform == "win32":
+    winmm.timeBeginPeriod.argtypes = (wintypes.UINT,)
+    winmm.timeBeginPeriod.restype = wintypes.UINT
+    winmm.timeEndPeriod.argtypes = (wintypes.UINT,)
+    winmm.timeEndPeriod.restype = wintypes.UINT
+
+    kernel32.GetCurrentThread.argtypes = ()
+    kernel32.GetCurrentThread.restype = wintypes.HANDLE
+    kernel32.GetThreadPriority.argtypes = (wintypes.HANDLE,)
+    kernel32.GetThreadPriority.restype = ctypes.c_int
+    kernel32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+    kernel32.SetThreadPriority.restype = wintypes.BOOL
+
+    if avrt is not None:
+        avrt.AvSetMmThreadCharacteristicsW.argtypes = (
+            wintypes.LPCWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        )
+        avrt.AvSetMmThreadCharacteristicsW.restype = wintypes.HANDLE
+        avrt.AvRevertMmThreadCharacteristics.argtypes = (wintypes.HANDLE,)
+        avrt.AvRevertMmThreadCharacteristics.restype = wintypes.BOOL
+        avrt.AvSetMmThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+        avrt.AvSetMmThreadPriority.restype = wintypes.BOOL
+
 TIMER_RESOLUTION_MS = 1
 PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
 _timer_resolution_enabled: bool = False
@@ -277,6 +305,47 @@ def wait_for_timer(handle: int) -> None:
 def close_handle(handle: int) -> None:
     kernel32.CloseHandle(wintypes.HANDLE(handle))
 
+def create_auto_reset_event() -> int | None:
+    if sys.platform != "win32":
+        return 9999  # Mock handle
+    create_event = getattr(kernel32, "CreateEventW", None)
+    if create_event is None:
+        return None
+    handle = create_event(None, False, False, None)
+    if not handle:
+        return None
+    return int(handle)
+
+def set_event(handle: int) -> bool:
+    if sys.platform != "win32":
+        return True
+    set_event_fn = getattr(kernel32, "SetEvent", None)
+    if set_event_fn is None:
+        return False
+    return bool(set_event_fn(wintypes.HANDLE(handle)))
+
+def wait_for_multiple_objects(handles: tuple[int, ...], timeout_ms: int) -> int | None:
+    if sys.platform != "win32":
+        return WAIT_OBJECT_0
+    wait_fn = getattr(kernel32, "WaitForMultipleObjects", None)
+    if wait_fn is None:
+        return None
+    
+    count = len(handles)
+    if count == 0:
+        return None
+        
+    handle_array_type = wintypes.HANDLE * count
+    handle_array = handle_array_type(*(wintypes.HANDLE(h) for h in handles))
+    
+    res = wait_fn(
+        wintypes.DWORD(count),
+        handle_array,
+        wintypes.BOOL(False),
+        wintypes.DWORD(timeout_ms)
+    )
+    return int(res)
+
 def _retry_wait_seconds(seconds: float) -> None:
     if seconds <= 0:
         return
@@ -326,6 +395,7 @@ def send_input_batch(inputs: list[INPUT]) -> None:
 # cached entries are never mutated and the partial-send retry in send_input_batch still operates on
 # the copied array.
 _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
+_ARRAY_CACHE: dict[tuple[tuple[int, ...], int], ctypes.Array] = {}
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
@@ -336,15 +406,45 @@ def _cached_key_input(scan_code: int, flags: int) -> INPUT:
         _INPUT_CACHE[cache_key] = cached
     return cached
 
+def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
+    cache_key = (scan_codes_tuple, flags)
+    input_array = _ARRAY_CACHE.get(cache_key)
+    n = len(scan_codes_tuple)
+
+    if input_array is None:
+        if len(_ARRAY_CACHE) >= 4096:
+            _ARRAY_CACHE.clear()
+        key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
+        input_array = (INPUT * n)(*key_inputs)
+        _ARRAY_CACHE[cache_key] = input_array
+
+    sent = user32.SendInput(n, input_array, ctypes.sizeof(INPUT))
+    if sent == n:
+        return
+
+    # Fallback retry path
+    if sent > 0:
+        remaining_scan_codes = scan_codes_tuple[sent:]
+    else:
+        remaining_scan_codes = scan_codes_tuple
+
+    remaining_inputs = [_cached_key_input(sc, flags) for sc in remaining_scan_codes]
+    send_input_batch(remaining_inputs)
+
 def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
     if not scan_codes:
         return
-    # Keep this boundary defensive: release/retry paths and direct callers do not all originate
-    # from the scheduler's already-deduplicated KeyAction batches.
-    scan_codes = tuple(dict.fromkeys(scan_codes))
+    scan_codes_tuple = tuple(dict.fromkeys(scan_codes))
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-    key_inputs = [_cached_key_input(scan_code, flags) for scan_code in scan_codes]
-    send_input_batch(key_inputs)
+    _send_scan_code_batch_impl(scan_codes_tuple, flags)
+
+def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
+    if not scan_codes:
+        return
+    assert len(scan_codes) == len(set(scan_codes)), f"send_scan_code_batch_trusted received duplicates: {scan_codes}"
+    scan_codes_tuple = tuple(scan_codes)
+    flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
+    _send_scan_code_batch_impl(scan_codes_tuple, flags)
 
 def get_process_name_by_pid(pid: int) -> str | None:
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -479,3 +579,37 @@ def is_sky_active() -> bool:
 
 def is_virtual_key_down(key_code: int) -> bool:
     return bool(user32.GetAsyncKeyState(key_code) & 0x8000)
+
+def av_set_mm_thread_characteristics(task_name: str) -> int | None:
+    if sys.platform != "win32" or avrt is None:
+        return None
+    task_index = wintypes.DWORD(0)
+    handle = avrt.AvSetMmThreadCharacteristicsW(task_name, ctypes.byref(task_index))
+    if not handle:
+        return None
+    return int(handle)
+
+def av_revert_mm_thread_characteristics(handle: int) -> None:
+    if sys.platform != "win32" or avrt is None:
+        return
+    avrt.AvRevertMmThreadCharacteristics(wintypes.HANDLE(handle))
+
+def av_set_mm_thread_priority(handle: int, priority: int) -> bool:
+    if sys.platform != "win32" or avrt is None:
+        return False
+    return bool(avrt.AvSetMmThreadPriority(wintypes.HANDLE(handle), priority))
+
+def get_current_thread() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(kernel32.GetCurrentThread())
+
+def get_thread_priority(thread_handle: int) -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(kernel32.GetThreadPriority(wintypes.HANDLE(thread_handle)))
+
+def set_thread_priority(thread_handle: int, priority: int) -> bool:
+    if sys.platform != "win32":
+        return False
+    return bool(kernel32.SetThreadPriority(wintypes.HANDLE(thread_handle), priority))

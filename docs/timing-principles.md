@@ -67,6 +67,11 @@ $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{rele
 ### Rationale
 Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead.
 
+### Interaction with Adaptive Dispatch Lead (2026-06)
+Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a per-kind EMA of `send_duration_us` (clamped to 2 ms) so completions land on `scheduled_us`. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
+$$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
+and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). Live A/B on `blue` @144 FPS moved the median down-onset error from +420 µs to −3 µs with zero drops. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+
 ---
 
 ## 4. Profile Classes

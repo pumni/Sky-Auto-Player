@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.config import AppConfig
+from sky_music.config import AppConfig, RtPriorityMode
 
 @dataclass
 class PlaybackOverrides:
@@ -26,6 +26,13 @@ class RuntimeSessionState:
     enable_timer_guard: bool = True
     enable_waitable_timer: bool = True
     enable_gc_pause: bool = True
+    enable_switch_interval_tuning: bool = True
+    # Graduated defaults (2026-06-11): adaptive lead/spin, event-driven waits, and the MMCSS
+    # priority ladder all ship ON; --no-* CLI flags are the per-feature kill switches.
+    enable_adaptive_lead: bool = True
+    enable_adaptive_spin: bool = True
+    enable_event_wait: bool = True
+    rt_priority_mode: RtPriorityMode = "auto"
     check_input_path: bool = False
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:

@@ -1,0 +1,126 @@
+{
+  "calls": [
+    {
+      "kind": "down",
+      "scan_codes": [
+        21,
+        22,
+        23
+      ],
+      "started_us": 10000,
+      "completed_us": 10100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        21,
+        22,
+        23
+      ],
+      "started_us": 20100,
+      "completed_us": 20200
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        21
+      ],
+      "started_us": 30000,
+      "completed_us": 30100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        21
+      ],
+      "started_us": 40100,
+      "completed_us": 40200
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        22
+      ],
+      "started_us": 50000,
+      "completed_us": 50100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        22
+      ],
+      "started_us": 60100,
+      "completed_us": 60200
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        23
+      ],
+      "started_us": 70000,
+      "completed_us": 70100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        23
+      ],
+      "started_us": 80100,
+      "completed_us": 80200
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        23
+      ],
+      "started_us": 95000,
+      "completed_us": 95100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        23
+      ],
+      "started_us": 105100,
+      "completed_us": 105200
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        21
+      ],
+      "started_us": 350200,
+      "completed_us": 350300
+    },
+    {
+      "kind": "down",
+      "scan_codes": [
+        22
+      ],
+      "started_us": 425000,
+      "completed_us": 425100
+    },
+    {
+      "kind": "up",
+      "scan_codes": [
+        22
+      ],
+      "started_us": 435100,
+      "completed_us": 435200
+    },
+    {
+      "kind": "release_all",
+      "scan_codes": [
+        21
+      ],
+      "started_us": 435200,
+      "completed_us": 435300
+    }
+  ],
+  "generation_status_counts": {
+    "cancelled_generation_count": 1,
+    "dropped_conflict_count": 1,
+    "dropped_backend_count": 0,
+    "released_count": 8
+  }
+}

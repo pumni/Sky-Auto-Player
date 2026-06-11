@@ -132,12 +132,14 @@ class CpuBoundRenderer:
 class BlockingFocusGuard:
     def __init__(self, block_s: float) -> None:
         self.block_s = block_s
+        self.focus_calls = 0
 
     def is_active(self) -> bool:
         time.sleep(self.block_s)
         return True
 
     def focus(self) -> bool:
+        self.focus_calls += 1
         return True
 
 
@@ -171,6 +173,22 @@ class TimedControls:
             return None
         self.commands.pop(0)
         return command
+
+
+class TimedFocusGuard:
+    def __init__(self, inactive_from_s: float, inactive_to_s: float) -> None:
+        self.inactive_from_s = inactive_from_s
+        self.inactive_to_s = inactive_to_s
+        self.started_s: float | None = None
+
+    def is_active(self) -> bool:
+        if self.started_s is None:
+            self.started_s = time.perf_counter()
+        elapsed_s = time.perf_counter() - self.started_s
+        return not (self.inactive_from_s <= elapsed_s < self.inactive_to_s)
+
+    def focus(self) -> bool:
+        return True
 
 
 class CpuBoundControls:
@@ -254,6 +272,79 @@ def test_threaded_dispatch_keeps_all_backend_calls_on_dispatch_thread() -> None:
     assert backend.calls
     assert {call.thread_id for call in backend.calls} == {backend.calls[0].thread_id}
     assert any(call.kind == "release_all" for call in backend.calls)
+
+
+def test_threaded_dispatch_refocus_publishes_and_wakes_control_path() -> None:
+    backend = ThreadRecordingBackend()
+    renderer = BlockingRenderer(block_s=0.0)
+    focus_guard = BlockingFocusGuard(block_s=0.0)
+    engine = PlaybackEngine(
+        song=Song(name="threaded-refocus", notes=()),
+        actions=(action(0, "down", 21), action(200_000, "up", 21)),
+        backend=backend,
+        controls=TimedControls(((0.01, "refocus"), (0.03, "quit"))),
+        renderer=renderer,
+        focus_guard=focus_guard,
+        require_focus=True,
+        sleep_policy=SleepPolicy(spin_threshold_us=500),
+        use_dispatch_thread=True,
+        enable_event_wait=True,
+    )
+
+    assert engine.play() == PLAYBACK_QUIT
+
+    assert focus_guard.focus_calls == 1
+    assert ("render", "refocus") in renderer.events
+
+
+def test_threaded_event_wait_pause_can_resume_with_second_f8() -> None:
+    backend = ThreadRecordingBackend()
+    renderer = BlockingRenderer(block_s=0.0)
+    engine = PlaybackEngine(
+        song=Song(name="threaded-pause-resume", notes=()),
+        actions=(action(0, "down", 21), action(140_000, "up", 21)),
+        backend=backend,
+        controls=TimedControls(((0.01, "pause"), (0.20, "pause"))),
+        renderer=renderer,
+        require_focus=False,
+        sleep_policy=SleepPolicy(spin_threshold_us=500, poll_s=0.005),
+        use_dispatch_thread=True,
+        enable_event_wait=True,
+    )
+
+    assert engine.play() == "finished"
+
+    statuses = [value for kind, value in renderer.events if kind == "render"]
+    assert "paused" in statuses
+    assert statuses.count("playing") >= 1
+    assert any(call.kind == "release_all" for call in backend.calls)
+
+
+def test_threaded_event_wait_focus_restore_resumes_without_refocus_command() -> None:
+    backend = ThreadRecordingBackend()
+    renderer = BlockingRenderer(block_s=0.0)
+    engine = PlaybackEngine(
+        song=Song(name="threaded-focus-restore", notes=()),
+        actions=(action(0, "down", 21), action(300_000, "up", 21)),
+        backend=backend,
+        renderer=renderer,
+        focus_guard=TimedFocusGuard(inactive_from_s=0.03, inactive_to_s=0.15),
+        telemetry_enabled=True,
+        require_focus=True,
+        sleep_policy=SleepPolicy(spin_threshold_us=500, poll_s=0.005),
+        focus_restore_grace_us=1_000,
+        use_dispatch_thread=True,
+        enable_event_wait=True,
+    )
+
+    assert engine.play() == "finished"
+
+    statuses = [value for kind, value in renderer.events if kind == "render"]
+    assert "focus_lost" in statuses
+    assert "playing" in statuses[statuses.index("focus_lost") + 1 :]
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["playback_pause"]["focus"]["count"] >= 1
 
 
 def test_threaded_dispatch_real_hud_does_not_read_backend_from_control_thread() -> None:
@@ -386,6 +477,7 @@ def test_threaded_dispatch_ablation_flags_skip_realtime_primitives(monkeypatch) 
         enable_timer_guard=False,
         enable_waitable_timer=False,
         enable_gc_pause=False,
+        enable_switch_interval_tuning=False,
     )
 
     engine.play()
@@ -397,3 +489,114 @@ def test_threaded_dispatch_ablation_flags_skip_realtime_primitives(monkeypatch) 
     assert summary["runtime_options"]["timer_guard"] is False
     assert summary["runtime_options"]["waitable_timer"] is False
     assert summary["runtime_options"]["gc_pause"] is False
+    assert summary["runtime_options"]["switch_interval_tuning"] is False
+
+
+def test_threaded_dispatch_priority_ladder_telemetry(monkeypatch) -> None:
+    import sys
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    mocked_characteristics_called = False
+    def mock_set_chars(name: str):
+        nonlocal mocked_characteristics_called
+        mocked_characteristics_called = True
+        return 9999
+
+    monkeypatch.setattr(inputs, "av_set_mm_thread_characteristics", mock_set_chars)
+    monkeypatch.setattr(inputs, "av_revert_mm_thread_characteristics", lambda h: None)
+    monkeypatch.setattr(inputs, "av_set_mm_thread_priority", lambda h, p: True)
+
+    backend = ThreadRecordingBackend()
+    engine = PlaybackEngine(
+        song=Song(name="threaded-priority", notes=()),
+        actions=(action(0, "down", 21),),
+        backend=backend,
+        require_focus=False,
+        telemetry_enabled=True,
+        use_dispatch_thread=True,
+        rt_priority_mode="mmcss",
+    )
+
+    engine.play()
+
+    assert any(call.kind == "down" for call in backend.calls)
+    assert mocked_characteristics_called is True
+
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["runtime_options"]["rt_priority_mode"] == "mmcss"
+    assert summary["runtime_options"]["rt_priority_acquired"] == "mmcss:Pro Audio"
+    assert summary["runtime_options"]["switch_interval_tuning"] is True
+
+
+def test_threaded_dispatch_enable_event_wait(monkeypatch) -> None:
+    create_called = 0
+    close_called = 0
+    set_called = 0
+    wait_called = 0
+
+    def mock_create_event():
+        nonlocal create_called
+        create_called += 1
+        return 7777
+
+    def mock_close_handle(handle: int):
+        nonlocal close_called
+        if handle == 7777:
+            close_called += 1
+
+    def mock_set_event(handle: int):
+        nonlocal set_called
+        if handle == 7777:
+            set_called += 1
+        return True
+
+    def mock_wait_multiple(handles: tuple[int, ...], timeout_ms: int):
+        nonlocal wait_called
+        wait_called += 1
+        return inputs.WAIT_OBJECT_0
+
+    monkeypatch.setattr(inputs, "create_auto_reset_event", mock_create_event)
+    monkeypatch.setattr(inputs, "close_handle", mock_close_handle)
+    monkeypatch.setattr(inputs, "set_event", mock_set_event)
+    monkeypatch.setattr(inputs, "wait_for_multiple_objects", mock_wait_multiple)
+
+    monkeypatch.setattr(
+        inputs,
+        "create_high_resolution_waitable_timer",
+        lambda: 8888
+    )
+
+    import sys
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    backend = ThreadRecordingBackend()
+    engine = PlaybackEngine(
+        song=Song(name="threaded-event-wait", notes=()),
+        actions=(
+            action(0, "down", 21),
+            action(100_000, "up", 21),
+        ),
+        backend=backend,
+        require_focus=False,
+        telemetry_enabled=True,
+        use_dispatch_thread=True,
+        enable_event_wait=True,
+        sleep_policy=SleepPolicy(spin_threshold_us=100),
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "_should_use_dispatch_thread",
+        lambda: True
+    )
+
+    engine.play()
+
+    assert create_called >= 1
+    assert close_called >= 1
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["runtime_options"]["enable_event_wait"] is True
+
+

@@ -18,6 +18,7 @@ def test_static_drift_guard() -> None:
     
     allowed_threading_thread = {
         "sky_music/orchestration/engine.py",
+        "sky_music/orchestration/playback_supervisor.py",
     }
 
     errors = []

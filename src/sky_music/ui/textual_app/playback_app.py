@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import queue
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,28 @@ if TYPE_CHECKING:
     from sky_music.orchestration.engine import PlaybackEngine
     from sky_music.domain.validation import ScheduleInvariantViolation
     from sky_music.domain.scheduler_types import FrameTimingPolicy
+
+class PlaybackCommandBridge:
+    """Merges global hotkey polling with UI-originated playback commands."""
+
+    def __init__(self, base_controls: Any | None) -> None:
+        self._base_controls = base_controls
+        self._commands: queue.Queue[str] = queue.Queue()
+
+    def poll(self) -> str | None:
+        try:
+            return self._commands.get_nowait()
+        except queue.Empty:
+            pass
+        if self._base_controls is None:
+            return None
+        return self._base_controls.poll()
+
+    def request(self, command: str) -> None:
+        if command not in {"pause", "skip", "quit", "refocus", "panic"}:
+            raise ValueError(f"unsupported playback command: {command}")
+        self._commands.put(command)
+
 
 @dataclass(frozen=True, slots=True)
 class PlaybackSnapshot:
@@ -201,15 +224,31 @@ class PlaybackCard(Static):
         self._debug_was_down = False
         self._exited = False
         self.engine: PlaybackEngine | None = None
+        self.command_bridge: PlaybackCommandBridge | None = None
 
     # ----- Textual hooks -----------------------------------------------------
     def on_mount(self) -> None:
         self.show_idle("Preparing playback")
 
     def on_key(self, event: events.Key) -> None:
+        if self._mode == "playing":
+            command = {
+                "f8": "pause",
+                "f9": "skip",
+                "f10": "quit",
+            }.get(event.key)
+            if command is not None:
+                self._request_playback_command(command)
+                event.stop()
+                return
         handler = getattr(self.app, "handle_playback_card_key", None)
         if callable(handler) and handler(event.key):
             event.stop()
+
+    def on_unmount(self) -> None:
+        self._stop_timers()
+        if not self._exited and self._mode == "playing":
+            self._request_playback_command("quit")
 
     def render(self) -> Text:
         return Text.from_ansi("\n".join(self._compose_lines()))
@@ -309,8 +348,10 @@ class PlaybackCard(Static):
         tempo_scale: float,
         debug_mode: bool,
         result_callback: Any,
+        command_bridge: PlaybackCommandBridge | None = None,
     ) -> None:
         self.engine = engine
+        self.command_bridge = command_bridge
         self.renderer = renderer
         self.song_name = song_name
         self.total_us = total_us
@@ -345,12 +386,25 @@ class PlaybackCard(Static):
         if self._exited:
             return
         self._exited = True
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
-            self._poll_timer = None
+        self._stop_timers()
         callback = self._playback_result_callback
         if callable(callback):
             callback(result)
+
+    def _stop_timers(self) -> None:
+        for attr in ("_timer", "_poll_timer"):
+            timer = getattr(self, attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def _request_playback_command(self, command: str) -> None:
+        bridge = self.command_bridge
+        if bridge is not None:
+            bridge.request(command)
 
     def _poll(self) -> None:
         self._poll_debug_hotkey()
@@ -752,7 +806,7 @@ def run_playback_textual(
         song_name=song_name,
         total_us=total_us,
     )
-    return app.run()
+    return app.run() or "quit"
 
 class PlaybackScreen(Screen[str]):
     BINDINGS = [

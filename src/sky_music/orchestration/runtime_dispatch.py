@@ -81,6 +81,9 @@ class PendingRelease:
     def effective_release_us(self) -> int:
         return max(self.scheduled_release_us, self.release_not_before_us)
 
+    def get_effective_release_us(self, lead_up: int = 0) -> int:
+        return max(self.scheduled_release_us - lead_up, self.release_not_before_us)
+
 
 def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
     """Attach stable per-key generations to an already-built scheduler timeline."""
@@ -144,20 +147,41 @@ class RuntimeDispatchCoordinator:
         }
         self.pending_by_generation: dict[int, PendingRelease] = {}
 
+    def _early_pop_blocked(self, batch: RuntimeActionBatch) -> bool:
+        """No-early-conflict guard predicate: a down batch may not be popped BEFORE its authored
+        time while any of its scan codes is still active or pending release — an early pop would
+        turn dispatch lead into a dropped_conflict (a lost note)."""
+        if batch.kind != "down":
+            return False
+        for intent in batch.intents:
+            code = intent.scan_code
+            if code in self.active_by_scan_code:
+                return True
+            if any(p.scan_code == code for p in self.pending_by_generation.values()):
+                return True
+        return False
+
     def next_authored_us(self, dispatch_lead_us: int = 0) -> int | None:
         if self.cursor >= len(self.schedule.batches):
             return None
-        return max(0, self.schedule.batches[self.cursor].scheduled_us - dispatch_lead_us)
+        batch = self.schedule.batches[self.cursor]
+        # Guard-aware deadline: while the early pop is blocked, the batch only becomes poppable at
+        # its authored time, so report that instead of scheduled - lead. Otherwise the engine
+        # would wake at the led deadline, drain nothing, and busy-loop until the blocking release
+        # fires (and a fake-clock test would hang forever).
+        if dispatch_lead_us > 0 and self._early_pop_blocked(batch):
+            return batch.scheduled_us
+        return max(0, batch.scheduled_us - dispatch_lead_us)
 
-    def next_pending_release_us(self) -> int | None:
+    def next_pending_release_us(self, lead_up: int = 0) -> int | None:
         if not self.pending_by_generation:
             return None
-        return min(pending.effective_release_us for pending in self.pending_by_generation.values())
+        return min(pending.get_effective_release_us(lead_up) for pending in self.pending_by_generation.values())
 
-    def next_deadline_us(self, dispatch_lead_us: int = 0) -> int | None:
+    def next_deadline_us(self, dispatch_lead_us: int = 0, lead_up: int = 0) -> int | None:
         deadlines = [
             deadline
-            for deadline in (self.next_authored_us(dispatch_lead_us), self.next_pending_release_us())
+            for deadline in (self.next_authored_us(dispatch_lead_us), self.next_pending_release_us(lead_up))
             if deadline is not None
         ]
         return min(deadlines, default=None)
@@ -170,15 +194,15 @@ class RuntimeDispatchCoordinator:
         counts = Counter(self.status_by_generation.values())
         return {status: counts[status] for status in GENERATION_STATUSES}
 
-    def pop_due_pending(self, now_us: int) -> tuple[PendingRelease, ...]:
+    def pop_due_pending(self, now_us: int, lead_up: int = 0) -> tuple[PendingRelease, ...]:
         due = sorted(
             (
                 pending
                 for pending in self.pending_by_generation.values()
-                if pending.effective_release_us <= now_us
+                if pending.get_effective_release_us(lead_up) <= now_us
             ),
             key=lambda pending: (
-                pending.effective_release_us,
+                pending.get_effective_release_us(lead_up),
                 pending.source_action_index,
                 pending.scan_code,
             ),
@@ -193,7 +217,14 @@ class RuntimeDispatchCoordinator:
             self.cursor < len(self.schedule.batches)
             and self.schedule.batches[self.cursor].scheduled_us <= now_us + dispatch_lead_us
         ):
-            due.append(self.schedule.batches[self.cursor])
+            batch = self.schedule.batches[self.cursor]
+            if batch.scheduled_us > now_us and self._early_pop_blocked(batch):
+                # Cannot pop early; stop popping to preserve timeline order. The batch pops
+                # normally once now_us reaches its authored time (degraded conflict handling in
+                # split_down_intents then applies as before lead existed).
+                break
+
+            due.append(batch)
             self.cursor += 1
         return tuple(due)
 

@@ -8,7 +8,12 @@ setting in the UI.
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
+
+# Defined here (not in infrastructure.rt_priority) so that low-level modules like
+# platform.win32.inputs can import config without creating an import cycle through the
+# platform layer. rt_priority re-exports this name.
+RtPriorityMode = Literal["auto", "mmcss", "time_critical", "highest", "off"]
 
 SCHEMA_VERSION: int = 2
 DEFAULT_GAME_FPS: int = 60
@@ -117,7 +122,12 @@ class AppConfig:
     verbose_hud:                 bool          = False
     use_dispatch_thread:         bool          = True
     input_path_warn_us:          int           = 3000
-    rt_time_critical:            bool          = False
+    rt_priority_mode:            RtPriorityMode = "auto"  # Replaces dead rt_time_critical. Old "true" maps to "auto", "false" to "off".
+    # Graduated 2026-06-11 after live A/B (see docs/perf-baselines/2026-06-baseline.md §3 and
+    # the archived rt-pipeline-extreme-optimization-plan): defaults ON in production. CLI
+    # --no-adaptive-lead / --no-adaptive-spin are the kill switches.
+    enable_adaptive_lead:         bool          = True
+    enable_adaptive_spin:         bool          = True
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
     frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
@@ -358,7 +368,12 @@ def _build_config_from_disk() -> AppConfig:
         verbose_hud                  = bool(raw.get("verbose_hud", AppConfig.verbose_hud)),
         use_dispatch_thread          = bool(raw.get("use_dispatch_thread", AppConfig.use_dispatch_thread)),
         input_path_warn_us           = max(0, int(raw.get("input_path_warn_us", AppConfig.input_path_warn_us))),
-        rt_time_critical             = bool(raw.get("rt_time_critical", AppConfig.rt_time_critical)),
+        # The legacy rt_time_critical flag was DEAD config (never wired to anything), so its value
+        # carries no user intent and must not pin the new ladder off: it is ignored entirely and
+        # dropped on the next save. Only an explicit rt_priority_mode key overrides the default.
+        rt_priority_mode             = cast(RtPriorityMode, str(raw.get("rt_priority_mode", AppConfig.rt_priority_mode))),
+        enable_adaptive_lead         = bool(raw.get("enable_adaptive_lead", AppConfig.enable_adaptive_lead)),
+        enable_adaptive_spin         = bool(raw.get("enable_adaptive_spin", AppConfig.enable_adaptive_spin)),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
@@ -396,7 +411,10 @@ def save_config(cfg: AppConfig) -> None:
     raw["verbose_hud"]                  = cfg.verbose_hud
     raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
     raw["input_path_warn_us"]           = cfg.input_path_warn_us
-    raw["rt_time_critical"]             = cfg.rt_time_critical
+    raw.pop("rt_time_critical", None)
+    raw["rt_priority_mode"]             = cfg.rt_priority_mode
+    raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
+    raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
     raw["hotkeys"] = {
         "pause":   cfg.hotkeys.pause,
         "skip":    cfg.hotkeys.skip,

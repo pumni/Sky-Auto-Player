@@ -15,9 +15,11 @@ This index defines the structure and hierarchy of truth for the Sky Player proje
 
 ## 1. Canonical Documents
 These files represent the current system state and contracts:
-* [timing-principles.md](timing-principles.md) — Source of truth for timing design, same-key feasibility limits (pure `min_hold` floor, no fixed margin), and the completion-anchor contract.
+* [timing-principles.md](timing-principles.md) — Source of truth for timing design, same-key feasibility limits (pure `min_hold` floor, no fixed margin), the completion-anchor contract, and the adaptive-lead/floor interaction.
+* [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Current RT dispatch design after the 2026-06 decomposition: DispatchLoop/Supervisor/HybridWaitStrategy, adaptive lead (onset = dispatch completion), priority ladder, event-driven waits, production defaults and kill switches.
 * [architecture.md](architecture.md) — Explains the 4-layer DDD codebase design, playback dispatch pipeline (MMCSS + waitable timer + timer-guard), and input hardening.
 * [timing-profile-frame-model.md](timing-profile-frame-model.md) — Pure frame-relative formulas and default profiles (`local_precise`, `balanced`, `audience_safe`).
+* [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
 
 ---
 
@@ -31,6 +33,7 @@ These files represent the current system state and contracts:
 
 ## 3. Historical Archives (`docs/archive/`)
 These files contain completed refactor plans, historic audits, and legacy design documents. They are read-only and include warning stamps specifying discrepancies with the current codebase.
+* `2026-06_rt-pipeline-extreme-optimization-plan.md` — Completed 7-phase RT pipeline optimization plan (adaptive lead, priority ladder, event waits, engine decomposition) with outcome stamps.
 * `2026-06_background-worker-lifecycle-refactor-brief.md` — Implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
 * `2026-06_background-worker-lifecycle-hardening-plan.md` — Hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
 * `2026-06_completion-anchor-refactor-plan.md` — Implementation plan for completion-anchor.

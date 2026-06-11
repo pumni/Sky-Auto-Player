@@ -143,7 +143,12 @@ class WinSendInputBackend(_TrackedKeyState):
         )
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
-        self.inputs_module.send_scan_code_batch(scan_codes, key_up=key_up)
+        send_fn = getattr(
+            self.inputs_module,
+            "send_scan_code_batch_trusted",
+            self.inputs_module.send_scan_code_batch,
+        )
+        send_fn(scan_codes, key_up=key_up)
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
         self.last_error = f"key_down error: {error}"

@@ -17,7 +17,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from sky_music.infrastructure.focus import Win32SkyFocusGuard
-from sky_music.ui.textual_app.playback_app import PlaybackCard, SnapshotRenderer
+from sky_music.ui.textual_app.playback_app import PlaybackCard, PlaybackCommandBridge, SnapshotRenderer
 from sky_music.ui.textual_app.playback_controller import prepare_playback, rebuild_with, PlaybackPlan, PlaybackError
 from textual.binding import Binding
 from textual.containers import Container
@@ -244,6 +244,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._risk_plan: PlaybackPlan | None = None
         self._risk_picker_result: SongPickerResult | None = None
         self._transitioning_to_playback = False
+        self._active_playback_commands: PlaybackCommandBridge | None = None
+        self._shutting_down_playback = False
         self.dispatch_lead_us = dispatch_lead_us
         self.session = PlaybackSessionContext(
             profile_name=self.profile_name,
@@ -716,6 +718,20 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self.start_playback_workflow(picker_result)
 
     def action_cancel(self) -> None:
+        if self.playback_mode == "countdown":
+            self._shutting_down_playback = True
+            try:
+                self.query_one("#playback-card", PlaybackCard)._stop_timers()
+            except Exception:
+                pass
+            self.exit(None)
+            return
+        if self.playback_mode == "playing":
+            self._shutting_down_playback = True
+            bridge = self._active_playback_commands
+            if bridge is not None:
+                bridge.request("quit")
+                return
         self.exit(None)
 
     def _replace_metadata_coordinator(self) -> None:
@@ -1076,6 +1092,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._risk_plan = None
         self._risk_picker_result = None
         self._transitioning_to_playback = False
+        self._active_playback_commands = None
+        self._shutting_down_playback = False
         self.query_one("#playback-card", PlaybackCard).styles.display = "none"
         self.query_one("#detail", DetailPanel).styles.display = "block"
         self.query_one(CustomFooter).styles.display = "block"
@@ -1205,6 +1223,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_timer_guard = main_mod.RUNTIME_STATE.enable_timer_guard
             enable_waitable_timer = main_mod.RUNTIME_STATE.enable_waitable_timer
             enable_gc_pause = main_mod.RUNTIME_STATE.enable_gc_pause
+            enable_switch_interval_tuning = main_mod.RUNTIME_STATE.enable_switch_interval_tuning
+            enable_adaptive_lead = main_mod.RUNTIME_STATE.enable_adaptive_lead
+            enable_adaptive_spin = getattr(main_mod.RUNTIME_STATE, "enable_adaptive_spin", False)
+            enable_event_wait = getattr(main_mod.RUNTIME_STATE, "enable_event_wait", False)
+            rt_priority_mode = getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto")
         else:
             # Fallback to config/defaults
             telemetry_enabled = self.cfg.telemetry_enabled_by_default or is_dry_run
@@ -1213,12 +1236,21 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_timer_guard = True
             enable_waitable_timer = True
             enable_gc_pause = True
+            enable_switch_interval_tuning = True
+            enable_adaptive_lead = getattr(self.cfg, "enable_adaptive_lead", True)
+            enable_adaptive_spin = getattr(self.cfg, "enable_adaptive_spin", True)
+            enable_event_wait = True
+            rt_priority_mode = getattr(self.cfg, "rt_priority_mode", "auto")
+
+        command_bridge = PlaybackCommandBridge(self.controls)
+        self._active_playback_commands = command_bridge
+        self._shutting_down_playback = False
 
         engine = PlaybackEngine(
             song=plan.song,
             actions=plan.actions,
             backend=backend,
-            controls=self.controls,
+            controls=command_bridge,
             renderer=renderer,
             telemetry_enabled=telemetry_enabled,
             require_focus=not is_dry_run,
@@ -1234,17 +1266,24 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_timer_guard=enable_timer_guard,
             enable_waitable_timer=enable_waitable_timer,
             enable_gc_pause=enable_gc_pause,
+            enable_switch_interval_tuning=enable_switch_interval_tuning,
+            enable_adaptive_lead=enable_adaptive_lead,
+            enable_adaptive_spin=enable_adaptive_spin,
+            enable_event_wait=enable_event_wait,
+            rt_priority_mode=rt_priority_mode,
             dispatch_lead_us=self.dispatch_lead_us,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
         def handle_playback_result(result: Any) -> None:
+            if result == "quit":
+                self._active_playback_commands = None
+                self._shutting_down_playback = False
+                self.exit(None)
+                return
             self.rearm()
             self._restore_picker_after_playback()
-            if result == "quit":
-                self.exit(0)
-            else:
-                self.update_session_state(picker_result)
+            self.update_session_state(picker_result)
 
         def run_playback() -> None:
             card = self._show_playback_card("playing")
@@ -1259,6 +1298,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 tempo_scale=plan.session.tempo_scale,
                 debug_mode=self.verbose_hud,
                 result_callback=handle_playback_result,
+                command_bridge=command_bridge,
             )
 
         if not is_dry_run:

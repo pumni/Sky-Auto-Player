@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import gc
+import sys
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Self
+from typing import ClassVar, Self
 
 from sky_music.infrastructure.timing import Sleeper
 from sky_music.platform.win32 import inputs
@@ -11,6 +12,10 @@ from sky_music.platform.win32 import inputs
 
 @dataclass(slots=True)
 class WaitableTimerSleeper:
+    # Capability flag consumed by HybridWaitStrategy: wakes with sub-millisecond accuracy, so the
+    # timer-aware ladder may sleep straight to target - guard. ClassVar, not a dataclass field.
+    is_high_resolution: ClassVar[bool] = True
+
     handle: int
     fallback: Sleeper
 
@@ -48,6 +53,14 @@ class WaitableTimerSleeper:
         self.close()
 
 
+# Cap GIL handoff latency while the Textual dashboard renders in parallel with dispatch
+# (the accepted live-dashboard design). Default CPython switch interval is 5 ms — a UI thread mid-
+# bytecode can deny the spinning dispatch thread the GIL for up to ~5 ms.
+# ctypes WinDLL calls release the GIL during the foreign call, so SendInput itself never blocks
+# the UI and vice versa; this knob only shortens bytecode-vs-bytecode handoff.
+DISPATCH_SWITCH_INTERVAL_S = 0.001
+
+
 class RealtimeProcessScope:
     """Pause cyclic GC for the duration of dispatch, reverting on exit.
 
@@ -56,30 +69,53 @@ class RealtimeProcessScope:
     the dispatch thread mid-send, so we collect accumulated picker-era garbage once up front and
     then pause GC until playback ends.
 
-    GC is re-enabled in ``__exit__`` so the picker/idle phases keep normal behaviour.
+    This scope also tunes the CPython GIL switch interval (if enabled) to minimize handoff latency
+    between the Textual UI/dashboard thread and the spinning dispatch thread.
+
+    GC is re-enabled and GIL switch interval restored in ``__exit__`` so the picker/idle phases
+    keep normal behaviour.
     """
 
-    __slots__ = ("_enabled", "_gc_was_enabled")
+    __slots__ = (
+        "_enabled",
+        "_gc_was_enabled",
+        "_enable_switch_interval_tuning",
+        "_old_switch_interval",
+    )
 
-    def __init__(self, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        enable_switch_interval_tuning: bool = True,
+    ) -> None:
         self._enabled = enabled
+        self._enable_switch_interval_tuning = enable_switch_interval_tuning
         self._gc_was_enabled = False
+        self._old_switch_interval: float | None = None
 
     def __enter__(self) -> Self:
-        if not self._enabled:
+        # 1. GC Pause
+        if self._enabled:
+            self._gc_was_enabled = gc.isenabled()
+            if self._gc_was_enabled:
+                try:
+                    gc.collect()
+                except Exception:
+                    pass
+                gc.disable()
+                inputs.debug_log("[realtime] cyclic GC paused for dispatch")
+        else:
             inputs.debug_log("[realtime] cyclic GC pause disabled for dispatch")
-            return self
 
-        # Collect picker-era garbage first so a full collection cannot fire in the middle of the
-        # precise dispatch loop, then pause GC for the run.
-        self._gc_was_enabled = gc.isenabled()
-        if self._gc_was_enabled:
-            try:
-                gc.collect()
-            except Exception:
-                pass
-            gc.disable()
-            inputs.debug_log("[realtime] cyclic GC paused for dispatch")
+        # 2. GIL Switch-Interval Tuning
+        if self._enable_switch_interval_tuning:
+            self._old_switch_interval = sys.getswitchinterval()
+            sys.setswitchinterval(DISPATCH_SWITCH_INTERVAL_S)
+            inputs.debug_log(f"[realtime] GIL switch interval tuned to {DISPATCH_SWITCH_INTERVAL_S}s")
+        else:
+            inputs.debug_log("[realtime] GIL switch interval tuning disabled")
+
         return self
 
     def __exit__(
@@ -88,9 +124,15 @@ class RealtimeProcessScope:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        # 1. Restore GC
         if self._gc_was_enabled:
             gc.enable()
             self._gc_was_enabled = False
+
+        # 2. Restore GIL Switch-Interval
+        if self._old_switch_interval is not None:
+            sys.setswitchinterval(self._old_switch_interval)
+            self._old_switch_interval = None
 
 
 def create_realtime_sleeper(fallback: Sleeper) -> Sleeper:

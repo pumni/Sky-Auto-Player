@@ -556,6 +556,11 @@ def play_selected_song(
         enable_timer_guard=RUNTIME_STATE.enable_timer_guard,
         enable_waitable_timer=RUNTIME_STATE.enable_waitable_timer,
         enable_gc_pause=RUNTIME_STATE.enable_gc_pause,
+        enable_switch_interval_tuning=RUNTIME_STATE.enable_switch_interval_tuning,
+        enable_adaptive_lead=RUNTIME_STATE.enable_adaptive_lead,
+        enable_adaptive_spin=RUNTIME_STATE.enable_adaptive_spin,
+        enable_event_wait=RUNTIME_STATE.enable_event_wait,
+        rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)

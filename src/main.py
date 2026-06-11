@@ -223,6 +223,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed lead time in microseconds to trigger input dispatch earlier (default: 0)",
     )
     timing.add_argument(
+        "--no-adaptive-lead",
+        action="store_true",
+        help="debug only: disable adaptive dispatch lead prediction (default: on)",
+    )
+    timing.add_argument(
+        "--no-adaptive-spin",
+        action="store_true",
+        help="debug only: disable adaptive sleep spin threshold tuning (default: on)",
+    )
+    timing.add_argument(
         "--fps",
         type=int,
         default=None,
@@ -289,6 +299,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--no-gc-pause",
         action="store_true",
         help="debug only: do not collect and pause cyclic GC during playback",
+    )
+    ctrl.add_argument(
+        "--no-switch-interval-tuning",
+        action="store_true",
+        help="debug only: do not tune the CPython GIL switch interval during playback",
+    )
+    ctrl.add_argument(
+        "--rt-priority-mode",
+        choices=["auto", "mmcss", "time_critical", "highest", "off"],
+        default=None,
+        help="control real-time thread priority ladder (default: loaded from config, falls back to auto)",
+    )
+    ctrl.add_argument(
+        "--no-event-wait",
+        action="store_true",
+        help="debug only: disable event-driven dispatch waits and fall back to 1ms polling",
     )
 
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
@@ -438,6 +464,11 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_timer_guard = not args.no_timer_guard
     RUNTIME_STATE.enable_waitable_timer = not args.no_waitable_timer
     RUNTIME_STATE.enable_gc_pause = not args.no_gc_pause
+    RUNTIME_STATE.enable_switch_interval_tuning = not args.no_switch_interval_tuning
+    RUNTIME_STATE.enable_adaptive_lead = False if args.no_adaptive_lead else cfg.enable_adaptive_lead
+    RUNTIME_STATE.enable_adaptive_spin = False if args.no_adaptive_spin else cfg.enable_adaptive_spin
+    RUNTIME_STATE.rt_priority_mode = args.rt_priority_mode if args.rt_priority_mode is not None else cfg.rt_priority_mode
+    RUNTIME_STATE.enable_event_wait = not args.no_event_wait
     RUNTIME_STATE.check_input_path = args.check_input_path
 
     if PLAYBACK_DEBUG:

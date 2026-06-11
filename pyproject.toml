@@ -1,6 +1,6 @@
 [project]
 name = "sky-player"
-version = "2.1.1"
+version = "2.2.1"
 description = "Sky Music Player"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -32,3 +32,13 @@ dev = [
 [project.scripts]
 play = "main:main"
 build-app = "build_app:main"
+
+[tool.pyright]
+# Keep typecheck signal on first-party code: dist/ contains PyInstaller-bundled third-party
+# sources and build/ is generated output.
+exclude = [
+    "dist",
+    "build",
+    ".venv",
+    "**/__pycache__",
+]

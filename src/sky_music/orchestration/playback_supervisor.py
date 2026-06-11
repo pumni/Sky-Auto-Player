@@ -1,0 +1,451 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from collections import deque
+from contextlib import nullcontext
+import queue
+import threading
+import time
+from typing import Any, Protocol, TYPE_CHECKING
+
+from sky_music.config import RtPriorityMode
+from sky_music.infrastructure.backend import BackendHealth
+from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
+from sky_music.infrastructure.focus import FocusGuard
+
+if TYPE_CHECKING:
+    from sky_music.orchestration.dispatch_loop import DispatchLoop
+    from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
+    from sky_music.orchestration.engine import PlaybackState
+    from sky_music.orchestration.telemetry import TelemetryLogger
+
+# Standard playback outcome constants
+PLAYBACK_FINISHED = "finished"
+PLAYBACK_SKIPPED = "skipped"
+PLAYBACK_QUIT = "quit"
+
+
+class CommandSource(Protocol):
+    def poll(self) -> str | None: ...
+
+
+class FocusSignal(Protocol):
+    def is_active(self) -> bool: ...
+
+
+class ProgressSink(Protocol):
+    def publish(
+        self,
+        *,
+        elapsed_us: int,
+        total_us: int,
+        status: str,
+        lateness_us: int | None = None,
+        health: BackendHealth | None = None,
+        input_path_degraded: bool = False,
+        force: bool = False,
+    ) -> None: ...
+
+    def finish(self, message: str) -> None: ...
+
+    def update_counters(self, lateness_us: int) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class DirectCommandSource:
+    controls: Any
+
+    def poll(self) -> str | None:
+        if self.controls is None:
+            return None
+        return self.controls.poll()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectFocusSignal:
+    is_active_fn: Any
+
+    def is_active(self) -> bool:
+        return self.is_active_fn()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectProgressSink:
+    renderer: Any
+    song_name: str
+
+    def publish(
+        self,
+        *,
+        elapsed_us: int,
+        total_us: int,
+        status: str,
+        lateness_us: int | None = None,
+        health: BackendHealth | None = None,
+        input_path_degraded: bool = False,
+        force: bool = False,
+    ) -> None:
+        if self.renderer is None:
+            return
+        self.renderer.render(
+            elapsed_us / 1_000_000,
+            total_us / 1_000_000,
+            self.song_name,
+            status=status,
+            force=force,
+            input_path_degraded=input_path_degraded,
+            backend_health=health,
+        )
+
+    def finish(self, message: str) -> None:
+        if self.renderer is not None:
+            self.renderer.finish(message)
+
+    def update_counters(self, lateness_us: int) -> None:
+        if self.renderer is not None and hasattr(self.renderer, "update_counters"):
+            self.renderer.update_counters(lateness_us)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressSnapshot:
+    elapsed_us: int
+    total_us: int
+    status: str
+    lateness_us: int | None = None
+    health: BackendHealth | None = None
+    input_path_degraded: bool = False
+    force: bool = False
+
+
+class QueueCommandSource:
+    def __init__(self, commands: queue.Queue[str]) -> None:
+        self._commands = commands
+
+    def poll(self) -> str | None:
+        try:
+            return self._commands.get_nowait()
+        except queue.Empty:
+            return None
+
+
+class SharedFocusSignal:
+    def __init__(self, active: bool = True) -> None:
+        self._active = active
+        self._lock = threading.Lock()
+
+    def set_active(self, active: bool) -> None:
+        with self._lock:
+            self._active = active
+
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._active
+
+
+class SnapshotProgressSink:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._snapshot: ProgressSnapshot | None = None
+        self._version = 0
+        self._finish_message: str | None = None
+        self._counter_updates: deque[int] = deque()
+
+    def publish(
+        self,
+        *,
+        elapsed_us: int,
+        total_us: int,
+        status: str,
+        lateness_us: int | None = None,
+        health: BackendHealth | None = None,
+        input_path_degraded: bool = False,
+        force: bool = False,
+    ) -> None:
+        with self._lock:
+            self._snapshot = ProgressSnapshot(
+                elapsed_us=elapsed_us,
+                total_us=total_us,
+                status=status,
+                lateness_us=lateness_us,
+                health=health,
+                input_path_degraded=input_path_degraded,
+                force=force,
+            )
+            self._version += 1
+
+    def finish(self, message: str) -> None:
+        with self._lock:
+            self._finish_message = message
+
+    def update_counters(self, lateness_us: int) -> None:
+        with self._lock:
+            self._counter_updates.append(lateness_us)
+
+    def consume(
+        self,
+        last_version: int,
+    ) -> tuple[int, ProgressSnapshot | None, tuple[int, ...], str | None]:
+        with self._lock:
+            snapshot = self._snapshot if self._version != last_version else None
+            version = self._version
+            counters = tuple(self._counter_updates)
+            self._counter_updates.clear()
+            finish_message = self._finish_message
+            self._finish_message = None
+        return version, snapshot, counters, finish_message
+
+
+@dataclass(slots=True)
+class DispatchThreadResult:
+    result: str | None = None
+    error: BaseException | None = None
+
+
+class PlaybackSupervisor:
+    """Coordinates thread execution, Windows focus checks, and input/output routing."""
+
+    def __init__(
+        self,
+        controls: Any,
+        focus_guard: FocusGuard,
+        require_focus: bool,
+        renderer: Any,
+        telemetry: TelemetryLogger,
+        sleep_policy: SleepPolicy,
+        clock: Clock,
+        sleeper: Sleeper,
+        song_name: str,
+        rt_priority_mode: RtPriorityMode = "auto",
+        enable_timer_guard: bool = True,
+        enable_event_wait: bool = False,
+    ) -> None:
+        self.controls = controls
+        self.focus_guard = focus_guard
+        self.require_focus = require_focus
+        self.renderer = renderer
+        self.telemetry = telemetry
+        self.sleep_policy = sleep_policy
+        self.clock = clock
+        self.sleeper = sleeper
+        self.song_name = song_name
+        self.rt_priority_mode: RtPriorityMode = rt_priority_mode
+        self.enable_timer_guard = enable_timer_guard
+        self.enable_event_wait = enable_event_wait
+
+    def run(
+        self,
+        dispatch_loop: DispatchLoop,
+        coordinator: RuntimeDispatchCoordinator,
+        state: PlaybackState,
+        total_time_us: int,
+        use_dispatch_thread: bool,
+    ) -> str:
+        if use_dispatch_thread:
+            return self._run_threaded(dispatch_loop, coordinator, state, total_time_us)
+        return self._run_direct(dispatch_loop, coordinator, state, total_time_us)
+
+    def _run_direct(
+        self,
+        dispatch_loop: DispatchLoop,
+        coordinator: RuntimeDispatchCoordinator,
+        state: PlaybackState,
+        total_time_us: int,
+    ) -> str:
+        command_source = DirectCommandSource(self.controls)
+        def get_focus_active() -> bool:
+            return True if not self.require_focus else self.focus_guard.is_active()
+        focus_signal = DirectFocusSignal(get_focus_active)
+        progress_sink = DirectProgressSink(self.renderer, self.song_name)
+
+        # Event-driven waits need a supervisor thread to signal the event; in direct mode nobody
+        # would, so commands could never interrupt a sleep. Always run direct mode polled
+        # (command_event=None drives the loop's polling behaviour).
+        return dispatch_loop.run(
+            state=state,
+            command_source=command_source,
+            focus_signal=focus_signal,
+            progress_sink=progress_sink,
+            total_time_us=total_time_us,
+            command_event=None,
+        )
+
+    def _run_threaded(
+        self,
+        dispatch_loop: DispatchLoop,
+        coordinator: RuntimeDispatchCoordinator,
+        state: PlaybackState,
+        total_time_us: int,
+    ) -> str:
+        from sky_music.platform.win32 import inputs
+
+        command_queue: queue.Queue[str] = queue.Queue()
+        command_source = QueueCommandSource(command_queue)
+        focus_signal = SharedFocusSignal(True)
+        progress_sink = SnapshotProgressSink()
+        dispatch_result = DispatchThreadResult()
+
+        # The supervisor owns the command event and creates it BEFORE the dispatch thread starts,
+        # so a command enqueued during thread startup can never lose its wake-up signal (in event
+        # mode the loop only polls the queue on event wake-ups).
+        command_event_handle: int | None = None
+        if self.enable_event_wait:
+            command_event_handle = inputs.create_auto_reset_event()
+            if command_event_handle is None:
+                inputs.debug_log("[realtime] command event unavailable; falling back to polled waits")
+
+        def dispatch_target() -> None:
+            try:
+                if not getattr(dispatch_loop.sleeper, "is_high_resolution", False):
+                    inputs.debug_log("[realtime] high-resolution waitable timer disabled")
+                timer_scope = (
+                    inputs.high_resolution_timer_scope()
+                    if self.enable_timer_guard
+                    else nullcontext()
+                )
+                if not self.enable_timer_guard:
+                    inputs.debug_log("[realtime] timer guard disabled")
+
+                from sky_music.infrastructure.rt_priority import DispatchThreadPriorityScope
+                priority_scope = DispatchThreadPriorityScope(self.rt_priority_mode)
+
+                with timer_scope, priority_scope:
+                    if priority_scope.outcome is not None:
+                        self.telemetry.record_runtime_options(
+                            {
+                                **self.telemetry.runtime_options,
+                                "rt_priority_acquired": priority_scope.outcome.acquired,
+                            }
+                        )
+                        inputs.debug_log(
+                            f"[rt_priority] Requested: {priority_scope.outcome.requested_mode}, "
+                            f"Acquired: {priority_scope.outcome.acquired}, Detail: {priority_scope.outcome.detail}"
+                        )
+
+                    dispatch_result.result = dispatch_loop.run(
+                        state=state,
+                        command_source=command_source,
+                        focus_signal=focus_signal,
+                        progress_sink=progress_sink,
+                        total_time_us=total_time_us,
+                        command_event=command_event_handle,
+                    )
+            except BaseException as exc:
+                dispatch_result.error = exc
+
+        dispatch_thread = threading.Thread(
+            target=dispatch_target,
+            name="sky-music-dispatch",
+        )
+        dispatch_thread.start()
+
+        last_snapshot_version = 0
+        next_control_poll_s = 0.0
+        next_focus_check_s = 0.0
+        next_progress_publish_s = 0.0
+        control_poll_s = min(max(self.sleep_policy.poll_s, 0.005), 0.010)
+        focus_poll_s = min(max(self.sleep_policy.poll_s, 0.010), 0.025)
+        control_sleep_s = min(control_poll_s, 0.005)
+        progress_publish_s = 0.033
+
+        last_active_state = True
+
+        try:
+            while dispatch_thread.is_alive():
+                now_s = time.perf_counter()
+                if now_s >= next_control_poll_s:
+                    command = self.controls.poll() if self.controls is not None else None
+                    if command in ("pause", "skip", "quit", "panic"):
+                        command_queue.put(command)
+                        if command_event_handle is not None:
+                            inputs.set_event(command_event_handle)
+                    elif command == "refocus":
+                        focused = self.focus_guard.focus()
+                        active = True if not self.require_focus else (self.focus_guard.is_active() or focused)
+                        last_active_state = active
+                        focus_signal.set_active(active)
+                        progress_sink.publish(
+                            elapsed_us=state.get_elapsed_us(self.clock),
+                            total_us=total_time_us,
+                            status="refocus",
+                            health=None,
+                            input_path_degraded=dispatch_loop.health_monitor.input_path_degraded,
+                            force=True,
+                        )
+                        if command_event_handle is not None:
+                            inputs.set_event(command_event_handle)
+                    next_control_poll_s = now_s + control_poll_s
+
+                if now_s >= next_focus_check_s:
+                    active = True if not self.require_focus else self.focus_guard.is_active()
+                    if active != last_active_state:
+                        last_active_state = active
+                        focus_signal.set_active(active)
+                        if command_event_handle is not None:
+                            inputs.set_event(command_event_handle)
+                    next_focus_check_s = now_s + focus_poll_s
+
+                # In event mode the dispatch loop sleeps whole inter-note gaps without iterating,
+                # so the periodic "playing" progress is published here instead. Pause/focus states
+                # are published by the loop itself (it is awake and polling in those states).
+                if command_event_handle is not None and now_s >= next_progress_publish_s:
+                    if not state.is_paused():
+                        # health=None on purpose: backend state is dispatch-thread-owned and must
+                        # not be read from the control thread (see
+                        # test_threaded_dispatch_keeps_all_backend_calls_on_dispatch_thread).
+                        progress_sink.publish(
+                            elapsed_us=state.get_elapsed_us(self.clock),
+                            total_us=total_time_us,
+                            status="playing",
+                            health=None,
+                            input_path_degraded=dispatch_loop.health_monitor.input_path_degraded,
+                        )
+                    next_progress_publish_s = now_s + progress_publish_s
+
+                last_snapshot_version = self._consume_progress_updates(
+                    progress_sink,
+                    last_snapshot_version,
+                )
+                time.sleep(control_sleep_s)
+
+            dispatch_thread.join()
+        finally:
+            if not dispatch_thread.is_alive() and command_event_handle is not None:
+                inputs.close_handle(command_event_handle)
+                command_event_handle = None
+
+        last_snapshot_version = self._consume_progress_updates(
+            progress_sink,
+            last_snapshot_version,
+        )
+
+        if dispatch_result.error is not None:
+            raise dispatch_result.error
+        return dispatch_result.result or PLAYBACK_FINISHED
+
+    def _render_progress_snapshot(self, snapshot: ProgressSnapshot) -> None:
+        if self.renderer is None:
+            return
+        self.renderer.render(
+            snapshot.elapsed_us / 1_000_000,
+            snapshot.total_us / 1_000_000,
+            self.song_name,
+            status=snapshot.status,
+            force=snapshot.force,
+            input_path_degraded=snapshot.input_path_degraded,
+            backend_health=snapshot.health,
+        )
+
+    def _consume_progress_updates(
+        self,
+        progress_sink: SnapshotProgressSink,
+        last_version: int,
+    ) -> int:
+        version, snapshot, counters, finish_message = progress_sink.consume(last_version)
+        if self.renderer is not None and hasattr(self.renderer, "update_counters"):
+            for lateness_us in counters:
+                self.renderer.update_counters(lateness_us)
+        if snapshot is not None:
+            self._render_progress_snapshot(snapshot)
+        if finish_message is not None and self.renderer is not None:
+            self.renderer.finish(finish_message)
+        return version

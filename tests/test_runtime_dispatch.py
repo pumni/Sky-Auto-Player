@@ -528,6 +528,7 @@ def test_generation_status_counts_surface_released_conflict_and_cancelled_run():
     )
 
     assert engine.play() == PLAYBACK_QUIT
+    assert engine._runtime_coordinator is not None
     counts = engine._runtime_coordinator.generation_status_counts()
     assert counts["released"] == 1
     assert counts["dropped_conflict"] == 1
@@ -1007,3 +1008,142 @@ def test_input_path_health_flags_sustained_slow_send_duration() -> None:
     assert summary is not None
     assert summary["input_path_degraded"] is True
     assert summary["input_path_warn_us"] == 300
+
+
+def test_health_estimator_equivalence_with_random_sequences() -> None:
+    import random
+    from collections import deque
+
+    random.seed(42)
+    warn_us = 300
+    maxlen = 64
+
+    def old_logic(window: deque[int]) -> bool:
+        if not window:
+            return True
+        sorted_window = sorted(window)
+        p95_idx = int(round(0.95 * (len(sorted_window) - 1)))
+        p95_us = sorted_window[p95_idx]
+        return p95_us <= warn_us
+
+    window: deque[int] = deque(maxlen=maxlen)
+    over_warn_count = 0
+
+    for _ in range(10000):
+        val = random.randint(100, 500)
+        evicted = None
+        if len(window) == window.maxlen:
+            evicted = window[0]
+
+        window.append(val)
+
+        if evicted is not None and evicted > warn_us:
+            over_warn_count -= 1
+        if val > warn_us:
+            over_warn_count += 1
+
+        L = len(window)
+        new_result = over_warn_count <= L - 1 - int(round(0.95 * (L - 1)))
+        old_result = old_logic(window)
+
+        assert new_result == old_result, (
+            f"Equivalence failed for window={list(window)}, "
+            f"over_warn_count={over_warn_count}, new={new_result}, old={old_result}"
+        )
+
+
+def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
+    from sky_music.orchestration.telemetry import TelemetryLogger, TelemetryRecord
+    logger = TelemetryLogger("test-lazy", enabled=True)
+    logger.record(
+        event_index=0,
+        kind="down",
+        scheduled_us=1000,
+        actual_us=1005,
+        lateness_us=5,
+        send_duration_us=10,
+        scan_codes=(21, 22),
+        reason="onset",
+    )
+    
+    # Assert logger.records contains a TelemetryRecord
+    assert len(logger.records) == 1
+    record = logger.records[0]
+    assert isinstance(record, TelemetryRecord)
+    
+    # Assert dictionary emulation works
+    assert record["song"] == "test-lazy"
+    assert record["event_index"] == 0
+    assert record["kind"] == "down"
+    assert record["scheduled_us"] == 1000
+    assert record["actual_us"] == 1005
+    assert record["lateness_us"] == 5
+    assert record["send_duration_us"] == 10
+    assert record["scan_codes"] == "21;22"
+    assert record.get("reason") == "onset"
+    assert record.get("nonexistent", "default") == "default"
+    assert "song" in record
+    assert len(record) == 21
+    
+    # Assert keys/items/values are correct
+    assert "song" in record.keys()
+    assert ("event_index", 0) in record.items()
+    assert "down" in record.values()
+
+
+def test_send_scan_code_batch_cache_and_retry() -> None:
+    import sky_music.platform.win32.inputs as win32_inputs
+    from unittest.mock import patch
+
+    # 1. Test cache reuse
+    win32_inputs._ARRAY_CACHE.clear()
+    chord = (21, 22)
+    
+    with patch.object(win32_inputs.user32, "SendInput", return_value=2) as mock_send:
+        win32_inputs.send_scan_code_batch(chord, key_up=False)
+        assert mock_send.call_count == 1
+        
+        # Second call should hit the cache (cache size should be 1)
+        assert len(win32_inputs._ARRAY_CACHE) == 1
+        win32_inputs.send_scan_code_batch(chord, key_up=False)
+        assert mock_send.call_count == 2
+        
+    # 2. Test fallback retry path
+    with patch.object(win32_inputs.user32, "SendInput", return_value=1) as mock_send, \
+         patch("sky_music.platform.win32.inputs.send_input_batch") as mock_send_batch:
+        win32_inputs.send_scan_code_batch(chord, key_up=False)
+        assert mock_send.call_count == 1
+        assert mock_send_batch.call_count == 1
+        called_inputs = mock_send_batch.call_args[0][0]
+        assert len(called_inputs) == 1
+        assert called_inputs[0].ki.wScan == 22
+
+
+def test_playback_state_epoch_based_continuity() -> None:
+    from sky_music.orchestration.engine import PlaybackState
+    
+    clock = FakeClock()
+    clock.time_us = 1000
+    state = PlaybackState(start_perf=1000)
+    
+    # Steady running
+    clock.time_us = 2000
+    assert state.get_elapsed_us(clock) == 1000
+    
+    # Pause
+    state.manual_pause_started_us = clock.time_us
+    clock.time_us = 3000
+    assert state.get_elapsed_us(clock) == 1000
+    
+    # Resume after 1000 us of pause
+    pause_duration = clock.time_us - state.manual_pause_started_us
+    state.update_pause_time(pause_duration)
+    state.manual_pause_started_us = None
+    
+    assert state.pause_time_us == 1000
+    assert state.epoch_us == 2000
+    
+    # Resume running
+    clock.time_us = 4000
+    assert state.get_elapsed_us(clock) == 2000
+

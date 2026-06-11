@@ -11,11 +11,11 @@ from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import ResourceState, WorkerSnapshot
 from sky_music.ui.picker_metadata import (
     compute_song_ui_metadata_payloads,
+    hydrate_persistent_metadata_for_paths,
     hydrate_and_fill_raw_metadata,
     peek_cached_song_ui_metadata,
     session_to_worker_payload,
     store_computed_song_ui_metadata_payloads,
-    warm_persistent_metadata_cache,
 )
 
 
@@ -163,10 +163,20 @@ class MetadataCoordinator:
         if self._should_stop(request_id):
             return
 
-        # Step 1: Warm SQLite cache for all paths in a single efficient operation
+        # Step 1: Hydrate SQLite cache in small batches so shutdown/playback handoff can stop
+        # promptly instead of waiting for one large library-wide cache operation.
+        warm_batch_size = 25
         try:
-            warm_persistent_metadata_cache(song_paths=paths)
-            self._refresh_ui_from_thread(request_id)
+            for i in range(0, len(paths), warm_batch_size):
+                if self._should_stop(request_id):
+                    return
+                changed = hydrate_persistent_metadata_for_paths(
+                    paths[i : i + warm_batch_size],
+                    self._session,
+                    self._cfg,
+                )
+                if changed:
+                    self._refresh_ui_from_thread(request_id)
         except Exception as exc:
             self._last_error = f"Step 1 (warm) failed: {exc}"
 

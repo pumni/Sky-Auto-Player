@@ -1,11 +1,145 @@
 import csv
 import json
+from typing import Any
 import math
 from pathlib import Path
 import sys
 import time
 import random
 from sky_music.infrastructure.backend import BackendHealth
+
+class TelemetryRecord:
+    __slots__ = (
+        "_dict",
+        "song_name",
+        "event_index",
+        "kind",
+        "scheduled_us",
+        "actual_us",
+        "lateness_us",
+        "send_duration_us",
+        "scan_codes",
+        "reason",
+        "dispatch_id",
+        "dispatch_completed_us",
+        "sent_scan_codes",
+        "skipped_scan_codes",
+        "generation_ids",
+        "runtime_outcome",
+        "deferred_by_us",
+        "pre_send_spin_us",
+        "idle_gap_us",
+        "visible_lateness_us",
+        "applied_lead_us",
+    )
+
+    def __init__(
+        self,
+        song_name: str,
+        event_index: int,
+        kind: str,
+        scheduled_us: int,
+        actual_us: int,
+        lateness_us: int,
+        send_duration_us: int,
+        scan_codes: tuple[int, ...],
+        reason: str,
+        dispatch_id: int | None,
+        dispatch_completed_us: int | None,
+        sent_scan_codes: tuple[int, ...] | None,
+        skipped_scan_codes: tuple[int, ...],
+        generation_ids: tuple[int, ...],
+        runtime_outcome: str,
+        deferred_by_us: int,
+        pre_send_spin_us: int,
+        idle_gap_us: int,
+        visible_lateness_us: int | None,
+        applied_lead_us: int = 0,
+    ) -> None:
+        self._dict = None
+        self.song_name = song_name
+        self.event_index = event_index
+        self.kind = kind
+        self.scheduled_us = scheduled_us
+        self.actual_us = actual_us
+        self.lateness_us = lateness_us
+        self.send_duration_us = send_duration_us
+        self.scan_codes = scan_codes
+        self.reason = reason
+        self.dispatch_id = dispatch_id
+        self.dispatch_completed_us = dispatch_completed_us
+        self.sent_scan_codes = sent_scan_codes
+        self.skipped_scan_codes = skipped_scan_codes
+        self.generation_ids = generation_ids
+        self.runtime_outcome = runtime_outcome
+        self.deferred_by_us = deferred_by_us
+        self.pre_send_spin_us = pre_send_spin_us
+        self.idle_gap_us = idle_gap_us
+        self.visible_lateness_us = visible_lateness_us
+        self.applied_lead_us = applied_lead_us
+
+    def _materialize(self) -> dict:
+        if self._dict is None:
+            scan_codes_str = ";".join(str(sc) for sc in self.scan_codes)
+            sent_scan_codes = self.scan_codes if self.sent_scan_codes is None else self.sent_scan_codes
+            visible_lat = (
+                self.visible_lateness_us
+                if self.visible_lateness_us is not None
+                else (self.dispatch_completed_us - self.scheduled_us if self.dispatch_completed_us is not None else (self.actual_us + self.send_duration_us - self.scheduled_us))
+            )
+            self._dict = {
+                "song": self.song_name,
+                "event_index": self.event_index,
+                "dispatch_id": self.event_index if self.dispatch_id is None else self.dispatch_id,
+                "evidence_scope": "sendinput_side",
+                "kind": self.kind,
+                "scheduled_us": self.scheduled_us,
+                "actual_us": self.actual_us,
+                "dispatch_completed_us": (
+                    self.actual_us + self.send_duration_us
+                    if self.dispatch_completed_us is None
+                    else self.dispatch_completed_us
+                ),
+                "lateness_us": self.lateness_us,
+                "visible_lateness_us": visible_lat,
+                "send_duration_us": self.send_duration_us,
+                "scan_codes": scan_codes_str,
+                "sent_scan_codes": ";".join(str(sc) for sc in sent_scan_codes),
+                "skipped_scan_codes": ";".join(str(sc) for sc in self.skipped_scan_codes),
+                "generation_ids": ";".join(str(generation_id) for generation_id in self.generation_ids),
+                "runtime_outcome": self.runtime_outcome,
+                "deferred_by_us": self.deferred_by_us,
+                "pre_send_spin_us": self.pre_send_spin_us,
+                "idle_gap_us": self.idle_gap_us,
+                "reason": self.reason,
+                "applied_lead_us": self.applied_lead_us,
+            }
+        return self._dict
+
+    def __getitem__(self, key):
+        return self._materialize()[key]
+
+    def get(self, key, default=None):
+        return self._materialize().get(key, default)
+
+    def __contains__(self, key):
+        return key in self._materialize()
+
+    def __iter__(self):
+        return iter(self._materialize())
+
+    def __len__(self):
+        return len(self._materialize())
+
+    def keys(self):
+        return self._materialize().keys()
+
+    def values(self):
+        return self._materialize().values()
+
+    def items(self):
+        return self._materialize().items()
+
 
 class TelemetryLogger:
     """Records precise microsecond timing metrics into clean CSV and companion summary JSON files for calibration."""
@@ -52,18 +186,19 @@ class TelemetryLogger:
             logs_dir = Path("logs")
             logs_dir.mkdir(parents=True, exist_ok=True)
             self.log_filepath = logs_dir / f"playback_telemetry_{self.run_id}.csv"
-            
+
     def record(
         self,
-        event_index: int,
-        kind: str,
-        scheduled_us: int,
-        actual_us: int,
-        lateness_us: int,
-        send_duration_us: int,
-        scan_codes: tuple[int, ...],
-        reason: str,
+        event_index: int | None = None,
+        kind: str | None = None,
+        scheduled_us: int | None = None,
+        actual_us: int | None = None,
+        lateness_us: int | None = None,
+        send_duration_us: int | None = None,
+        scan_codes: tuple[int, ...] | None = None,
+        reason: str | None = None,
         *,
+        result: Any = None,
         dispatch_id: int | None = None,
         dispatch_completed_us: int | None = None,
         sent_scan_codes: tuple[int, ...] | None = None,
@@ -74,43 +209,59 @@ class TelemetryLogger:
         pre_send_spin_us: int = 0,
         idle_gap_us: int = 0,
         visible_lateness_us: int | None = None,
+        applied_lead_us: int = 0,
     ) -> None:
         if not self.enabled:
             return
-            
-        scan_codes_str = ";".join(str(sc) for sc in scan_codes)
-        sent_scan_codes = scan_codes if sent_scan_codes is None else sent_scan_codes
-        visible_lat = (
-            visible_lateness_us
-            if visible_lateness_us is not None
-            else (dispatch_completed_us - scheduled_us if dispatch_completed_us is not None else (actual_us + send_duration_us - scheduled_us))
+
+        if result is not None:
+            event_index = result.event_index
+            scheduled_us = result.scheduled_us
+            actual_us = result.actual_us
+            lateness_us = result.lateness_us
+            send_duration_us = result.send_duration_us
+            dispatch_completed_us = result.dispatch_completed_us
+            sent_scan_codes = result.sent_scan_codes
+            skipped_scan_codes = result.skipped_scan_codes
+            runtime_outcome = result.runtime_outcome
+            deferred_by_us = getattr(result, "deferred_by_us", 0)
+            visible_lateness_us = result.visible_lateness_us
+            applied_lead_us = result.applied_lead_us
+
+        assert event_index is not None
+        assert kind is not None
+        assert scheduled_us is not None
+        assert actual_us is not None
+        assert lateness_us is not None
+        assert send_duration_us is not None
+        assert scan_codes is not None
+        assert reason is not None
+
+        self.records.append(
+            TelemetryRecord(
+                self.song_name,
+                event_index,
+                kind,
+                scheduled_us,
+                actual_us,
+                lateness_us,
+                send_duration_us,
+                scan_codes,
+                reason,
+                dispatch_id,
+                dispatch_completed_us,
+                sent_scan_codes,
+                skipped_scan_codes,
+                generation_ids,
+                runtime_outcome,
+                deferred_by_us,
+                pre_send_spin_us,
+                idle_gap_us,
+                visible_lateness_us,
+                applied_lead_us,
+            )
         )
-        self.records.append({
-            "song": self.song_name,
-            "event_index": event_index,
-            "dispatch_id": event_index if dispatch_id is None else dispatch_id,
-            "evidence_scope": "sendinput_side",
-            "kind": kind,
-            "scheduled_us": scheduled_us,
-            "actual_us": actual_us,
-            "dispatch_completed_us": (
-                actual_us + send_duration_us
-                if dispatch_completed_us is None
-                else dispatch_completed_us
-            ),
-            "lateness_us": lateness_us,
-            "visible_lateness_us": visible_lat,
-            "send_duration_us": send_duration_us,
-            "scan_codes": scan_codes_str,
-            "sent_scan_codes": ";".join(str(sc) for sc in sent_scan_codes),
-            "skipped_scan_codes": ";".join(str(sc) for sc in skipped_scan_codes),
-            "generation_ids": ";".join(str(generation_id) for generation_id in generation_ids),
-            "runtime_outcome": runtime_outcome,
-            "deferred_by_us": deferred_by_us,
-            "pre_send_spin_us": pre_send_spin_us,
-            "idle_gap_us": idle_gap_us,
-            "reason": reason,
-        })
+
         
     def record_backend_health(self, health: BackendHealth) -> None:
         """Stores the backend health state at the end of playback."""
@@ -541,6 +692,7 @@ class TelemetryLogger:
                 "pre_send_spin_us",
                 "idle_gap_us",
                 "reason",
+                "applied_lead_us",
             ]
             with self.log_filepath.open("w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fields)
@@ -579,9 +731,9 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
         print(f"No valid telemetry summary files (.summary.json) found at {target_path}")
         return
         
-    print(f"\n==================================================")
+    print("\n==================================================")
     print(f" AGGREGATE TELEMETRY TIMING REPORT ({len(summary_files)} run(s))")
-    print(f"==================================================")
+    print("==================================================")
     
     for f in summary_files:
         try:
@@ -599,7 +751,7 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             )
             
             lat = data.get("lateness_us", {})
-            print(f"  Loop Lateness:")
+            print("  Loop Lateness:")
             print(f"    * Average: {lat.get('avg_us', 0.0):.1f} us ({lat.get('avg_us', 0.0)/1000:.3f} ms)")
             print(f"    * Median (p50): {lat.get('p50_us', 0.0):.1f} us")
             print(f"    * 95th Percentile (p95): {lat.get('p95_us', 0.0):.1f} us")
@@ -608,7 +760,7 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             print(f"    * Lateness Counts: >2ms={lat.get('over_2ms', 0)}, >5ms={lat.get('over_5ms', 0)}, >10ms={lat.get('over_10ms', 0)}")
             
             dur = data.get("send_duration_us", {})
-            print(f"  SendInput Execution Duration:")
+            print("  SendInput Execution Duration:")
             print(f"    * Average: {dur.get('avg_us', 0.0):.1f} us")
             print(f"    * p95: {dur.get('p95_us', 0.0):.1f} us")
             print(f"    * p99: {dur.get('p99_us', 0.0):.1f} us")
@@ -629,7 +781,7 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             
             hold = data.get("note_hold_duration_us", {})
             if hold:
-                print(f"  Note Hold Durations:")
+                print("  Note Hold Durations:")
                 print(f"    * Average: {hold.get('avg_us', 0.0):.1f} us ({hold.get('avg_us', 0.0)/1000:.1f} ms)")
                 print(f"    * p50: {hold.get('p50_us', 0.0):.1f} us")
                 
@@ -643,7 +795,7 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 inp = calibration_input_from_summary(data)
                 rec = calibrate_profile(inp)
                 
-                print(f"\n  Calibration Recommendation:")
+                print("\n  Calibration Recommendation:")
                 print(f"    * Suggested Profile : {rec.profile_name}")
                 print(f"    * Suggested Tempo   : {rec.tempo_scale:.2f}x")
                 print(f"    * Hold Duration (us): {rec.hold_us} ({rec.hold_us/1000:.1f} ms)")
@@ -652,4 +804,4 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
         except Exception as e:
             print(f"  [error] Failed to read summary file {f.name}: {e}")
             
-    print(f"\n==================================================")
+    print("\n==================================================")

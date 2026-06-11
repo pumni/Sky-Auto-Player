@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from typing import Any
 from sky_music.config import AppConfig
@@ -48,16 +47,17 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     
     stages_called = []
     
-    def mock_warm(song_paths):
+    def mock_warm(song_paths, sess, c):
         stages_called.append("warm")
         # cancel right inside the first stage
         coord.cancel()
+        return 1
         
     def mock_hydrate(paths, sess, c):
         stages_called.append("hydrate")
         
     import sky_music.ui.textual_app.workers as workers_module
-    monkeypatch.setattr(workers_module, "warm_persistent_metadata_cache", mock_warm)
+    monkeypatch.setattr(workers_module, "hydrate_persistent_metadata_for_paths", mock_warm)
     monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
     
     coord.refresh([Path("some/song.json")])
@@ -80,17 +80,18 @@ def test_metadata_coordinator_debounce_request_id(monkeypatch) -> None:
     
     stages_called = []
     
-    def mock_warm(song_paths):
+    def mock_warm(song_paths, sess, c):
         stages_called.append("warm")
         # Trigger another refresh to increment request_id ONLY for the first request
         if len(stages_called) == 1:
             coord.refresh([Path("new/path.json")])
+        return 1
         
     def mock_hydrate(paths, sess, c):
         stages_called.append("hydrate")
         
     import sky_music.ui.textual_app.workers as workers_module
-    monkeypatch.setattr(workers_module, "warm_persistent_metadata_cache", mock_warm)
+    monkeypatch.setattr(workers_module, "hydrate_persistent_metadata_for_paths", mock_warm)
     monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
     
     coord.refresh([Path("first/path.json")])
