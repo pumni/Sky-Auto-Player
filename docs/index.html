@@ -1,28 +1,32 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- Basic metadata -->
+    <!--
+      Sky Player landing page
+    -->
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Sky Player - PC Music Sheet Player for Sky: Children of the Light</title>
+    <title>
+      Sky Player - Automatic PC Music Sheet Player for Sky: Children of the
+      Light
+    </title>
     <meta
       name="description"
-      content="Sky Player is an automatic PC music sheet player for Sky: Children of the Light on Windows PC. Download the open-source Sky COTL player for JSON, skysheet, and TXT music sheets."
+      content="Sky Player is an open-source automatic PC music sheet player for Sky: Children of the Light on Windows. Download the latest release and play JSON, skysheet, and TXT Sky Music sheets."
     />
-    <meta name="author" content="pumzu" />
-    <meta name="robots" content="index, follow, max-image-preview:large" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="author" content="pumni" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#07111f" />
     <meta name="color-scheme" content="dark" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
-    <!-- Canonical URL for GitHub Pages -->
-    <link rel="canonical" href="https://pumzu.github.io/Sky-Player/" />
+    <link rel="canonical" href="https://pumni.github.io/Sky-Player/" />
+    <link rel="author" href="https://github.com/pumni" />
 
-    <!-- Favicon: inline SVG, no extra asset required -->
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Cpath d='M39 12v27.5a9 9 0 1 1-4-7.49V19h16v-7H39z' fill='url(%23g)'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='8' y1='8' x2='56' y2='56' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Cpath d='M40 12v27.4a8.9 8.9 0 1 1-4.2-7.6V18h16v-6H40Z' fill='url(%23a)'/%3E%3C/svg%3E"
     />
 
     <!-- Open Graph -->
@@ -30,70 +34,131 @@
     <meta property="og:site_name" content="Sky Player" />
     <meta
       property="og:title"
-      content="Sky Player - PC Music Sheet Player for Sky: Children of the Light"
+      content="Sky Player - Automatic PC Music Sheet Player for Sky: Children of the Light"
     />
     <meta
       property="og:description"
-      content="Download an open-source automatic PC music sheet player for Sky: Children of the Light. Supports JSON, skysheet, and TXT song files."
+      content="Download Sky Player, an open-source PC music sheet player for Sky: Children of the Light with JSON, skysheet, and TXT support."
     />
-    <meta property="og:url" content="https://pumzu.github.io/Sky-Player/" />
+    <meta property="og:url" content="https://pumni.github.io/Sky-Player/" />
 
     <!-- Twitter/X card -->
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="Sky Player - PC Music Sheet Player" />
     <meta
       name="twitter:description"
-      content="Automatic PC music sheet player for Sky: Children of the Light with JSON, skysheet, and TXT support."
+      content="Open-source automatic PC music sheet player for Sky: Children of the Light. Supports JSON, skysheet, and TXT song files."
     />
 
-    <!-- Structured data for search engines -->
+    <!-- Structured data -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Sky Player",
-        "alternateName": "Sky COTL PC Music Player",
-        "applicationCategory": "MultimediaApplication",
-        "operatingSystem": "Windows, PC",
-        "description": "Sky Player is an automatic PC music sheet player for Sky: Children of the Light. It supports JSON, skysheet, and JSON-compatible TXT song files.",
-        "url": "https://pumzu.github.io/Sky-Player/",
-        "downloadUrl": "https://github.com/pumzu/Sky-Player/releases/latest",
-        "codeRepository": "https://github.com/pumzu/Sky-Player",
-        "isAccessibleForFree": true,
-        "license": "https://github.com/pumzu/Sky-Player",
-        "creator": {
-          "@type": "Person",
-          "name": "pumzu",
-          "url": "https://github.com/pumzu"
-        }
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://pumni.github.io/Sky-Player/#website",
+            "name": "Sky Player",
+            "alternateName": ["Sky-Player", "Sky COTL PC Music Player"],
+            "url": "https://pumni.github.io/Sky-Player/",
+            "publisher": {
+              "@id": "https://github.com/pumni#person"
+            }
+          },
+          {
+            "@type": "Person",
+            "@id": "https://github.com/pumni#person",
+            "name": "pumni",
+            "url": "https://github.com/pumni",
+            "sameAs": ["https://github.com/pumni"]
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://pumni.github.io/Sky-Player/#software",
+            "name": "Sky Player",
+            "license": "https://github.com/pumni/Sky-Player/LICENSE",
+            "alternateName": ["Sky-Player", "Sky COTL PC Music Player"],
+            "applicationCategory": "MultimediaApplication",
+            "operatingSystem": "Windows",
+            "isAccessibleForFree": true,
+            "description": "Sky Player is an open-source automatic PC music sheet player for Sky: Children of the Light. It supports JSON, skysheet, and JSON-compatible TXT song files.",
+            "url": "https://pumni.github.io/Sky-Player/",
+            "downloadUrl": "https://github.com/pumni/Sky-Player/releases/latest",
+            "codeRepository": "https://github.com/pumni/Sky-Player",
+            "creator": {
+              "@id": "https://github.com/pumni#person"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://pumni.github.io/Sky-Player/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "Is Sky Player free?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Sky Player is available from its public GitHub repository, and the latest packaged release can be downloaded from GitHub Releases."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What file formats does Sky Player support?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Sky Player supports JSON, skysheet, and JSON-compatible TXT music sheet files."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Where is the Sky Player source code?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The source code is hosted in the Sky Player GitHub repository at https://github.com/pumni/Sky-Player."
+                }
+              }
+            ]
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://pumni.github.io/Sky-Player/#breadcrumb",
+            "itemListElement": [
+              {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "Sky Player",
+                "item": "https://pumni.github.io/Sky-Player/"
+              }
+            ]
+          }
+        ]
       }
     </script>
 
     <style>
       :root {
         --bg: #020617;
-        --bg-soft: #0f172a;
-        --surface: rgba(15, 23, 42, 0.72);
-        --surface-strong: rgba(15, 23, 42, 0.9);
-        --surface-soft: rgba(255, 255, 255, 0.055);
-        --border: rgba(148, 163, 184, 0.22);
-        --border-strong: rgba(255, 255, 255, 0.18);
+        --bg-2: #07111f;
+        --panel: rgba(15, 23, 42, 0.72);
+        --panel-strong: rgba(15, 23, 42, 0.92);
+        --panel-soft: rgba(255, 255, 255, 0.06);
+        --line: rgba(148, 163, 184, 0.22);
+        --line-strong: rgba(255, 255, 255, 0.18);
         --text: #f8fafc;
         --muted: #cbd5e1;
-        --muted-soft: #94a3b8;
+        --muted-2: #94a3b8;
         --primary: #7dd3fc;
         --primary-strong: #38bdf8;
         --secondary: #c084fc;
-        --accent: #facc15;
-        --success: #86efac;
-        --warning: #fde68a;
+        --yellow: #facc15;
+        --green: #86efac;
         --focus: #fef08a;
-        --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+        --shadow: 0 26px 90px rgba(0, 0, 0, 0.46);
         --radius-xl: 34px;
         --radius-lg: 28px;
-        --radius-md: 18px;
+        --radius-md: 20px;
         --radius-sm: 14px;
-        --max-width: 1120px;
+        --max: 1120px;
       }
 
       *,
@@ -111,12 +176,25 @@
         margin: 0;
         color: var(--text);
         font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", sans-serif;
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
         background:
-          radial-gradient(circle at top left, rgba(125, 211, 252, 0.24), transparent 34rem),
-          radial-gradient(circle at top right, rgba(192, 132, 252, 0.2), transparent 34rem),
-          linear-gradient(180deg, var(--bg) 0%, var(--bg-soft) 52%, var(--bg) 100%);
+          radial-gradient(
+            circle at 8% 0%,
+            rgba(125, 211, 252, 0.24),
+            transparent 34rem
+          ),
+          radial-gradient(
+            circle at 92% 4%,
+            rgba(192, 132, 252, 0.2),
+            transparent 34rem
+          ),
+          linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 52%, var(--bg) 100%);
         text-rendering: optimizeLegibility;
         -webkit-font-smoothing: antialiased;
       }
@@ -128,7 +206,11 @@
         content: "";
         background-image:
           linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+          linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.035) 1px,
+            transparent 1px
+          );
         background-size: 48px 48px;
         mask-image: linear-gradient(to bottom, black, transparent 78%);
       }
@@ -138,13 +220,10 @@
         text-decoration: none;
       }
 
-      a:focus-visible {
+      a:focus-visible,
+      button:focus-visible {
         outline: 3px solid var(--focus);
         outline-offset: 4px;
-      }
-
-      strong {
-        color: var(--text);
       }
 
       h1,
@@ -158,15 +237,19 @@
         margin-bottom: 0;
       }
 
+      strong {
+        color: var(--text);
+      }
+
       .skip-link {
         position: absolute;
         top: 12px;
         left: 12px;
-        z-index: 10;
+        z-index: 20;
         padding: 10px 14px;
         border-radius: 999px;
         color: #031018;
-        font-weight: 800;
+        font-weight: 900;
         background: var(--focus);
         transform: translateY(-160%);
         transition: transform 160ms ease;
@@ -179,12 +262,13 @@
       .page {
         position: relative;
         z-index: 1;
-        width: min(100% - 32px, var(--max-width));
+        width: min(100% - 32px, var(--max));
         margin: 0 auto;
       }
 
-      .nav {
+      .site-header {
         display: flex;
+        gap: 20px;
         align-items: center;
         justify-content: space-between;
         padding: 28px 0;
@@ -194,25 +278,30 @@
         display: inline-flex;
         gap: 12px;
         align-items: center;
-        font-weight: 900;
+        min-height: 44px;
+        font-size: 17px;
+        font-weight: 950;
         letter-spacing: -0.04em;
       }
 
-      .brand-icon {
+      .brand-mark {
         display: grid;
-        width: 42px;
-        height: 42px;
+        width: 44px;
+        height: 44px;
         place-items: center;
         border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 14px;
-        background:
-          linear-gradient(135deg, rgba(125, 211, 252, 0.95), rgba(192, 132, 252, 0.9));
-        box-shadow: 0 12px 36px rgba(56, 189, 248, 0.25);
+        border-radius: 15px;
+        background: linear-gradient(
+          135deg,
+          rgba(125, 211, 252, 0.95),
+          rgba(192, 132, 252, 0.92)
+        );
+        box-shadow: 0 14px 40px rgba(56, 189, 248, 0.24);
       }
 
-      .nav-actions {
+      .nav-links {
         display: flex;
-        gap: 12px;
+        gap: 10px;
         align-items: center;
       }
 
@@ -221,32 +310,39 @@
         align-items: center;
         justify-content: center;
         min-height: 44px;
-        padding: 0 18px;
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 0 16px;
+        border: 1px solid rgba(255, 255, 255, 0.13);
         border-radius: 999px;
         color: var(--muted);
         font-size: 14px;
-        font-weight: 800;
+        font-weight: 850;
         background: rgba(15, 23, 42, 0.56);
         backdrop-filter: blur(18px);
         transition:
           transform 180ms ease,
           border-color 180ms ease,
-          background 180ms ease;
+          background 180ms ease,
+          color 180ms ease;
       }
 
       .nav-link:hover {
-        border-color: rgba(125, 211, 252, 0.5);
+        border-color: rgba(125, 211, 252, 0.52);
+        color: var(--text);
         background: rgba(15, 23, 42, 0.88);
         transform: translateY(-2px);
       }
 
+      .nav-link.github {
+        border-color: rgba(125, 211, 252, 0.26);
+        color: #dff7ff;
+      }
+
       .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+        grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
         gap: 48px;
         align-items: center;
-        padding: 76px 0 52px;
+        padding: 74px 0 56px;
       }
 
       .eyebrow {
@@ -260,7 +356,7 @@
         border-radius: 999px;
         color: #bae6fd;
         font-size: 14px;
-        font-weight: 800;
+        font-weight: 900;
         background: rgba(14, 165, 233, 0.12);
       }
 
@@ -268,27 +364,32 @@
         width: 8px;
         height: 8px;
         border-radius: 999px;
-        background: var(--accent);
-        box-shadow: 0 0 24px rgba(250, 204, 21, 0.8);
+        background: var(--yellow);
+        box-shadow: 0 0 24px rgba(250, 204, 21, 0.86);
       }
 
       h1 {
-        max-width: 780px;
+        max-width: 820px;
         margin-bottom: 0;
-        font-size: clamp(46px, 8vw, 92px);
-        line-height: 0.95;
+        font-size: clamp(44px, 7.6vw, 88px);
+        line-height: 0.96;
         letter-spacing: -0.075em;
       }
 
       .gradient-text {
         color: transparent;
-        background: linear-gradient(135deg, #f8fafc 0%, var(--primary) 45%, var(--secondary) 100%);
+        background: linear-gradient(
+          135deg,
+          #f8fafc 0%,
+          var(--primary) 45%,
+          var(--secondary) 100%
+        );
         background-clip: text;
         -webkit-background-clip: text;
       }
 
-      .hero-text {
-        max-width: 700px;
+      .hero-copy {
+        max-width: 710px;
         margin: 26px 0 0;
         color: var(--muted);
         font-size: clamp(18px, 2vw, 21px);
@@ -304,12 +405,14 @@
 
       .button {
         display: inline-flex;
+        gap: 10px;
         align-items: center;
         justify-content: center;
         min-height: 52px;
         padding: 0 22px;
         border-radius: 999px;
-        font-weight: 900;
+        font-weight: 950;
+        letter-spacing: -0.01em;
         transition:
           transform 180ms ease,
           box-shadow 180ms ease,
@@ -338,33 +441,33 @@
       }
 
       .button-secondary:hover {
-        border-color: rgba(255, 255, 255, 0.28);
-        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.11);
       }
 
       .hero-note {
         display: flex;
         gap: 10px;
         align-items: flex-start;
-        max-width: 660px;
+        max-width: 680px;
         margin-top: 20px;
-        color: var(--muted-soft);
+        color: var(--muted-2);
         font-size: 14px;
-        line-height: 1.6;
+        line-height: 1.65;
       }
 
       .hero-note span {
-        color: var(--success);
+        color: var(--green);
       }
 
       .preview-card {
         position: relative;
         overflow: hidden;
-        border: 1px solid var(--border);
+        border: 1px solid var(--line);
         border-radius: var(--radius-lg);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent),
-          var(--surface);
+          var(--panel);
         box-shadow: var(--shadow);
         backdrop-filter: blur(26px);
       }
@@ -375,12 +478,24 @@
         pointer-events: none;
         content: "";
         background:
-          radial-gradient(circle at 30% 0%, rgba(125, 211, 252, 0.24), transparent 32%),
-          radial-gradient(circle at 90% 10%, rgba(192, 132, 252, 0.22), transparent 30%);
+          radial-gradient(
+            circle at 30% 0%,
+            rgba(125, 211, 252, 0.24),
+            transparent 32%
+          ),
+          radial-gradient(
+            circle at 90% 10%,
+            rgba(192, 132, 252, 0.22),
+            transparent 30%
+          );
+      }
+
+      .window-bar,
+      .player-preview {
+        position: relative;
       }
 
       .window-bar {
-        position: relative;
         display: flex;
         gap: 8px;
         align-items: center;
@@ -397,13 +512,12 @@
 
       .window-title {
         margin-left: 8px;
-        color: var(--muted-soft);
+        color: var(--muted-2);
         font-size: 13px;
-        font-weight: 800;
+        font-weight: 850;
       }
 
-      .player {
-        position: relative;
+      .player-preview {
         padding: 28px;
       }
 
@@ -416,7 +530,7 @@
 
       .song-subtitle {
         margin: 0 0 24px;
-        color: var(--muted-soft);
+        color: var(--muted-2);
       }
 
       .notes {
@@ -430,13 +544,20 @@
         aspect-ratio: 1;
         border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 18px;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.18),
+          rgba(255, 255, 255, 0.04)
+        );
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
       }
 
       .note.active {
-        background: linear-gradient(135deg, rgba(125, 211, 252, 0.95), rgba(192, 132, 252, 0.95));
+        background: linear-gradient(
+          135deg,
+          rgba(125, 211, 252, 0.95),
+          rgba(192, 132, 252, 0.95)
+        );
         box-shadow:
           0 0 28px rgba(125, 211, 252, 0.44),
           inset 0 1px 0 rgba(255, 255, 255, 0.4);
@@ -476,7 +597,7 @@
       }
 
       .stat span {
-        color: var(--muted-soft);
+        color: var(--muted-2);
         font-size: 13px;
       }
 
@@ -487,12 +608,22 @@
         padding: 0 0 88px;
       }
 
+      .trust-item,
+      .card,
+      .format-card,
+      .step,
+      .faq-item,
+      .source-panel,
+      .callout {
+        border: 1px solid var(--line);
+        background: rgba(15, 23, 42, 0.56);
+        backdrop-filter: blur(18px);
+      }
+
       .trust-item {
         padding: 16px;
-        border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         color: var(--muted);
-        background: rgba(15, 23, 42, 0.48);
       }
 
       .trust-item strong {
@@ -502,7 +633,7 @@
       }
 
       .trust-item span {
-        color: var(--muted-soft);
+        color: var(--muted-2);
         font-size: 13px;
       }
 
@@ -511,7 +642,7 @@
       }
 
       .section-header {
-        max-width: 760px;
+        max-width: 780px;
         margin-bottom: 26px;
       }
 
@@ -520,7 +651,7 @@
         margin-bottom: 12px;
         color: var(--primary);
         font-size: 13px;
-        font-weight: 900;
+        font-weight: 950;
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
@@ -528,7 +659,7 @@
       .section-title {
         margin-bottom: 0;
         font-size: clamp(30px, 5vw, 48px);
-        line-height: 1.03;
+        line-height: 1.04;
         letter-spacing: -0.055em;
       }
 
@@ -547,10 +678,7 @@
 
       .card {
         padding: 24px;
-        border: 1px solid var(--border);
         border-radius: var(--radius-md);
-        background: rgba(15, 23, 42, 0.58);
-        backdrop-filter: blur(18px);
       }
 
       .card-icon {
@@ -563,15 +691,35 @@
         background: rgba(125, 211, 252, 0.12);
       }
 
-      .card h3 {
+      .card h3,
+      .format-card h3,
+      .faq-item h3,
+      .step h3 {
         margin-bottom: 10px;
-        font-size: 18px;
         letter-spacing: -0.03em;
       }
 
-      .card p {
+      .card h3,
+      .faq-item h3,
+      .step h3 {
+        font-size: 18px;
+      }
+
+      .card p,
+      .format-card p,
+      .faq-item p,
+      .step p,
+      .source-panel p,
+      .callout p {
         color: var(--muted);
-        line-height: 1.7;
+        line-height: 1.72;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: 0.95fr 1.05fr;
+        gap: 22px;
+        align-items: start;
       }
 
       .steps {
@@ -586,9 +734,7 @@
         gap: 16px;
         align-items: start;
         padding: 18px;
-        border: 1px solid var(--border);
         border-radius: var(--radius-md);
-        background: rgba(15, 23, 42, 0.55);
       }
 
       .step::before {
@@ -604,16 +750,6 @@
         background: linear-gradient(135deg, var(--primary), var(--secondary));
       }
 
-      .step h3 {
-        margin-bottom: 6px;
-        font-size: 17px;
-      }
-
-      .step p {
-        color: var(--muted);
-        line-height: 1.7;
-      }
-
       .format-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -622,7 +758,6 @@
 
       .format-card {
         padding: 24px;
-        border: 1px solid var(--border);
         border-radius: var(--radius-md);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent),
@@ -641,36 +776,42 @@
       }
 
       .format-card h3 {
-        margin-bottom: 8px;
         font-size: 22px;
-        letter-spacing: -0.04em;
       }
 
-      .format-card p {
-        color: var(--muted);
-        line-height: 1.7;
-      }
-
-      .split {
+      .source-panel {
         display: grid;
-        grid-template-columns: 0.95fr 1.05fr;
-        gap: 22px;
-        align-items: start;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 20px;
+        align-items: center;
+        padding: 28px;
+        border-radius: var(--radius-lg);
+        background:
+          radial-gradient(
+            circle at 0% 0%,
+            rgba(125, 211, 252, 0.16),
+            transparent 34%
+          ),
+          rgba(15, 23, 42, 0.7);
+      }
+
+      .source-panel h2 {
+        margin-bottom: 10px;
+        font-size: clamp(26px, 4vw, 40px);
+        letter-spacing: -0.05em;
       }
 
       .callout {
         padding: 26px;
-        border: 1px solid rgba(250, 204, 21, 0.26);
+        border-color: rgba(250, 204, 21, 0.28);
         border-radius: var(--radius-md);
-        color: var(--muted);
         background: rgba(250, 204, 21, 0.08);
-        line-height: 1.75;
       }
 
       .callout strong {
         display: block;
         margin-bottom: 8px;
-        color: var(--warning);
+        color: #fde68a;
         font-size: 18px;
       }
 
@@ -681,64 +822,71 @@
 
       .faq-item {
         padding: 20px;
-        border: 1px solid var(--border);
         border-radius: var(--radius-md);
-        background: rgba(15, 23, 42, 0.52);
-      }
-
-      .faq-item h3 {
-        margin-bottom: 8px;
-        font-size: 17px;
-      }
-
-      .faq-item p {
-        color: var(--muted);
-        line-height: 1.7;
       }
 
       .final-cta {
-        overflow: hidden;
         position: relative;
+        overflow: hidden;
         padding: 34px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--line);
         border-radius: var(--radius-xl);
         background:
-          radial-gradient(circle at 20% 0%, rgba(125, 211, 252, 0.2), transparent 36%),
-          radial-gradient(circle at 90% 20%, rgba(192, 132, 252, 0.18), transparent 34%),
-          var(--surface-strong);
+          radial-gradient(
+            circle at 20% 0%,
+            rgba(125, 211, 252, 0.2),
+            transparent 36%
+          ),
+          radial-gradient(
+            circle at 90% 20%,
+            rgba(192, 132, 252, 0.18),
+            transparent 34%
+          ),
+          var(--panel-strong);
         box-shadow: var(--shadow);
       }
 
       .final-cta h2 {
-        max-width: 760px;
+        max-width: 780px;
         margin-bottom: 12px;
         font-size: clamp(30px, 5vw, 52px);
-        line-height: 1.03;
+        line-height: 1.04;
         letter-spacing: -0.055em;
       }
 
       .final-cta p {
-        max-width: 740px;
+        max-width: 760px;
         color: var(--muted);
         font-size: 18px;
         line-height: 1.75;
       }
 
       .footer {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
         padding: 34px 0 46px;
         border-top: 1px solid rgba(255, 255, 255, 0.1);
-        color: var(--muted-soft);
-        text-align: center;
+        color: var(--muted-2);
+        font-size: 14px;
+      }
+
+      .footer-links {
+        display: flex;
+        gap: 14px;
+        align-items: center;
       }
 
       .footer a {
         color: var(--primary);
-        font-weight: 800;
+        font-weight: 850;
       }
 
       @media (max-width: 940px) {
         .hero,
-        .split {
+        .split,
+        .source-panel {
           grid-template-columns: 1fr;
         }
 
@@ -751,27 +899,30 @@
         .format-grid {
           grid-template-columns: 1fr 1fr;
         }
+
+        .source-panel .actions {
+          margin-top: 0;
+        }
       }
 
-      @media (max-width: 640px) {
+      @media (max-width: 680px) {
         .page {
-          width: min(100% - 24px, var(--max-width));
+          width: min(100% - 24px, var(--max));
         }
 
-        .nav {
-          gap: 18px;
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .nav-actions {
-          width: 100%;
-          flex-direction: column;
+        .site-header {
           align-items: stretch;
+          flex-direction: column;
         }
 
-        .nav-link {
+        .nav-links {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
           width: 100%;
+        }
+
+        .nav-link.github {
+          grid-column: 1 / -1;
         }
 
         .hero {
@@ -793,7 +944,7 @@
           grid-template-columns: 1fr;
         }
 
-        .player {
+        .player-preview {
           padding: 22px;
         }
 
@@ -813,12 +964,14 @@
           grid-template-columns: 1fr;
         }
 
-        .section {
+        .section,
+        .trust {
           padding-bottom: 68px;
         }
 
-        .trust {
-          padding-bottom: 68px;
+        .footer {
+          align-items: flex-start;
+          flex-direction: column;
         }
       }
 
@@ -839,22 +992,23 @@
     <a class="skip-link" href="#main">Skip to content</a>
 
     <div class="page">
-      <header class="nav" aria-label="Main navigation">
+      <header class="site-header" aria-label="Site header">
         <a class="brand" href="./" aria-label="Sky Player home">
-          <span class="brand-icon" aria-hidden="true">♪</span>
+          <span class="brand-mark" aria-hidden="true">♪</span>
           <span>Sky Player</span>
         </a>
 
-        <nav class="nav-actions" aria-label="Primary navigation">
+        <nav class="nav-links" aria-label="Primary navigation">
           <a class="nav-link" href="#features">Features</a>
           <a class="nav-link" href="#quick-start">Quick start</a>
+          <a class="nav-link" href="#formats">Formats</a>
           <a
-            class="nav-link"
-            href="https://github.com/pumzu/Sky-Player"
+            class="nav-link github"
+            href="https://github.com/pumni/Sky-Player"
             target="_blank"
             rel="noopener noreferrer"
           >
-            GitHub
+            GitHub repository
           </a>
         </nav>
       </header>
@@ -864,25 +1018,25 @@
           <div>
             <div class="eyebrow">
               <span class="eyebrow-dot" aria-hidden="true"></span>
-              Open-source Sky COTL music tool for PC
+              Open-source Sky COTL music tool for Windows PC
             </div>
 
             <h1 id="hero-title">
-              Play Sky music sheets
-              <span class="gradient-text">beautifully.</span>
+              Play Sky music sheets on PC
+              <span class="gradient-text">with Sky Player.</span>
             </h1>
 
-            <p class="hero-text">
+            <p class="hero-copy">
               Sky Player is an automatic PC music sheet player for
               <strong>Sky: Children of the Light</strong>. Load JSON, skysheet,
-              and TXT song files, then play Sky Music notes with a clean desktop-friendly
-              workflow.
+              or TXT song files, then use a focused desktop workflow for Sky
+              Music playback.
             </p>
 
-            <div class="actions" aria-label="Project links">
+            <div class="actions" aria-label="Project actions">
               <a
                 class="button button-primary"
-                href="https://github.com/pumzu/Sky-Player/releases/latest"
+                href="https://github.com/pumni/Sky-Player/releases/latest"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -891,18 +1045,19 @@
 
               <a
                 class="button button-secondary"
-                href="https://github.com/pumzu/Sky-Player"
+                href="https://github.com/pumni/Sky-Player"
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                View source on GitHub
+                View source code on GitHub
               </a>
             </div>
 
             <p class="hero-note">
               <span aria-hidden="true">●</span>
-              Built for Windows PC players who want quick access to Sky Music sheets,
-              automatic playback, and a focused desktop experience.
+              The GitHub repository link is intentionally visible as a normal UI
+              button, so users and search engines can clearly connect this
+              landing page to the source project.
             </p>
           </div>
 
@@ -914,7 +1069,7 @@
               <span class="window-title">Sky Player Preview</span>
             </div>
 
-            <div class="player">
+            <div class="player-preview">
               <p class="song-title">Sample Sky Song</p>
               <p class="song-subtitle">JSON · skysheet · TXT compatible</p>
 
@@ -924,13 +1079,11 @@
                 <span class="note"></span>
                 <span class="note active"></span>
                 <span class="note"></span>
-
                 <span class="note"></span>
                 <span class="note active"></span>
                 <span class="note"></span>
                 <span class="note"></span>
                 <span class="note active"></span>
-
                 <span class="note"></span>
                 <span class="note"></span>
                 <span class="note active"></span>
@@ -945,15 +1098,15 @@
               <div class="stats" aria-label="Sky Player highlights">
                 <div class="stat">
                   <strong>3</strong>
-                  <span>Formats</span>
+                  <span>File formats</span>
                 </div>
                 <div class="stat">
                   <strong>PC</strong>
-                  <span>Optimized</span>
+                  <span>Windows flow</span>
                 </div>
                 <div class="stat">
-                  <strong>Auto</strong>
-                  <span>Playback</span>
+                  <strong>Open</strong>
+                  <span>GitHub source</span>
                 </div>
               </div>
             </div>
@@ -986,8 +1139,9 @@
               A focused player for Sky music sheets.
             </h2>
             <p class="section-text">
-              Sky Player keeps the experience simple: choose a supported song file,
-              start playback, and let the app handle the PC music input flow.
+              Sky Player keeps the experience simple: choose a supported song
+              file, prepare playback, and use a PC-friendly interface for Sky
+              Music sessions.
             </p>
           </div>
 
@@ -996,8 +1150,8 @@
               <div class="card-icon" aria-hidden="true">⚡</div>
               <h3>Automatic playback</h3>
               <p>
-                Play supported Sky Music sheets automatically with a clean workflow
-                for desktop music sessions.
+                Use supported Sky Music sheets with an automated playback
+                workflow designed for desktop sessions.
               </p>
             </article>
 
@@ -1005,8 +1159,8 @@
               <div class="card-icon" aria-hidden="true">🗂️</div>
               <h3>Multiple file formats</h3>
               <p>
-                Load JSON, skysheet, and JSON-compatible TXT song files without
-                needing a complicated conversion step.
+                Load JSON, skysheet, and JSON-compatible TXT files without a
+                complicated conversion step.
               </p>
             </article>
 
@@ -1014,14 +1168,18 @@
               <div class="card-icon" aria-hidden="true">🖥️</div>
               <h3>Made for PC</h3>
               <p>
-                Designed for Windows PC usage with a simple interface and fast
-                access to your songs.
+                Built around Windows PC usage with a clean, direct release flow
+                through GitHub.
               </p>
             </article>
           </div>
         </section>
 
-        <section id="quick-start" class="section" aria-labelledby="quick-start-title">
+        <section
+          id="quick-start"
+          class="section"
+          aria-labelledby="quick-start-title"
+        >
           <div class="split">
             <div class="section-header">
               <span class="section-kicker">Quick start</span>
@@ -1029,13 +1187,14 @@
                 Download and play in a few steps.
               </h2>
               <p class="section-text">
-                Use the latest release from GitHub, extract the ZIP file, open the
-                game, and run Sky Player on your PC.
+                Use the latest GitHub release, extract the package, open Sky:
+                Children of the Light on PC, and run Sky Player from the
+                extracted folder.
               </p>
               <div class="actions">
                 <a
                   class="button button-primary"
-                  href="https://github.com/pumzu/Sky-Player/releases/latest"
+                  href="https://github.com/pumni/Sky-Player/releases/latest"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1049,28 +1208,28 @@
                 <div>
                   <h3>Download the release</h3>
                   <p>
-                    Open the latest GitHub release and download the packaged
-                    Sky Player ZIP file.
+                    Open the latest GitHub release and download the packaged Sky
+                    Player ZIP file.
                   </p>
                 </div>
               </article>
 
               <article class="step">
                 <div>
-                  <h3>Extract the files</h3>
+                  <h3>Extract the package</h3>
                   <p>
-                    Unzip the downloaded package to a folder you can easily find
-                    on your PC.
+                    Unzip the downloaded file to a folder you can easily find on
+                    your Windows PC.
                   </p>
                 </div>
               </article>
 
               <article class="step">
                 <div>
-                  <h3>Open Sky: Children of the Light</h3>
+                  <h3>Open the game</h3>
                   <p>
-                    Launch the game first so Sky Player can be used with your
-                    desktop gameplay session.
+                    Launch Sky: Children of the Light first so your music
+                    session is ready.
                   </p>
                 </div>
               </article>
@@ -1079,7 +1238,7 @@
                 <div>
                   <h3>Run Sky Player</h3>
                   <p>
-                    Start the executable, select a supported song file, and begin
+                    Start Sky Player, select a supported song file, and begin
                     playback from the app interface.
                   </p>
                 </div>
@@ -1095,8 +1254,8 @@
               Bring your Sky Music sheets.
             </h2>
             <p class="section-text">
-              Sky Player is built around common Sky Music sheet formats, making it
-              easier to reuse songs you already have.
+              Sky Player is built around common Sky Music sheet formats, making
+              it easier to reuse songs you already have.
             </p>
           </div>
 
@@ -1123,95 +1282,96 @@
               <span class="format-tag">.txt</span>
               <h3>Compatible TXT</h3>
               <p>
-                Play JSON-compatible TXT song files from supported Sky Music sheet
-                sources.
+                Play JSON-compatible TXT song files from supported Sky Music
+                sheet sources.
               </p>
             </article>
           </div>
         </section>
 
-        <section id="how-it-works" class="section" aria-labelledby="how-it-works-title">
-          <div class="section-header">
-            <span class="section-kicker">How it works</span>
-            <h2 id="how-it-works-title" class="section-title">
-              Simple input flow for desktop play.
-            </h2>
-            <p class="section-text">
-              Sky Player reads a song file, maps the notes to a PC playback flow,
-              and helps automate the timing so you can focus on the music session.
-            </p>
-          </div>
-
-          <div class="grid-3">
-            <article class="card">
-              <div class="card-icon" aria-hidden="true">1</div>
-              <h3>Choose a song</h3>
+        <section
+          id="open-source"
+          class="section"
+          aria-labelledby="open-source-title"
+        >
+          <div class="source-panel">
+            <div>
+              <span class="section-kicker">Open source</span>
+              <h2 id="open-source-title">
+                Source code, issues, and releases on GitHub.
+              </h2>
               <p>
-                Pick a supported JSON, skysheet, or compatible TXT file from your
-                local song collection.
+                The Sky Player GitHub repository contains the source code,
+                release packages, and project updates. This visible link helps
+                users verify the project and helps search engines understand
+                that the GitHub repository is the source project.
               </p>
-            </article>
+            </div>
 
-            <article class="card">
-              <div class="card-icon" aria-hidden="true">2</div>
-              <h3>Preview the workflow</h3>
-              <p>
-                Use the desktop-friendly interface to prepare playback before
-                sending notes to the game.
-              </p>
-            </article>
-
-            <article class="card">
-              <div class="card-icon" aria-hidden="true">3</div>
-              <h3>Start playback</h3>
-              <p>
-                Run the song with automatic note timing for a smoother PC music
-                playing experience.
-              </p>
-            </article>
+            <div class="actions" aria-label="Open-source links">
+              <a
+                class="button button-secondary"
+                href="https://github.com/pumni/Sky-Player"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open GitHub repository
+              </a>
+            </div>
           </div>
         </section>
 
-        <section id="responsible-use" class="section" aria-labelledby="responsible-use-title">
+        <section
+          id="responsible-use"
+          class="section"
+          aria-labelledby="responsible-use-title"
+        >
           <div class="callout">
             <strong id="responsible-use-title">Responsible use</strong>
-            Sky Player is a community tool for music playback workflows on PC.
-            Automated playback or simulated input may not be allowed in every game
-            context. Review the rules for Sky: Children of the Light and use the
-            project responsibly at your own risk.
+            <p>
+              Sky Player is a community music playback tool for PC workflows.
+              Automated playback or simulated input may not be allowed in every
+              game context. Review the rules for Sky: Children of the Light and
+              use the project responsibly at your own risk.
+            </p>
           </div>
         </section>
 
         <section id="faq" class="section" aria-labelledby="faq-title">
           <div class="section-header">
             <span class="section-kicker">FAQ</span>
-            <h2 id="faq-title" class="section-title">
-              Common questions.
-            </h2>
+            <h2 id="faq-title" class="section-title">Common questions.</h2>
           </div>
 
           <div class="faq">
             <article class="faq-item">
               <h3>Is Sky Player free?</h3>
               <p>
-                Yes. The project is available on GitHub, and the latest release
-                can be downloaded from the repository release page.
+                Yes. Sky Player is available from its public GitHub repository,
+                and the latest packaged release can be downloaded from GitHub
+                Releases.
               </p>
             </article>
 
             <article class="faq-item">
-              <h3>Does it work on mobile?</h3>
+              <h3>What file formats does Sky Player support?</h3>
               <p>
-                Sky Player is designed for PC workflows. Mobile platforms are not
-                the focus of this landing page or release flow.
+                Sky Player supports JSON, skysheet, and JSON-compatible TXT
+                music sheet files.
               </p>
             </article>
 
             <article class="faq-item">
               <h3>Where is the source code?</h3>
               <p>
-                The source code is hosted on GitHub at the Sky Player repository,
-                together with releases and project updates.
+                The source code is hosted in the
+                <a
+                  href="https://github.com/pumni/Sky-Player"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Sky Player GitHub repository</a
+                >, together with releases and project updates.
               </p>
             </article>
           </div>
@@ -1219,18 +1379,16 @@
 
         <section class="section" aria-labelledby="final-cta-title">
           <div class="final-cta">
-            <h2 id="final-cta-title">
-              Ready to try Sky Player?
-            </h2>
+            <h2 id="final-cta-title">Ready to try Sky Player?</h2>
             <p>
-              Download the latest release, open Sky: Children of the Light on PC,
-              and start playing supported Sky Music sheets with a focused desktop
+              Download the latest release, open Sky: Children of the Light on
+              PC, and play supported Sky Music sheets with a focused desktop
               workflow.
             </p>
-            <div class="actions">
+            <div class="actions" aria-label="Final project actions">
               <a
                 class="button button-primary"
-                href="https://github.com/pumzu/Sky-Player/releases/latest"
+                href="https://github.com/pumni/Sky-Player/releases/latest"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -1238,7 +1396,7 @@
               </a>
               <a
                 class="button button-secondary"
-                href="https://github.com/pumzu/Sky-Player"
+                href="https://github.com/pumni/Sky-Player"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -1250,16 +1408,23 @@
       </main>
 
       <footer class="footer">
-        <p>
-          Built for Sky music players.
+        <p>Built for Sky music players by pumni.</p>
+        <div class="footer-links" aria-label="Footer links">
           <a
-            href="https://github.com/pumzu/Sky-Player"
+            href="https://github.com/pumni/Sky-Player"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Explore the project on GitHub
-          </a>.
-        </p>
+            GitHub
+          </a>
+          <a
+            href="https://github.com/pumni/Sky-Player/releases/latest"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Releases
+          </a>
+        </div>
       </footer>
     </div>
   </body>

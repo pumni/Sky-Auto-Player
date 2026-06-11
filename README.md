@@ -2,6 +2,10 @@
 
 An automatic music player designed for **Sky: Children of the Light** on PC. It reads JSON, skysheet, or JSON-compatible txt song files downloaded from specy/skyMusic and simulates keyboard keypresses in real-time.
 
+[Website](https://pumni.github.io/Sky-Player/) ·
+[GitHub Repository](https://github.com/pumni/Sky-Player) ·
+[Download Latest Release](https://github.com/pumni/Sky-Player/releases/latest)
+
 > [!WARNING]
 > Automatically playing music sheets or using simulated keystrokes might violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
 
@@ -11,7 +15,7 @@ An automatic music player designed for **Sky: Children of the Light** on PC. It 
 
 ### 🚀 Option 1: Standalone Release (Recommended)
 
-1. Go to the [Releases](https://github.com/pumznguyen/Sky-Player/releases) page on GitHub.
+1. Go to the [Releases](https://github.com/pumni/Sky-Player/releases) page on GitHub.
 2. Download the latest `Sky-Player.zip` package.
 3. Extract the ZIP file anywhere on your PC.
 4. Launch your **Sky game**, then double-click `Sky-Player.exe` inside the extracted folder to start playing!
@@ -56,14 +60,6 @@ Sky Player uses a beautiful Textual TUI interface for selecting and playing song
 
 ---
 
-## ⚙️ Advanced Settings & CLI
+## License
 
-Most settings—including timing profiles, calibration, and FPS adjustments—can be managed effortlessly inside the app using the **Command Palette** (press `/` while in the menu).
-
-If you need to run system diagnostics, generate telemetry logs, or use advanced command-line overrides, you can view all available CLI arguments by running:
-
-```bash
-Sky-Player.exe --help
-# or
-uv run python src/main.py --help
-```
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
