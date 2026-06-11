@@ -32,6 +32,7 @@ class RuntimeSessionState:
     enable_adaptive_lead: bool = True
     enable_adaptive_spin: bool = True
     enable_event_wait: bool = True
+    enable_epoch_rebase: bool = True
     rt_priority_mode: RtPriorityMode = "auto"
     check_input_path: bool = False
 

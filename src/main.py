@@ -316,6 +316,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="debug only: disable event-driven dispatch waits and fall back to 1ms polling",
     )
+    ctrl.add_argument(
+        "--no-epoch-rebase",
+        action="store_true",
+        help="debug only: keep playback epoch anchored on the control thread",
+    )
 
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
     diag = parser.add_argument_group("Safety and diagnostics")
@@ -469,6 +474,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_adaptive_spin = False if args.no_adaptive_spin else cfg.enable_adaptive_spin
     RUNTIME_STATE.rt_priority_mode = args.rt_priority_mode if args.rt_priority_mode is not None else cfg.rt_priority_mode
     RUNTIME_STATE.enable_event_wait = not args.no_event_wait
+    RUNTIME_STATE.enable_epoch_rebase = not args.no_epoch_rebase
     RUNTIME_STATE.check_input_path = args.check_input_path
 
     if PLAYBACK_DEBUG:

@@ -134,6 +134,7 @@ class PlaybackEngine:
         rt_priority_mode: RtPriorityMode = "auto",
         dispatch_lead_us: int = 0,
         enable_event_wait: bool = False,
+        enable_epoch_rebase: bool = False,
         wait_strategy: Optional[WaitStrategy] = None,
     ):
         self.song = song
@@ -161,6 +162,7 @@ class PlaybackEngine:
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, int(dispatch_lead_us))
         self.enable_event_wait = bool(enable_event_wait)
+        self.enable_epoch_rebase = bool(enable_epoch_rebase)
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
         self._wait_strategy: WaitStrategy = (
             wait_strategy
@@ -189,6 +191,7 @@ class PlaybackEngine:
                 "adaptive_lead": self.enable_adaptive_lead,
                 "rt_priority_mode": self.rt_priority_mode,
                 "enable_event_wait": self.enable_event_wait,
+                "epoch_rebase": self.enable_epoch_rebase,
             }
         )
         self.require_focus = require_focus
@@ -387,6 +390,7 @@ class PlaybackEngine:
                     rt_priority_mode=self.rt_priority_mode,
                     enable_timer_guard=self.enable_timer_guard,
                     enable_event_wait=self.enable_event_wait,
+                    enable_epoch_rebase=self.enable_epoch_rebase,
                 )
 
                 result = supervisor.run(

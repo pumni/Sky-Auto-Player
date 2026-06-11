@@ -62,6 +62,13 @@ class PlaybackState:
         self.pause_time_us += duration_us
         self.epoch_us = self.start_perf + self.pause_time_us
 
+    def rebase_epoch(self, now_us: int) -> int:
+        """Move the playback anchor to now and return the old-to-new delta."""
+        old_start_perf = self.start_perf
+        self.start_perf = now_us
+        self.epoch_us = self.start_perf + self.pause_time_us
+        return now_us - old_start_perf
+
     def get_elapsed_us(self, clock: Clock) -> int:
         """Compute elapsed playback time in microseconds, accounting for pauses."""
         if self.manual_pause_started_us is not None:

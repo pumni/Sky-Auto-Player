@@ -6,7 +6,7 @@ from sky_music.config import AppConfig, clear_config_cache
 src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
-import main
+import main  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_config_cache():
@@ -58,6 +58,14 @@ def test_cli_check_input_path_argument():
     assert args.check_input_path is True
     main.configure_from_args(args, AppConfig())
     assert main.RUNTIME_STATE.check_input_path is True
+
+
+def test_cli_no_epoch_rebase_disables_runtime_flag():
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--no-epoch-rebase"])
+    assert args.no_epoch_rebase is True
+    main.configure_from_args(args, AppConfig())
+    assert main.RUNTIME_STATE.enable_epoch_rebase is False
 
 
 class DummyStdout:

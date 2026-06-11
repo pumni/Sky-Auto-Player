@@ -1227,6 +1227,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_adaptive_lead = main_mod.RUNTIME_STATE.enable_adaptive_lead
             enable_adaptive_spin = getattr(main_mod.RUNTIME_STATE, "enable_adaptive_spin", False)
             enable_event_wait = getattr(main_mod.RUNTIME_STATE, "enable_event_wait", False)
+            enable_epoch_rebase = getattr(main_mod.RUNTIME_STATE, "enable_epoch_rebase", True)
             rt_priority_mode = getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto")
         else:
             # Fallback to config/defaults
@@ -1240,6 +1241,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_adaptive_lead = getattr(self.cfg, "enable_adaptive_lead", True)
             enable_adaptive_spin = getattr(self.cfg, "enable_adaptive_spin", True)
             enable_event_wait = True
+            enable_epoch_rebase = True
             rt_priority_mode = getattr(self.cfg, "rt_priority_mode", "auto")
 
         command_bridge = PlaybackCommandBridge(self.controls)
@@ -1270,6 +1272,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_adaptive_lead=enable_adaptive_lead,
             enable_adaptive_spin=enable_adaptive_spin,
             enable_event_wait=enable_event_wait,
+            enable_epoch_rebase=enable_epoch_rebase,
             rt_priority_mode=rt_priority_mode,
             dispatch_lead_us=self.dispatch_lead_us,
         )

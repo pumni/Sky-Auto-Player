@@ -218,6 +218,7 @@ class PlaybackSupervisor:
         rt_priority_mode: RtPriorityMode = "auto",
         enable_timer_guard: bool = True,
         enable_event_wait: bool = False,
+        enable_epoch_rebase: bool = False,
     ) -> None:
         self.controls = controls
         self.focus_guard = focus_guard
@@ -231,6 +232,7 @@ class PlaybackSupervisor:
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.enable_timer_guard = enable_timer_guard
         self.enable_event_wait = enable_event_wait
+        self.enable_epoch_rebase = enable_epoch_rebase
 
     def run(
         self,
@@ -319,6 +321,17 @@ class PlaybackSupervisor:
                         inputs.debug_log(
                             f"[rt_priority] Requested: {priority_scope.outcome.requested_mode}, "
                             f"Acquired: {priority_scope.outcome.acquired}, Detail: {priority_scope.outcome.detail}"
+                        )
+
+                    if self.enable_epoch_rebase:
+                        # Keep this as the final pre-run statement; later work here is again
+                        # charged against t=0 notes.
+                        rebase_us = state.rebase_epoch(self.clock.now_us())
+                        self.telemetry.record_runtime_options(
+                            {
+                                **self.telemetry.runtime_options,
+                                "epoch_rebase_us": rebase_us,
+                            }
                         )
 
                     dispatch_result.result = dispatch_loop.run(

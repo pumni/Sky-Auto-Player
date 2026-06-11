@@ -560,6 +560,7 @@ def play_selected_song(
         enable_adaptive_lead=RUNTIME_STATE.enable_adaptive_lead,
         enable_adaptive_spin=RUNTIME_STATE.enable_adaptive_spin,
         enable_event_wait=RUNTIME_STATE.enable_event_wait,
+        enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
         rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
     )
@@ -650,4 +651,3 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         print(f"  {_fmt_row(row)}")
     print()
     print(f"  {ANSI_DIM}All time values in milliseconds. Use --timing-profile <name> to select.{ANSI_RESET}")
-

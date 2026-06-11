@@ -10,7 +10,10 @@ from sky_music.infrastructure.backend import BackendHealth, InputSendResult, Rel
 from sky_music.platform.win32 import inputs
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.ui.hud import ProgressRenderer
+from sky_music.orchestration.dispatch_loop import PlaybackState
 from sky_music.orchestration.engine import PLAYBACK_QUIT, PlaybackEngine
+from sky_music.orchestration.playback_supervisor import PlaybackSupervisor
+from sky_music.orchestration.telemetry import TelemetryLogger
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +194,42 @@ class TimedFocusGuard:
         return True
 
 
+class StepClock:
+    def __init__(self, values: tuple[int, ...]) -> None:
+        self.values = list(values)
+        self.last_value = values[-1]
+
+    def now_us(self) -> int:
+        if self.values:
+            self.last_value = self.values.pop(0)
+        return self.last_value
+
+
+class NoopSleeper:
+    def sleep(self, seconds: float) -> None:
+        return
+
+
+class StubDispatchLoop:
+    def __init__(self) -> None:
+        self.sleeper = NoopSleeper()
+        self.health_monitor = None
+        self.start_perf_at_run: int | None = None
+
+    def run(
+        self,
+        *,
+        state: PlaybackState,
+        command_source: object,
+        focus_signal: object,
+        progress_sink: object,
+        total_time_us: int,
+        command_event: int | None,
+    ) -> str:
+        self.start_perf_at_run = state.start_perf
+        return "finished"
+
+
 class CpuBoundControls:
     def __init__(self, block_s: float) -> None:
         self.block_s = block_s
@@ -226,6 +265,90 @@ def assert_down_intervals_near(
         for left, right in zip(down_calls, down_calls[1:])
     ]
     assert max(abs(actual_us - interval_us) for actual_us in intervals_us) < tolerance_us
+
+
+def test_playback_state_rebase_epoch_preserves_pause_offset() -> None:
+    state = PlaybackState(start_perf=1_000, pause_time_us=250)
+
+    delta_us = state.rebase_epoch(2_500)
+
+    assert delta_us == 1_500
+    assert state.start_perf == 2_500
+    assert state.epoch_us == 2_750
+
+
+def test_threaded_epoch_rebase_defaults_off_in_engine_runtime_options() -> None:
+    backend = ThreadRecordingBackend()
+    engine = PlaybackEngine(
+        song=Song(name="threaded-rebase-default-off", notes=()),
+        actions=(action(0, "down", 21),),
+        backend=backend,
+        require_focus=False,
+        telemetry_enabled=True,
+        use_dispatch_thread=True,
+    )
+
+    engine.play()
+
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["runtime_options"]["epoch_rebase"] is False
+    assert "epoch_rebase_us" not in summary["runtime_options"]
+
+
+def test_threaded_epoch_rebase_records_measured_delta_when_enabled() -> None:
+    backend = ThreadRecordingBackend()
+    engine = PlaybackEngine(
+        song=Song(name="threaded-rebase-enabled", notes=()),
+        actions=(action(0, "down", 21),),
+        backend=backend,
+        require_focus=False,
+        telemetry_enabled=True,
+        use_dispatch_thread=True,
+        enable_epoch_rebase=True,
+    )
+
+    engine.play()
+
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    assert summary["runtime_options"]["epoch_rebase"] is True
+    assert isinstance(summary["runtime_options"]["epoch_rebase_us"], int)
+    assert summary["runtime_options"]["epoch_rebase_us"] >= 0
+
+
+def test_threaded_supervisor_rebases_epoch_as_last_pre_run_step() -> None:
+    telemetry = TelemetryLogger("threaded-rebase", enabled=True)
+    clock = StepClock((2_500,))
+    supervisor = PlaybackSupervisor(
+        controls=None,
+        focus_guard=BlockingFocusGuard(block_s=0.0),
+        require_focus=False,
+        renderer=None,
+        telemetry=telemetry,
+        sleep_policy=SleepPolicy(),
+        clock=clock,
+        sleeper=NoopSleeper(),
+        song_name="threaded-rebase",
+        rt_priority_mode="off",
+        enable_timer_guard=False,
+        enable_event_wait=False,
+        enable_epoch_rebase=True,
+    )
+    dispatch_loop = StubDispatchLoop()
+    state = PlaybackState(start_perf=1_000)
+
+    result = supervisor.run(
+        dispatch_loop=dispatch_loop,  # type: ignore[arg-type]
+        coordinator=None,  # type: ignore[arg-type]
+        state=state,
+        total_time_us=0,
+        use_dispatch_thread=True,
+    )
+
+    assert result == "finished"
+    assert dispatch_loop.start_perf_at_run == 2_500
+    assert telemetry.runtime_options["epoch_rebase_us"] == 1_500
 
 
 def test_threaded_dispatch_isolates_onsets_from_slow_ui_and_focus() -> None:
