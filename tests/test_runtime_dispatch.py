@@ -1083,8 +1083,8 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     assert record.get("reason") == "onset"
     assert record.get("nonexistent", "default") == "default"
     assert "song" in record
-    assert len(record) == 21
-    
+    assert len(record) == 24
+
     # Assert keys/items/values are correct
     assert "song" in record.keys()
     assert ("event_index", 0) in record.items()

@@ -32,7 +32,7 @@ class ExecutionResult:
     actual_us: int
     lateness_us: int           # actual_us - scheduled_us; negative means early (expected when
                                # dispatch lead is applied — visible_lateness_us is the on-time metric)
-    send_duration_us: int      # wall-clock time the backend call took
+    send_duration_us: int      # wall-clock time the backend call took (including bookkeeping)
     is_late: bool              # True when lateness_us > 0
     is_critically_late: bool   # True when lateness_us > 10_000 (10 ms)
     dispatch_completed_us: int = 0
@@ -41,6 +41,9 @@ class ExecutionResult:
     skipped_scan_codes: tuple[int, ...] = ()
     runtime_outcome: str = "sent"
     applied_lead_us: int = 0
+    send_duration_pure_us: int = 0  # time from backend call start to SendInput return (no bookkeeping)
+    bookkeeping_us: int = 0        # time from SendInput return to backend call end
+    dispatch_lateness_us: int = 0  # send_completed_us - action.at_us; player-side completion lateness
 
 
 @dataclass
@@ -273,20 +276,30 @@ class DispatchLoop:
         deferred_by_us: int = 0,
         applied_lead_us: int = 0,
     ) -> ExecutionResult:
+        send_start_raw = self.clock.now_us()
         send_start_us = state.get_elapsed_us(self.clock)
         if action.kind == "down":
             send_result = self.backend.key_down(action.scan_codes)
         else:
             send_result = self.backend.key_up(action.scan_codes)
+        send_end_raw = self.clock.now_us()
         send_end_us = state.get_elapsed_us(self.clock)
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
         self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
 
+        if send_result.send_completed_us is not None:
+            send_duration_pure_us = send_result.send_completed_us - send_start_raw
+            bookkeeping_us = send_end_raw - send_result.send_completed_us
+        else:
+            send_duration_pure_us = send_duration_us
+            bookkeeping_us = 0
+
         pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
         idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
         self._last_send_completed_us = send_end_us
         visible_lateness_us = send_end_us - action.at_us
+        dispatch_lateness_us = lateness_us + send_duration_pure_us
 
         result = ExecutionResult(
             event_index=idx,
@@ -294,6 +307,9 @@ class DispatchLoop:
             actual_us=send_start_us,
             lateness_us=lateness_us,
             send_duration_us=send_duration_us,
+            send_duration_pure_us=send_duration_pure_us,
+            bookkeeping_us=bookkeeping_us,
+            dispatch_lateness_us=dispatch_lateness_us,
             is_late=lateness_us > 0,
             is_critically_late=lateness_us > 10_000,
             dispatch_completed_us=send_end_us,

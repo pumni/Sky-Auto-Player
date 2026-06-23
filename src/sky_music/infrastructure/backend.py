@@ -1,5 +1,6 @@
 from typing import Protocol
 from dataclasses import dataclass
+import time
 
 @dataclass(frozen=True, slots=True)
 class ReleaseAllOutcome:
@@ -28,6 +29,9 @@ class InputSendResult:
     success: bool
     # Optional diagnostic message on failure
     error: str | None = None
+    # Raw perf_counter µs right after SendInput returned (before backend bookkeeping).
+    # None if the backend cannot provide this (e.g. DryRunBackend or no clock available).
+    send_completed_us: int | None = None
 
 class InputBackend(Protocol):
     """Protocol interface defining operations for keyboard note key injections."""
@@ -74,7 +78,8 @@ class _TrackedKeyState:
         )
         return to_release, already_released
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
+        """Returns raw perf_counter µs after send completed, or None if unavailable."""
         raise NotImplementedError
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
@@ -94,14 +99,19 @@ class _TrackedKeyState:
 
         self.possibly_active_keys.update(to_send)
         try:
-            self._emit(to_send, key_up=False)
+            send_completed_us = self._emit(to_send, key_up=False)
         except Exception as error:
             self._handle_down_error(to_send, error)
             raise
 
         self.active_keys.update(to_send)
         self.possibly_active_keys.difference_update(to_send)
-        return InputSendResult(sent=to_send, skipped_duplicates=duplicates, success=True)
+        return InputSendResult(
+            sent=to_send,
+            skipped_duplicates=duplicates,
+            success=True,
+            send_completed_us=send_completed_us,
+        )
 
     def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
         if not scan_codes:
@@ -112,7 +122,7 @@ class _TrackedKeyState:
             return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
 
         try:
-            self._emit(to_release, key_up=True)
+            send_completed_us = self._emit(to_release, key_up=True)
         except Exception as error:
             self._handle_up_error(to_release, error)
             raise
@@ -120,7 +130,12 @@ class _TrackedKeyState:
         self.active_keys.difference_update(to_release)
         self.possibly_active_keys.difference_update(to_release)
         self.failed_release_keys.difference_update(to_release)
-        return InputSendResult(sent=to_release, skipped_duplicates=already_released, success=True)
+        return InputSendResult(
+            sent=to_release,
+            skipped_duplicates=already_released,
+            success=True,
+            send_completed_us=send_completed_us,
+        )
 
 
 class WinSendInputBackend(_TrackedKeyState):
@@ -142,13 +157,14 @@ class WinSendInputBackend(_TrackedKeyState):
             last_error=self.last_error
         )
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
         send_fn = getattr(
             self.inputs_module,
             "send_scan_code_batch_trusted",
             self.inputs_module.send_scan_code_batch,
         )
         send_fn(scan_codes, key_up=key_up)
+        return time.perf_counter_ns() // 1000
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
         self.last_error = f"key_down error: {error}"
@@ -309,8 +325,9 @@ class DryRunBackend(_TrackedKeyState):
             last_error=self.last_error
         )
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> None:
+    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
         self.history.append(("up" if key_up else "down", tuple(sorted(scan_codes))))
+        return None
             
     def release_all(self) -> ReleaseAllOutcome:
         to_release = self.active_keys | self.possibly_active_keys | self.failed_release_keys

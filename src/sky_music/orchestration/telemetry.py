@@ -31,6 +31,9 @@ class TelemetryRecord:
         "idle_gap_us",
         "visible_lateness_us",
         "applied_lead_us",
+        "send_duration_pure_us",
+        "bookkeeping_us",
+        "dispatch_lateness_us",
     )
 
     def __init__(
@@ -55,6 +58,9 @@ class TelemetryRecord:
         idle_gap_us: int,
         visible_lateness_us: int | None,
         applied_lead_us: int = 0,
+        send_duration_pure_us: int = 0,
+        bookkeeping_us: int = 0,
+        dispatch_lateness_us: int = 0,
     ) -> None:
         self._dict = None
         self.song_name = song_name
@@ -77,6 +83,9 @@ class TelemetryRecord:
         self.idle_gap_us = idle_gap_us
         self.visible_lateness_us = visible_lateness_us
         self.applied_lead_us = applied_lead_us
+        self.send_duration_pure_us = send_duration_pure_us
+        self.bookkeeping_us = bookkeeping_us
+        self.dispatch_lateness_us = dispatch_lateness_us
 
     def _materialize(self) -> dict:
         if self._dict is None:
@@ -113,6 +122,9 @@ class TelemetryRecord:
                 "idle_gap_us": self.idle_gap_us,
                 "reason": self.reason,
                 "applied_lead_us": self.applied_lead_us,
+                "send_duration_pure_us": self.send_duration_pure_us,
+                "bookkeeping_us": self.bookkeeping_us,
+                "dispatch_lateness_us": self.dispatch_lateness_us,
             }
         return self._dict
 
@@ -211,6 +223,10 @@ class TelemetryLogger:
         visible_lateness_us: int | None = None,
         applied_lead_us: int = 0,
     ) -> None:
+        send_duration_pure_us = 0
+        bookkeeping_us = 0
+        dispatch_lateness_us = 0
+
         if not self.enabled:
             return
 
@@ -227,6 +243,9 @@ class TelemetryLogger:
             deferred_by_us = getattr(result, "deferred_by_us", 0)
             visible_lateness_us = result.visible_lateness_us
             applied_lead_us = result.applied_lead_us
+            send_duration_pure_us = getattr(result, "send_duration_pure_us", 0)
+            bookkeeping_us = getattr(result, "bookkeeping_us", 0)
+            dispatch_lateness_us = getattr(result, "dispatch_lateness_us", 0)
 
         assert event_index is not None
         assert kind is not None
@@ -259,6 +278,9 @@ class TelemetryLogger:
                 idle_gap_us,
                 visible_lateness_us,
                 applied_lead_us,
+                send_duration_pure_us,
+                bookkeeping_us,
+                dispatch_lateness_us,
             )
         )
 
@@ -332,6 +354,9 @@ class TelemetryLogger:
         latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
         visible_latenesses = [r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
+        send_durations_pure = [r.get("send_duration_pure_us", 0) for r in dispatch_records]
+        bookkeeping_durations = [r.get("bookkeeping_us", 0) for r in dispatch_records]
+        dispatch_latenesses = [r.get("dispatch_lateness_us", 0) for r in scheduler_dispatch_records]
         # Sender-warmup split: a send preceded by a long idle gap runs on a core that has likely
         # downclocked/parked, so we compare send_duration when "cold" vs "warm" to test whether
         # CPU coldness (caused by sleeping between notes) inflates send latency.
@@ -575,7 +600,10 @@ class TelemetryLogger:
             "after_send_missing_count": None,
             "lateness_us": _stats(latenesses, thresholds=True),
             "visible_lateness_us": _stats(visible_latenesses, thresholds=True),
+            "dispatch_lateness_us": _stats(dispatch_latenesses, thresholds=True),
             "send_duration_us": _stats(send_durations),
+            "send_duration_pure_us": _stats(send_durations_pure),
+            "bookkeeping_us": _stats(bookkeeping_durations),
             "send_warmup": {
                 "cold_threshold_us": SEND_COLD_THRESHOLD_US,
                 "cold_send_count": len(cold_send_durations),
@@ -683,6 +711,9 @@ class TelemetryLogger:
                 "lateness_us",
                 "visible_lateness_us",
                 "send_duration_us",
+                "send_duration_pure_us",
+                "bookkeeping_us",
+                "dispatch_lateness_us",
                 "scan_codes",
                 "sent_scan_codes",
                 "skipped_scan_codes",
