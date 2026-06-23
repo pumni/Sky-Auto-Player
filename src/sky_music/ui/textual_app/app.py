@@ -26,6 +26,7 @@ from textual.widgets import DataTable, Input
 
 if TYPE_CHECKING:
     from sky_music.infrastructure.hotkeys import PlaybackControls
+    from textual.widgets._data_table import RowKey
 
 from sky_music.config import (
     AppConfig,
@@ -109,6 +110,8 @@ def rank_song_choices(
 class SongTable(DataTable[str]):
     """DataTable wrapper for song picker rows."""
 
+    app: SkyPickerApp
+
     BINDINGS = [
         # Secondary actions — functional but hidden from the footer bar to reduce
         # visual clutter. Users discover them via the Commands modal (/).
@@ -124,34 +127,34 @@ class SongTable(DataTable[str]):
     ]
 
     def action_open_commands(self) -> None:
-        self.app.action_open_commands()  # type: ignore[attr-defined]
+        self.app.action_open_commands()
 
     def action_open_profile(self) -> None:
-        self.app.action_open_profile()  # type: ignore[attr-defined]
+        self.app.action_open_profile()
 
     def action_open_tempo(self) -> None:
-        self.app.action_open_tempo()  # type: ignore[attr-defined]
+        self.app.action_open_tempo()
 
     def action_open_fps(self) -> None:
-        self.app.action_open_fps()  # type: ignore[attr-defined]
+        self.app.action_open_fps()
 
     def action_open_theme(self) -> None:
-        self.app.action_open_theme()  # type: ignore[attr-defined]
+        self.app.action_open_theme()
 
     def action_toggle_preview(self) -> None:
-        self.app.action_toggle_preview()  # type: ignore[attr-defined]
+        self.app.action_toggle_preview()
 
     def action_toggle_dry_run(self) -> None:
-        self.app.action_toggle_dry_run()  # type: ignore[attr-defined]
+        self.app.action_toggle_dry_run()
 
     def action_toggle_hud(self) -> None:
-        self.app.action_toggle_hud()  # type: ignore[attr-defined]
+        self.app.action_toggle_hud()
 
     def action_toggle_telemetry(self) -> None:
-        self.app.action_toggle_telemetry()  # type: ignore[attr-defined]
+        self.app.action_toggle_telemetry()
 
     def action_reload_songs(self) -> None:
-        self.app.action_reload_songs()  # type: ignore[attr-defined]
+        self.app.action_reload_songs()
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,12 +555,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
         t = self._theme_tokens
         if self._marked_row_key is not None:
             try:
-                table.update_cell(self._marked_row_key, "marker", t.song_icon)  # type: ignore[arg-type]
+                table.update_cell(cast(RowKey, self._marked_row_key), "marker", t.song_icon)
             except Exception:
                 pass
         if row_key is not None:
             try:
-                table.update_cell(row_key, "marker", t.pointer)  # type: ignore[arg-type]
+                table.update_cell(cast(RowKey, row_key), "marker", t.pointer)
             except Exception:
                 pass
         self._marked_row_key = row_key
@@ -777,7 +780,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if value is None:
             self._focus_table()
             return
-        self.tempo_scale = float(value)  # type: ignore[arg-type]
+        assert value is not None
+        self.tempo_scale = cast(float, value)
         persist_default_tempo(self.cfg, self.tempo_scale)
         self._replace_metadata_coordinator()
 
@@ -792,7 +796,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if value is None:
             self._focus_table()
             return
-        self.fps = resolve_game_fps(int(value))  # type: ignore[arg-type]
+        assert value is not None
+        self.fps = resolve_game_fps(cast(int, value))
         persist_default_fps(self.cfg, self.fps)
         self._replace_metadata_coordinator()
 

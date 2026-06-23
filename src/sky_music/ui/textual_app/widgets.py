@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.markup import escape
 from rich.table import Table
@@ -12,6 +12,9 @@ from textual.widgets import Static
 from sky_music.ui.picker_theme import get_theme_preset, pad_text, remove_accents
 from sky_music.ui.text_render import cell_width
 from sky_music.ui.textual_app.keymap import PICKER_HINTS, CommandSpec, KeyHint
+
+if TYPE_CHECKING:
+    from sky_music.ui.textual_app.app import SkyPickerApp
 
 
 class GridRenderable(Table):
@@ -111,6 +114,7 @@ class CustomFooter(AppFooter):
 class CommandPaletteList(Static):
     """Custom widget for grouped command selection."""
 
+    app: SkyPickerApp
     can_focus = True
     GROUP_ORDER = ["View", "Playback", "Interface", "Library", "System"]
 
@@ -237,7 +241,7 @@ class CommandPaletteList(Static):
 
     def render(self) -> Text:
         try:
-            t = get_theme_preset(self.app.active_theme)  # type: ignore[attr-defined]
+            t = get_theme_preset(self.app.active_theme)
         except Exception:
             from sky_music.ui.picker_theme import THEME_PRESETS
             t = THEME_PRESETS["aurora"]

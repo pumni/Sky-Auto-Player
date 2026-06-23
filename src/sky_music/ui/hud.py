@@ -2,6 +2,7 @@ import shutil
 import os
 import time
 from sky_music.config import resolve_game_fps
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
 from sky_music.ui.text_render import (
@@ -87,6 +88,7 @@ class ProgressRenderer:
         self.last_lines_printed: int = 0
         self._initialized: bool = False
         self.input_path_degraded: bool = False
+        self.active_policy: FrameTimingPolicy | None = None
 
     def update_counters(self, lateness_us: int) -> None:
         """Called by PlaybackEngine after each key action to update live timing counters."""
@@ -273,8 +275,8 @@ class ProgressRenderer:
             )
 
         # Insert timing info if verbose
-        if self.verbose and getattr(self, "active_policy", None) is not None:
-            pol = self.active_policy  # type: ignore[attr-defined]
+        if self.verbose and self.active_policy is not None:
+            pol = self.active_policy
             fps = resolve_game_fps(getattr(pol, "fps", None))
             frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
             frame_label = f"{frame_us}us"
