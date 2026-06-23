@@ -55,11 +55,24 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Exclude dev-only packages that are never needed at runtime.
+    # (pyinstaller itself, type checkers, linters, audio-capture dev tool)
+    # Do NOT exclude tkinter/numpy without confirming they are unused.
+    excludes=[
+        "pyinstaller",
+        "pyright",
+        "ruff",
+        "soundcard",
+        "pytest",
+        "_pytest",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
+    # optimize=1: strips docstrings and __debug__-only blocks; preserves
+    # assert statements (safe — see C1 audit in docs/main-path-cleanup-and-build-quality-plan.md).
+    optimize=1,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)

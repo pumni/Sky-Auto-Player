@@ -10,6 +10,7 @@ from sky_music.infrastructure.backend import InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.focus import FocusGuard, NoopFocusGuard, Win32SkyFocusGuard
 from sky_music.infrastructure.realtime import (
     RealtimeProcessScope,
+    _gil_enabled,
     create_realtime_sleeper,
 )
 from sky_music.infrastructure.timing import Clock, PerfCounterClock, RealSleeper, Sleeper, SleepPolicy
@@ -188,6 +189,7 @@ class PlaybackEngine:
                 "waitable_timer": self.enable_waitable_timer,
                 "gc_pause": self.enable_gc_pause,
                 "switch_interval_tuning": self.enable_switch_interval_tuning,
+                "gil_enabled": _gil_enabled(),
                 "adaptive_lead": self.enable_adaptive_lead,
                 "rt_priority_mode": self.rt_priority_mode,
                 "enable_event_wait": self.enable_event_wait,

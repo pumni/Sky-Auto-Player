@@ -60,6 +60,19 @@ Sky Player uses a beautiful Textual TUI interface for selecting and playing song
 
 ---
 
+## 🔧 Tuning for Your Machine / Forks
+
+Most users need no extra flags — the defaults are optimised for stock CPython 3.14 on Windows.
+
+For non-standard environments (weak machines, free-threaded `python3.14t` builds, jitter
+investigation, maximum-compatibility mode), see **[docs/tuning-presets.md](docs/tuning-presets.md)**
+for the full preset table with instructions and telemetry fields to verify.
+
+Run `--doctor` first to check your GIL state, MMCSS availability, and key mapping before
+choosing a preset.
+
+---
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

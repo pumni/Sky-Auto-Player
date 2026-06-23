@@ -61,6 +61,17 @@ class WaitableTimerSleeper:
 DISPATCH_SWITCH_INTERVAL_S = 0.001
 
 
+def _gil_enabled() -> bool:
+    """Return True when the GIL is active in the current interpreter.
+
+    ``sys._is_gil_enabled()`` exists from CPython 3.13+ and returns False
+    only on free-threaded builds (``python3.14t``).  On older builds the GIL
+    is always present, so we default to True.
+    """
+    probe = getattr(sys, "_is_gil_enabled", None)
+    return bool(probe()) if probe is not None else True
+
+
 class RealtimeProcessScope:
     """Pause cyclic GC for the duration of dispatch, reverting on exit.
 
@@ -109,10 +120,12 @@ class RealtimeProcessScope:
             inputs.debug_log("[realtime] cyclic GC pause disabled for dispatch")
 
         # 2. GIL Switch-Interval Tuning
-        if self._enable_switch_interval_tuning:
+        if self._enable_switch_interval_tuning and _gil_enabled():
             self._old_switch_interval = sys.getswitchinterval()
             sys.setswitchinterval(DISPATCH_SWITCH_INTERVAL_S)
             inputs.debug_log(f"[realtime] GIL switch interval tuned to {DISPATCH_SWITCH_INTERVAL_S}s")
+        elif self._enable_switch_interval_tuning:
+            inputs.debug_log("[realtime] free-threaded build: switch-interval tuning skipped (no GIL)")
         else:
             inputs.debug_log("[realtime] GIL switch interval tuning disabled")
 

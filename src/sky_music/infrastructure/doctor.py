@@ -108,6 +108,9 @@ def run_all_doctor_checks() -> bool:
     print("=" * 60)
     print(f"OS Platform      : {sys.platform} (Windows expected)")
     print(f"Python Version   : {sys.version.split()[0]}")
+    _gil_probe = getattr(sys, "_is_gil_enabled", None)
+    _gil_state = "enabled" if (_gil_probe is None or _gil_probe()) else "DISABLED (free-threaded)"
+    print(f"GIL State        : {_gil_state}")
     print(f"Admin Privileges : {'YES' if is_admin() else 'NO'}")
     print("-" * 60)
     

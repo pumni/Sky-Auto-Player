@@ -24,6 +24,7 @@ These files represent the current system state and contracts:
 ---
 
 ## 2. Active References & Experiments
+* [main-path-cleanup-and-build-quality-plan.md](main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
 * [2026-06_wasapi-loopback-measurement-plan.md](2026-06_wasapi-loopback-measurement-plan.md) — Active implementation plan for automated after-send measurement using WASAPI loopback.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
