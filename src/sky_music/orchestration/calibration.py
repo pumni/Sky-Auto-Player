@@ -130,7 +130,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
         base,
         fps=resolve_game_fps(inp.fps),
         profile_name=rec_profile,
-        **cfg.frame_timing.as_policy_kwargs(),
+        **cfg.frame_timing.as_policy_kwargs(),  # type: ignore[arg-type]
     )
     recommended_hold = effective.hold_us
 

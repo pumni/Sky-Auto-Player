@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-OUT = Path("songs"); OUT.mkdir(exist_ok=True)
+OUT = Path("songs")
+OUT.mkdir(exist_ok=True)
 
 def write(name, notes):
       (OUT / f"{name}.json").write_text(
@@ -15,10 +16,11 @@ write("TEST_visibility", [(i*700, i) for i in range(15)])
 # --- Bài R: repeat staircase — 1 phím (Key7), 8 block x 8 lần, interval giảm dần ---
 def staircase(key=7, reps=8, intervals=(220,180,150,120,100,85,70,55), block_gap=1500):
       notes, t = [], 0
-      for I in intervals:
+      for interval in intervals:
           for _ in range(reps):
-              notes.append((t, key)); t += I
-          t += block_gap            # 1.5s im lặng giữa các block
+              notes.append((t, key))
+              t += interval
+          t += block_gap
       return notes
 write("TEST_repeat_staircase", staircase())
 
@@ -26,7 +28,8 @@ write("TEST_repeat_staircase", staircase())
 def chords():
       notes, t = [], 0
       for size in (2,3,4,5,6):
-          for k in range(size): notes.append((t, k*2))  # các phím rời nhau
+          for k in range(size):
+              notes.append((t, k*2))
           t += 800
       return notes
 write("TEST_chords", chords())
@@ -40,7 +43,8 @@ def staircase_gap(key=7, reps=10, hold_ms=24,
       for g in gaps:
           interval = g + hold_ms          # gap_thực = interval - hold = g
           for _ in range(reps):
-              notes.append((t, key)); t += interval
+              notes.append((t, key))
+              t += interval
           t += block_gap
       return notes
 
@@ -98,10 +102,11 @@ write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 # avoid the synthetic fragile band.
 def repeat_floor(key=7, reps=12, intervals=(7, 8, 9, 10, 12, 15, 20), block_gap=1500):
       notes, t = [], 0
-      for I in intervals:
+      for i in intervals:
           for _ in range(reps):
-              notes.append((t, key)); t += I
-          t += block_gap            # silence between blocks so onsets separate cleanly
+              notes.append((t, key))
+              t += i
+          t += block_gap
       return notes
 
 # 84 same-key onsets each; run at the matching --fps so the floor lands where intended.
@@ -116,9 +121,10 @@ write("TEST_repeat_floor_60", repeat_floor(intervals=(17, 18, 19, 20, 22, 25, 30
 # use TEST_repeat_floor_* for sender/anchor diagnostics where the game's own wall would confound.
 def repeat_clean(key=7, reps=12, intervals=(20, 24, 30, 40, 55, 70), block_gap=1500):
       notes, t = [], 0
-      for I in intervals:
+      for i in intervals:
           for _ in range(reps):
-              notes.append((t, key)); t += I
+              notes.append((t, key))
+              t += i
           t += block_gap
       return notes
 

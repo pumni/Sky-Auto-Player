@@ -1,19 +1,11 @@
 import sys
-from pathlib import Path
-import pytest
-import time
-from typing import Tuple, Optional
 
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
+import pytest
 
 from sky_music.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import TimingPolicy, KeyAction, FrameTimingPolicy
-
-def _frame_policy(d: dict | None = None) -> FrameTimingPolicy:
-    return FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict(d or {}))
-from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
+from sky_music.infrastructure.backend import DryRunBackend
 from sky_music.orchestration.engine import (
     PlaybackEngine,
     PlaybackState,
@@ -22,7 +14,10 @@ from sky_music.orchestration.engine import (
     PLAYBACK_SKIPPED,
 )
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
+
+
+def _frame_policy(d: dict | None = None) -> FrameTimingPolicy:
+    return FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict(d or {}))
 
 class FakeClock:
     def __init__(self, start_us=0):
@@ -190,7 +185,7 @@ def test_deterministic_playback_with_fake_time():
 
 def test_runtime_polling_is_throttled_during_approach_phase():
     song = Song(name="Polling Cadence", notes=())
-    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=10_000, reason="onset")
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=10_000, reason="onset")  # type: ignore[arg-type]
     clock = AdvancingReadClock()
     controls = CountingControls()
     engine = PlaybackEngine(
@@ -211,7 +206,7 @@ def test_runtime_polling_is_throttled_during_approach_phase():
 
 def test_final_spin_does_not_poll_controls_or_focus():
     song = Song(name="Pure Final Spin", notes=())
-    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=500, reason="onset")
+    action = KeyAction(kind="down", scan_codes=(0x15,), at_us=500, reason="onset")  # type: ignore[arg-type]
     clock = AdvancingReadClock()
     controls = CountingControls()
     guard = _CountingFocusGuard(active=True)

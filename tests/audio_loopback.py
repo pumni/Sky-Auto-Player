@@ -28,6 +28,7 @@ def get_default_loopback_device_name() -> str | None:
     if not HAS_SOUNDCARD:
         return None
     try:
+        assert sc is not None
         speaker = sc.default_speaker()
         mic = sc.get_microphone(speaker.name, include_loopback=True)
         return mic.name
@@ -54,13 +55,14 @@ def capture_loopback_to_wav(
         )
 
     try:
+        assert sc is not None
         speaker = sc.default_speaker()
         mic = sc.get_microphone(speaker.name, include_loopback=True)
     except Exception as e:
         raise RuntimeError(
             f"Failed to locate default audio loopback device: {e}\n"
             "Ensure you have a default audio output device enabled in Windows Sound settings."
-        )
+        ) from e
 
     channels = 1
     # Record in small chunks (e.g., 100ms blocks) to allow timely stop_event checks
@@ -103,6 +105,7 @@ def capture_loopback_to_wav(
         raise RuntimeError("Capture completed but no audio samples were recorded.")
 
     # Concatenate all numpy array chunks
+    assert np is not None
     data = np.concatenate(all_chunks, axis=0)
 
     # Convert float32 -> 16-bit PCM (clamp to [-1.0, 1.0], scale to signed int16)

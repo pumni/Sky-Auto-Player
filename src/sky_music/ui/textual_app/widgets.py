@@ -237,7 +237,7 @@ class CommandPaletteList(Static):
 
     def render(self) -> Text:
         try:
-            t = get_theme_preset(self.app.active_theme)
+            t = get_theme_preset(self.app.active_theme)  # type: ignore[attr-defined]
         except Exception:
             from sky_music.ui.picker_theme import THEME_PRESETS
             t = THEME_PRESETS["aurora"]

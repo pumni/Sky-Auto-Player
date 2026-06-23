@@ -190,5 +190,5 @@ class InfoModal(PickerModal[None]):
             event.stop()
             self.dismiss(None)
 
-    def dismiss(self, result: Any = None) -> None:
+    def dismiss(self, result: Any = None) -> None:  # type: ignore[override]
         super().dismiss(result)

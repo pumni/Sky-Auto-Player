@@ -62,7 +62,6 @@ import statistics
 import sys
 import wave
 from array import array
-from pathlib import Path
 
 
 # --------------------------------------------------------------------------------------------
@@ -264,7 +263,7 @@ def fmt_t(sec: float) -> str:
 
 def main() -> int:
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
     ap = argparse.ArgumentParser(
@@ -373,7 +372,7 @@ def main() -> int:
         print("   none — every sent down produced an audio onset (no notes lost after send).")
 
     # ---- 2. STUTTER GAPS (audio IOI >> scheduled IOI) ----
-    print(f"\n=== 2. STUTTER GAPS (audio interval much larger than scheduled) ===")
+    print("\n=== 2. STUTTER GAPS (audio interval much larger than scheduled) ===")
     # Build consecutive matched pairs to compare IOIs.
     gap_rows = []
     for a in range(len(pairs) - 1):
@@ -400,7 +399,7 @@ def main() -> int:
         print("   timing scatter (see jitter below) or not present in this run.")
 
     # ---- 3. GAME-ONLY JITTER ----
-    print(f"\n=== 3. GAME-ONLY JITTER (heard - sent, offset removed) ===")
+    print("\n=== 3. GAME-ONLY JITTER (heard - sent, offset removed) ===")
     resid = [(h - s) for _, _, s, h in pairs]  # h is already offset-removed in match()
     if len(resid) > 2:
         mean = statistics.mean(resid)

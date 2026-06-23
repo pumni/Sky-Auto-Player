@@ -1,17 +1,10 @@
 """Strict acceptance checks for unified profile + FPS timing flow (Phases 0–4)."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.config import AppConfig, clear_config_cache, apply_config_defaults, canonical_profile_name
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
-    merge_session_with_overrides,
 )
 from sky_music.domain.scheduler import build_key_actions, ScheduleBuildError
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
@@ -34,7 +27,7 @@ def test_configure_and_session_resolve_same_policy():
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TIMING_POLICY == main.PLAYBACK_SESSION.resolve_effective_policy(cfg)
+    assert main.TIMING_POLICY == main.PLAYBACK_SESSION.resolve_effective_policy(cfg)  # type: ignore[attr-defined]
 
 
 def test_play_fallback_balanced_accepts_scan_code_mode():
@@ -101,7 +94,7 @@ def test_saved_profile_name_has_no_fps_suffix():
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert canonical_profile_name(main.PLAYBACK_SESSION.profile_name) == "audience-safe"
+    assert canonical_profile_name(main.PLAYBACK_SESSION.profile_name) == "audience-safe"  # type: ignore[attr-defined]
     assert main.TIMING_PROFILE_NAME == "audience-safe@60fps"
 
 

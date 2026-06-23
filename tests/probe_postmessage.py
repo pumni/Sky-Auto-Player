@@ -15,7 +15,6 @@ Run:  uv run python tests/probe_postmessage.py
 """
 from __future__ import annotations
 
-import ctypes
 import sys
 import time
 from ctypes import wintypes
@@ -29,7 +28,7 @@ NOTES = [("y", 21, 89), ("u", 22, 85), ("i", 23, 73), ("o", 24, 79), ("p", 25, 8
 
 def main() -> int:
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
     from sky_music.platform.win32 import inputs

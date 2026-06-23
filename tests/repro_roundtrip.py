@@ -1,16 +1,17 @@
 """Tái hiện: local_precise@144 -> đổi profile/fps -> quay lại local_precise@144.
 Đo min_hold hiệu dụng ở từng bước qua ĐÚNG các hàm persist/load thật."""
 from __future__ import annotations
-import sys, json, tempfile, os
+import sys
+import json
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import sky_music.config as config
 from sky_music.config import (
-    load_config, save_config, clear_config_cache,
-    persist_default_profile, persist_default_fps, persist_default_tempo,
-    persist_calibration_defaults, profile_dict_for,
+    load_config, clear_config_cache,
+    persist_default_profile, persist_default_fps, persist_calibration_defaults, profile_dict_for,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 
@@ -53,10 +54,10 @@ def main():
         clear_config_cache()
         cfg = load_config(force_reload=True)  # reset về tươi mỗi kịch bản
         persist_calibration_defaults(load_config(), profile_name=cal_profile, tempo_scale=1.0, fps=cal_fps)
-        mid = show(f"after calibration({cal_profile}@{cal_fps})", load_config())
+        show(f"after calibration({cal_profile}@{cal_fps})", load_config())
         persist_default_profile(load_config(), "local-precise")
         persist_default_fps(load_config(), 144)
-        after = show(f"  then user sets back local-precise@144", load_config())
+        after = show("  then user sets back local-precise@144", load_config())
         flag = "  <-- KHÁC baseline!" if after != base else ""
         print(f"      baseline={base}  after={after}{flag}")
 

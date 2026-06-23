@@ -192,12 +192,12 @@ def build_key_actions(
         ))
         
     raw_draft_count = len(drafts)
-    drafts = normalise_note_drafts(drafts)
+    drafts = normalise_note_drafts(drafts)  # type: ignore[assignment]
     deduplicated_note_count = len(drafts)
     duplicate_note_count = raw_draft_count - deduplicated_note_count
     
     # Stage 2: plan each physical-key lane and emit typed raw key events.
-    next_same_key_time = next_same_key_times(drafts)
+    next_same_key_time = next_same_key_times(drafts)  # type: ignore[arg-type]
 
     raw_events: list[RawKeyEvent] = []
     diagnostics: list[ScheduleDiagnostic] = []
@@ -222,6 +222,7 @@ def build_key_actions(
 
         if planned_hold.risk == "severe":
             impossible_same_key_repeats += 1
+            assert effective_delta_us is not None
             diagnostics.append(ScheduleDiagnostic(
                 source_index=draft.source_index,
                 note_key=draft.note_key,
@@ -280,10 +281,10 @@ def build_key_actions(
 
     key_actions_list: list[KeyAction] = []
     for (at_us, kind, reason), scs in grouped.items():
-        unique_scs = tuple(dict.fromkeys(scs))
+        unique_scs = tuple(dict.fromkeys(scs))  # type: ignore[assignment]
         key_actions_list.append(KeyAction(
             at_us=Microseconds(at_us),
-            scan_codes=unique_scs,
+            scan_codes=unique_scs,  # type: ignore[arg-type]
             kind=kind,
             reason=reason
         ))

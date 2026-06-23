@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, NewType
+from typing import Literal
 import math
 
 from sky_music.domain.domain import NoteKey, ScanCode, Microseconds

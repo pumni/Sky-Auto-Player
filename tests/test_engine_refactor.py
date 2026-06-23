@@ -4,14 +4,9 @@ Sprint 8 — Unit tests for:
  - Backend safety: InputSendResult, duplicate-down protection, idempotent key_up
  - CLI: --fps FrameTimingPolicy upgrade, --compare-profiles smoke
 """
-import sys
 import types
-from pathlib import Path
 
 import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.domain.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import build_key_actions
@@ -146,7 +141,6 @@ class TestGetElapsedUs:
 
 class TestExecuteAction:
     def test_returns_execution_result(self):
-        from sky_music.domain.scheduler_types import KeyAction, Microseconds
         song = _simple_song((0,))
         sched = build_key_actions(song)
         backend = DryRunBackend()
@@ -289,7 +283,7 @@ class TestWinBackendDuplicateDownProtection:
             calls.append((scan_codes, key_up))
 
         dummy = types.SimpleNamespace(send_scan_code_batch=mock_send)
-        backend.inputs_module = dummy
+        backend.inputs_module = dummy  # type: ignore[assignment]
         return backend, calls
 
     def test_no_duplicate_send_when_already_held(self):
@@ -308,7 +302,7 @@ class TestWinBackendDuplicateDownProtection:
         backend.key_down((0x15,))
         calls.clear()
 
-        result = backend.key_down((0x15, 0x16))
+        _result = backend.key_down((0x15, 0x16))
         # Only 0x16 should have been sent
         assert len(calls) == 1
         sent_codes, key_up = calls[0]
@@ -339,7 +333,7 @@ def _make_contract_backend(kind: str):
     def mock_send(scan_codes, key_up=False):
         return None
 
-    backend.inputs_module = types.SimpleNamespace(send_scan_code_batch=mock_send)
+    backend.inputs_module = types.SimpleNamespace(send_scan_code_batch=mock_send)  # type: ignore[assignment]
     return backend
 
 

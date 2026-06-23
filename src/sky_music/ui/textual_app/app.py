@@ -10,7 +10,7 @@ except Exception:
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 from rapidfuzz import fuzz, process
 from rich.text import Text
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from sky_music.config import (
     AppConfig,
+    RtPriorityMode,
     canonical_profile_name,
     load_config,
     persist_calibration_defaults,
@@ -123,34 +124,34 @@ class SongTable(DataTable[str]):
     ]
 
     def action_open_commands(self) -> None:
-        self.app.action_open_commands()
+        self.app.action_open_commands()  # type: ignore[attr-defined]
 
     def action_open_profile(self) -> None:
-        self.app.action_open_profile()
+        self.app.action_open_profile()  # type: ignore[attr-defined]
 
     def action_open_tempo(self) -> None:
-        self.app.action_open_tempo()
+        self.app.action_open_tempo()  # type: ignore[attr-defined]
 
     def action_open_fps(self) -> None:
-        self.app.action_open_fps()
+        self.app.action_open_fps()  # type: ignore[attr-defined]
 
     def action_open_theme(self) -> None:
-        self.app.action_open_theme()
+        self.app.action_open_theme()  # type: ignore[attr-defined]
 
     def action_toggle_preview(self) -> None:
-        self.app.action_toggle_preview()
+        self.app.action_toggle_preview()  # type: ignore[attr-defined]
 
     def action_toggle_dry_run(self) -> None:
-        self.app.action_toggle_dry_run()
+        self.app.action_toggle_dry_run()  # type: ignore[attr-defined]
 
     def action_toggle_hud(self) -> None:
-        self.app.action_toggle_hud()
+        self.app.action_toggle_hud()  # type: ignore[attr-defined]
 
     def action_toggle_telemetry(self) -> None:
-        self.app.action_toggle_telemetry()
+        self.app.action_toggle_telemetry()  # type: ignore[attr-defined]
 
     def action_reload_songs(self) -> None:
-        self.app.action_reload_songs()
+        self.app.action_reload_songs()  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +184,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     # Use the terminal's own default background (no painted app surface),
     # so the picker blends into the user's terminal theme like a native CLI.
-    ansi_color = True
+    ansi_color = True  # type: ignore[assignment]
 
     CSS = APP_CSS + "\n" + """
 #playback-card {
@@ -201,7 +202,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         ("/", "open_commands", "Commands"),
     ]
 
-    query: reactive[str] = reactive("", init=False)
+    query: reactive[str] = reactive("", init=False)  # type: ignore[override]
 
     def __init__(
         self,
@@ -336,7 +337,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_table()
         self._render_detail()
         self.set_focus(self.query_one("#songs", SongTable))
-        self.metadata.refresh(paths)
+        self.metadata.refresh(paths)  # type: ignore[attr-defined]
         # Update tagline with total song count once songs are loaded
         self._update_header_tagline()
         # Initialize responsive columns on start
@@ -477,7 +478,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "search":
             return
-        self.query = event.value
+        self.query = event.value  # type: ignore[assignment]
         import sys
         if "pytest" in sys.modules or "unittest" in sys.modules:
             if self._search_timer is not None:
@@ -542,19 +543,21 @@ class SkyPickerApp(App[SongPickerResult | None]):
         event.stop()
         if self.playback_mode != "picker":
             return
-        self.action_confirm(song_path=Path(event.row_key.value))
+        row_key_value = event.row_key.value
+        assert row_key_value is not None
+        self.action_confirm(song_path=Path(row_key_value))
 
     def _set_marker(self, row_key: object | None) -> None:
         table = self.query_one("#songs", SongTable)
         t = self._theme_tokens
         if self._marked_row_key is not None:
             try:
-                table.update_cell(self._marked_row_key, "marker", t.song_icon)
+                table.update_cell(self._marked_row_key, "marker", t.song_icon)  # type: ignore[arg-type]
             except Exception:
                 pass
         if row_key is not None:
             try:
-                table.update_cell(row_key, "marker", t.pointer)
+                table.update_cell(row_key, "marker", t.pointer)  # type: ignore[arg-type]
             except Exception:
                 pass
         self._marked_row_key = row_key
@@ -652,7 +655,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                     if self.show_notes:
                         table.update_cell(row_key, "notes", notes)
                     if self.show_risk:
-                        table.update_cell(row_key, "risk", _risk_cell(risk, muted, self._theme_tokens))
+                        table.update_cell(row_key, "risk", str(_risk_cell(risk, muted, self._theme_tokens)))
                     if self.show_suggested:
                         table.update_cell(row_key, "suggested", suggested)
             except Exception:
@@ -686,9 +689,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
             return
         self._transitioning_to_playback = True
 
-        if getattr(self, "_search_timer", None) is not None:
+        _search_timer = getattr(self, "_search_timer", None)
+        if _search_timer is not None:
             try:
-                self._search_timer.stop()
+                _search_timer.stop()
             except Exception:
                 pass
             self._search_timer = None
@@ -747,7 +751,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_status()
         self._render_table()
         self._render_detail()
-        self.metadata.refresh([choice.path for choice in self.choices])
+        self.metadata.refresh([choice.path for choice in self.choices])  # type: ignore[attr-defined]
         self._focus_table()
 
     def _focus_table(self) -> None:
@@ -773,7 +777,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if value is None:
             self._focus_table()
             return
-        self.tempo_scale = float(value)
+        self.tempo_scale = float(value)  # type: ignore[arg-type]
         persist_default_tempo(self.cfg, self.tempo_scale)
         self._replace_metadata_coordinator()
 
@@ -788,7 +792,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if value is None:
             self._focus_table()
             return
-        self.fps = resolve_game_fps(int(value))
+        self.fps = resolve_game_fps(int(value))  # type: ignore[arg-type]
         persist_default_fps(self.cfg, self.fps)
         self._replace_metadata_coordinator()
 
@@ -987,9 +991,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._focus_table()
 
     def action_reload_songs(self) -> None:
-        if getattr(self, "_search_timer", None) is not None:
+        _search_timer = getattr(self, "_search_timer", None)
+        if _search_timer is not None:
             try:
-                self._search_timer.stop()
+                _search_timer.stop()
             except Exception:
                 pass
             self._search_timer = None
@@ -1005,7 +1010,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._update_header_tagline()
         self._render_table(reset_cursor=True)
         self._render_detail()
-        self.metadata.refresh(paths)
+        self.metadata.refresh(paths)  # type: ignore[attr-defined]
 
     def quiesce(self) -> None:
         try:
@@ -1036,7 +1041,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def rearm(self) -> None:
         self.picker_scope = BackgroundScope(phase="picker")
         self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
-        self.metadata.refresh([choice.path for choice in self.choices])
+        self.metadata.refresh([choice.path for choice in self.choices])  # type: ignore[attr-defined]
         self._focus_table()
 
     def handle_playback_card_key(self, key: str) -> bool:
@@ -1201,8 +1206,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.quiesce()
 
         from sky_music.orchestration.telemetry import TelemetryLogger
-        if _picker_cleanup_failed(TelemetryLogger.last_picker_cleanup):
-            error_msg = TelemetryLogger.last_picker_cleanup.get("error", "Unknown error during picker cleanup")
+        _last_cleanup = TelemetryLogger.last_picker_cleanup
+        if _last_cleanup is not None and _picker_cleanup_failed(_last_cleanup):
+            error_msg = _last_cleanup.get("error", "Unknown error during picker cleanup")
             self.rearm()
             self._show_playback_error("Cleanup Error", f"Failed to stop background workers: {error_msg}")
             return
@@ -1228,7 +1234,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_adaptive_spin = getattr(main_mod.RUNTIME_STATE, "enable_adaptive_spin", False)
             enable_event_wait = getattr(main_mod.RUNTIME_STATE, "enable_event_wait", False)
             enable_epoch_rebase = getattr(main_mod.RUNTIME_STATE, "enable_epoch_rebase", True)
-            rt_priority_mode = getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto")
+            rt_priority_mode = cast(RtPriorityMode, getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto"))
         else:
             # Fallback to config/defaults
             telemetry_enabled = self.cfg.telemetry_enabled_by_default or is_dry_run
@@ -1242,7 +1248,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_adaptive_spin = getattr(self.cfg, "enable_adaptive_spin", True)
             enable_event_wait = True
             enable_epoch_rebase = True
-            rt_priority_mode = getattr(self.cfg, "rt_priority_mode", "auto")
+            rt_priority_mode = cast(RtPriorityMode, getattr(self.cfg, "rt_priority_mode", "auto"))
 
         command_bridge = PlaybackCommandBridge(self.controls)
         self._active_playback_commands = command_bridge
@@ -1388,8 +1394,9 @@ def choose_song_interactively_textual(
     result = app.run()
 
     # Deterministic abort regardless of whether Textual propagates the on_unmount exception:
-    if _picker_cleanup_failed(TelemetryLogger.last_picker_cleanup):
-        error = TelemetryLogger.last_picker_cleanup.get("error", "unknown error")
+    _last_cleanup = TelemetryLogger.last_picker_cleanup
+    if _last_cleanup is not None and _picker_cleanup_failed(_last_cleanup):
+        error = _last_cleanup.get("error", "unknown error")
         raise RuntimeError(
             f"picker background worker cleanup failed before playback: {error}"
         )
@@ -1426,8 +1433,9 @@ def run_sky_app_unified(
 
     app.run()
 
-    if _picker_cleanup_failed(TelemetryLogger.last_picker_cleanup):
-        error = TelemetryLogger.last_picker_cleanup.get("error", "unknown error")
+    _last_cleanup = TelemetryLogger.last_picker_cleanup
+    if _last_cleanup is not None and _picker_cleanup_failed(_last_cleanup):
+        error = _last_cleanup.get("error", "unknown error")
         raise RuntimeError(
             f"picker background worker cleanup failed: {error}"
         )

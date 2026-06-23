@@ -25,7 +25,7 @@ def test_metadata_coordinator_state_transitions() -> None:
     session = PlaybackSessionContext.balanced()
     cfg = AppConfig()
     
-    coord = MetadataCoordinator(app, session, cfg)
+    coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
     assert coord.snapshot().state == "open"
     assert coord.snapshot().closed is False
     
@@ -43,7 +43,7 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     session = PlaybackSessionContext.balanced()
     cfg = AppConfig()
     
-    coord = MetadataCoordinator(app, session, cfg)
+    coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
     
     stages_called = []
     
@@ -76,7 +76,7 @@ def test_metadata_coordinator_debounce_request_id(monkeypatch) -> None:
     session = PlaybackSessionContext.balanced()
     cfg = AppConfig()
     
-    coord = MetadataCoordinator(app, session, cfg)
+    coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
     
     stages_called = []
     
@@ -151,6 +151,7 @@ def test_telemetry_summary_contains_picker_cleanup() -> None:
     )
     summary = logger.get_summary()
     
+    assert summary is not None
     assert "background" in summary
     assert summary["background"]["picker_cleanup"]["ok"] is True
     assert summary["background"]["picker_cleanup"]["resources"][0]["name"] == "test-picker"

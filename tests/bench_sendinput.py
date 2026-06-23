@@ -25,7 +25,7 @@ ITERATIONS = 2000
 
 def main() -> int:
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
     from sky_music.platform.win32.inputs import (
@@ -55,7 +55,7 @@ def main() -> int:
     def stats(xs: list[int], label: str) -> None:
         xs = sorted(xs)
         n = len(xs)
-        p = lambda q: xs[min(n - 1, int(q * n))]
+        def p(q: float) -> int: return xs[min(n - 1, int(q * n))]
         print(
             f"  {label}: n={n} p50={p(.5)} p90={p(.9)} p95={p(.95)} p99={p(.99)} "
             f"max={xs[-1]} (us)"

@@ -6,19 +6,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sky_music.config import AppConfig
-from sky_music.domain.parser import parse_song_file
-from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
-from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.layouts import DefaultNoteResolver, SKY_15_KEY_PROFILE
+from sky_music.config import AppConfig  # noqa: E402
+from sky_music.domain.parser import parse_song_file  # noqa: E402
+from sky_music.domain.scheduler import build_key_actions  # noqa: E402
+from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction  # noqa: E402
+from sky_music.domain.session_context import PlaybackSessionContext  # noqa: E402
+from sky_music.layouts import DefaultNoteResolver, SKY_15_KEY_PROFILE  # noqa: E402
 
 
 SUPPORTED_SUFFIXES = {".json", ".skysheet"}

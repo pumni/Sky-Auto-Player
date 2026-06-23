@@ -1,13 +1,9 @@
-import sys
 import json
-from pathlib import Path
+
 import pytest
 
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
-
 from sky_music.domain.parser import parse_song_file
-from sky_music.domain.validation import SongParseError, SongValidationError
+from sky_music.domain.validation import SongValidationError
 
 @pytest.fixture
 def tmp_song_file(tmp_path):

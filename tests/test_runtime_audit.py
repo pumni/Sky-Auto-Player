@@ -20,7 +20,6 @@ from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
 from test_runtime_dispatch import (
     FakeClock,
     FakeSleeper,
-    OneShotStallingSleeper,
     TimedBackend,
     action,
     play,

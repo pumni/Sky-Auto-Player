@@ -404,7 +404,6 @@ def test_repeat_clean_ground_truth_song_never_drops_end_to_end():
     # and a same-key repeat the scheduler called feasible is being lost in the runtime again.
     from sky_music.domain.scheduler import build_key_actions
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.layouts import SKY_15_KEY_PROFILE
 
     cases = (
         (144, (20, 24, 30, 40, 55, 70)),

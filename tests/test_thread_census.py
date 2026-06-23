@@ -1,13 +1,6 @@
-"""Runtime backstop: no picker-phase worker thread may be alive at playback start."""
-
 from __future__ import annotations
 
-import sys
 import threading
-from pathlib import Path
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.domain.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import build_key_actions
@@ -47,6 +40,7 @@ def test_thread_census_detects_leaked_picker_worker() -> None:
         assert leaked is not None
         assert "sky-picker-meta-leak" in leaked
         census = TelemetryLogger.last_thread_census
+        assert census is not None
         assert census["clean"] is False
         assert "sky-picker-meta-leak" in census["leaked_threads"]
     finally:

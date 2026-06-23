@@ -41,7 +41,8 @@ def windows_version_tuple(version: str) -> tuple[int, int, int, int]:
     parts = [int(x) for x in re.findall(r"\d+", version)[:4]]
     while len(parts) < 4:
         parts.append(0)
-    return tuple(parts)
+    p0, p1, p2, p3 = (parts + [0, 0, 0, 0])[:4]
+    return (p0, p1, p2, p3)
 
 def generate_version_info(version: str) -> None:
     v_tuple = windows_version_tuple(version)

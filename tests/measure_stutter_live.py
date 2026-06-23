@@ -47,7 +47,7 @@ def locate_newest_csv() -> Path | None:
 
 def main() -> int:
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -87,7 +87,7 @@ def main() -> int:
     # 2. Start background recording
     stop_event = threading.Event()
     thread = threading.Thread(
-        target=capture_loopback_to_wav,
+        target=capture_loopback_to_wav,  # type: ignore[possibly-unbound]
         args=(out_wav,),
         kwargs={
             "stop_event": stop_event,
@@ -170,7 +170,7 @@ def main() -> int:
     )
     
     # 7. Echo command to re-run
-    print(f"\nTo re-analyze this run later, use:")
+    print("\nTo re-analyze this run later, use:")
     print(f"  uv run python tests/measure_stutter.py {out_wav} {csv_path_str} --fps {args.fps}")
     
     return code

@@ -1,17 +1,11 @@
 import json
-import sys
 from pathlib import Path
-import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import TimingPolicy, FrameTimingPolicy
 
 def get_golden_songs():
-    songs_dir = Path(__file__).parent / "golden_schedules"
     # Map song name keywords to their parsed Song objects
     mapping = {
         "golden_chord_15_keys": "chord_15_keys.json",

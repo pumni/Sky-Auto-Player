@@ -75,13 +75,13 @@ def _pearson(xs: list[float], ys: list[float]) -> float:
     return cov / (sx * sy)
 
 
-def load_sent_rows(csv_path: str) -> list[dict[str, int]]:
+def load_sent_rows(csv_path: str) -> list[dict[str, int | str]]:
     """Return sent dispatch rows with the warmup columns parsed to ints (skips event_index 0).
 
     event_index 0 is skipped: its idle_gap is measured from a zero baseline and is meaningless.
     """
     rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
-    out: list[dict[str, int]] = []
+    out: list[dict[str, int | str]] = []
     for r in rows:
         if not r.get("sent_scan_codes", "").strip():
             continue
@@ -181,7 +181,7 @@ def main() -> int:
     try:
         import sys
 
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
     ap = argparse.ArgumentParser(
@@ -199,7 +199,7 @@ def main() -> int:
         if not rows:
             print(f"{label}: no sent dispatches with warmup columns; skipping.")
             continue
-        results.append(analyze_one(label, rows))
+        results.append(analyze_one(label, rows))  # type: ignore[arg-type]
 
     print_comparison(results)
     return 0

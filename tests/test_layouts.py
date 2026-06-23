@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
-
+from sky_music.domain import NoteKey
 from sky_music.layouts import SKY_15_KEY_PROFILE, SKY_15_KEY_MAP
 
 def test_layout_completeness():
@@ -18,7 +13,7 @@ def test_layout_completeness():
         assert bk in key_map
         
     # Assert all base keys map to unique character bindings
-    mapped_chars = {key_map[bk] for bk in base_keys}
+    mapped_chars = {key_map[NoteKey(bk)] for bk in base_keys}
     assert len(mapped_chars) == 15
     
     # Ensure they map to exactly the classic layout characters

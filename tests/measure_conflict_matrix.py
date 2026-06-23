@@ -16,11 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from sky_music.domain import Song
-from sky_music.domain.parser import parse_song_file, SongParseError
-from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import FrameTimingPolicy
-from sky_music.orchestration.runtime_dispatch import (
+from sky_music.domain import Song  # noqa: E402
+from sky_music.domain.parser import parse_song_file, SongParseError  # noqa: E402
+from sky_music.domain.scheduler import build_key_actions  # noqa: E402
+from sky_music.domain.scheduler_types import FrameTimingPolicy  # noqa: E402
+from sky_music.orchestration.runtime_dispatch import (  # noqa: E402
     RuntimeDispatchCoordinator,
     compile_runtime_intents,
 )
@@ -215,7 +215,7 @@ def main() -> None:
             if k[:1] in "123" and k.startswith(("1Key", "2Key", "3Key")):
                 k = "Key" + k[4:]
             try:
-                sc = resolver.resolve_scan_code(k, "physical")
+                sc = resolver.resolve_scan_code(k, "physical")  # type: ignore[arg-type]
             except Exception:
                 continue
             if sc <= 0:

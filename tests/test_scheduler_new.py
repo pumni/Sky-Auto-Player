@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
 import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import (
@@ -14,6 +9,7 @@ from sky_music.domain.scheduler import (
     plan_same_key_hold,
 )
 from sky_music.domain.scheduler_types import TimingPolicy, KeyAction, FrameTimingPolicy, Microseconds
+
 
 def _policy(d: dict | None = None) -> FrameTimingPolicy:
     return FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict(d or {}))
@@ -188,9 +184,9 @@ def test_same_key_repeat_above_min_hold_is_not_impossible():
 
 def test_prioritization_at_same_timestamp():
     """Verify key event scheduling priorities when multiple events fall on the exact same microsecond."""
-    a_down = KeyAction(at_us=1000, scan_codes=(0x15,), kind="down", reason="onset")
-    a_up_repeat = KeyAction(at_us=1000, scan_codes=(0x15,), kind="up", reason="repeat_release")
-    a_up_normal = KeyAction(at_us=1000, scan_codes=(0x16,), kind="up", reason="release")
+    a_down = KeyAction(at_us=1000, scan_codes=(0x15,), kind="down", reason="onset")  # type: ignore[arg-type]
+    a_up_repeat = KeyAction(at_us=1000, scan_codes=(0x15,), kind="up", reason="repeat_release")  # type: ignore[arg-type]
+    a_up_normal = KeyAction(at_us=1000, scan_codes=(0x16,), kind="up", reason="release")  # type: ignore[arg-type]
     
     unsorted = [a_up_normal, a_down, a_up_repeat]
     def action_priority(action: KeyAction) -> int:
@@ -368,8 +364,8 @@ def test_strict_validation_keeps_duplicate_down_fatal():
         same_key_conflict_policy="strict",
     )
     actions = (
-        KeyAction(at_us=Microseconds(1_000), scan_codes=(0x15,), kind="down", reason="onset"),
-        KeyAction(at_us=Microseconds(1_001), scan_codes=(0x15,), kind="down", reason="onset"),
+        KeyAction(at_us=Microseconds(1_000), scan_codes=(0x15,), kind="down", reason="onset"),  # type: ignore[arg-type]
+        KeyAction(at_us=Microseconds(1_001), scan_codes=(0x15,), kind="down", reason="onset"),  # type: ignore[arg-type]
     )
 
     violations = validate_key_actions(actions, policy=policy)

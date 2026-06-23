@@ -176,7 +176,7 @@ PROCESS_IMAGE_NAME_BUFFER_CHARS = 4096
 _timer_resolution_enabled: bool = False
 
 # Global configuration variables to be updated by main.py
-from sky_music.config import DEFAULT_SKY_PROCESS_NAMES
+from sky_music.config import DEFAULT_SKY_PROCESS_NAMES  # noqa: E402
 
 EXPECTED_PROCESS_NAMES: set[str] = set(DEFAULT_SKY_PROCESS_NAMES)
 ALLOW_TITLE_FALLBACK: bool = False

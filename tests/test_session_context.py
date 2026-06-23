@@ -1,10 +1,6 @@
-import sys
 from pathlib import Path
 
 import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.config import AppConfig, clear_config_cache, FrameTimingDefaults
 from sky_music.domain.session_context import (

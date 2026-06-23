@@ -30,7 +30,7 @@ from sky_music.orchestration.runtime_dispatch import compile_runtime_intents
 
 # Reuse the deterministic fakes from the test suite.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-from test_runtime_dispatch import FakeClock, FakeSleeper, TimedBackend  # noqa: E402
+from test_runtime_dispatch import FakeClock, FakeSleeper, TimedBackend  # noqa: E402  # type: ignore
 
 
 def _bench(fn, repeats: int) -> float:

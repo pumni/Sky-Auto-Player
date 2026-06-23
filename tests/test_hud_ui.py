@@ -47,12 +47,12 @@ def test_hud_controls_focus_waiting_keeps_refocus_on_narrow_width() -> None:
 
 def test_verbose_hud_timing_uses_fps_fallback_not_na(capsys) -> None:
     renderer = ProgressRenderer(controls=_controls(), verbose=True)
-    renderer.active_policy = FrameTimingPolicy(
+    renderer.active_policy = FrameTimingPolicy(  # type: ignore[attr-defined]
         fps=0,
-        frame_us=0,
-        hold_us=10_000,
-        min_hold_us=10_000,
-        focus_restore_grace_us=100_000,
+        frame_us=0,  # type: ignore[arg-type]
+        hold_us=10_000,  # type: ignore[arg-type]
+        min_hold_us=10_000,  # type: ignore[arg-type]
+        focus_restore_grace_us=100_000,  # type: ignore[arg-type]
         profile_name="fallback",
     )
 

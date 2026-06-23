@@ -116,7 +116,7 @@ def test_prompt_song_selection_routes_to_textual(monkeypatch):
         action="dry_run",
         profile_name="balanced",
         tempo_scale=1.0,
-        fps=None,
+        fps=None,  # type: ignore[arg-type]
     )
 
     def fake_textual_picker(**kwargs: object) -> SongPickerResult:

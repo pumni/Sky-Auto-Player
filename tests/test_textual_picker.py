@@ -92,7 +92,7 @@ def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
-        assert table.row_count == len(SONGS)
+        assert table.row_count == len(SONGS)  # type: ignore[attr-defined]
         await pilot.pause()
         await pilot.press("escape")
 
@@ -111,7 +111,7 @@ def test_textual_picker_filters_and_selects_current_row(monkeypatch) -> None:
         await pilot.click("#search")
         await pilot.press("a")
         table = app.query_one("#songs")
-        assert table.row_count == 3
+        assert table.row_count == 3  # type: ignore[attr-defined]
         app.set_focus(table)
         await pilot.press("down")
         await pilot.press("enter")
@@ -215,11 +215,11 @@ def test_table_arrow_moves_one_row_from_initial_focus(monkeypatch) -> None:
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
         assert app.focused is table
-        assert table.cursor_row == 0
+        assert table.cursor_row == 0  # type: ignore[attr-defined]
         await pilot.press("down")
-        assert table.cursor_row == 1
+        assert table.cursor_row == 1  # type: ignore[attr-defined]
         await pilot.press("escape")
-
+    
     app = run_picker(_run_app(actions))
     assert app.return_value is None
 
@@ -249,9 +249,9 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
         await pilot.press("escape")
         await pilot.pause()
         await pilot.press("down")
-        assert table.cursor_row == 1
+        assert table.cursor_row == 1  # type: ignore[attr-defined]
         await pilot.press("escape")
-
+    
     app = run_picker(_run_app(actions))
     assert app.return_value is None
     assert saves == []
@@ -671,12 +671,12 @@ def test_search_interaction_navigation_and_escape(monkeypatch) -> None:
         assert search.has_focus
         assert not table.has_focus
 
-        assert table.cursor_row == 0
+        assert table.cursor_row == 0  # type: ignore[attr-defined]
         await pilot.press("down")
-        assert table.cursor_row == 1
+        assert table.cursor_row == 1  # type: ignore[attr-defined]
 
         await pilot.press("up")
-        assert table.cursor_row == 0
+        assert table.cursor_row == 0  # type: ignore[attr-defined]
 
         await pilot.press("escape")
         assert table.has_focus
@@ -697,8 +697,8 @@ def test_double_click_row_selects_song(monkeypatch) -> None:
         table = app.query_one("#songs")
         from textual.widgets import DataTable
         
-        row_keys = list(table._data.keys())
-        event = DataTable.RowSelected(table, cursor_row=1, row_key=row_keys[1])
+        row_keys = list(table._data.keys())  # type: ignore[attr-defined]
+        event = DataTable.RowSelected(table, cursor_row=1, row_key=row_keys[1])  # type: ignore[arg-type]
         app.post_message(event)
         await pilot.pause()
 
@@ -843,7 +843,7 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
         app._apply_responsive_columns()
         
         # Verify that dynamic title width has been updated
-        title_col = next((c for c in table.ordered_columns if c.key.value == "title"), None)
+        title_col = next((c for c in table.ordered_columns if c.key.value == "title"), None)  # type: ignore[attr-defined]
         assert title_col is not None
         assert title_col.width == 43
 

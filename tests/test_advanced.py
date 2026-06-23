@@ -1,15 +1,11 @@
-import sys
 import random
-from pathlib import Path
-import pytest
 
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
+import pytest
 
 from sky_music.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
-from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_FINISHED
+from sky_music.infrastructure.backend import WinSendInputBackend
+
 
 def generate_random_song(num_notes: int = 100) -> Song:
     """Helper to generate a random song with diverse chord sizes and overlapping notes."""
@@ -80,7 +76,7 @@ def test_fault_injection_and_recovery():
 
     backend = WinSendInputBackend()
     mock_inputs = FaultyInputs()
-    backend.inputs_module = mock_inputs
+    backend.inputs_module = mock_inputs  # type: ignore[assignment]
     
     # 1. Successful down
     backend.key_down((0x15, 0x16))
@@ -126,7 +122,7 @@ def test_fault_injection_cleanup_fail_retry():
 
     backend = WinSendInputBackend()
     mock_inputs = MultiFaultyInputs()
-    backend.inputs_module = mock_inputs
+    backend.inputs_module = mock_inputs  # type: ignore[assignment]
     
     # 1. Try to inject KeyDown which fails, and its emergency cleanup KeyUp also fails
     with pytest.raises(OSError, match="KeyDown Failed"):

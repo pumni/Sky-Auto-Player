@@ -497,7 +497,7 @@ def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionCont
     return PlaybackSessionContext(
         profile_name=str(payload.get("profile_name", "balanced")),
         tempo_scale=float(payload.get("tempo_scale", 1.0)),
-        fps=payload.get("fps"),
+        fps=payload.get("fps"),  # type: ignore[arg-type]
         scan_code_mode=str(payload.get("scan_code_mode", "physical")),
         same_key_conflict_policy=conflict_policy,  # type: ignore[arg-type]
         policy_overrides=tuple(overrides),
@@ -611,7 +611,7 @@ def store_computed_song_ui_metadata_payloads(
                     pass
     except Exception:
         try:
-            conn.rollback()
+            conn.rollback()  # type: ignore[possibly-unbound]
         except Exception:
             pass
         return 0

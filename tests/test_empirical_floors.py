@@ -7,13 +7,7 @@ fails loudly instead of silently regressing reliability:
   - frame-aware sizing is disabled at fps=0/None (expert/experiment escape hatch)
 """
 
-import sys
-from pathlib import Path
-
 import pytest
-
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.config import AppConfig, FrameTimingDefaults, clear_config_cache, load_config
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
@@ -76,6 +70,6 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
         clear_config_cache()
 
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
-    policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())
+    policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())  # type: ignore[arg-type]
     assert policy.frame_us == 16667
     assert policy.hold_us == policy.min_hold_us == 17000

@@ -80,7 +80,7 @@ def run_song(path: str, fps: int) -> tuple[int, int, int]:
 def main() -> int:
     # Windows consoles default to cp1252; song filenames contain non-Latin-1 chars (e.g. Vietnamese).
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
     files = sorted(

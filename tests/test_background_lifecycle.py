@@ -7,7 +7,6 @@ from sky_music.infrastructure.background import (
     BackgroundScope,
     ExecutorResource,
     WorkerSnapshot,
-    ResourceState,
     BackgroundCleanupError,
 )
 

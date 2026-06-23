@@ -1,10 +1,5 @@
-import sys
 import json
 from pathlib import Path
-
-# Add src to sys.path to access local imports
-src_dir = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_dir))
 
 from sky_music.domain import Song, Note, NoteKey, Millis
 from sky_music.domain.scheduler import build_key_actions

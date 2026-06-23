@@ -274,7 +274,7 @@ class ProgressRenderer:
 
         # Insert timing info if verbose
         if self.verbose and getattr(self, "active_policy", None) is not None:
-            pol = self.active_policy
+            pol = self.active_policy  # type: ignore[attr-defined]
             fps = resolve_game_fps(getattr(pol, "fps", None))
             frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
             frame_label = f"{frame_us}us"
