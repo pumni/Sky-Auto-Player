@@ -126,35 +126,38 @@ class SongTable(DataTable[str]):
         Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
     ]
 
+    def _run_action(self, name: str) -> None:
+        getattr(self.app, f"action_{name}")()
+
     def action_open_commands(self) -> None:
-        self.app.action_open_commands()
+        self._run_action("open_commands")
 
     def action_open_profile(self) -> None:
-        self.app.action_open_profile()
+        self._run_action("open_profile")
 
     def action_open_tempo(self) -> None:
-        self.app.action_open_tempo()
+        self._run_action("open_tempo")
 
     def action_open_fps(self) -> None:
-        self.app.action_open_fps()
+        self._run_action("open_fps")
 
     def action_open_theme(self) -> None:
-        self.app.action_open_theme()
+        self._run_action("open_theme")
 
     def action_toggle_preview(self) -> None:
-        self.app.action_toggle_preview()
+        self._run_action("toggle_preview")
 
     def action_toggle_dry_run(self) -> None:
-        self.app.action_toggle_dry_run()
+        self._run_action("toggle_dry_run")
 
     def action_toggle_hud(self) -> None:
-        self.app.action_toggle_hud()
+        self._run_action("toggle_hud")
 
     def action_toggle_telemetry(self) -> None:
-        self.app.action_toggle_telemetry()
+        self._run_action("toggle_telemetry")
 
     def action_reload_songs(self) -> None:
-        self.app.action_reload_songs()
+        self._run_action("reload_songs")
 
 
 @dataclass(frozen=True, slots=True)

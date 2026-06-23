@@ -239,8 +239,8 @@ class PlaybackEngine:
     def _should_use_dispatch_thread(self) -> bool:
         return (
             self.use_dispatch_thread
-            and type(self.clock) is PerfCounterClock
-            and type(self.sleeper) is RealSleeper
+            and isinstance(self.clock, PerfCounterClock)
+            and isinstance(self.sleeper, RealSleeper)
             and self.backend.__class__.__name__ != "DryRunBackend"
         )
 
