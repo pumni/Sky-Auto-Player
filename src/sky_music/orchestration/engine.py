@@ -43,42 +43,109 @@ from sky_music.orchestration.playback_supervisor import (
 class SendLatencyEstimator:
     """Per-kind EMA of SendInput durations used to derive the adaptive dispatch lead.
 
-    The first N samples of each kind yield lead 0 (cold estimates are worse than nothing); the
+    Down durations are bucketed by polyphony (number of scan-codes in the batch, clamped to
+    [1, MAX_POLY]) so that each chord size gets its own EMA.  Fallback chain for an unseeded
+    bucket: online linear model (send ≈ a + b·N, fit across all down samples) → nearest seeded
+    bucket ≤ N → total down EMA → 0.  The linear model lets a rarely-seen or first-of-its-size
+    chord be led correctly (extrapolated) instead of borrowing a smaller chord's smaller lead.
+
+    Warm-start: once the linear model is available, a bucket's EMA is seeded from the linear
+    prediction on its FIRST sample (then refined per-bucket via EMA), so a rare large chord is led
+    well from its first occurrence instead of needing a full cold warm-up.
+
+    Up durations use a single scalar EMA (unchanged from the original design).
+
+    The first N samples of each bucket yield lead 0 (cold estimates are worse than nothing); the
     Nth sample seeds the EMA with the average of all warm-up samples.
     """
 
     _SEED_SAMPLES = 5
+    _MAX_POLY = 6
 
     __slots__ = (
-        "_ema_down",
-        "_ema_up",
-        "_count_down",
-        "_count_up",
-        "_sum_down",
-        "_sum_up",
         "_alpha",
         "_max_lead_us",
+        # Down buckets: index by n_keys (0 unused, 1..MAX_POLY valid)
+        "_count_down",
+        "_sum_down",
+        "_ema_down",
+        "_warm_down",
+        # Down total fallback (all samples regardless of bucket)
+        "_count_down_total",
+        "_sum_down_total",
+        "_ema_down_total",
+        # Online least-squares accumulators for the linear model send ≈ a + b·N (x = n_keys)
+        "_lin_n",
+        "_lin_sx",
+        "_lin_sxx",
+        "_lin_sy",
+        "_lin_sxy",
+        # Up scalar (unchanged — single EMA for all release durations)
+        "_count_up",
+        "_sum_up",
+        "_ema_up",
     )
 
     def __init__(self, alpha: float = 0.2, max_lead_us: int = 2_000) -> None:
-        self._ema_down: float = 0.0
-        self._ema_up: float = 0.0
-        self._count_down: int = 0
-        self._count_up: int = 0
-        self._sum_down: int = 0
-        self._sum_up: int = 0
+        max_poly = self._MAX_POLY
         self._alpha: float = alpha
         self._max_lead_us: int = max_lead_us
+        self._count_down: list[int] = [0] * (max_poly + 1)
+        self._sum_down: list[int] = [0] * (max_poly + 1)
+        self._ema_down: list[float] = [0.0] * (max_poly + 1)
+        self._warm_down: list[bool] = [False] * (max_poly + 1)
+        self._count_down_total: int = 0
+        self._sum_down_total: int = 0
+        self._ema_down_total: float = 0.0
+        self._lin_n: int = 0
+        self._lin_sx: float = 0.0
+        self._lin_sxx: float = 0.0
+        self._lin_sy: float = 0.0
+        self._lin_sxy: float = 0.0
+        self._count_up: int = 0
+        self._sum_up: int = 0
+        self._ema_up: float = 0.0
 
-    def update(self, kind: ActionKind, duration_us: int) -> None:
+    def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None:
         if kind == "down":
-            self._count_down += 1
-            if self._count_down <= self._SEED_SAMPLES:
-                self._sum_down += duration_us
-                if self._count_down == self._SEED_SAMPLES:
-                    self._ema_down = self._sum_down / self._SEED_SAMPLES
+            n = max(1, min(self._MAX_POLY, n_keys))
+            self._count_down[n] += 1
+            if self._warm_down[n]:
+                self._ema_down[n] = (
+                    self._alpha * duration_us + (1.0 - self._alpha) * self._ema_down[n]
+                )
             else:
-                self._ema_down = self._alpha * duration_us + (1.0 - self._alpha) * self._ema_down
+                warm_base = self._predict_linear(n)
+                if warm_base is not None:
+                    # Warm-start this bucket from the linear model (built on prior samples),
+                    # then fold in the current sample so it is usable from the first occurrence.
+                    self._ema_down[n] = (
+                        self._alpha * duration_us + (1.0 - self._alpha) * warm_base
+                    )
+                    self._warm_down[n] = True
+                else:
+                    # Linear model not ready yet: classic accumulate-then-seed.
+                    self._sum_down[n] += duration_us
+                    if self._count_down[n] >= self._SEED_SAMPLES:
+                        self._ema_down[n] = self._sum_down[n] / self._count_down[n]
+                        self._warm_down[n] = True
+            # Total fallback
+            self._count_down_total += 1
+            if self._count_down_total <= self._SEED_SAMPLES:
+                self._sum_down_total += duration_us
+                if self._count_down_total == self._SEED_SAMPLES:
+                    self._ema_down_total = self._sum_down_total / self._SEED_SAMPLES
+            else:
+                self._ema_down_total = (
+                    self._alpha * duration_us
+                    + (1.0 - self._alpha) * self._ema_down_total
+                )
+            # Linear model accumulators (x = polyphony, y = duration)
+            self._lin_n += 1
+            self._lin_sx += n
+            self._lin_sxx += n * n
+            self._lin_sy += duration_us
+            self._lin_sxy += n * duration_us
         elif kind == "up":
             self._count_up += 1
             if self._count_up <= self._SEED_SAMPLES:
@@ -88,11 +155,41 @@ class SendLatencyEstimator:
             else:
                 self._ema_up = self._alpha * duration_us + (1.0 - self._alpha) * self._ema_up
 
-    def get_lead_us(self, kind: ActionKind) -> int:
+    def _predict_linear(self, n: int) -> int | None:
+        """Predict send duration for polyphony n via online least-squares (a + b·N).
+
+        Returns None until there are enough samples spanning ≥2 distinct polyphony values
+        (otherwise the slope is undefined). Lets an unseen/rare chord size be extrapolated
+        instead of borrowing a smaller chord's smaller lead.
+        """
+        count = self._lin_n
+        if count < self._SEED_SAMPLES:
+            return None
+        denom = count * self._lin_sxx - self._lin_sx * self._lin_sx
+        if denom <= 0:  # all samples share one polyphony → slope undefined
+            return None
+        slope = (count * self._lin_sxy - self._lin_sx * self._lin_sy) / denom
+        intercept = (self._lin_sy - slope * self._lin_sx) / count
+        return max(0, min(self._max_lead_us, round(intercept + slope * n)))
+
+    def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
         if kind == "down":
-            if self._count_down < self._SEED_SAMPLES:
-                return 0
-            return max(0, min(self._max_lead_us, round(self._ema_down)))
+            n = max(1, min(self._MAX_POLY, n_keys))
+            # Exact bucket usable (seeded or warm-started)?
+            if self._warm_down[n]:
+                return max(0, min(self._max_lead_us, round(self._ema_down[n])))
+            # Linear extrapolation (best for an unseen/rare chord size)
+            predicted = self._predict_linear(n)
+            if predicted is not None:
+                return predicted
+            # Nearest usable bucket ≤ n
+            for b in range(n, 0, -1):
+                if self._warm_down[b]:
+                    return max(0, min(self._max_lead_us, round(self._ema_down[b])))
+            # Total fallback
+            if self._count_down_total >= self._SEED_SAMPLES:
+                return max(0, min(self._max_lead_us, round(self._ema_down_total)))
+            return 0
         if kind == "up":
             if self._count_up < self._SEED_SAMPLES:
                 return 0

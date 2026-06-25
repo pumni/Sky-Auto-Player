@@ -248,6 +248,21 @@ class DispatchLoop:
         lead_down += self.onset_bias_us
         return lead_down, lead_up
 
+    def _down_lead_for_batch(self, batch: RuntimeActionBatch) -> int:
+        # onset_bias_us is an onset-only (key-down) knob — never added to releases.
+        if batch.kind == "up":
+            if self.dispatch_lead_us > 0:
+                return self.dispatch_lead_us
+            if self.enable_adaptive_lead and self.estimator is not None:
+                return self.estimator.get_lead_us("up")
+            return 0
+        if self.dispatch_lead_us > 0:
+            return self.dispatch_lead_us + self.onset_bias_us
+        base = 0
+        if self.enable_adaptive_lead and self.estimator is not None:
+            base = self.estimator.get_lead_us("down", len(batch.intents))
+        return base + self.onset_bias_us
+
     def _record_overshoot(self, elapsed_us: int, target_elapsed_us: int) -> None:
         overshoot_us = elapsed_us - target_elapsed_us
         if overshoot_us > 0:
@@ -437,7 +452,7 @@ class DispatchLoop:
             applied_lead_us=lead_down,
         )
         if self.enable_adaptive_lead and self.estimator is not None:
-            self.estimator.update("down", result.send_duration_us)
+            self.estimator.update("down", result.send_duration_us, n_keys=len(playable))
         self.coordinator.activate_sent_downs(
             playable,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -854,7 +869,9 @@ class DispatchLoop:
             if self.enable_adaptive_lead and self.estimator is not None:
                 _, lead_up = self.get_current_leads()
 
-        for batch in self.coordinator.pop_due_authored(now_us, lead_down):
+        for batch in self.coordinator.pop_due_authored(
+            now_us, lead_down, lead_for_batch=self._down_lead_for_batch
+        ):
             if batch.kind == "up":
                 self._request_up_batch(batch, state)
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)
@@ -864,7 +881,8 @@ class DispatchLoop:
                 if self.enable_adaptive_lead and self.estimator is not None:
                     _, lead_up = self.get_current_leads()
             else:
-                results.append(self._dispatch_down_batch(batch, state, lead_down=lead_down, now_us=now_us))
+                down_lead = self._down_lead_for_batch(batch)
+                results.append(self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us))
                 if self.enable_adaptive_lead and self.estimator is not None:
                     lead_down, _ = self.get_current_leads()
 
@@ -892,7 +910,9 @@ class DispatchLoop:
         try:
             while not self.coordinator.is_finished():
                 lead_down, lead_up = self.get_current_leads()
-                deadline_us = self.coordinator.next_deadline_us(lead_down, lead_up)
+                deadline_us = self.coordinator.next_deadline_us(
+                    lead_down, lead_up, lead_for_batch=self._down_lead_for_batch
+                )
                 if deadline_us is None:
                     break
                 command_result, last_runtime_poll_us, last_render_time_us, first_action_executed = self._wait_until_runtime_deadline(

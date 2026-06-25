@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -162,27 +163,44 @@ class RuntimeDispatchCoordinator:
                 return True
         return False
 
-    def next_authored_us(self, dispatch_lead_us: int = 0) -> int | None:
+    def next_authored_us(
+        self,
+        dispatch_lead_us: int = 0,
+        *,
+        lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
+    ) -> int | None:
         if self.cursor >= len(self.schedule.batches):
             return None
         batch = self.schedule.batches[self.cursor]
+        lead = dispatch_lead_us
+        if lead_for_batch is not None:
+            lead = lead_for_batch(batch)
         # Guard-aware deadline: while the early pop is blocked, the batch only becomes poppable at
         # its authored time, so report that instead of scheduled - lead. Otherwise the engine
         # would wake at the led deadline, drain nothing, and busy-loop until the blocking release
         # fires (and a fake-clock test would hang forever).
-        if dispatch_lead_us > 0 and self._early_pop_blocked(batch):
+        if lead > 0 and self._early_pop_blocked(batch):
             return batch.scheduled_us
-        return max(0, batch.scheduled_us - dispatch_lead_us)
+        return max(0, batch.scheduled_us - lead)
 
     def next_pending_release_us(self, lead_up: int = 0) -> int | None:
         if not self.pending_by_generation:
             return None
         return min(pending.get_effective_release_us(lead_up) for pending in self.pending_by_generation.values())
 
-    def next_deadline_us(self, dispatch_lead_us: int = 0, lead_up: int = 0) -> int | None:
+    def next_deadline_us(
+        self,
+        dispatch_lead_us: int = 0,
+        lead_up: int = 0,
+        *,
+        lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
+    ) -> int | None:
         deadlines = [
             deadline
-            for deadline in (self.next_authored_us(dispatch_lead_us), self.next_pending_release_us(lead_up))
+            for deadline in (
+                self.next_authored_us(dispatch_lead_us, lead_for_batch=lead_for_batch),
+                self.next_pending_release_us(lead_up),
+            )
             if deadline is not None
         ]
         return min(deadlines, default=None)
@@ -217,13 +235,21 @@ class RuntimeDispatchCoordinator:
             self.pending_scan_codes.discard(pending.scan_code)
         return tuple(due)
 
-    def pop_due_authored(self, now_us: int, dispatch_lead_us: int = 0) -> tuple[RuntimeActionBatch, ...]:
+    def pop_due_authored(
+        self,
+        now_us: int,
+        dispatch_lead_us: int = 0,
+        *,
+        lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
+    ) -> tuple[RuntimeActionBatch, ...]:
         due: list[RuntimeActionBatch] = []
-        while (
-            self.cursor < len(self.schedule.batches)
-            and self.schedule.batches[self.cursor].scheduled_us <= now_us + dispatch_lead_us
-        ):
+        while self.cursor < len(self.schedule.batches):
             batch = self.schedule.batches[self.cursor]
+            lead = dispatch_lead_us
+            if lead_for_batch is not None:
+                lead = lead_for_batch(batch)
+            if batch.scheduled_us > now_us + lead:
+                break
             if batch.scheduled_us > now_us and self._early_pop_blocked(batch):
                 # Cannot pop early; stop popping to preserve timeline order. The batch pops
                 # normally once now_us reaches its authored time (degraded conflict handling in
