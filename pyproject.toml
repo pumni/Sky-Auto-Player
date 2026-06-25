@@ -1,6 +1,6 @@
 [project]
 name = "sky-player"
-version = "2.2.4"
+version = "2.2.5"
 description = "Sky Music Player"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
