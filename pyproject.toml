@@ -3,6 +3,14 @@ name = "sky-player"
 version = "2.2.5"
 description = "Sky Music Player"
 readme = "README.md"
+# The dispatch loop tight-spins on `time.perf_counter_ns` for up to ~800 us per action, and a
+# parallel Textual live-dashboard thread runs alongside it. Under CPython's standard GIL the spin
+# window can starve the UI thread (or vice versa) and yields tail-latency spikes around 100-250 us
+# while a std-GIL + 1 ms switch-interval tuning pushes measurement noise around the spinner. The
+# 3.14 free-threaded build (`cpython-3.14+freethreaded`) cleanly decouples the two threads so the
+# spinner can no longer pre-empt the UI renderer. `rapidfuzz 3.14.5` and `textual 8.2.7` both ship
+# free-threaded-compatible wheels and run unchanged under no-GIL. The exact interpreter is pinned
+# by `.python-version`; keep these two in sync.
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "rapidfuzz>=3.14.5",
