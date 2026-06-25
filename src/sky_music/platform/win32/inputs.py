@@ -371,7 +371,7 @@ def send_input_batch(inputs: list[INPUT]) -> None:
     total_inputs = len(inputs)
     while pending_inputs:
         input_array = (INPUT * len(pending_inputs))(*pending_inputs)
-        sent = user32.SendInput(len(pending_inputs), input_array, ctypes.sizeof(INPUT))
+        sent = user32.SendInput(len(pending_inputs), input_array, _INPUT_SIZE)
         if sent == len(pending_inputs):
             return
         if sent > 0:
@@ -388,6 +388,8 @@ def send_input_batch(inputs: list[INPUT]) -> None:
                 f"or target window handles became invalid."
             )
         _retry_wait_seconds(0.002)
+
+_INPUT_SIZE = ctypes.sizeof(INPUT)
 
 # Cache one immutable INPUT per (scan_code, flags). Sky uses at most ~15 keys x {down, up}, so this
 # is a tiny fixed-size table. Building the KEYBDINPUT/INPUT structs is the bulk of the per-event
@@ -418,7 +420,7 @@ def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) ->
         input_array = (INPUT * n)(*key_inputs)
         _ARRAY_CACHE[cache_key] = input_array
 
-    sent = user32.SendInput(n, input_array, ctypes.sizeof(INPUT))
+    sent = user32.SendInput(n, input_array, _INPUT_SIZE)
     if sent == n:
         return
 

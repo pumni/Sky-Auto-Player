@@ -53,6 +53,8 @@ class InputBackend(Protocol):
 
 
 class _TrackedKeyState:
+    __slots__ = ("active_keys", "possibly_active_keys", "failed_release_keys", "last_error")
+
     active_keys: set[int]
     possibly_active_keys: set[int]
     failed_release_keys: set[int]
@@ -60,23 +62,26 @@ class _TrackedKeyState:
 
     def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
         unique_scan_codes = tuple(dict.fromkeys(scan_codes))
-        duplicates = tuple(sc for sc in unique_scan_codes if sc in self.active_keys)
-        to_send = tuple(sc for sc in unique_scan_codes if sc not in self.active_keys)
-        return to_send, duplicates
+        if not self.active_keys:
+            return unique_scan_codes, ()
+        active = self.active_keys
+        to_send: list[int] = []
+        duplicates: list[int] = []
+        for sc in unique_scan_codes:
+            (duplicates if sc in active else to_send).append(sc)
+        return tuple(to_send), tuple(duplicates)
 
     def _decide_up(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
         unique_scan_codes = tuple(dict.fromkeys(scan_codes))
-        to_release = tuple(
-            sc
-            for sc in unique_scan_codes
-            if sc in self.active_keys or sc in self.possibly_active_keys
-        )
-        already_released = tuple(
-            sc
-            for sc in unique_scan_codes
-            if sc not in self.active_keys and sc not in self.possibly_active_keys
-        )
-        return to_release, already_released
+        active = self.active_keys
+        possibly = self.possibly_active_keys
+        if not active and not possibly:
+            return (), unique_scan_codes
+        to_release: list[int] = []
+        already_released: list[int] = []
+        for sc in unique_scan_codes:
+            (to_release if (sc in active or sc in possibly) else already_released).append(sc)
+        return tuple(to_release), tuple(already_released)
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
         """Returns raw perf_counter µs after send completed, or None if unavailable."""
@@ -140,6 +145,8 @@ class _TrackedKeyState:
 
 class WinSendInputBackend(_TrackedKeyState):
     """Windows-specific SendInput backend wrapper with safety tracking and panic release."""
+    __slots__ = ("inputs_module", "_send_fn", "_send_fn_module")
+
     def __init__(self):
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
@@ -190,7 +197,6 @@ class WinSendInputBackend(_TrackedKeyState):
             self.last_error = f"key_down emergency cleanup failed: {cleanup_error}"
             
     def release_all(self) -> ReleaseAllOutcome:
-        import time
         from sky_music.layouts import PHYSICAL_SCAN_CODES, VK_CODES
         
         # Build inverse map from scan code to VK code for active verification
@@ -323,6 +329,8 @@ class WinSendInputBackend(_TrackedKeyState):
 
 class DryRunBackend(_TrackedKeyState):
     """Mock backend useful for timing analysis, safety state validation, and testing."""
+    __slots__ = ("history",)
+
     def __init__(self):
         self.history = [] # Records tuples of (action_type, scan_codes)
         self.active_keys = set()

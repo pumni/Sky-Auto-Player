@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
@@ -13,7 +14,6 @@ from sky_music.orchestration.runtime_dispatch import (
     RuntimeKeyIntent,
 )
 from dataclasses import dataclass
-from typing import Optional
 from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
@@ -46,13 +46,13 @@ class ExecutionResult:
     dispatch_lateness_us: int = 0  # send_completed_us - action.at_us; player-side completion lateness
 
 
-@dataclass
+@dataclass(slots=True)
 class PlaybackState:
     """Manages the runtime state of the playback loop."""
     start_perf: int
     pause_time_us: int = 0
-    manual_pause_started_us: Optional[int] = None
-    focus_pause_started_us: Optional[int] = None
+    manual_pause_started_us: int | None = None
+    focus_pause_started_us: int | None = None
     epoch_us: int = 0
 
     def __post_init__(self) -> None:
@@ -72,7 +72,7 @@ class PlaybackState:
         self.epoch_us = self.start_perf + self.pause_time_us
         return now_us - old_start_perf
 
-    def get_elapsed_us(self, clock: Clock, now_us: Optional[int] = None) -> int:
+    def get_elapsed_us(self, clock: Clock, now_us: int | None = None) -> int:
         """Compute elapsed playback time in microseconds, accounting for pauses."""
         if now_us is None:
             now_us = clock.now_us()
@@ -194,7 +194,7 @@ class DispatchLoop:
         estimator: Any = None,
         enable_event_pause: bool = False,
         enable_reprobe: bool = False,
-        probe_callback: Optional[Callable[[Sleeper], int]] = None,
+        probe_callback: Callable[[Sleeper], int] | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -354,6 +354,8 @@ class DispatchLoop:
         self,
         batch: RuntimeActionBatch,
         state: PlaybackState,
+        *,
+        lead_down: int,
     ) -> ExecutionResult | None:
         if self.late_pulse_drop_threshold_us is not None:
             now_us = state.get_elapsed_us(self.clock)
@@ -397,7 +399,6 @@ class DispatchLoop:
             at_us=Microseconds(batch.scheduled_us),
             reason=batch.reason,
         )
-        lead_down, _ = self.get_current_leads()
         result = self._execute_action(
             batch.source_action_index,
             action,
@@ -419,6 +420,8 @@ class DispatchLoop:
         self,
         releases: tuple[PendingRelease, ...],
         state: PlaybackState,
+        *,
+        lead_up: int,
     ) -> ExecutionResult | None:
         if not releases:
             return None
@@ -451,7 +454,6 @@ class DispatchLoop:
             at_us=Microseconds(scheduled_us),
             reason=reason,
         )
-        _, lead_up = self.get_current_leads()
         result = self._execute_action(
             representative.source_action_index,
             action,
@@ -802,17 +804,23 @@ class DispatchLoop:
 
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
-            results.append(self._dispatch_pending_releases(pending, state))
+            results.append(self._dispatch_pending_releases(pending, state, lead_up=lead_up))
+            if self.estimator is not None:
+                _, lead_up = self.get_current_leads()
 
         for batch in self.coordinator.pop_due_authored(now_us, lead_down):
             if batch.kind == "up":
                 self._request_up_batch(batch, state)
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)
                 results.append(
-                    self._dispatch_pending_releases(newly_due, state)
+                    self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
                 )
+                if self.estimator is not None:
+                    _, lead_up = self.get_current_leads()
             else:
-                results.append(self._dispatch_down_batch(batch, state))
+                results.append(self._dispatch_down_batch(batch, state, lead_down=lead_down))
+                if self.estimator is not None:
+                    lead_down, _ = self.get_current_leads()
 
         return tuple(results)
 

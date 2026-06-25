@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional, Tuple
 
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
-from sky_music.domain.scheduler_types import KeyAction
+from sky_music.domain.scheduler_types import ActionKind, KeyAction
 from sky_music.infrastructure.backend import InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.focus import FocusGuard, NoopFocusGuard, Win32SkyFocusGuard
 from sky_music.infrastructure.realtime import (
@@ -71,7 +70,7 @@ class SendLatencyEstimator:
         self._alpha: float = alpha
         self._max_lead_us: int = max_lead_us
 
-    def update(self, kind: str, duration_us: int) -> None:
+    def update(self, kind: ActionKind, duration_us: int) -> None:
         if kind == "down":
             self._count_down += 1
             if self._count_down <= self._SEED_SAMPLES:
@@ -89,7 +88,7 @@ class SendLatencyEstimator:
             else:
                 self._ema_up = self._alpha * duration_us + (1.0 - self._alpha) * self._ema_up
 
-    def get_lead_us(self, kind: str) -> int:
+    def get_lead_us(self, kind: ActionKind) -> int:
         if kind == "down":
             if self._count_down < self._SEED_SAMPLES:
                 return 0
@@ -107,20 +106,20 @@ class PlaybackEngine:
     def __init__(
         self,
         song: Song,
-        actions: Tuple[KeyAction, ...],
+        actions: tuple[KeyAction, ...],
         backend: InputBackend,
         controls = None,
         renderer = None,
         telemetry_enabled: bool = False,
         require_focus: bool = True,
-        clock: Optional[Clock] = None,
-        sleeper: Optional[Sleeper] = None,
+        clock: Clock | None = None,
+        sleeper: Sleeper | None = None,
         sleep_policy: SleepPolicy = SleepPolicy(),
-        focus_guard: Optional[FocusGuard] = None,
+        focus_guard: FocusGuard | None = None,
         profile_name: str = "balanced",
         tempo_scale: float = 1.0,
         focus_restore_grace_us: int = 100_000,
-        fps: Optional[int] = None,
+        fps: int | None = None,
         min_hold_us: int = 0,
         same_key_conflict_policy: str = "degraded",
         late_pulse_drop_threshold_us: int | None = None,
@@ -136,7 +135,7 @@ class PlaybackEngine:
         dispatch_lead_us: int = 0,
         enable_event_wait: bool = False,
         enable_epoch_rebase: bool = False,
-        wait_strategy: Optional[WaitStrategy] = None,
+        wait_strategy: WaitStrategy | None = None,
         enable_event_pause: bool = False,
         enable_reprobe: bool = False,
     ):
@@ -298,12 +297,7 @@ class PlaybackEngine:
             probe_callback=self.probe_spin_threshold,
         )
 
-    def probe_spin_threshold(self, sleeper: Sleeper) -> int:
-        """Measure this machine's sleeper wake error and derive the effective spin threshold.
-
-        Called mid-play (after focus restore). Records reprobe_* telemetry keys so the
-        initial probe_* keys from _probe_timer_wake_error remain intact for comparison.
-        """
+    def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
         wake_errors: list[int] = []
         for _ in range(10):
             t0 = self.clock.now_us()
@@ -311,19 +305,36 @@ class PlaybackEngine:
             t1 = self.clock.now_us()
             wake_errors.append((t1 - t0) - 2_000)
 
-        p_max = max(wake_errors)
-        new_threshold = max(300, min(3_000, p_max + 200))
-        self.effective_spin_threshold_us = new_threshold
+        threshold = max(300, min(3_000, max(wake_errors) + 200))
+        self.effective_spin_threshold_us = threshold
 
-        self.telemetry.record_runtime_options(
-            {
-                **self.telemetry.runtime_options,
-                "reprobe_wake_errors_us": wake_errors,
-                "reprobe_effective_spin_threshold_us": new_threshold,
-                "reprobe_trigger": "focus_restore",
-            }
-        )
-        return new_threshold
+        if prefix == "reprobe":
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "reprobe_wake_errors_us": wake_errors,
+                    "reprobe_effective_spin_threshold_us": threshold,
+                    "reprobe_trigger": "focus_restore",
+                }
+            )
+        else:
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "probe_wake_errors_us": wake_errors,
+                    "effective_spin_threshold_us": threshold,
+                    "enable_adaptive_spin": True,
+                }
+            )
+        return threshold
+
+    def probe_spin_threshold(self, sleeper: Sleeper) -> int:
+        """Measure this machine's sleeper wake error and derive the effective spin threshold.
+
+        Called mid-play (after focus restore). Records reprobe_* telemetry keys so the
+        initial probe_* keys from _probe_timer_wake_error remain intact for comparison.
+        """
+        return self._measure_spin_threshold(sleeper, prefix="reprobe")
 
     def _probe_timer_wake_error(self, sleeper: Sleeper) -> None:
         """Measure this machine's sleeper wake error and derive the effective spin threshold.
@@ -333,24 +344,7 @@ class PlaybackEngine:
         Uses the original probe_* telemetry keys (not reprobe_*) so tests can distinguish
         initial probing from mid-play re-probing.
         """
-        wake_errors: list[int] = []
-        for _ in range(10):
-            t0 = self.clock.now_us()
-            sleeper.sleep(0.002)
-            t1 = self.clock.now_us()
-            wake_errors.append((t1 - t0) - 2_000)
-
-        p_max = max(wake_errors)
-        self.effective_spin_threshold_us = max(300, min(3_000, p_max + 200))
-
-        self.telemetry.record_runtime_options(
-            {
-                **self.telemetry.runtime_options,
-                "probe_wake_errors_us": wake_errors,
-                "effective_spin_threshold_us": self.effective_spin_threshold_us,
-                "enable_adaptive_spin": True,
-            }
-        )
+        self._measure_spin_threshold(sleeper, prefix="probe")
 
     def play(self) -> str:
         # Re-resolve the live game window per run
@@ -500,7 +494,7 @@ class PlaybackEngine:
         command_source = None,
         focus_signal = None,
         progress_sink = None,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         resolved_total_time_us = (
             int(total_time_us * 1_000_000)
             if isinstance(total_time_us, float)

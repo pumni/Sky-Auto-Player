@@ -146,6 +146,7 @@ class RuntimeDispatchCoordinator:
             for generation_id in range(schedule.generation_count)
         }
         self.pending_by_generation: dict[int, PendingRelease] = {}
+        self.pending_scan_codes: set[int] = set()
 
     def _early_pop_blocked(self, batch: RuntimeActionBatch) -> bool:
         """No-early-conflict guard predicate: a down batch may not be popped BEFORE its authored
@@ -157,7 +158,7 @@ class RuntimeDispatchCoordinator:
             code = intent.scan_code
             if code in self.active_by_scan_code:
                 return True
-            if any(p.scan_code == code for p in self.pending_by_generation.values()):
+            if code in self.pending_scan_codes:
                 return True
         return False
 
@@ -195,12 +196,16 @@ class RuntimeDispatchCoordinator:
         return {status: counts[status] for status in GENERATION_STATUSES}
 
     def pop_due_pending(self, now_us: int, lead_up: int = 0) -> tuple[PendingRelease, ...]:
-        due = sorted(
-            (
-                pending
-                for pending in self.pending_by_generation.values()
-                if pending.get_effective_release_us(lead_up) <= now_us
-            ),
+        if not self.pending_by_generation:
+            return ()
+        due = [
+            pending
+            for pending in self.pending_by_generation.values()
+            if pending.get_effective_release_us(lead_up) <= now_us
+        ]
+        if not due:
+            return ()
+        due.sort(
             key=lambda pending: (
                 pending.get_effective_release_us(lead_up),
                 pending.source_action_index,
@@ -209,6 +214,7 @@ class RuntimeDispatchCoordinator:
         )
         for pending in due:
             self.pending_by_generation.pop(pending.generation_id, None)
+            self.pending_scan_codes.discard(pending.scan_code)
         return tuple(due)
 
     def pop_due_authored(self, now_us: int, dispatch_lead_us: int = 0) -> tuple[RuntimeActionBatch, ...]:
@@ -309,6 +315,7 @@ class RuntimeDispatchCoordinator:
                 reason=intent.reason,
             )
             self.pending_by_generation[generation_id] = pending
+            self.pending_scan_codes.add(intent.scan_code)
             self.status_by_generation[generation_id] = "release_pending"
             requested.append(pending)
         return tuple(requested), tuple(suppressed)
@@ -341,4 +348,5 @@ class RuntimeDispatchCoordinator:
             self.status_by_generation[generation_id] = "cancelled"
         self.active_by_scan_code.clear()
         self.pending_by_generation.clear()
+        self.pending_scan_codes.clear()
         return cancelled

@@ -24,6 +24,7 @@ These files represent the current system state and contracts:
 ---
 
 ## 2. Active References & Experiments
+* [core-dispatch-hygiene-and-tail-latency-plan.md](core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
 * [main-path-cleanup-and-build-quality-plan.md](main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
 * [2026-06_wasapi-loopback-measurement-plan.md](2026-06_wasapi-loopback-measurement-plan.md) — Active implementation plan for automated after-send measurement using WASAPI loopback.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:

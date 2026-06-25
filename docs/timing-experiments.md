@@ -72,6 +72,15 @@ To record game audio accurately on Windows without background noise:
   Decision: global focus_restore_grace_us = __ / INCONCLUSIVE / REMOVE (grace=0 passes) / CONFIRMATION_LOOP (race detected)
   ```
 
+### O10.7 UI-Contention GIL Tail-Latency Investigation
+* **Objective:** Determine if GIL contention between the Textual UI thread and the real-time dispatch thread introduces tail latency at the dispatch loop.
+* **Tooling:** Automated using [measure_dispatch_tail.py](file:///d:/Dev/Sky%20Player/scripts/measure_dispatch_tail.py) simulating 60Hz UI load (GIL contention) and SendInput latency (empirical distribution: p50≈477µs, p99≈953µs, max≈1695µs).
+* **Matrix results (2026-06-25):**
+  - **Load Off / Def:** p50 lateness: -567.0µs | p99 lateness: 62.0µs | max lateness: 68.0µs
+  - **Load On / 1ms:** p50 lateness: -568.0µs | p99 lateness: 40.0µs | max lateness: 334.0µs
+  - **Load On / 5ms:** p50 lateness: -555.0µs | p99 lateness: 60.0µs | max lateness: 128.0µs
+* **Decision:** **REJECT/CLOSE free-threaded python migration**. The maximum lateness change under maximum GIL contention (60Hz UI thread load) is only +266µs (334.0µs vs 68.0µs), well below the 500µs decision threshold. The current `switch-interval` tuning (1ms) is highly sufficient to handle GIL contention. No free-threaded Python migration is necessary.
+
 ---
 
 ## 2. Phase G Validation Results (Vietnamese Detail Record)
