@@ -60,6 +60,12 @@ class _TrackedKeyState:
     failed_release_keys: set[int]
     last_error: str | None
 
+    def __init__(self) -> None:
+        self.active_keys: set[int] = set()
+        self.possibly_active_keys: set[int] = set()
+        self.failed_release_keys: set[int] = set()
+        self.last_error: str | None = None
+
     def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
         unique_scan_codes = tuple(dict.fromkeys(scan_codes))
         if not self.active_keys:
@@ -148,6 +154,7 @@ class WinSendInputBackend(_TrackedKeyState):
     __slots__ = ("inputs_module", "_send_fn", "_send_fn_module")
 
     def __init__(self):
+        super().__init__()
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
         self.inputs_module = inputs
@@ -155,10 +162,6 @@ class WinSendInputBackend(_TrackedKeyState):
             inputs, "send_scan_code_batch_trusted", inputs.send_scan_code_batch
         )
         self._send_fn_module = inputs  # track which module _send_fn was resolved from
-        self.active_keys = set()
-        self.possibly_active_keys = set()
-        self.failed_release_keys = set()
-        self.last_error: str | None = None
         
     def get_health(self) -> BackendHealth:
         return BackendHealth(
@@ -332,11 +335,8 @@ class DryRunBackend(_TrackedKeyState):
     __slots__ = ("history",)
 
     def __init__(self):
-        self.history = [] # Records tuples of (action_type, scan_codes)
-        self.active_keys = set()
-        self.possibly_active_keys = set()
-        self.failed_release_keys = set()
-        self.last_error: str | None = None
+        super().__init__()
+        self.history: list[tuple[str, tuple[int, ...]]] = []  # Records (action_type, scan_codes)
         
     def get_health(self) -> BackendHealth:
         return BackendHealth(

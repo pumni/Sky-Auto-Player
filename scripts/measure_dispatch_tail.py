@@ -18,13 +18,10 @@ from sky_music.orchestration.playback_supervisor import PLAYBACK_FINISHED
 class SyntheticLatencyBackend(_TrackedKeyState):
     __slots__ = ("clock", "history")
 
-    def __init__(self, clock):
+    def __init__(self, clock: PerfCounterClock) -> None:
+        super().__init__()
         self.clock = clock
-        self.active_keys = set()
-        self.possibly_active_keys = set()
-        self.failed_release_keys = set()
-        self.last_error = None
-        self.history = []
+        self.history: list[tuple[str, tuple[int, ...]]] = []
 
     def get_health(self) -> BackendHealth:
         return BackendHealth(
