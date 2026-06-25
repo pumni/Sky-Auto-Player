@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
@@ -72,16 +72,18 @@ class PlaybackState:
         self.epoch_us = self.start_perf + self.pause_time_us
         return now_us - old_start_perf
 
-    def get_elapsed_us(self, clock: Clock) -> int:
+    def get_elapsed_us(self, clock: Clock, now_us: Optional[int] = None) -> int:
         """Compute elapsed playback time in microseconds, accounting for pauses."""
+        if now_us is None:
+            now_us = clock.now_us()
         if self.manual_pause_started_us is not None:
             elapsed = self.manual_pause_started_us - self.epoch_us
             if self.focus_pause_started_us is not None:
-                elapsed -= (clock.now_us() - self.focus_pause_started_us)
+                elapsed -= (now_us - self.focus_pause_started_us)
             return max(0, elapsed)
         if self.focus_pause_started_us is not None:
             return max(0, self.focus_pause_started_us - self.epoch_us)
-        return max(0, clock.now_us() - self.epoch_us)
+        return max(0, now_us - self.epoch_us)
 
 if TYPE_CHECKING:
     from sky_music.orchestration.telemetry import TelemetryLogger
@@ -190,6 +192,9 @@ class DispatchLoop:
         enable_event_wait: bool = False,
         dispatch_lead_us: int = 0,
         estimator: Any = None,
+        enable_event_pause: bool = False,
+        enable_reprobe: bool = False,
+        probe_callback: Optional[Callable[[Sleeper], int]] = None,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -208,6 +213,17 @@ class DispatchLoop:
         self.enable_event_wait = enable_event_wait
         self.dispatch_lead_us = dispatch_lead_us
         self.estimator = estimator
+        self.enable_event_pause = enable_event_pause
+        self.enable_reprobe = enable_reprobe
+        self.probe_callback = probe_callback
+
+        self._win32_inputs = None
+        if self.enable_event_pause:
+            try:
+                from sky_music.platform.win32 import inputs
+                self._win32_inputs = inputs
+            except (ImportError, AttributeError):
+                pass
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -277,13 +293,13 @@ class DispatchLoop:
         applied_lead_us: int = 0,
     ) -> ExecutionResult:
         send_start_raw = self.clock.now_us()
-        send_start_us = state.get_elapsed_us(self.clock)
+        send_start_us = state.get_elapsed_us(self.clock, send_start_raw)
         if action.kind == "down":
             send_result = self.backend.key_down(action.scan_codes)
         else:
             send_result = self.backend.key_up(action.scan_codes)
         send_end_raw = self.clock.now_us()
-        send_end_us = state.get_elapsed_us(self.clock)
+        send_end_us = state.get_elapsed_us(self.clock, send_end_raw)
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
         self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
@@ -540,6 +556,7 @@ class DispatchLoop:
         command_source: Any,
         focus_signal: Any,
         progress_sink: Any,
+        command_event: int | None = None,
     ) -> tuple[bool, str | None]:
         if state.manual_pause_started_us is not None:
             progress_sink.publish(
@@ -549,7 +566,10 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
-            self.sleeper.sleep(self.sleep_policy.poll_s)
+            if self.enable_event_pause and command_event is not None and self._win32_inputs is not None:
+                self._win32_inputs.wait_for_multiple_objects((command_event,), self._win32_inputs.INFINITE)
+            else:
+                self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
         if self.health_monitor.require_focus and not focus_signal.is_active():
@@ -564,7 +584,10 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
-            self.sleeper.sleep(self.sleep_policy.poll_s)
+            if self.enable_event_pause and command_event is not None and self._win32_inputs is not None:
+                self._win32_inputs.wait_for_multiple_objects((command_event,), self._win32_inputs.INFINITE)
+            else:
+                self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
         if state.focus_pause_started_us is not None:
@@ -583,6 +606,10 @@ class DispatchLoop:
                     return True, cmd_res
                 if early_cmd in ("pause", "panic"):
                     break
+
+            if self.enable_reprobe and self.probe_callback is not None and self.sleeper is not None:
+                new_threshold = self.probe_callback(self.sleeper)
+                self.spin_threshold_us = new_threshold
 
             pause_duration_us = self.clock.now_us() - state.focus_pause_started_us
             state.update_pause_time(pause_duration_us)
@@ -611,6 +638,7 @@ class DispatchLoop:
         progress_sink: Any,
         *,
         check_focus_signal: bool,
+        command_event: int | None = None,
     ) -> str | None:
         while True:
             needs_service = (
@@ -642,6 +670,7 @@ class DispatchLoop:
                 command_source,
                 focus_signal,
                 progress_sink,
+                command_event=command_event,
             )
             if wait_cmd:
                 return wait_cmd
@@ -673,6 +702,7 @@ class DispatchLoop:
                     focus_signal,
                     progress_sink,
                     check_focus_signal=False,
+                    command_event=command_event,
                 )
                 if service_result:
                     return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed
@@ -702,6 +732,7 @@ class DispatchLoop:
                 focus_signal,
                 progress_sink,
                 check_focus_signal=True,
+                command_event=command_event,
             )
             if service_result:
                 return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed

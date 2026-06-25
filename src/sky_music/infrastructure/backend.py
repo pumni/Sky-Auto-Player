@@ -144,6 +144,10 @@ class WinSendInputBackend(_TrackedKeyState):
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
         self.inputs_module = inputs
+        self._send_fn = getattr(
+            inputs, "send_scan_code_batch_trusted", inputs.send_scan_code_batch
+        )
+        self._send_fn_module = inputs  # track which module _send_fn was resolved from
         self.active_keys = set()
         self.possibly_active_keys = set()
         self.failed_release_keys = set()
@@ -158,12 +162,21 @@ class WinSendInputBackend(_TrackedKeyState):
         )
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
-        send_fn = getattr(
-            self.inputs_module,
-            "send_scan_code_batch_trusted",
-            self.inputs_module.send_scan_code_batch,
-        )
-        send_fn(scan_codes, key_up=key_up)
+        # Re-resolve send_fn if inputs_module was replaced (e.g. in tests via monkeypatching)
+        inputs_module = self.inputs_module
+        try:
+            cached_module = self._send_fn_module
+        except AttributeError:
+            cached_module = None
+
+        if cached_module is not inputs_module:
+            self._send_fn = getattr(
+                inputs_module,
+                "send_scan_code_batch_trusted",
+                inputs_module.send_scan_code_batch,
+            )
+            self._send_fn_module = inputs_module
+        self._send_fn(scan_codes, key_up=key_up)
         return time.perf_counter_ns() // 1000
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:

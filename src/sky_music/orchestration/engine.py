@@ -137,6 +137,8 @@ class PlaybackEngine:
         enable_event_wait: bool = False,
         enable_epoch_rebase: bool = False,
         wait_strategy: Optional[WaitStrategy] = None,
+        enable_event_pause: bool = False,
+        enable_reprobe: bool = False,
     ):
         self.song = song
         self.actions = actions
@@ -164,6 +166,8 @@ class PlaybackEngine:
         self.dispatch_lead_us = max(0, int(dispatch_lead_us))
         self.enable_event_wait = bool(enable_event_wait)
         self.enable_epoch_rebase = bool(enable_epoch_rebase)
+        self.enable_event_pause = bool(enable_event_pause)
+        self.enable_reprobe = bool(enable_reprobe)
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
         self._wait_strategy: WaitStrategy = (
             wait_strategy
@@ -289,13 +293,45 @@ class PlaybackEngine:
             enable_event_wait=self.enable_event_wait,
             dispatch_lead_us=self.dispatch_lead_us,
             estimator=self.estimator,
+            enable_event_pause=self.enable_event_pause,
+            enable_reprobe=self.enable_reprobe,
+            probe_callback=self.probe_spin_threshold,
         )
+
+    def probe_spin_threshold(self, sleeper: Sleeper) -> int:
+        """Measure this machine's sleeper wake error and derive the effective spin threshold.
+
+        Called mid-play (after focus restore). Records reprobe_* telemetry keys so the
+        initial probe_* keys from _probe_timer_wake_error remain intact for comparison.
+        """
+        wake_errors: list[int] = []
+        for _ in range(10):
+            t0 = self.clock.now_us()
+            sleeper.sleep(0.002)
+            t1 = self.clock.now_us()
+            wake_errors.append((t1 - t0) - 2_000)
+
+        p_max = max(wake_errors)
+        new_threshold = max(300, min(3_000, p_max + 200))
+        self.effective_spin_threshold_us = new_threshold
+
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "reprobe_wake_errors_us": wake_errors,
+                "reprobe_effective_spin_threshold_us": new_threshold,
+                "reprobe_trigger": "focus_restore",
+            }
+        )
+        return new_threshold
 
     def _probe_timer_wake_error(self, sleeper: Sleeper) -> None:
         """Measure this machine's sleeper wake error and derive the effective spin threshold.
 
         Runs strictly BEFORE the playback perf anchor (start_perf) is captured, like gc.collect():
         nothing may delay the dispatch start after the anchor or the first onsets compress.
+        Uses the original probe_* telemetry keys (not reprobe_*) so tests can distinguish
+        initial probing from mid-play re-probing.
         """
         wake_errors: list[int] = []
         for _ in range(10):

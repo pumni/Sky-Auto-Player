@@ -130,7 +130,15 @@ def validate_key_actions(
                     hold = action.at_us - down_at
                     frame_floor = int(policy.frame_us) if getattr(policy, "frame_us", 0) else 0
                     min_req = max(ABSOLUTE_MIN_HOLD_US, frame_floor)
-                    if hold < min_req:
+                    if frame_floor > 0 and hold < frame_floor:
+                        violations.append(ScheduleInvariantViolation(
+                            code="insufficient_hold",
+                            message=f"Hold duration for scan code {sc} is {hold}us, below 1-frame floor {frame_floor}us",
+                            at_us=action.at_us,
+                            scan_code=sc,
+                            severity="fatal"
+                        ))
+                    elif hold < min_req:
                         severity = "fatal" if policy.same_key_conflict_policy == "strict" else "warning"
                         violations.append(ScheduleInvariantViolation(
                             code="insufficient_hold",
