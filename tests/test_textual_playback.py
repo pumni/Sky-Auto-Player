@@ -1579,7 +1579,7 @@ def test_debug_stats_calculation() -> None:
     assert stats.late_10ms == 0
     assert stats.p50_ms == 0.0
     assert stats.p95_ms == 0.0
-    assert stats.jitter_ms == 0.0
+    assert stats.sigma_onset_ms == 0.0
     assert stats.active_keys == 0
     assert stats.stuck_keys == 0
     assert stats.backend_status == "healthy"
@@ -1601,7 +1601,7 @@ def test_debug_stats_calculation() -> None:
     assert stats.late_10ms == 1
     assert stats.p50_ms == 4.0
     assert stats.p95_ms == 15.0
-    assert abs(stats.jitter_ms - expected_jitter) < 1e-5
+    assert abs(stats.sigma_onset_ms - expected_jitter) < 1e-5
 
     # Mock backend health
     class MockBackendHealth:

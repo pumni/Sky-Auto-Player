@@ -66,22 +66,36 @@ class DebugStats:
     late_10ms: int
     p50_ms: float
     p95_ms: float
-    jitter_ms: float
+    sigma_onset_ms: float  # renamed from jitter_ms: stdev of signed onset latency
     active_keys: int
     stuck_keys: int
     backend_status: str
 
+
 class SnapshotRenderer:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.snapshot: PlaybackSnapshot | None = None
+        self._snapshot_data: PlaybackSnapshot | None = None
+        # Onset-only counters (key-down) — these are what the player hears
         self.max_lateness_us: int = 0
         self.late_2ms: int = 0
         self.late_5ms: int = 0
         self.late_10ms: int = 0
-        self._latencies: deque = deque(maxlen=4096)
+        # Signed onset latencies for p50/p95/σ (deque of raw signed int)
+        self._latencies: deque[int] = deque(maxlen=512)
+        # Release counters (key-up) — separate from onset, verbose only
+        self.release_late_2ms: int = 0
+        self.release_max_us: int = 0
         self.done: bool = False
         self.finish_message: str = ""
+
+    @property
+    def snapshot(self) -> PlaybackSnapshot | None:
+        return self._snapshot_data
+
+    @snapshot.setter
+    def snapshot(self, value: PlaybackSnapshot | None) -> None:
+        self._snapshot_data = value
 
     def render(
         self,
@@ -103,16 +117,28 @@ class SnapshotRenderer:
                 backend_health=backend_health,
             )
 
-    def update_counters(self, lateness_us: int) -> None:
-        if lateness_us > self.max_lateness_us:
-            self.max_lateness_us = lateness_us
-        if lateness_us > 2000:
-            self.late_2ms += 1
-        if lateness_us > 5000:
-            self.late_5ms += 1
-        if lateness_us > 10000:
-            self.late_10ms += 1
-        self._latencies.append(lateness_us)
+    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
+        """Called after each SendInput dispatch. Uses signed lateness_us; onset (down) only
+        updates the p50/p95/σ ring buffer. Threshold counters use max(0, ...) to avoid
+        counting early arrivals as 'late'."""
+        clamped = max(0, lateness_us)
+        if kind == "down":
+            if clamped > self.max_lateness_us:
+                self.max_lateness_us = clamped
+            if clamped > 2000:
+                self.late_2ms += 1
+            if clamped > 5000:
+                self.late_5ms += 1
+            if clamped > 10000:
+                self.late_10ms += 1
+            # Store signed latency for dispersion stats (early arrivals show as negative)
+            self._latencies.append(lateness_us)
+        else:
+            # Release — track separately for verbose/debug use
+            if clamped > self.release_max_us:
+                self.release_max_us = clamped
+            if clamped > 2000:
+                self.release_late_2ms += 1
 
     def debug_stats(self) -> DebugStats:
         samples = list(self._latencies)
@@ -122,7 +148,6 @@ class SnapshotRenderer:
             p50_us = sorted_samples[n // 2]
             p95_index = min(n - 1, int(n * 0.95))
             p95_us = sorted_samples[p95_index]
-            
             mean_us = sum(sorted_samples) / n
             variance = sum((x - mean_us) ** 2 for x in sorted_samples) / n
             stdev_ms = (variance ** 0.5) / 1000.0
@@ -148,7 +173,31 @@ class SnapshotRenderer:
             late_10ms=self.late_10ms,
             p50_ms=p50_us / 1000.0,
             p95_ms=p95_us / 1000.0,
-            jitter_ms=stdev_ms,
+            sigma_onset_ms=stdev_ms,
+            active_keys=active_keys,
+            stuck_keys=stuck_keys,
+            backend_status=backend_status,
+        )
+
+    def counters_snapshot(self) -> DebugStats:
+        """Lightweight stats for non-debug display — avoids sorted() + variance."""
+        snap = self.snapshot
+        active_keys = 0
+        stuck_keys = 0
+        backend_status = "healthy"
+        if snap is not None and snap.backend_health is not None:
+            active_keys = snap.backend_health.active_count
+            stuck_keys = snap.backend_health.failed_release_count
+            if stuck_keys > 0:
+                backend_status = f"stuck:{stuck_keys}"
+        return DebugStats(
+            max_lateness_us=self.max_lateness_us,
+            late_2ms=self.late_2ms,
+            late_5ms=self.late_5ms,
+            late_10ms=self.late_10ms,
+            p50_ms=0.0,
+            p95_ms=0.0,
+            sigma_onset_ms=0.0,
             active_keys=active_keys,
             stuck_keys=stuck_keys,
             backend_status=backend_status,
@@ -564,7 +613,10 @@ class PlaybackCard(Static):
                 f"{yellow}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{_ANSI_RESET}"
             )
 
-        stats = self.renderer.debug_stats()
+        if self.debug_mode:
+            stats = self.renderer.debug_stats()
+        else:
+            stats = self.renderer.counters_snapshot()
         backend = (
             f"{red}stuck keys: {stats.stuck_keys}{_ANSI_RESET}"
             if stats.stuck_keys > 0
@@ -588,7 +640,7 @@ class PlaybackCard(Static):
             max_ms = stats.max_lateness_us / 1000.0
             body.append(
                 f"{gray}max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · "
-                f"p95 {stats.p95_ms:.1f}ms · jitter {stats.jitter_ms:.1f}ms{_ANSI_RESET}"
+                f"p95 {stats.p95_ms:.1f}ms · σ(onset) {stats.sigma_onset_ms:.1f}ms{_ANSI_RESET}"
             )
             if self.active_policy is not None:
                 pol = self.active_policy
@@ -969,7 +1021,7 @@ class PlaybackScreen(Screen[str]):
             max_ms = stats.max_lateness_us / 1000.0
             lateness_str = (
                 f"late >2ms:{stats.late_2ms} >5ms:{stats.late_5ms} >10ms:{stats.late_10ms} · "
-                f"max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · p95 {stats.p95_ms:.1f}ms · jitter {stats.jitter_ms:.1f}ms"
+                f"max {max_ms:.1f}ms · p50 {stats.p50_ms:.1f}ms · p95 {stats.p95_ms:.1f}ms · σ(onset) {stats.sigma_onset_ms:.1f}ms"
             )
             self.query_one("#debug-lateness", Static).update(lateness_str)
             

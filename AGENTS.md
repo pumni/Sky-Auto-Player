@@ -46,69 +46,52 @@ Dependency rules:
 
 ## Command usage rules
 
+**Shell: PowerShell 7 (`pwsh`).** All commands run in PS7. `&&` and `||` chaining work. Use `;` for sequential steps only when exit-code propagation is not needed.
+
 ### General principles
 
 - Prefer narrow, targeted commands over broad recursive output.
 - Search before reading files.
 - Avoid dumping large files into the terminal.
-- Avoid reading generated files, dependency folders, caches, build outputs, or virtual environments unless explicitly needed.
+- Skip generated folders: `.venv`, `dist`, `build`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.uv-cache`.
 - Prefer commands that return file paths, line numbers, and small surrounding context.
-- When reading files, read only the relevant line range whenever possible.
-- Keep terminal output small enough to preserve context and reduce token usage.
+- When reading files, prefer `--line-range` over reading the whole file.
+- Keep terminal output small to preserve context and reduce token usage.
 
 ### Fast search and discovery
 
-Use `rg` for text and code search.
-
-Prefer:
+Use `rg` for text/code search; use `fd` for file discovery. Prefer both over PS7 built-ins.
 
 ```powershell
-rg -n "<pattern>"
-rg -n -C 3 "<pattern>"
-rg --files
-rg --files -g "*.py"
-```
+# Search text
+rg -n "<pattern>" src
+rg -n -C 3 "<pattern>" src
+rg --files -g "*.py" src
 
-Use `rg` before slower alternatives such as:
-
-```powershell
-Select-String
-findstr
-Get-ChildItem -Recurse
-```
-
-Use `fd` for file or directory discovery when pattern-based discovery is needed.
-
-Prefer:
-
-```powershell
-fd "<pattern>"
+# Find files
 fd -e py
 fd test
 ```
 
-Exclude heavy folders when useful:
+Do NOT default to `Select-String`, `findstr`, or `Get-ChildItem -Recurse`.
+
+Exclude project noise:
 
 ```powershell
-rg -n "<pattern>" -g "!node_modules" -g "!.git" -g "!.venv" -g "!dist" -g "!build" -g "!.expo" -g "!__pycache__" -g "!.pytest_cache" -g "!.mypy_cache" -g "!.ruff_cache"
-
-fd "<pattern>" -E .git -E .venv -E node_modules -E dist -E build -E .expo -E __pycache__ -E .pytest_cache -E .mypy_cache -E .ruff_cache
+rg -n "<pattern>" -g "!.venv" -g "!dist" -g "!build" -g "!__pycache__" -g "!.pytest_cache" -g "!.ruff_cache"
+fd "<pattern>" -E .git -E .venv -E dist -E build -E __pycache__ -E .pytest_cache -E .ruff_cache
 ```
 
 ### Reading files
 
-Use `bat --paging=never` for source and config files.
-
-Prefer line ranges:
+Use `bat --paging=never` with a line range whenever possible.
 
 ```powershell
-bat --paging=never --line-range 1:160 pyproject.toml
-bat --paging=never --line-range 120:220 src/module.py
+bat --paging=never --line-range 1:60 pyproject.toml
+bat --paging=never --line-range 40:120 src/scheduler.py
 ```
 
-Avoid reading entire large files unless necessary.
-
-Recommended flow:
+Recommended flow — search first, then read only the relevant range:
 
 ```powershell
 rg -n "TargetSymbol" src
@@ -117,28 +100,26 @@ bat --paging=never --line-range 80:160 src/example.py
 
 ### JSON
 
-Use `jq` to inspect and transform JSON.
-
-Prefer extracting only needed fields:
+Use `jq` for JSON inspection. Extract only needed fields.
 
 ```powershell
-jq -r ".scripts" package.json
-jq -r ".dependencies, .devDependencies" package.json
-jq -r ".tool" pyproject.json
+jq -r ".tool.uv" pyproject.toml
+jq -r ".tool.ruff" pyproject.toml
+jq "." config.json
 ```
 
-Avoid printing entire large JSON files unless necessary.
+Avoid printing entire large JSON files.
 
-### Preferred local tools
+### Available CLI tools
 
-The following CLI tools are available on this Windows machine:
+| Tool | Use for |
+| ---- | ------- |
+| `rg` | Fast text and code search |
+| `fd` | Fast file discovery |
+| `bat --paging=never` | Reading source/config files with line numbers |
+| `jq` | Inspecting and transforming JSON |
 
-- `rg` for fast text and code search.
-- `fd` for fast file discovery.
-- `bat --paging=never` for reading files with line numbers and syntax highlighting.
-- `jq` for inspecting and transforming JSON.
-
-Prefer these tools before slower built-in alternatives.
+Prefer these over slower PS7 built-ins (`Select-String`, `Get-ChildItem -Recurse`, etc.).
 
 ## Testing and validation
 

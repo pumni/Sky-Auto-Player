@@ -223,6 +223,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed lead time in microseconds to trigger input dispatch earlier (default: 0)",
     )
     timing.add_argument(
+        "--onset-bias-us",
+        type=int,
+        default=0,
+        help="Additive fixed lead time in microseconds applied to key-down/onset dispatches only (default: 0)",
+    )
+    timing.add_argument(
         "--no-adaptive-lead",
         action="store_true",
         help="debug only: disable adaptive dispatch lead prediction (default: on)",
@@ -476,6 +482,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_event_wait = not args.no_event_wait
     RUNTIME_STATE.enable_epoch_rebase = not args.no_epoch_rebase
     RUNTIME_STATE.check_input_path = args.check_input_path
+    RUNTIME_STATE.onset_bias_us = args.onset_bias_us
 
     if PLAYBACK_DEBUG:
         init_debug_log()
@@ -780,6 +787,7 @@ def main() -> int:
                     overrides=PlaybackOverrides(
                         dry_run=DRY_RUN_MODE,
                         dispatch_lead_us=args.dispatch_lead_us,
+                        onset_bias_us=args.onset_bias_us,
                     ),
                 )
                 if result == PLAYBACK_QUIT:
@@ -857,6 +865,7 @@ def main() -> int:
                     tempo=picker_result.tempo_scale,
                     fps=picker_result.fps,
                     dispatch_lead_us=args.dispatch_lead_us,
+                    onset_bias_us=args.onset_bias_us,
                 )
             )
             if result == PLAYBACK_QUIT:

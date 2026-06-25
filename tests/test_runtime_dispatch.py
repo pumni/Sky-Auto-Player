@@ -92,7 +92,7 @@ class CaptureRenderer:
     def finish(self, message: str) -> None:
         return
 
-    def update_counters(self, lateness_us: int) -> None:
+    def update_counters(self, lateness_us: int, **kwargs: object) -> None:
         return
 
 
@@ -1146,3 +1146,38 @@ def test_playback_state_epoch_based_continuity() -> None:
     clock.time_us = 4000
     assert state.get_elapsed_us(clock) == 2000
 
+
+def test_onset_bias_us_is_applied_only_to_downs() -> None:
+    from sky_music.orchestration.dispatch_loop import DispatchLoop
+    from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.orchestration.telemetry import TelemetryLogger
+    from sky_music.infrastructure.backend import DryRunBackend
+    from sky_music.orchestration.runtime_dispatch import RuntimeSchedule
+    
+    clock = FakeClock()
+    sleeper = FakeSleeper(clock)
+    backend = DryRunBackend()
+    telemetry = TelemetryLogger(song_name="test")
+    coordinator = RuntimeDispatchCoordinator(RuntimeSchedule((), generation_count=0), min_hold_us=0)
+    
+    loop = DispatchLoop(
+        coordinator=coordinator,
+        clock=clock,
+        sleeper=sleeper,
+        wait_strategy=None,  # type: ignore[arg-type]
+        backend=backend,
+        telemetry=telemetry,
+        sleep_policy=SleepPolicy(spin_threshold_us=300),
+        health_monitor=None,  # type: ignore[arg-type]
+        min_hold_us=0,
+        spin_threshold_us=300,
+        dispatch_lead_us=1000,
+        onset_bias_us=500,
+    )
+    
+    lead_down, lead_up = loop.get_current_leads()
+    # lead_down should have onset_bias_us added (1000 + 500 = 1500)
+    assert lead_down == 1500
+    # lead_up should be exactly dispatch_lead_us (1000)
+    assert lead_up == 1000

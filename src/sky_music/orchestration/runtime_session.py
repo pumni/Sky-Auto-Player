@@ -9,6 +9,7 @@ class PlaybackOverrides:
     tempo: float | None = None
     fps: int | None = None
     dispatch_lead_us: int = 0
+    onset_bias_us: int = 0  # additive lead applied to key-down dispatches only (µs)
 
 
 @dataclass
@@ -35,6 +36,7 @@ class RuntimeSessionState:
     enable_epoch_rebase: bool = True
     rt_priority_mode: RtPriorityMode = "auto"
     check_input_path: bool = False
+    onset_bias_us: int = 0  # additive onset-only dispatch lead (µs); set via --onset-bias-us
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
         self.session = session

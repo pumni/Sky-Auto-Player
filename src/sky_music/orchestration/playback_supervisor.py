@@ -48,7 +48,7 @@ class ProgressSink(Protocol):
 
     def finish(self, message: str) -> None: ...
 
-    def update_counters(self, lateness_us: int) -> None: ...
+    def update_counters(self, lateness_us: int, kind: str = "down") -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +101,9 @@ class DirectProgressSink:
         if self.renderer is not None:
             self.renderer.finish(message)
 
-    def update_counters(self, lateness_us: int) -> None:
+    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
         if self.renderer is not None and hasattr(self.renderer, "update_counters"):
-            self.renderer.update_counters(lateness_us)
+            self.renderer.update_counters(lateness_us, kind=kind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +148,7 @@ class SnapshotProgressSink:
         self._snapshot: ProgressSnapshot | None = None
         self._version = 0
         self._finish_message: str | None = None
-        self._counter_updates: deque[int] = deque()
+        self._counter_updates: deque[tuple[int, str]] = deque()
 
     def publish(
         self,
@@ -177,14 +177,14 @@ class SnapshotProgressSink:
         with self._lock:
             self._finish_message = message
 
-    def update_counters(self, lateness_us: int) -> None:
+    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
         with self._lock:
-            self._counter_updates.append(lateness_us)
+            self._counter_updates.append((lateness_us, kind))
 
     def consume(
         self,
         last_version: int,
-    ) -> tuple[int, ProgressSnapshot | None, tuple[int, ...], str | None]:
+    ) -> tuple[int, ProgressSnapshot | None, tuple[tuple[int, str], ...], str | None]:
         with self._lock:
             snapshot = self._snapshot if self._version != last_version else None
             version = self._version
@@ -455,8 +455,8 @@ class PlaybackSupervisor:
     ) -> int:
         version, snapshot, counters, finish_message = progress_sink.consume(last_version)
         if self.renderer is not None and hasattr(self.renderer, "update_counters"):
-            for lateness_us in counters:
-                self.renderer.update_counters(lateness_us)
+            for lateness_us, kind in counters:
+                self.renderer.update_counters(lateness_us, kind=kind)
         if snapshot is not None:
             self._render_progress_snapshot(snapshot)
         if finish_message is not None and self.renderer is not None:

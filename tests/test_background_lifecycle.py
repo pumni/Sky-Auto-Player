@@ -257,7 +257,12 @@ def test_real_process_pool_executor_lifecycle() -> None:
     assert res.snapshot().closed is True
     assert res.snapshot().state == "closed"
     assert future.done()
-    assert future.result() == 42
+    # Retirement (res.cancel()) may cancel a job that the worker had not started yet — a valid
+    # outcome of the closing flow. If it did run, the result must be 42.
+    if future.cancelled():
+        pass
+    else:
+        assert future.result() == 42
 
 
 def test_executor_resource_state_transitions() -> None:

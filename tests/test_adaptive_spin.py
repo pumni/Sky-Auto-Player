@@ -194,13 +194,13 @@ def test_wake_error_probe() -> None:
         
     # Derived effective threshold:
     # wake_error = 2300 - 2000 = 300 us
-    # effective_spin_threshold_us = clamp(300 + 200, 300, 3000) = 500 us
-    assert engine.effective_spin_threshold_us == 500
-    assert engine.current_spin_threshold_us == 500
+    # effective_spin_threshold_us = clamp(300 + 100, 700, 3000) = 700 us
+    assert engine.effective_spin_threshold_us == 700
+    assert engine.current_spin_threshold_us == 700
 
     # Verify options recorded
     opts = engine.telemetry.runtime_options
-    assert opts.get("effective_spin_threshold_us") == 500
+    assert opts.get("effective_spin_threshold_us") == 700
     assert opts.get("enable_adaptive_spin") is True
     probe_errors = opts.get("probe_wake_errors_us")
     assert isinstance(probe_errors, list)

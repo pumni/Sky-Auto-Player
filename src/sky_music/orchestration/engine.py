@@ -138,6 +138,7 @@ class PlaybackEngine:
         wait_strategy: WaitStrategy | None = None,
         enable_event_pause: bool = False,
         enable_reprobe: bool = False,
+        onset_bias_us: int = 0,
     ):
         self.song = song
         self.actions = actions
@@ -163,6 +164,7 @@ class PlaybackEngine:
         self.estimator = SendLatencyEstimator()
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, int(dispatch_lead_us))
+        self.onset_bias_us = max(0, int(onset_bias_us))
         self.enable_event_wait = bool(enable_event_wait)
         self.enable_epoch_rebase = bool(enable_epoch_rebase)
         self.enable_event_pause = bool(enable_event_pause)
@@ -292,12 +294,14 @@ class PlaybackEngine:
             enable_event_wait=self.enable_event_wait,
             dispatch_lead_us=self.dispatch_lead_us,
             estimator=self.estimator,
+            onset_bias_us=self.onset_bias_us,
             enable_event_pause=self.enable_event_pause,
             enable_reprobe=self.enable_reprobe,
             probe_callback=self.probe_spin_threshold,
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
+        import math as _math
         wake_errors: list[int] = []
         for _ in range(10):
             t0 = self.clock.now_us()
@@ -305,7 +309,13 @@ class PlaybackEngine:
             t1 = self.clock.now_us()
             wake_errors.append((t1 - t0) - 2_000)
 
-        threshold = max(300, min(3_000, max(wake_errors) + 200))
+        # Use mean + 3σ rather than raw max: a single scheduler hiccup during the probe
+        # would inflate max by 2–5ms and push the threshold into territory where nearly
+        # every inter-note gap triggers a sleep, defeating the purpose of the spin floor.
+        mean = sum(wake_errors) / len(wake_errors)
+        variance = sum((e - mean) ** 2 for e in wake_errors) / len(wake_errors)
+        stdev = _math.sqrt(variance)
+        threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
         self.effective_spin_threshold_us = threshold
 
         if prefix == "reprobe":

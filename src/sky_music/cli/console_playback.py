@@ -360,6 +360,7 @@ def play_selected_song(
     force_tempo = overrides.tempo if overrides else None
     force_fps = overrides.fps if overrides else None
     dispatch_lead_us = overrides.dispatch_lead_us if overrides else 0
+    onset_bias_us = overrides.onset_bias_us if (overrides and overrides.onset_bias_us is not None) else RUNTIME_STATE.onset_bias_us
     if force_profile is not None:
         force_profile = canonical_profile_name(force_profile)
 
@@ -563,6 +564,7 @@ def play_selected_song(
         enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
         rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
+        onset_bias_us=onset_bias_us,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 

@@ -90,19 +90,24 @@ class ProgressRenderer:
         self.input_path_degraded: bool = False
         self.active_policy: FrameTimingPolicy | None = None
 
-    def update_counters(self, lateness_us: int) -> None:
-        """Called by PlaybackEngine after each key action to update live timing counters."""
-        if lateness_us > 10000:
+    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
+        """Called by PlaybackEngine after each key action to update live timing counters.
+        Only onset (key-down) events update the main late_* counters; release events are
+        tracked separately to avoid inflating the timing display with min_hold deferral."""
+        clamped = max(0, lateness_us)
+        if kind != "down":
+            return  # release lateness is deferred by design; skip main counters
+        if clamped > 10000:
             self.late_10ms += 1
             self.late_5ms += 1
             self.late_2ms += 1
-        elif lateness_us > 5000:
+        elif clamped > 5000:
             self.late_5ms += 1
             self.late_2ms += 1
-        elif lateness_us > 2000:
+        elif clamped > 2000:
             self.late_2ms += 1
-        if lateness_us > self.max_lateness_us:
-            self.max_lateness_us = lateness_us
+        if clamped > self.max_lateness_us:
+            self.max_lateness_us = clamped
 
     def _control_hint(self, key: str, label: str, key_color: str, bold: str, reset: str) -> str:
         return f"{key_color}{bold}{key}{reset} {label}"

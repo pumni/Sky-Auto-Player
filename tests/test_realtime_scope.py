@@ -14,7 +14,10 @@ def test_realtime_scope_saves_and_restores_switch_interval() -> None:
 
     scope = RealtimeProcessScope(enabled=False, enable_switch_interval_tuning=True)
     with scope:
-        assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+        if _gil_enabled():
+            assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+        else:
+            assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
 
     assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
 
@@ -41,7 +44,10 @@ def test_realtime_scope_restores_on_exception() -> None:
 
     try:
         with RealtimeProcessScope(enabled=False, enable_switch_interval_tuning=True):
-            assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+            if _gil_enabled():
+                assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+            else:
+                assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
             raise ValueError("Intentional exception")
     except ValueError:
         pass
@@ -59,10 +65,16 @@ def test_realtime_scope_nested_idempotence() -> None:
     scope2 = RealtimeProcessScope(enabled=False, enable_switch_interval_tuning=True)
 
     with scope1:
-        assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
-        with scope2:
+        if _gil_enabled():
             assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
-        assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+            with scope2:
+                assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+            assert abs(sys.getswitchinterval() - DISPATCH_SWITCH_INTERVAL_S) < 1e-7
+        else:
+            assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
+            with scope2:
+                assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
+            assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
 
     assert abs(sys.getswitchinterval() - initial_interval) < 1e-7
 

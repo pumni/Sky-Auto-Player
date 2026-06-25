@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -35,6 +36,7 @@ class ExecutionResult:
     send_duration_us: int      # wall-clock time the backend call took (including bookkeeping)
     is_late: bool              # True when lateness_us > 0
     is_critically_late: bool   # True when lateness_us > 10_000 (10 ms)
+    kind: str = "down"         # "down" (onset) or "up" (release) — used to separate counters
     dispatch_completed_us: int = 0
     visible_lateness_us: int = 0
     sent_scan_codes: tuple[int, ...] = ()
@@ -195,6 +197,7 @@ class DispatchLoop:
         enable_event_pause: bool = False,
         enable_reprobe: bool = False,
         probe_callback: Callable[[Sleeper], int] | None = None,
+        onset_bias_us: int = 0,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -202,6 +205,7 @@ class DispatchLoop:
         self.wait_strategy = wait_strategy
         self.backend = backend
         self.telemetry = telemetry
+        self.onset_bias_us = onset_bias_us
         self.sleep_policy = sleep_policy
         self.health_monitor = health_monitor
         self.min_hold_us = min_hold_us
@@ -229,12 +233,35 @@ class DispatchLoop:
         self._wait_spin_start_us = 0
         self._last_send_completed_us = 0
 
+        # Periodic reprobe state — track actual wake overshoot to adapt spin threshold under load
+        self._overshoot_samples: deque[int] = deque(maxlen=200)
+        self._last_reprobe_us: int = 0
+        self._reprobe_interval_us: int = 5_000_000  # 5 seconds of elapsed playback time
+
     def get_current_leads(self) -> tuple[int, int]:
         if self.dispatch_lead_us > 0:
-            return self.dispatch_lead_us, self.dispatch_lead_us
-        if self.enable_adaptive_lead and self.estimator is not None:
-            return self.estimator.get_lead_us("down"), self.estimator.get_lead_us("up")
-        return 0, 0
+            lead_down, lead_up = self.dispatch_lead_us, self.dispatch_lead_us
+        elif self.enable_adaptive_lead and self.estimator is not None:
+            lead_down, lead_up = self.estimator.get_lead_us("down"), self.estimator.get_lead_us("up")
+        else:
+            lead_down, lead_up = 0, 0
+        lead_down += self.onset_bias_us
+        return lead_down, lead_up
+
+    def _record_overshoot(self, elapsed_us: int, target_elapsed_us: int) -> None:
+        overshoot_us = elapsed_us - target_elapsed_us
+        if overshoot_us > 0:
+            self._overshoot_samples.append(overshoot_us)
+
+    def _recompute_spin_threshold_from_overshoot(self) -> int:
+        if len(self._overshoot_samples) < 10:
+            return self.spin_threshold_us
+        samples = list(self._overshoot_samples)
+        mean = sum(samples) / len(samples)
+        variance = sum((x - mean) ** 2 for x in samples) / len(samples)
+        stdev = math.sqrt(variance)
+        new_threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
+        return new_threshold
 
     def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
         outcome = self.backend.release_all()
@@ -328,6 +355,7 @@ class DispatchLoop:
             dispatch_lateness_us=dispatch_lateness_us,
             is_late=lateness_us > 0,
             is_critically_late=lateness_us > 10_000,
+            kind=action.kind,
             dispatch_completed_us=send_end_us,
             visible_lateness_us=visible_lateness_us,
             sent_scan_codes=send_result.sent,
@@ -356,9 +384,11 @@ class DispatchLoop:
         state: PlaybackState,
         *,
         lead_down: int,
+        now_us: int | None = None,
     ) -> ExecutionResult | None:
-        if self.late_pulse_drop_threshold_us is not None:
+        if now_us is None:
             now_us = state.get_elapsed_us(self.clock)
+        if self.late_pulse_drop_threshold_us is not None:
             if now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
                 self.coordinator.drop_expired_downs(batch.intents)
                 self._record_without_dispatch(
@@ -406,7 +436,7 @@ class DispatchLoop:
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
         )
-        if self.estimator is not None:
+        if self.enable_adaptive_lead and self.estimator is not None:
             self.estimator.update("down", result.send_duration_us)
         self.coordinator.activate_sent_downs(
             playable,
@@ -425,45 +455,56 @@ class DispatchLoop:
     ) -> ExecutionResult | None:
         if not releases:
             return None
-        representative = min(
-            releases,
-            key=lambda release: (
-                release.effective_release_us,
-                release.source_action_index,
-                release.scan_code,
-            ),
+        # Single pass: find representative, collect min/max/sets/scancodes/gen_ids
+        best = releases[0]
+        best_key = (
+            best.effective_release_us,
+            best.source_action_index,
+            best.scan_code,
         )
-        scheduled_us = min(release.scheduled_release_us for release in releases)
-        deferred_by_us = max(
-            0,
-            max(
-                release.down_dispatch_started_us + self.min_hold_us - release.scheduled_release_us
-                for release in releases
-            ),
-        )
-        source_action_indices = {release.source_action_index for release in releases}
-        reasons = {release.reason for release in releases}
+        scheduled_us = best.scheduled_release_us
+        max_deferral = 0
+        source_action_indices: set[int] = set()
+        reasons: set[str] = set()
+        scan_codes_list: list[int] = []
+        gen_ids_list: list[int] = []
+        for release in releases:
+            eff = release.effective_release_us
+            key = (eff, release.source_action_index, release.scan_code)
+            if key < best_key:
+                best = release
+                best_key = key
+            if release.scheduled_release_us < scheduled_us:
+                scheduled_us = release.scheduled_release_us
+            deferral = release.down_dispatch_started_us + self.min_hold_us - release.scheduled_release_us
+            if deferral > max_deferral:
+                max_deferral = deferral
+            source_action_indices.add(release.source_action_index)
+            reasons.add(release.reason)
+            scan_codes_list.append(release.scan_code)
+            gen_ids_list.append(release.generation_id)
+        deferred_by_us = max(0, max_deferral)
         reason = (
-            representative.reason
+            best.reason
             if len(source_action_indices) == 1 and len(reasons) == 1
             else "mixed_deferred_release"
         )
         action = KeyAction(
             kind="up",
-            scan_codes=tuple(ScanCode(release.scan_code) for release in releases),
+            scan_codes=tuple(ScanCode(sc) for sc in scan_codes_list),
             at_us=Microseconds(scheduled_us),
             reason=reason,
         )
         result = self._execute_action(
-            representative.source_action_index,
+            best.source_action_index,
             action,
             state,
-            generation_ids=tuple(release.generation_id for release in releases),
+            generation_ids=tuple(g_id for g_id in gen_ids_list),
             runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
             deferred_by_us=deferred_by_us,
             applied_lead_us=lead_up,
         )
-        if self.estimator is not None:
+        if self.enable_adaptive_lead and self.estimator is not None:
             self.estimator.update("up", result.send_duration_us)
         self.coordinator.complete_releases(
             releases,
@@ -712,6 +753,8 @@ class DispatchLoop:
             elapsed_us = state.get_elapsed_us(self.clock)
             if elapsed_us >= target_elapsed_us:
                 self._wait_spin_start_us = elapsed_us
+                if self.enable_reprobe:
+                    self._record_overshoot(elapsed_us, target_elapsed_us)
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
 
             remaining_us = target_elapsed_us - elapsed_us
@@ -724,6 +767,9 @@ class DispatchLoop:
                 else:
                     while self.clock.now_us() < target_system_us:
                         pass
+                if self.enable_reprobe:
+                    after_elapsed = state.get_elapsed_us(self.clock)
+                    self._record_overshoot(after_elapsed, target_elapsed_us)
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
 
             service_result = self._service_control_state(
@@ -805,7 +851,7 @@ class DispatchLoop:
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
             results.append(self._dispatch_pending_releases(pending, state, lead_up=lead_up))
-            if self.estimator is not None:
+            if self.enable_adaptive_lead and self.estimator is not None:
                 _, lead_up = self.get_current_leads()
 
         for batch in self.coordinator.pop_due_authored(now_us, lead_down):
@@ -815,11 +861,11 @@ class DispatchLoop:
                 results.append(
                     self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
                 )
-                if self.estimator is not None:
+                if self.enable_adaptive_lead and self.estimator is not None:
                     _, lead_up = self.get_current_leads()
             else:
-                results.append(self._dispatch_down_batch(batch, state, lead_down=lead_down))
-                if self.estimator is not None:
+                results.append(self._dispatch_down_batch(batch, state, lead_down=lead_down, now_us=now_us))
+                if self.enable_adaptive_lead and self.estimator is not None:
                     lead_down, _ = self.get_current_leads()
 
         return tuple(results)
@@ -841,7 +887,7 @@ class DispatchLoop:
             if exec_result is None:
                 return
             if exec_result.runtime_outcome != "deferred_release":
-                progress_sink.update_counters(max(0, exec_result.lateness_us))
+                progress_sink.update_counters(exec_result.lateness_us, exec_result.kind)
 
         try:
             while not self.coordinator.is_finished():
@@ -869,6 +915,12 @@ class DispatchLoop:
                     if result is not None:
                         first_action_executed = True
                     observe_result(result)
+
+                if self.enable_reprobe and now_us - self._last_reprobe_us >= self._reprobe_interval_us:
+                    new_threshold = self._recompute_spin_threshold_from_overshoot()
+                    if new_threshold > self.spin_threshold_us:
+                        self.spin_threshold_us = new_threshold
+                    self._last_reprobe_us = now_us
 
             progress_sink.publish(
                 elapsed_us=total_time_us,

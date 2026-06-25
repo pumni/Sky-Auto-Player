@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import time
 from typing import Protocol
 
-from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
+from sky_music.infrastructure.timing import Clock, PerfCounterClock, Sleeper, SleepPolicy
 
 
 class WaitStrategy(Protocol):
@@ -38,8 +39,15 @@ class HybridWaitStrategy:
         self.enable_event_wait = enable_event_wait
 
     def spin_until_us(self, target_system_us: int, clock: Clock) -> None:
-        while clock.now_us() < target_system_us:
-            pass
+        # Hot path: PerfCounterClock uses time.perf_counter_ns() // 1000 -> avoid the div per
+        # iteration by comparing against target_ns directly. Fallback for mock clocks in tests.
+        if isinstance(clock, PerfCounterClock):
+            tgt_ns = target_system_us * 1000
+            while time.perf_counter_ns() < tgt_ns:
+                pass
+        else:
+            while clock.now_us() < target_system_us:
+                pass
 
     def wait_until_us(
         self,

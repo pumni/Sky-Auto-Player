@@ -340,16 +340,19 @@ class TelemetryLogger:
         if not self.records:
             return None
 
-        dispatch_records = [
-            record
-            for record in self.records
-            if record.get("sent_scan_codes", record["scan_codes"])
-            or record.get("skipped_scan_codes", "")
-        ]
+        # Materialize once — all later list comprehensions work from `rows`
+        rows = [r._materialize() for r in self.records]
+
+        # dispatch_records: only records where SendInput was actually called
+        # (sent_scan_codes is non-empty string). No-op release skips are excluded.
+        dispatch_records = [r for r in rows if r.get("sent_scan_codes")]
+        noop_skipped_count = sum(
+            1 for r in rows
+            if not r.get("sent_scan_codes") and r.get("skipped_scan_codes")
+        )
         scheduler_dispatch_records = [
-            record
-            for record in dispatch_records
-            if record.get("runtime_outcome") != "deferred_release"
+            r for r in dispatch_records
+            if r.get("runtime_outcome") != "deferred_release"
         ]
         latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
         visible_latenesses = [r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records]
@@ -408,7 +411,7 @@ class TelemetryLogger:
         confirmed_hold_lower_bounds: list[int] = []
         observed_holds: list[int] = []
         active_downs: dict[int, tuple[int, int]] = {}
-        for r in self.records:
+        for r in rows:
             sent_codes = r.get("sent_scan_codes", r["scan_codes"])
             codes = [int(sc) for sc in sent_codes.split(";") if sc]
             if r["kind"] == "down":
@@ -495,53 +498,39 @@ class TelemetryLogger:
             else self.min_hold_us
         )
         intended_down_count = sum(
-            _scan_count(record, "scan_codes")
-            for record in self.records
-            if record["kind"] == "down"
+            _scan_count(r, "scan_codes") for r in rows if r["kind"] == "down"
         )
         intended_up_count = sum(
-            _scan_count(record, "scan_codes")
-            for record in self.records
-            if record["kind"] == "up"
+            _scan_count(r, "scan_codes") for r in rows if r["kind"] == "up"
         )
         sent_down_count = sum(
-            _scan_count(record, "sent_scan_codes")
-            for record in self.records
-            if record["kind"] == "down"
+            _scan_count(r, "sent_scan_codes") for r in rows if r["kind"] == "down"
         )
         sent_up_count = sum(
-            _scan_count(record, "sent_scan_codes")
-            for record in self.records
-            if record["kind"] == "up"
+            _scan_count(r, "sent_scan_codes") for r in rows if r["kind"] == "up"
         )
         backend_skipped_down_count = sum(
-            _scan_count(record, "skipped_scan_codes")
-            for record in self.records
-            if record["kind"] == "down"
+            _scan_count(r, "skipped_scan_codes") for r in rows if r["kind"] == "down"
         )
         backend_skipped_up_count = sum(
-            _scan_count(record, "skipped_scan_codes")
-            for record in self.records
-            if record["kind"] == "up"
+            _scan_count(r, "skipped_scan_codes") for r in rows if r["kind"] == "up"
         )
         runtime_conflict_dropped_down_count = sum(
-            _scan_count(record, "scan_codes")
-            for record in self.records
-            if record.get("runtime_outcome") == "dropped_conflict"
+            _scan_count(r, "scan_codes") for r in rows
+            if r.get("runtime_outcome") == "dropped_conflict"
         )
         expired_dropped_down_count = sum(
-            _scan_count(record, "scan_codes")
-            for record in self.records
-            if record.get("runtime_outcome") == "dropped_expired"
+            _scan_count(r, "scan_codes") for r in rows
+            if r.get("runtime_outcome") == "dropped_expired"
         )
         runtime_backend_dropped_down_count = sum(
             max(
                 0,
-                _scan_count(record, "scan_codes") - _scan_count(record, "sent_scan_codes"),
+                _scan_count(r, "scan_codes") - _scan_count(r, "sent_scan_codes"),
             )
-            for record in self.records
-            if record["kind"] == "down"
-            and record.get("runtime_outcome")
+            for r in rows
+            if r["kind"] == "down"
+            and r.get("runtime_outcome")
             not in {"dropped_conflict", "dropped_expired", "suppressed_stale_up"}
         )
         before_send_missing_down_count = (
@@ -560,7 +549,7 @@ class TelemetryLogger:
             "profile": self.profile_name,
             "fps": self.fps,
             "tempo_scale": self.tempo_scale,
-            "total_events": len(self.records),
+            "total_events": len(rows),
             "evidence_boundaries": {
                 "schedule": {
                     "intended_down_count": intended_down_count,
@@ -627,9 +616,8 @@ class TelemetryLogger:
                 if self.min_hold_us > 0 and hold_us < self.min_hold_us
             ),
             "attempted_dispatches": len(dispatch_records),
-            "successful_dispatches": sum(
-                1 for record in self.records if record.get("sent_scan_codes", record["scan_codes"])
-            ),
+            "noop_skipped_count": noop_skipped_count,
+            "successful_dispatches": len(dispatch_records),  # already filtered to sent-only
             "sent_down_count": sent_down_count,
             "sent_up_count": sent_up_count,
             "backend_skipped_down_count": backend_skipped_down_count,

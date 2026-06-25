@@ -93,10 +93,10 @@ def test_reprobe_pause_duration_absorption() -> None:
     # Pause duration = 130_000 - 10_000 = 120_000
     assert state_b.pause_time_us == 120_000
     
-    # Check that spin threshold was updated (default fake sleeper will have 0 errors, so new_threshold=300)
-    assert engine_b._compat_dispatch_loop().spin_threshold_us == 300
+    # Check that spin threshold was updated (default fake sleeper will have 0 errors, so new_threshold=700 due to floor)
+    assert engine_b._compat_dispatch_loop().spin_threshold_us == 700
     
     # Check telemetry options record reprobe keys
     opts = engine_b.telemetry.runtime_options
     assert "reprobe_wake_errors_us" in opts
-    assert opts.get("reprobe_effective_spin_threshold_us") == 300
+    assert opts.get("reprobe_effective_spin_threshold_us") == 700

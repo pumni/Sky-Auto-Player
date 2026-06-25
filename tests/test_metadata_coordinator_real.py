@@ -45,10 +45,13 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     
     coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
     
+    import threading
+    started = threading.Event()
     stages_called = []
     
     def mock_warm(song_paths, sess, c):
         stages_called.append("warm")
+        started.set()
         # cancel right inside the first stage
         coord.cancel()
         return 1
@@ -61,6 +64,9 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
     
     coord.refresh([Path("some/song.json")])
+    
+    # Ensure background thread has actually entered mock_warm
+    started.wait(timeout=2.0)
     
     # Wait for the coordinator to finish
     coord.close(wait=True)
