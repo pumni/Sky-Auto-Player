@@ -61,8 +61,10 @@ class TimingPolicy:
             fallback_value: int | None = None,
             fallback_frames: float | None = None,
         ) -> tuple[Microseconds, float, Microseconds | None, bool]:
-            base_value = int(base.get(value_key, base.get(unframed_key, 0)))
-            base_unframed_value = int(base.get(unframed_key, base_value))
+            _bv_raw = base.get(value_key, base.get(unframed_key, 0))
+            base_value = int(_bv_raw) if _bv_raw is not None else 0
+            _buv_raw = base.get(unframed_key, base_value)
+            base_unframed_value = int(_buv_raw) if _buv_raw is not None else base_value
             has_frame_model = frames_key in p_dict or (
                 fallback_frames is not None and value_key in p_dict
             )

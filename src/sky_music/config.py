@@ -207,12 +207,9 @@ def profile_dict_for(cfg: AppConfig, profile_name: str) -> dict[str, Any]:
 
 def spin_threshold_for_profile(cfg: AppConfig, profile_name: str) -> int:
     p_dict = profile_dict_for(cfg, profile_name)
-    return int(
-        p_dict.get(
-            "spin_threshold_us",
-            DEFAULT_TIMING_PROFILES["balanced"]["spin_threshold_us"],
-        )
-    )
+    _default_spin: int = 800  # matches DEFAULT_TIMING_PROFILES["balanced"]["spin_threshold_us"]
+    raw = p_dict.get("spin_threshold_us", _default_spin)
+    return int(raw) if raw is not None else _default_spin
 
 
 def sky_process_names_csv(cfg: AppConfig | None = None) -> str:
@@ -222,9 +219,9 @@ def sky_process_names_csv(cfg: AppConfig | None = None) -> str:
 
 def resolve_game_fps(value: int | None) -> int:
     """Return the effective game FPS; never returns 0/None."""
-    if value is None or int(value) <= 0:
+    if value is None or value <= 0:
         return DEFAULT_GAME_FPS
-    return int(value)
+    return value
 
 
 def normalize_fps_value(fps: int | None) -> int:

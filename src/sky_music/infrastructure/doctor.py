@@ -13,7 +13,7 @@ def is_admin() -> bool:
 
 def check_sky_window() -> dict:
     """Diagnoses Sky window handle, process name, and potential UIPI elevation mismatches."""
-    status = {"ok": False, "msg": "", "hwnd": None, "process": ""}
+    status: dict[str, Any] = {"ok": False, "msg": "", "hwnd": None, "process": ""}
     
     hwnd = inputs.get_sky_window()
     if hwnd is None:
