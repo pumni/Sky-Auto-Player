@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from copy import replace as copy_replace
+from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
 
 from sky_music.config import (
@@ -91,19 +92,19 @@ class PlaybackSessionContext:
         )
 
     def with_profile(self, profile_name: str) -> PlaybackSessionContext:
-        return replace(self, profile_name=canonical_profile_name(profile_name))
+        return copy_replace(self, profile_name=canonical_profile_name(profile_name))
 
     def with_tempo(self, tempo_scale: float) -> PlaybackSessionContext:
         if tempo_scale <= 0:
             raise ValueError("tempo_scale must be > 0")
-        return replace(self, tempo_scale=tempo_scale)
+        return copy_replace(self, tempo_scale=tempo_scale)
 
     def with_fps(self, fps: int | None) -> PlaybackSessionContext:
         normalized = resolve_game_fps(fps)
-        return replace(self, fps=normalized)
+        return copy_replace(self, fps=normalized)
 
     def with_scan_code_mode(self, mode: str) -> PlaybackSessionContext:
-        return replace(self, scan_code_mode=mode)
+        return copy_replace(self, scan_code_mode=mode)
 
     def display_profile_label(self) -> str:
         return display_profile_name(self.profile_name, self.fps)
@@ -213,7 +214,7 @@ def apply_recommendation_to_context(
 ) -> PlaybackSessionContext:
     """Apply telemetry calibration advice to an in-memory session (does not persist config)."""
     override_map = dict(session.policy_overrides)
-    return replace(
+    return copy_replace(
         session,
         profile_name=canonical_profile_name(recommendation.profile_name),
         tempo_scale=recommendation.tempo_scale,

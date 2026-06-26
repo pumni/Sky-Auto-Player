@@ -3,31 +3,23 @@ from __future__ import annotations
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
 
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
 
 
-GenerationStatus = Literal[
-    "scheduled",
-    "active",
-    "release_pending",
-    "released",
-    "dropped_conflict",
-    "dropped_backend",
-    "dropped_expired",
-    "cancelled",
-]
-GENERATION_STATUSES: tuple[GenerationStatus, ...] = (
-    "scheduled",
-    "active",
-    "release_pending",
-    "released",
-    "dropped_conflict",
-    "dropped_backend",
-    "dropped_expired",
-    "cancelled",
-)
+class GenerationStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    ACTIVE = "active"
+    RELEASE_PENDING = "release_pending"
+    RELEASED = "released"
+    DROPPED_CONFLICT = "dropped_conflict"
+    DROPPED_BACKEND = "dropped_backend"
+    DROPPED_EXPIRED = "dropped_expired"
+    CANCELLED = "cancelled"
+
+
+GENERATION_STATUSES: tuple[GenerationStatus, ...] = tuple(GenerationStatus)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,8 +86,7 @@ def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
 
     for source_action_index, action in enumerate(actions):
         intents: list[RuntimeKeyIntent] = []
-        for scan_code_raw in action.scan_codes:
-            scan_code = int(scan_code_raw)
+        for scan_code in action.scan_codes:
             generation_id: int | None
             if action.kind == "down":
                 generation_id = next_generation_id
@@ -143,7 +134,7 @@ class RuntimeDispatchCoordinator:
         self.cursor = 0
         self.active_by_scan_code: dict[int, ActiveKeyGeneration] = {}
         self.status_by_generation: dict[int, GenerationStatus] = {
-            generation_id: "scheduled"
+            generation_id: GenerationStatus.SCHEDULED
             for generation_id in range(schedule.generation_count)
         }
         self.pending_by_generation: dict[int, PendingRelease] = {}
@@ -206,7 +197,7 @@ class RuntimeDispatchCoordinator:
     def generation_status_counts(self) -> dict[str, int]:
         """Return counts for every runtime generation terminal/intermediate status."""
         counts = Counter(self.status_by_generation.values())
-        return {status: counts[status] for status in GENERATION_STATUSES}
+        return {status.value: counts[status] for status in GENERATION_STATUSES}
 
     def pop_due_pending(self, now_us: int, lead_up: int = 0) -> tuple[PendingRelease, ...]:
         if not self.pending_by_generation:
@@ -268,7 +259,7 @@ class RuntimeDispatchCoordinator:
             if intent.generation_id is None:
                 continue
             if intent.scan_code not in sent:
-                self.status_by_generation[intent.generation_id] = "dropped_backend"
+                self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_BACKEND
                 continue
             self.active_by_scan_code[intent.scan_code] = ActiveKeyGeneration(
                 generation_id=intent.generation_id,
@@ -289,7 +280,7 @@ class RuntimeDispatchCoordinator:
                 # See docs/timing-principles.md §7.
                 release_not_before_us=dispatch_completed_us + self.min_hold_us,
             )
-            self.status_by_generation[intent.generation_id] = "active"
+            self.status_by_generation[intent.generation_id] = GenerationStatus.ACTIVE
 
     def split_down_intents(
         self,
@@ -301,7 +292,7 @@ class RuntimeDispatchCoordinator:
             if intent.scan_code in self.active_by_scan_code:
                 conflicts.append(intent)
                 if intent.generation_id is not None:
-                    self.status_by_generation[intent.generation_id] = "dropped_conflict"
+                    self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_CONFLICT
             else:
                 playable.append(intent)
         return tuple(playable), tuple(conflicts)
@@ -309,7 +300,7 @@ class RuntimeDispatchCoordinator:
     def drop_expired_downs(self, intents: tuple[RuntimeKeyIntent, ...]) -> None:
         for intent in intents:
             if intent.generation_id is not None:
-                self.status_by_generation[intent.generation_id] = "dropped_expired"
+                self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_EXPIRED
 
     def request_releases(
         self,
@@ -337,7 +328,7 @@ class RuntimeDispatchCoordinator:
             )
             self.pending_by_generation[generation_id] = pending
             self.pending_scan_codes.add(intent.scan_code)
-            self.status_by_generation[generation_id] = "release_pending"
+            self.status_by_generation[generation_id] = GenerationStatus.RELEASE_PENDING
             requested.append(pending)
         return tuple(requested), tuple(suppressed)
 
@@ -356,7 +347,7 @@ class RuntimeDispatchCoordinator:
             if active is not None and active.generation_id == pending.generation_id:
                 self.active_by_scan_code.pop(pending.scan_code, None)
             self.status_by_generation[pending.generation_id] = (
-                "released" if pending.scan_code in sent else "dropped_backend"
+                GenerationStatus.RELEASED if pending.scan_code in sent else GenerationStatus.DROPPED_BACKEND
             )
 
     def cancel_all(self) -> tuple[int, ...]:
@@ -364,9 +355,9 @@ class RuntimeDispatchCoordinator:
             sorted(active.generation_id for active in self.active_by_scan_code.values())
         )
         for generation_id in cancelled:
-            self.status_by_generation[generation_id] = "cancelled"
+            self.status_by_generation[generation_id] = GenerationStatus.CANCELLED
         for generation_id in self.pending_by_generation:
-            self.status_by_generation[generation_id] = "cancelled"
+            self.status_by_generation[generation_id] = GenerationStatus.CANCELLED
         self.active_by_scan_code.clear()
         self.pending_by_generation.clear()
         self.pending_scan_codes.clear()

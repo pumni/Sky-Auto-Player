@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import Protocol
 from dataclasses import dataclass
 import time
@@ -52,7 +53,7 @@ class InputBackend(Protocol):
         ...
 
 
-class _TrackedKeyState:
+class _TrackedKeyState(ABC):
     __slots__ = ("active_keys", "possibly_active_keys", "failed_release_keys", "last_error")
 
     active_keys: set[int]
@@ -87,9 +88,10 @@ class _TrackedKeyState:
             (to_release if (sc in active or sc in possibly) else already_released).append(sc)
         return tuple(to_release), tuple(already_released)
 
+    @abstractmethod
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
         """Returns raw perf_counter µs after send completed, or None if unavailable."""
-        raise NotImplementedError
+        ...
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
         self.last_error = f"key_down error: {error}"
@@ -176,8 +178,12 @@ class WinSendInputBackend(_TrackedKeyState):
             self._emit(scan_codes, key_up=True)
             self.possibly_active_keys.difference_update(scan_codes)
         except Exception as cleanup_error:
-            # If cleanup fails, keep them in possibly_active_keys to track potential sticking.
             self.last_error = f"key_down emergency cleanup failed: {cleanup_error}"
+            # Guard against silent stuck keys: if cleanup also fails the keys are
+            # physically stuck but escaped all tracking sets (possibly_active_keys
+            # still holds them).  Promote into failed_release_keys so release_all
+            # picks them up even if the caller swallows the original exception.
+            self.failed_release_keys.update(scan_codes)
             
     def release_all(self) -> ReleaseAllOutcome:
         from sky_music.layouts import PHYSICAL_SCAN_CODES, VK_CODES

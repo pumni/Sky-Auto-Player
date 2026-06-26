@@ -125,7 +125,6 @@ def test_same_key_repeat_releases_first():
     assert actions[2].at_us == 1015_000 # Down 2
     assert actions[3].at_us == 1035_000 # Up 2 (1015 + 20ms hold)
     assert res.compressed_holds == 1
-    assert res.same_key_compressed_holds == 1
     assert res.min_same_key_up_gap_us == 0
 
 
@@ -149,10 +148,8 @@ def test_same_key_repeat_compresses_hold_to_next_down():
     assert first_up.at_us == 1_015_000
     assert second_down.at_us - first_up.at_us == 0
     assert res.compressed_holds == 1
-    assert res.same_key_compressed_holds == 1
     assert res.risky_same_key_repeats == 1
     assert res.impossible_same_key_repeats == 0
-    assert res.infeasible_same_key_repeats == 0
     assert res.min_same_key_up_gap_us == 0
 
 
@@ -177,7 +174,6 @@ def test_same_key_repeat_above_min_hold_is_not_impossible():
     assert second_down.at_us - first_up.at_us == 5_000
     assert res.compressed_holds == 0
     assert res.impossible_same_key_repeats == 0
-    assert res.infeasible_same_key_repeats == 0
     assert res.min_same_key_up_gap_us == 5_000
     assert res.diagnostics == ()
 
@@ -189,9 +185,7 @@ def test_prioritization_at_same_timestamp():
     a_up_normal = KeyAction(at_us=1000, scan_codes=(0x16,), kind="up", reason="release")  # type: ignore[arg-type]
     
     unsorted = [a_up_normal, a_down, a_up_repeat]
-    def action_priority(action: KeyAction) -> int:
-        return 0 if action.kind == "up" else 1
-    sorted_actions = sorted(unsorted, key=lambda a: (a.at_us, action_priority(a)))
+    sorted_actions = sorted(unsorted, key=lambda a: (a.at_us, a.kind == "down"))
     assert {sorted_actions[0], sorted_actions[1]} == {a_up_repeat, a_up_normal}
     assert sorted_actions[2] == a_down
 
@@ -226,7 +220,6 @@ def test_impossible_same_key_repeat_diagnostics():
     policy = _policy({"min_hold_us": 10000})
     res = build_key_actions(song, policy=policy)
     assert res.impossible_same_key_repeats == 1
-    assert res.infeasible_same_key_repeats == 1
     assert res.min_same_key_up_gap_us == -9_000
     up_action = next(a for a in res.actions if a.kind == "up" and 0x15 in a.scan_codes)
     assert up_action.at_us == 1010_000 # 1000ms + 10ms min_hold

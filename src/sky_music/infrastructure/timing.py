@@ -13,6 +13,11 @@ class Sleeper(Protocol):
         ...
 
 class PerfCounterClock:
+    __slots__ = ("_ns_based",)
+
+    def __init__(self) -> None:
+        self._ns_based = True
+
     def now_us(self) -> int:
         return time.perf_counter_ns() // 1000
 

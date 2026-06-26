@@ -1,8 +1,9 @@
 import ctypes
 from ctypes import wintypes
 import time
-from pathlib import Path
+from collections import OrderedDict
 from collections.abc import Callable
+from pathlib import Path
 
 import sys
 
@@ -397,7 +398,8 @@ _INPUT_SIZE = ctypes.sizeof(INPUT)
 # cached entries are never mutated and the partial-send retry in send_input_batch still operates on
 # the copied array.
 _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
-_ARRAY_CACHE: dict[tuple[tuple[int, ...], int], ctypes.Array] = {}
+_ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDict()
+_ARRAY_CACHE_MAX = 8192
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
@@ -414,8 +416,8 @@ def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) ->
     n = len(scan_codes_tuple)
 
     if input_array is None:
-        if len(_ARRAY_CACHE) >= 4096:
-            _ARRAY_CACHE.clear()
+        if len(_ARRAY_CACHE) >= _ARRAY_CACHE_MAX:
+            _ARRAY_CACHE.popitem(last=False)
         key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
         input_array = (INPUT * n)(*key_inputs)
         _ARRAY_CACHE[cache_key] = input_array

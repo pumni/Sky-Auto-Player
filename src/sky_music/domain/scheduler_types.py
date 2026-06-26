@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal
 import math
 
@@ -8,7 +9,9 @@ from sky_music.domain.domain import NoteKey, ScanCode, Microseconds
 
 from sky_music.config import AppConfig
 
-ActionKind = Literal["down", "up"]
+class ActionKind(StrEnum):
+    DOWN = "down"
+    UP = "up"
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,8 +243,6 @@ class ScheduleMetadata:
     risky_same_key_repeats: int = 0
     deduplicated_note_count: int = 0
     duplicate_note_count: int = 0
-    same_key_compressed_holds: int = 0
-    infeasible_same_key_repeats: int = 0
     max_polyphony: int = 0
     note_count: int = 0
     shortest_same_key_interval_us: int | None = None

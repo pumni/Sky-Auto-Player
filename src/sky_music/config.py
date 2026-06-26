@@ -6,6 +6,7 @@ setting in the UI.
 """
 
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -138,12 +139,14 @@ class AppConfig:
 
 
 _runtime_cfg: AppConfig | None = None
+_runtime_cfg_lock: threading.Lock = threading.Lock()
 
 
 def clear_config_cache() -> None:
     """Reset the in-memory config cache (primarily for tests)."""
     global _runtime_cfg
-    _runtime_cfg = None
+    with _runtime_cfg_lock:
+        _runtime_cfg = None
 
 
 def normalize_profile_name(name: str) -> str:
@@ -391,10 +394,14 @@ def load_config(*, force_reload: bool = False) -> AppConfig:
     update the cache, or ``force_reload=True`` to re-read from disk.
     """
     global _runtime_cfg
-    if not force_reload and _runtime_cfg is not None:
-        return _runtime_cfg
-    _runtime_cfg = _build_config_from_disk()
-    return _runtime_cfg
+    if not force_reload:
+        with _runtime_cfg_lock:
+            if _runtime_cfg is not None:
+                return _runtime_cfg
+    new_cfg = _build_config_from_disk()
+    with _runtime_cfg_lock:
+        _runtime_cfg = new_cfg
+    return new_cfg
 
 
 def save_config(cfg: AppConfig) -> None:
@@ -440,7 +447,8 @@ def save_config(cfg: AppConfig) -> None:
     try:
         with CONFIG_PATH.open("w", encoding="utf-8") as f:
             json.dump(raw, f, indent=4)
-        _runtime_cfg = cfg
+        with _runtime_cfg_lock:
+            _runtime_cfg = cfg
     except Exception as e:
         print(f"Failed to save config: {e}")
 

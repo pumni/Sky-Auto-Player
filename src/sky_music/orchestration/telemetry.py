@@ -321,8 +321,6 @@ class TelemetryLogger:
             "risky_same_key_repeats": int(getattr(metadata, "risky_same_key_repeats", 0)),
             "deduplicated_note_count": int(getattr(metadata, "deduplicated_note_count", 0)),
             "duplicate_note_count": int(getattr(metadata, "duplicate_note_count", 0)),
-            "same_key_compressed_holds": int(getattr(metadata, "same_key_compressed_holds", 0)),
-            "infeasible_same_key_repeats": int(getattr(metadata, "infeasible_same_key_repeats", 0)),
             "max_polyphony": int(getattr(metadata, "max_polyphony", 0)),
             "note_count": int(getattr(metadata, "note_count", 0)),
             "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),

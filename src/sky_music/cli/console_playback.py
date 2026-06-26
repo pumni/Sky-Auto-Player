@@ -288,7 +288,7 @@ def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     print(f"    Max chord                   : {max_chord}")
     print(f"    Min timestamp gap           : {min_ts_gap_str}")
     print(f"    Min same-key gap            : {min_sk_gap_str}")
-    print(f"    Infeasible same-key repeats : {sched_meta.infeasible_same_key_repeats}")
+    print(f"    Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}")
     print(f"    Duplicate same-key slots    : {sched_meta.duplicate_note_count}")
     print()
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Literal
+from sky_music.domain.domain import Note
 from sky_music.domain.scheduler_types import ScheduleMetadata
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +61,7 @@ def _find_dense_clusters(down_events: list[Any]) -> list[DenseCluster]:
 
 def _compute_min_gaps(
     res: ScheduleMetadata,
-    raw_notes: tuple[Any, ...] | None,
+    raw_notes: tuple[Note, ...] | None,
     down_events: list[Any] | None = None,
 ) -> tuple[int | None, int | None]:
     """Compute minimum gap between ANY two notes and SAME physical key.
@@ -173,7 +174,7 @@ def _evaluate_risk_severity(res: ScheduleMetadata, dense_clusters_list: list[Den
     
     return severity, recommendations, reasons_list
 
-def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Any, ...] | None = None) -> ScheduleRiskReport:
+def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Note, ...] | None = None) -> ScheduleRiskReport:
     """Analyze a ScheduleMetadata and optional raw notes to detect timing conflicts, density risks, and suggest overrides."""
     down_events = sorted([action for action in res.actions if action.kind == "down"], key=lambda a: a.at_us)
     

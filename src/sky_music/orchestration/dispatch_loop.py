@@ -4,7 +4,7 @@ import math
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 from sky_music.infrastructure.wait_strategy import WaitStrategy
@@ -438,7 +438,7 @@ class DispatchLoop:
             return None
 
         action = KeyAction(
-            kind="down",
+            kind=ActionKind.DOWN,
             scan_codes=tuple(ScanCode(intent.scan_code) for intent in playable),
             at_us=Microseconds(batch.scheduled_us),
             reason=batch.reason,
@@ -506,7 +506,7 @@ class DispatchLoop:
             else "mixed_deferred_release"
         )
         action = KeyAction(
-            kind="up",
+            kind=ActionKind.UP,
             scan_codes=tuple(ScanCode(sc) for sc in scan_codes_list),
             at_us=Microseconds(scheduled_us),
             reason=reason,
@@ -871,6 +871,8 @@ class DispatchLoop:
                     self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
                 )
             else:
+                # Compute lead once per batch: pass to both pop_due_authored (via callback) and
+                # _dispatch_down_batch without recomputing.
                 down_lead = self._down_lead_for_batch(batch)
                 results.append(
                     self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)

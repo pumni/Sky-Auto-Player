@@ -195,10 +195,10 @@ def _frame_coupled_us(
     if legacy_key in profile and _has_frame_model(profile, stem):
         return int(profile[legacy_key])
     if _has_frame_model(profile, stem):
-        # round() mirrors FrameTimingPolicy.from_timing_policy materialisation exactly.
+        from sky_music.domain.scheduler_types import FrameTimingPolicy
         frame_us = math.ceil(1_000_000 / fps)
         frames = float(profile.get(f"{stem}_frames", default_frames))
-        return int(round(frames * frame_us))
+        return int(FrameTimingPolicy.materialise_frame_us(frames, frame_us))
     return int(profile[legacy_key])
 
 

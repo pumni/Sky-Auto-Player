@@ -261,27 +261,32 @@ def build_key_actions(
         raw_events.append(RawKeyEvent(
             at_us=down_at_us,
             scan_code=sc,
-            kind="down",
+            kind=ActionKind.DOWN,
             reason="onset",
         ))
         raw_events.append(RawKeyEvent(
             at_us=up_at_us,
             scan_code=sc,
-            kind="up",
+            kind=ActionKind.UP,
             reason="repeat_release" if next_same_info is not None else "release",
         ))
 
-    # Stage 3: group simultaneous events without merging distinct reasons.
-    grouped: dict[tuple[int, ActionKind, str], list[int]] = {}
+    # Stage 3: group simultaneous events by (time, kind).  Reason is dropped from the key so
+    # releases with different origins (e.g. "release" vs "repeat_release") at the same
+    # microsecond collapse into a single KeyAction — fewer backend calls, no behavioural change.
+    grouped: dict[tuple[int, ActionKind], list[tuple[int, str]]] = {}
     for ev in raw_events:
-        g_key = (ev.at_us, ev.kind, ev.reason)
+        g_key = (ev.at_us, ev.kind)
         if g_key not in grouped:
             grouped[g_key] = []
-        grouped[g_key].append(ev.scan_code)
+        grouped[g_key].append((ev.scan_code, ev.reason))
 
     key_actions_list: list[KeyAction] = []
-    for (at_us, kind, reason), scs in grouped.items():
-        unique_scs = tuple(dict.fromkeys(scs))  # type: ignore[assignment]
+    for (at_us, kind), items in grouped.items():
+        scs = [sc for sc, _ in items]
+        reasons = {r for _, r in items}
+        unique_scs = tuple(dict.fromkeys(scs))
+        reason = reasons.pop() if len(reasons) == 1 else "mixed"
         key_actions_list.append(KeyAction(
             at_us=Microseconds(at_us),
             scan_codes=unique_scs,  # type: ignore[arg-type]
@@ -290,12 +295,7 @@ def build_key_actions(
         ))
         
     # Stage 4: sort the executable timeline with up-before-down priority.
-    def action_priority(action: KeyAction) -> int:
-        if action.kind == "up":
-            return 0
-        return 1
-            
-    key_actions_list.sort(key=lambda a: (a.at_us, action_priority(a)))
+    key_actions_list.sort(key=lambda a: (a.at_us, a.kind == "down"))
     
     # Stage 5: derive metrics from the executable timeline.
     active_keys: set[int] = set()
@@ -340,14 +340,10 @@ def build_key_actions(
         actions=tuple(key_actions_list),
         compressed_holds=compressed_holds,
         impossible_same_key_repeats=impossible_same_key_repeats,
-        # Phase-5 compatibility aliases (scheduler-core-architecture-plan §Phase 5): telemetry and
-        # calibration prefer these newer names but the values intentionally mirror the legacy ones.
-        infeasible_same_key_repeats=impossible_same_key_repeats,
         max_polyphony=max_polyphony,
         note_count=note_count,
         deduplicated_note_count=deduplicated_note_count,
         duplicate_note_count=duplicate_note_count,
-        same_key_compressed_holds=compressed_holds,
         duration_us=duration_us,
         warnings=tuple(warnings),
         risky_same_key_repeats=risky_same_key_repeats,
