@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from sky_music.domain import Song
 from sky_music.domain.domain import ScanCode
-from sky_music.domain.scheduler_types import KeyAction, Microseconds
+from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
 from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import SendLatencyEstimator, PlaybackEngine, PLAYBACK_FINISHED
@@ -87,33 +87,33 @@ def test_send_latency_estimator_ema() -> None:
     
     # First 4 sends should yield 0
     for _ in range(4):
-        estimator.update("down", 1000)
-        assert estimator.get_lead_us("down") == 0
+        estimator.update(ActionKind.DOWN, 1000)
+        assert estimator.get_lead_us(ActionKind.DOWN) == 0
     
     # 5th send seeds the EMA
-    estimator.update("down", 1000)
-    assert estimator.get_lead_us("down") == 1000
+    estimator.update(ActionKind.DOWN, 1000)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 1000
     
     # 6th send updates EMA: 0.2 * 1500 + 0.8 * 1000 = 1100
-    estimator.update("down", 1500)
-    assert estimator.get_lead_us("down") == 1100
+    estimator.update(ActionKind.DOWN, 1500)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 1100
     
     # Max cap check: update with high value
     for _ in range(20):
-        estimator.update("down", 5000)
-    assert estimator.get_lead_us("down") == 2000  # capped
+        estimator.update(ActionKind.DOWN, 5000)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 2000  # capped
 
     # Up estimator is independent
-    assert estimator.get_lead_us("up") == 0
+    assert estimator.get_lead_us(ActionKind.UP) == 0
 
 
 def test_no_early_conflict_guard() -> None:
     # Test that down action batch is not popped early if there is a conflict (active or pending key release)
     actions = (
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="first_down"),
-        KeyAction(kind="up", scan_codes=(ScanCode(1),), at_us=Microseconds(100), reason="first_up"),
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(150), reason="second_down"),
-        KeyAction(kind="up", scan_codes=(ScanCode(1),), at_us=Microseconds(250), reason="second_up"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="first_down"),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(100), reason="first_up"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(150), reason="second_down"),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(250), reason="second_up"),
     )
     schedule = compile_runtime_intents(actions)
     coordinator = RuntimeDispatchCoordinator(schedule, min_hold_us=0)
@@ -164,8 +164,8 @@ def test_adaptive_lead_integration() -> None:
     # Create actions that will trigger 6 down dispatches and 6 up dispatches
     actions = []
     for i in range(1, 7):
-        actions.append(KeyAction(kind="down", scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000), reason=f"d{i}"))
-        actions.append(KeyAction(kind="up", scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000 + 500), reason=f"u{i}"))
+        actions.append(KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000), reason=f"d{i}"))
+        actions.append(KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000 + 500), reason=f"u{i}"))
     
     actions_tuple = tuple(actions)
     song = Song(name="test_adaptive", notes=())
@@ -197,8 +197,8 @@ def test_adaptive_lead_integration() -> None:
     assert engine.estimator._count_up == 6
     
     # Seed value was 800, 6th value updated: 0.2 * 800 + 0.8 * 800 = 800
-    assert engine.estimator.get_lead_us("down") == 800
-    assert engine.estimator.get_lead_us("up") == 800
+    assert engine.estimator.get_lead_us(ActionKind.DOWN) == 800
+    assert engine.estimator.get_lead_us(ActionKind.UP) == 800
     
     # Telemetry records should exist and have non-zero applied_lead_us for later records
     records = engine.telemetry.records
@@ -270,10 +270,10 @@ def _floor_engine(actions, backend, clock, *, min_hold_us, **kwargs):
 
 def _tight_same_key_actions(min_hold_us: int):
     return (
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(10_000), reason="d1"),
-        KeyAction(kind="up", scan_codes=(ScanCode(1),), at_us=Microseconds(10_000 + min_hold_us), reason="u1"),
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(95_000), reason="d2"),
-        KeyAction(kind="up", scan_codes=(ScanCode(1),), at_us=Microseconds(95_000 + min_hold_us), reason="u2"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(10_000), reason="d1"),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(10_000 + min_hold_us), reason="u1"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(95_000), reason="d2"),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(95_000 + min_hold_us), reason="u2"),
     )
 
 
@@ -317,10 +317,10 @@ def test_observed_hold_never_below_floor_under_adaptive_lead() -> None:
     )
     # Pre-warm the estimator to the worst case: the 2 ms clamp on both kinds.
     for _ in range(5):
-        engine.estimator.update("down", 5_000)
-        engine.estimator.update("up", 5_000)
-    assert engine.estimator.get_lead_us("down") == 2_000
-    assert engine.estimator.get_lead_us("up") == 2_000
+        engine.estimator.update(ActionKind.DOWN, 5_000)
+        engine.estimator.update(ActionKind.UP, 5_000)
+    assert engine.estimator.get_lead_us(ActionKind.DOWN) == 2_000
+    assert engine.estimator.get_lead_us(ActionKind.UP) == 2_000
 
     assert engine.play() == PLAYBACK_FINISHED
 
@@ -336,8 +336,8 @@ def test_dispatch_completion_lands_on_schedule_with_warm_estimator() -> None:
     send_duration_us = 800
     actions: list[KeyAction] = []
     for i in range(1, 5):
-        actions.append(KeyAction(kind="down", scan_codes=(ScanCode(i),), at_us=Microseconds(i * 20_000), reason=f"d{i}"))
-        actions.append(KeyAction(kind="up", scan_codes=(ScanCode(i),), at_us=Microseconds(i * 20_000 + 5_000), reason=f"u{i}"))
+        actions.append(KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 20_000), reason=f"d{i}"))
+        actions.append(KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 20_000 + 5_000), reason=f"u{i}"))
 
     clock = FakeClock()
     backend = TimedBackend(clock, send_duration_us=send_duration_us)
@@ -349,8 +349,8 @@ def test_dispatch_completion_lands_on_schedule_with_warm_estimator() -> None:
         enable_adaptive_lead=True,
     )
     for _ in range(5):
-        engine.estimator.update("down", send_duration_us)
-        engine.estimator.update("up", send_duration_us)
+        engine.estimator.update(ActionKind.DOWN, send_duration_us)
+        engine.estimator.update(ActionKind.UP, send_duration_us)
 
     assert engine.play() == PLAYBACK_FINISHED
 
@@ -369,82 +369,82 @@ def test_dispatch_completion_lands_on_schedule_with_warm_estimator() -> None:
 def test_estimator_polyphony_buckets() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
     for _ in range(5):
-        est.update("down", 200, n_keys=1)
+        est.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
-        est.update("down", 800, n_keys=4)
-    assert est.get_lead_us("down", 1) == 200
-    assert est.get_lead_us("down", 4) == 800
+        est.update(ActionKind.DOWN, 800, n_keys=4)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 200
+    assert est.get_lead_us(ActionKind.DOWN, 4) == 800
     # The whole point of the fix: a 4-key chord is led more than a single note.
-    assert est.get_lead_us("down", 4) > est.get_lead_us("down", 1)
+    assert est.get_lead_us(ActionKind.DOWN, 4) > est.get_lead_us(ActionKind.DOWN, 1)
 
 
 def test_estimator_linear_extrapolation_for_unseen_bucket() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
     # Seed buckets 1 and 4 so a linear model (a + b*N) is defined across >=2 sizes.
     for _ in range(5):
-        est.update("down", 200, n_keys=1)
+        est.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
-        est.update("down", 800, n_keys=4)
+        est.update(ActionKind.DOWN, 800, n_keys=4)
     # Fit through (1,200) and (4,800): slope 200, intercept 0. Unseen sizes are EXTRAPOLATED,
     # not borrowed from a smaller seeded bucket (which would under-lead the chord).
-    assert est.get_lead_us("down", 2) == 400
-    assert est.get_lead_us("down", 3) == 600
+    assert est.get_lead_us(ActionKind.DOWN, 2) == 400
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
     # Seeded buckets still return their own EMA exactly.
-    assert est.get_lead_us("down", 1) == 200
-    assert est.get_lead_us("down", 4) == 800
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 200
+    assert est.get_lead_us(ActionKind.DOWN, 4) == 800
 
 
 def test_estimator_warm_start_uses_first_sample() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
     # Seed buckets 1 and 2 so the linear model (slope 200, intercept 0) is available.
     for _ in range(5):
-        est.update("down", 200, n_keys=1)
+        est.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
-        est.update("down", 400, n_keys=2)
+        est.update(ActionKind.DOWN, 400, n_keys=2)
     # First-ever poly-4 chord, with a real send (1000) above the linear prediction (800):
     # the bucket warm-starts from linear then folds in the sample -> 0.2*1000 + 0.8*800 = 840.
     # (Pure linear fallback would ignore the real sample and return 800.)
-    est.update("down", 1000, n_keys=4)
-    assert est.get_lead_us("down", 4) == 840
+    est.update(ActionKind.DOWN, 1000, n_keys=4)
+    assert est.get_lead_us(ActionKind.DOWN, 4) == 840
 
 
 def test_estimator_nearest_bucket_when_linear_undefined() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
     # Only one polyphony seen -> slope undefined -> linear model unavailable.
     for _ in range(5):
-        est.update("down", 300, n_keys=2)
+        est.update(ActionKind.DOWN, 300, n_keys=2)
     # Unseen bucket 4 falls back to nearest seeded <= 4 (bucket 2 = 300).
-    assert est.get_lead_us("down", 4) == 300
+    assert est.get_lead_us(ActionKind.DOWN, 4) == 300
 
 
 def test_estimator_total_fallback_when_no_lower_bucket() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
     # Only high-polyphony history exists.
     for _ in range(5):
-        est.update("down", 800, n_keys=4)
+        est.update(ActionKind.DOWN, 800, n_keys=4)
     # A single-note query: no bucket <= 1 seeded -> total fallback (800).
-    assert est.get_lead_us("down", 1) == 800
-    assert est.get_lead_us("down", 4) == 800
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 800
+    assert est.get_lead_us(ActionKind.DOWN, 4) == 800
 
 
 def test_estimator_bucket_cold_then_clamp() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
     # Cold: fewer than seed samples in the bucket -> lead 0.
     for _ in range(4):
-        est.update("down", 5_000, n_keys=3)
-    assert est.get_lead_us("down", 3) == 0
+        est.update(ActionKind.DOWN, 5_000, n_keys=3)
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
     # Seed then push high -> clamp at max_lead_us.
-    est.update("down", 5_000, n_keys=3)
+    est.update(ActionKind.DOWN, 5_000, n_keys=3)
     for _ in range(20):
-        est.update("down", 9_000, n_keys=3)
-    assert est.get_lead_us("down", 3) == 2_000
+        est.update(ActionKind.DOWN, 9_000, n_keys=3)
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 2_000
 
 
 def test_coordinator_per_batch_lead_scales_with_polyphony() -> None:
     actions = (
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(10_000), reason="single"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(10_000), reason="single"),
         KeyAction(
-            kind="down",
+            kind=ActionKind.DOWN,
             scan_codes=(ScanCode(2), ScanCode(3), ScanCode(4), ScanCode(5)),
             at_us=Microseconds(20_000),
             reason="chord",
@@ -481,8 +481,8 @@ def _bias_engine(actions: tuple, **kwargs: object) -> PlaybackEngine:
 
 def test_down_lead_for_batch_onset_bias_is_onset_only() -> None:
     actions = (
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="d"),
-        KeyAction(kind="up", scan_codes=(ScanCode(1),), at_us=Microseconds(500), reason="u"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="d"),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(500), reason="u"),
     )
     engine = _bias_engine(actions, dispatch_lead_us=1_000, onset_bias_us=500)
     loop = engine._compat_dispatch_loop()
@@ -496,9 +496,9 @@ def test_down_lead_for_batch_onset_bias_is_onset_only() -> None:
 
 def test_down_lead_for_batch_scales_with_polyphony() -> None:
     actions = (
-        KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="single"),
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="single"),
         KeyAction(
-            kind="down",
+            kind=ActionKind.DOWN,
             scan_codes=(ScanCode(2), ScanCode(3), ScanCode(4), ScanCode(5)),
             at_us=Microseconds(1_000),
             reason="chord",
@@ -506,9 +506,9 @@ def test_down_lead_for_batch_scales_with_polyphony() -> None:
     )
     engine = _bias_engine(actions, enable_adaptive_lead=True, dispatch_lead_us=0, onset_bias_us=0)
     for _ in range(5):
-        engine.estimator.update("down", 200, n_keys=1)
+        engine.estimator.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
-        engine.estimator.update("down", 800, n_keys=4)
+        engine.estimator.update(ActionKind.DOWN, 800, n_keys=4)
     loop = engine._compat_dispatch_loop()
     single = engine.runtime_schedule.batches[0]
     chord = engine.runtime_schedule.batches[1]

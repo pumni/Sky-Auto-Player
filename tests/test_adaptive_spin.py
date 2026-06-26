@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from sky_music.domain import Song
-from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
 from typing import cast
 
@@ -160,7 +160,7 @@ def test_wake_error_probe() -> None:
             self.clock.time_us += max(1, requested + self.error_us)
 
     song = Song(name="test_probe", notes=())
-    actions = (KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(50000), reason="d1"),)
+    actions = (KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(50000), reason="d1"),)
     
     clock = FakeClock()
     backend = TimedBackend(clock)
@@ -230,7 +230,7 @@ def test_probes_complete_before_perf_anchor() -> None:
     sleeper = TracingSleeper(clock)
     backend = TimedBackend(clock)
     song = Song(name="test_order", notes=())
-    actions = (KeyAction(kind="down", scan_codes=(ScanCode(1),), at_us=Microseconds(50000), reason="d1"),)
+    actions = (KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(50000), reason="d1"),)
 
     engine = PlaybackEngine(
         song=song,
