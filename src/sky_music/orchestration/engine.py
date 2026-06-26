@@ -378,8 +378,8 @@ class PlaybackEngine:
         # each chord size are led correctly instead of paying full cold-start lateness (the first
         # _SEED_SAMPLES events of every bucket would otherwise dispatch with lead 0). Best-effort.
         self.lead_cache_path = lead_cache_path
-        if self.enable_adaptive_lead and self.lead_cache_path is not None:
-            cached = load_lead_cache(self.lead_cache_path)
+        if self._lead_cache_enabled:
+            cached = load_lead_cache(self.lead_cache_path)  # type: ignore[arg-type]
             if cached is not None:
                 self.estimator.import_state(cached)
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
@@ -445,6 +445,16 @@ class PlaybackEngine:
         # Compatibility shim for legacy engine-level tests (_execute_action/_process_wait_states):
         # one cached loop so dispatch ids keep incrementing across calls. Lazily built.
         self._compat_loop: DispatchLoop | None = None
+
+    @property
+    def _lead_cache_enabled(self) -> bool:
+        # Only a real-backend, adaptive-lead run may read/write the per-machine cache. DryRunBackend
+        # sends never hit SendInput, so their ~0 durations would poison the cache for real sessions.
+        return (
+            self.enable_adaptive_lead
+            and self.lead_cache_path is not None
+            and self.backend.__class__.__name__ != "DryRunBackend"
+        )
 
     @property
     def input_path_degraded(self) -> bool:
@@ -668,8 +678,8 @@ class PlaybackEngine:
                     close()
             # Persist the warmed estimator (any exit path) so the next run starts warm. Outside the
             # RT scope's timing window — playback is already done — and fully best-effort.
-            if self.enable_adaptive_lead and self.lead_cache_path is not None:
-                save_lead_cache(self.lead_cache_path, self.estimator.export_state())
+            if self._lead_cache_enabled:
+                save_lead_cache(self.lead_cache_path, self.estimator.export_state())  # type: ignore[arg-type]
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (

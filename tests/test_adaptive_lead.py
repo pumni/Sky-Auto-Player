@@ -585,3 +585,28 @@ def test_load_lead_cache_handles_corrupt_file(tmp_path) -> None:
     path = tmp_path / "lead.json"
     path.write_text("{not valid json", encoding="utf-8")
     assert load_lead_cache(path) is None
+
+
+def test_lead_cache_disabled_for_dry_run_backend(tmp_path) -> None:
+    from sky_music.infrastructure.backend import DryRunBackend
+
+    actions = (
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="d"),
+    )
+    path = tmp_path / "lead.json"
+
+    # Real-ish backend (TimedBackend) with adaptive lead + a path -> cache active.
+    real = _bias_engine(actions, enable_adaptive_lead=True, lead_cache_path=path)
+    assert real._lead_cache_enabled is True
+
+    # DryRunBackend must never read/write the per-machine cache (its sends are not representative).
+    dry = PlaybackEngine(
+        song=Song(name="poly", notes=()),
+        actions=actions,
+        backend=DryRunBackend(),
+        require_focus=False,
+        use_dispatch_thread=False,
+        enable_adaptive_lead=True,
+        lead_cache_path=path,
+    )
+    assert dry._lead_cache_enabled is False
