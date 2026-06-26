@@ -1,8 +1,10 @@
+import threading
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.config import AppConfig, RtPriorityMode
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class PlaybackOverrides:
     dry_run: bool = False
     profile: str | None = None
@@ -12,7 +14,7 @@ class PlaybackOverrides:
     onset_bias_us: int = 0  # additive lead applied to key-down dispatches only (µs)
 
 
-@dataclass
+@dataclass(slots=True)
 class RuntimeSessionState:
     session: PlaybackSessionContext | None = None
     timing_policy: object | None = None
@@ -47,4 +49,45 @@ class RuntimeSessionState:
         self.timing_profile_name = session.display_profile_label()
 
 
-RUNTIME_STATE = RuntimeSessionState()
+class _RuntimeStateProxy:
+    """Thread-safe proxy for RuntimeSessionState.
+
+    All attribute reads and writes go through a lock so that access from
+    multiple threads (main thread + dispatch thread) is safe under
+    free-threaded Python 3.14.  The proxy delegates method calls like
+    ``apply_session`` directly under the lock.
+    """
+
+    def __init__(self) -> None:
+        object.__setattr__(self, '_lock', threading.Lock())
+        object.__setattr__(self, '_state', RuntimeSessionState())
+
+    def __getattr__(self, name: str) -> object:
+        state = object.__getattribute__(self, '_state')
+        lock: threading.Lock = object.__getattribute__(self, '_lock')
+        with lock:
+            return getattr(state, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        state = object.__getattribute__(self, '_state')
+        lock: threading.Lock = object.__getattribute__(self, '_lock')
+        with lock:
+            setattr(state, name, value)
+
+    def apply_session(
+        self,
+        session: PlaybackSessionContext,
+        cfg: AppConfig,
+        *,
+        spin_threshold_us: int | None = None,
+    ) -> None:
+        state = object.__getattribute__(self, '_state')
+        lock: threading.Lock = object.__getattribute__(self, '_lock')
+        with lock:
+            state.apply_session(session, cfg, spin_threshold_us=spin_threshold_us)
+
+
+if TYPE_CHECKING:
+    RUNTIME_STATE: RuntimeSessionState = RuntimeSessionState()
+else:
+    RUNTIME_STATE = _RuntimeStateProxy()

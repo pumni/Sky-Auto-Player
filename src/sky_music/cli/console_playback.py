@@ -569,7 +569,10 @@ def play_selected_song(
     engine.telemetry.record_schedule_metadata(sched_meta)
 
     if use_textual_ui:
-        assert isinstance(renderer, SnapshotRenderer)
+        if not isinstance(renderer, SnapshotRenderer):
+            raise TypeError(
+                f"expected SnapshotRenderer for Textual UI, got {type(renderer).__name__}"
+            )
         result = run_playback_textual(
             engine,
             renderer,

@@ -22,7 +22,7 @@ VALID_FPS: tuple[int, ...] = (30, 60, 90, 120, 144, 165, 240)
 CONFIG_PATH: Path = Path(__file__).resolve().parents[2] / "config.json"
 
 
-@dataclass
+@dataclass(frozen=True)
 class HotkeyDefaults:
     pause:   str = "f8"
     skip:    str = "f9"
@@ -31,13 +31,13 @@ class HotkeyDefaults:
     panic:   str = "ctrl+alt+backspace"
 
 
-@dataclass
+@dataclass(frozen=True)
 class SafetyDefaults:
     prompt_on_medium_risk: bool = True
     prompt_on_high_risk:   bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class FrameTimingDefaults:
     """Frame-aware scaling ratios (defaults match built-in FrameTimingPolicy formulas)."""
 

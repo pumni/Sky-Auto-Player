@@ -129,7 +129,8 @@ def validate_key_actions(
                     down_at, down_idx = active_downs[sc]
                     hold = action.at_us - down_at
                     frame_floor = int(policy.frame_us) if getattr(policy, "frame_us", 0) else 0
-                    min_req = max(ABSOLUTE_MIN_HOLD_US, frame_floor)
+                    policy_min_hold = int(policy.min_hold_us) if getattr(policy, "min_hold_us", 0) else 0
+                    min_req = max(ABSOLUTE_MIN_HOLD_US, frame_floor, policy_min_hold)
                     if frame_floor > 0 and hold < frame_floor:
                         violations.append(ScheduleInvariantViolation(
                             code="insufficient_hold",

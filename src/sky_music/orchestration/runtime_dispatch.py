@@ -25,7 +25,6 @@ GENERATION_STATUSES: tuple[GenerationStatus, ...] = tuple(GenerationStatus)
 @dataclass(frozen=True, slots=True)
 class RuntimeKeyIntent:
     source_action_index: int
-    batch_id: int
     generation_id: int | None
     kind: ActionKind
     scan_code: int
@@ -36,7 +35,6 @@ class RuntimeKeyIntent:
 @dataclass(frozen=True, slots=True)
 class RuntimeActionBatch:
     source_action_index: int
-    batch_id: int
     kind: ActionKind
     scheduled_us: int
     reason: str
@@ -99,7 +97,6 @@ def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
             intents.append(
                 RuntimeKeyIntent(
                     source_action_index=source_action_index,
-                    batch_id=source_action_index,
                     generation_id=generation_id,
                     kind=action.kind,
                     scan_code=scan_code,
@@ -111,7 +108,6 @@ def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
         batches.append(
             RuntimeActionBatch(
                 source_action_index=source_action_index,
-                batch_id=source_action_index,
                 kind=action.kind,
                 scheduled_us=int(action.at_us),
                 reason=action.reason,

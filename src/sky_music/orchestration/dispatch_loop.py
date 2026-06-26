@@ -500,9 +500,10 @@ class DispatchLoop:
             reasons.add(release.reason)
             scan_codes_list.append(release.scan_code)
             gen_ids_list.append(release.generation_id)
-        assert len(scan_codes_list) == len(set(scan_codes_list)), (
-            f"duplicate scan codes in pending releases: {scan_codes_list}"
-        )
+        if len(scan_codes_list) != len(set(scan_codes_list)):
+            raise RuntimeError(
+                f"duplicate scan codes in pending releases: {scan_codes_list}"
+            )
         deferred_by_us = max(0, max_deferral)
         reason = (
             best.reason

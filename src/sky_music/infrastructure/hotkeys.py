@@ -29,7 +29,7 @@ VK_CODE_BY_KEY_NAME = {
     "/": 0xBF,
 }
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class HotkeyBinding:
     name: str
     key_code: int
@@ -53,7 +53,7 @@ class HotkeyBinding:
     def has_modifier(self) -> bool:
         return self.ctrl or self.alt or self.shift
 
-@dataclass
+@dataclass(slots=True)
 class PlaybackControls:
     pause: HotkeyBinding
     skip: HotkeyBinding

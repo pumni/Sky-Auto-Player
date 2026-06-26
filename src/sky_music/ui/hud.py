@@ -325,8 +325,5 @@ class ProgressRenderer:
         self._initialized = False
         self.last_lines_printed = 0
 
-# Compatibility Alias
-PlaybackHudRenderer = ProgressRenderer
-
 def clear_terminal() -> None:
     os.system('cls' if os.name == 'nt' else 'clear')

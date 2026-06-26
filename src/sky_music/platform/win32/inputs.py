@@ -1,5 +1,6 @@
 import ctypes
 from ctypes import wintypes
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -183,6 +184,11 @@ EXPECTED_PROCESS_NAMES: set[str] = set(DEFAULT_SKY_PROCESS_NAMES)
 ALLOW_TITLE_FALLBACK: bool = False
 PLAYBACK_DEBUG: bool = False
 REJECTED_WINDOW_WARNINGS: set[int] = set()
+_REJECTED_WINDOW_WARNINGS_MAX = 256
+# Sky window HWND cache.  Written by the main thread (get_sky_window / reset_window_cache) before
+# the dispatch thread starts; read by the dispatch thread during playback focus checks.  All writes
+# complete before dispatch_thread.start() — safe under the current architecture, but document the
+# contract so future refactors keep it single-writer.
 sky: int | None = None
 
 # We dynamically hook debug_log to avoid circular dependency
@@ -400,27 +406,29 @@ _INPUT_SIZE = ctypes.sizeof(INPUT)
 _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
 _ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDict()
 _ARRAY_CACHE_MAX = 8192
+_CACHE_LOCK = threading.RLock()
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
-    cached = _INPUT_CACHE.get(cache_key)
-    if cached is None:
-        cached = INPUT(type=INPUT_KEYBOARD)
-        cached.ki = KEYBDINPUT(0, scan_code, flags, 0, 0)
-        _INPUT_CACHE[cache_key] = cached
+    with _CACHE_LOCK:
+        cached = _INPUT_CACHE.get(cache_key)
+        if cached is None:
+            cached = INPUT(type=INPUT_KEYBOARD)
+            cached.ki = KEYBDINPUT(0, scan_code, flags, 0, 0)
+            _INPUT_CACHE[cache_key] = cached
     return cached
 
 def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
-    cache_key = (scan_codes_tuple, flags)
-    input_array = _ARRAY_CACHE.get(cache_key)
     n = len(scan_codes_tuple)
-
-    if input_array is None:
-        if len(_ARRAY_CACHE) >= _ARRAY_CACHE_MAX:
-            _ARRAY_CACHE.popitem(last=False)
-        key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
-        input_array = (INPUT * n)(*key_inputs)
-        _ARRAY_CACHE[cache_key] = input_array
+    cache_key = (scan_codes_tuple, flags)
+    with _CACHE_LOCK:
+        input_array = _ARRAY_CACHE.get(cache_key)
+        if input_array is None:
+            if len(_ARRAY_CACHE) >= _ARRAY_CACHE_MAX:
+                _ARRAY_CACHE.popitem(last=False)
+            key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
+            input_array = (INPUT * n)(*key_inputs)
+            _ARRAY_CACHE[cache_key] = input_array
 
     sent = user32.SendInput(n, input_array, _INPUT_SIZE)
     if sent == n:
@@ -445,7 +453,8 @@ def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool =
 def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
     if not scan_codes:
         return
-    assert len(scan_codes) == len(set(scan_codes)), f"send_scan_code_batch_trusted received duplicates: {scan_codes}"
+    if len(scan_codes) != len(set(scan_codes)):
+        raise ValueError(f"send_scan_code_batch_trusted received duplicates: {scan_codes}")
     scan_codes_tuple = tuple(scan_codes)
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
     _send_scan_code_batch_impl(scan_codes_tuple, flags)
@@ -517,6 +526,8 @@ def get_sky_window() -> int | None:
     else:
         for hwnd, title, pid_val, proc_name in rejected_candidates:
             if hwnd not in REJECTED_WINDOW_WARNINGS:
+                if len(REJECTED_WINDOW_WARNINGS) >= _REJECTED_WINDOW_WARNINGS_MAX:
+                    REJECTED_WINDOW_WARNINGS.clear()
                 REJECTED_WINDOW_WARNINGS.add(hwnd)
                 print(
                     f"Rejected Sky-like window (untrusted process): Title={title!r}, "
