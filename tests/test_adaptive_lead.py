@@ -514,3 +514,74 @@ def test_down_lead_for_batch_scales_with_polyphony() -> None:
     chord = engine.runtime_schedule.batches[1]
     assert loop._down_lead_for_batch(single) == 200
     assert loop._down_lead_for_batch(chord) == 800
+
+
+# --- Per-machine estimator persistence (warm-start across sessions) ---
+
+
+def test_estimator_export_import_round_trip() -> None:
+    src = SendLatencyEstimator()
+    for _ in range(6):
+        src.update(ActionKind.DOWN, 280, n_keys=1)
+        src.update(ActionKind.DOWN, 420, n_keys=2)
+        src.update(ActionKind.DOWN, 560, n_keys=3)
+        src.update(ActionKind.UP, 200)
+
+    dst = SendLatencyEstimator()
+    dst.import_state(src.export_state())
+
+    for n in (1, 2, 3):
+        assert dst.get_lead_us(ActionKind.DOWN, n) == src.get_lead_us(ActionKind.DOWN, n)
+    assert dst.get_lead_us(ActionKind.UP) == src.get_lead_us(ActionKind.UP)
+    # Warm from the very first event: no cold-start zero.
+    assert dst.get_lead_us(ActionKind.DOWN, 3) > 0
+
+
+def test_imported_bucket_is_warm_from_first_event() -> None:
+    est = SendLatencyEstimator()
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 0  # cold
+
+    est.import_state({"version": 1, "ema_down": {"3": 600.0}})
+    # Seeded value used immediately, with no real samples sent.
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
+
+
+def test_import_ignores_unversioned_or_corrupt_state() -> None:
+    est = SendLatencyEstimator()
+    est.import_state({})  # missing version
+    est.import_state({"version": 2, "ema_down": {"3": 600.0}})  # wrong version
+    est.import_state("not a dict")  # type: ignore[arg-type]
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
+
+
+def test_import_rejects_out_of_range_values() -> None:
+    est = SendLatencyEstimator()
+    est.import_state({"version": 1, "ema_down": {"3": 1e12, "2": -5}})
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
+    assert est.get_lead_us(ActionKind.DOWN, 2) == 0
+
+
+def test_lead_cache_file_round_trip(tmp_path) -> None:
+    from sky_music.orchestration.engine import load_lead_cache, save_lead_cache
+
+    path = tmp_path / "cache" / "lead.json"
+    assert load_lead_cache(path) is None  # missing file -> None, no crash
+
+    src = SendLatencyEstimator()
+    for _ in range(6):
+        src.update(ActionKind.DOWN, 300, n_keys=1)
+    save_lead_cache(path, src.export_state())
+
+    loaded = load_lead_cache(path)
+    assert loaded is not None
+    dst = SendLatencyEstimator()
+    dst.import_state(loaded)
+    assert dst.get_lead_us(ActionKind.DOWN, 1) == src.get_lead_us(ActionKind.DOWN, 1)
+
+
+def test_load_lead_cache_handles_corrupt_file(tmp_path) -> None:
+    from sky_music.orchestration.engine import load_lead_cache
+
+    path = tmp_path / "lead.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    assert load_lead_cache(path) is None

@@ -847,9 +847,10 @@ class DispatchLoop:
         now_us: int,
         state: PlaybackState,
         first_action_executed: bool,
-        lead_down: int,
         lead_up: int,
     ) -> tuple[ExecutionResult | None, ...]:
+        # The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch); a scalar
+        # down lead would be overridden by it inside pop_due_authored anyway, so none is threaded in.
         results: list[ExecutionResult | None] = []
 
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
@@ -857,7 +858,7 @@ class DispatchLoop:
             results.append(self._dispatch_pending_releases(pending, state, lead_up=lead_up))
 
         for batch in self.coordinator.pop_due_authored(
-            now_us, lead_down, lead_for_batch=self._down_lead_for_batch
+            now_us, lead_for_batch=self._down_lead_for_batch
         ):
             if batch.kind == "up":
                 self._request_up_batch(batch, state)
@@ -866,8 +867,6 @@ class DispatchLoop:
                     self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
                 )
             else:
-                # Compute lead once per batch: pass to both pop_due_authored (via callback) and
-                # _dispatch_down_batch without recomputing.
                 down_lead = self._down_lead_for_batch(batch)
                 results.append(
                     self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
@@ -918,7 +917,7 @@ class DispatchLoop:
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
-                for result in self._drain_due(now_us, state, first_action_executed, lead_down, lead_up):
+                for result in self._drain_due(now_us, state, first_action_executed, lead_up):
                     if result is not None:
                         first_action_executed = True
                     observe_result(result)

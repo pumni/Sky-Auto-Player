@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import statistics
 import threading
+from pathlib import Path
 
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
@@ -197,6 +199,118 @@ class SendLatencyEstimator:
             return max(0, min(self._max_lead_us, round(self._ema_up)))
         return 0
 
+    def export_state(self) -> dict:
+        """Serializable warm state for per-machine cross-session persistence.
+
+        Only WARM buckets/scalars are exported; cold seeding state is intentionally dropped
+        (it would just re-seed identically). Linear accumulators are exported so warm-start
+        for a not-yet-seen chord size also survives a restart. The send/prologue latency this
+        captures is a property of the machine (CPU + Python build), independent of song/profile,
+        so a single global cache is correct.
+        """
+        return {
+            "version": 1,
+            "max_poly": self._MAX_POLY,
+            "ema_down": {
+                str(n): self._ema_down[n]
+                for n in range(1, self._MAX_POLY + 1)
+                if self._warm_down[n]
+            },
+            "ema_down_total": (
+                self._ema_down_total
+                if self._count_down_total >= self._SEED_SAMPLES
+                else None
+            ),
+            "ema_up": self._ema_up if self._count_up >= self._SEED_SAMPLES else None,
+            "lin": (
+                {
+                    "n": self._lin_n,
+                    "sx": self._lin_sx,
+                    "sxx": self._lin_sxx,
+                    "sy": self._lin_sy,
+                    "sxy": self._lin_sxy,
+                }
+                if self._lin_n >= self._SEED_SAMPLES
+                else None
+            ),
+        }
+
+    def import_state(self, state: object) -> None:
+        """Seed warm EMAs from a previously exported state (best-effort, validated).
+
+        A bucket seeded this way is marked warm, so its lead is used from the FIRST event of a
+        run (no cold-start lateness), then refined by the normal EMA as real samples arrive. All
+        values are range-checked; a corrupt cache is ignored rather than allowed to inject an
+        absurd lead (get_lead_us also clamps to max_lead_us on read as a second guard).
+        """
+        if not isinstance(state, dict) or state.get("version") != 1:
+            return
+        sane_max = float(self._max_lead_us) * 4.0
+        ema_down = state.get("ema_down")
+        if isinstance(ema_down, dict):
+            for raw_key, raw_val in ema_down.items():
+                try:
+                    n = int(raw_key)
+                    val = float(raw_val)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= n <= self._MAX_POLY and 0.0 <= val <= sane_max:
+                    self._ema_down[n] = val
+                    self._warm_down[n] = True
+                    if self._count_down[n] < self._SEED_SAMPLES:
+                        self._count_down[n] = self._SEED_SAMPLES
+        total = state.get("ema_down_total")
+        if isinstance(total, (int, float)) and 0.0 <= float(total) <= sane_max:
+            self._ema_down_total = float(total)
+            if self._count_down_total < self._SEED_SAMPLES:
+                self._count_down_total = self._SEED_SAMPLES
+        up = state.get("ema_up")
+        if isinstance(up, (int, float)) and 0.0 <= float(up) <= sane_max:
+            self._ema_up = float(up)
+            if self._count_up < self._SEED_SAMPLES:
+                self._count_up = self._SEED_SAMPLES
+        lin = state.get("lin")
+        if isinstance(lin, dict):
+            try:
+                lin_n = int(lin["n"])
+                lin_sx = float(lin["sx"])
+                lin_sxx = float(lin["sxx"])
+                lin_sy = float(lin["sy"])
+                lin_sxy = float(lin["sxy"])
+            except (KeyError, TypeError, ValueError):
+                return
+            if lin_n >= 0:
+                self._lin_n = lin_n
+                self._lin_sx = lin_sx
+                self._lin_sxx = lin_sxx
+                self._lin_sy = lin_sy
+                self._lin_sxy = lin_sxy
+
+
+_LEAD_CACHE_PATH = Path(__file__).resolve().parents[3] / ".cache" / "lead_estimator.json"
+
+
+def load_lead_cache(path: Path) -> dict | None:
+    """Read a persisted estimator state, or None on any error (missing/corrupt cache)."""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def save_lead_cache(path: Path, state: dict) -> None:
+    """Persist estimator state atomically. Best-effort: never raise into playback."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(state, f)
+        tmp.replace(path)
+    except Exception:
+        pass
+
 
 class PlaybackEngine:
     """Facade wiring schedule compilation, realtime context, DispatchLoop, and PlaybackSupervisor."""
@@ -236,6 +350,7 @@ class PlaybackEngine:
         wait_strategy: WaitStrategy | None = None,
         enable_reprobe: bool = False,
         onset_bias_us: int = 0,
+        lead_cache_path: Path | None = None,
     ):
         self.song = song
         self.actions = actions
@@ -259,6 +374,14 @@ class PlaybackEngine:
         self.enable_adaptive_lead = bool(enable_adaptive_lead)
         self.enable_adaptive_spin = bool(enable_adaptive_spin)
         self.estimator = SendLatencyEstimator()
+        # Per-machine warm-start: seed the estimator from a prior session so the first notes of
+        # each chord size are led correctly instead of paying full cold-start lateness (the first
+        # _SEED_SAMPLES events of every bucket would otherwise dispatch with lead 0). Best-effort.
+        self.lead_cache_path = lead_cache_path
+        if self.enable_adaptive_lead and self.lead_cache_path is not None:
+            cached = load_lead_cache(self.lead_cache_path)
+            if cached is not None:
+                self.estimator.import_state(cached)
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, int(dispatch_lead_us))
         self.onset_bias_us = max(0, int(onset_bias_us))
@@ -543,6 +666,10 @@ class PlaybackEngine:
                 close = getattr(realtime_sleeper, "close", None)
                 if close is not None:
                     close()
+            # Persist the warmed estimator (any exit path) so the next run starts warm. Outside the
+            # RT scope's timing window — playback is already done — and fully best-effort.
+            if self.enable_adaptive_lead and self.lead_cache_path is not None:
+                save_lead_cache(self.lead_cache_path, self.estimator.export_state())
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (
