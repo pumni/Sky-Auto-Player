@@ -282,7 +282,7 @@ class TestWinBackendDuplicateDownProtection:
                 raise OSError("mock error")
             calls.append((scan_codes, key_up))
 
-        dummy = types.SimpleNamespace(send_scan_code_batch=mock_send)
+        dummy = types.SimpleNamespace(send_scan_code_batch=mock_send, send_scan_code_batch_trusted=mock_send)
         backend.inputs_module = dummy  # type: ignore[assignment]
         return backend, calls
 
@@ -333,7 +333,7 @@ def _make_contract_backend(kind: str):
     def mock_send(scan_codes, key_up=False):
         return None
 
-    backend.inputs_module = types.SimpleNamespace(send_scan_code_batch=mock_send)  # type: ignore[assignment]
+    backend.inputs_module = types.SimpleNamespace(send_scan_code_batch=mock_send, send_scan_code_batch_trusted=mock_send)  # type: ignore[assignment]
     return backend
 
 

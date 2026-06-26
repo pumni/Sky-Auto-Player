@@ -233,7 +233,6 @@ class PlaybackEngine:
         enable_event_wait: bool = False,
         enable_epoch_rebase: bool = False,
         wait_strategy: WaitStrategy | None = None,
-        enable_event_pause: bool = False,
         enable_reprobe: bool = False,
         onset_bias_us: int = 0,
     ):
@@ -264,7 +263,6 @@ class PlaybackEngine:
         self.onset_bias_us = max(0, int(onset_bias_us))
         self.enable_event_wait = bool(enable_event_wait)
         self.enable_epoch_rebase = bool(enable_epoch_rebase)
-        self.enable_event_pause = bool(enable_event_pause)
         self.enable_reprobe = bool(enable_reprobe)
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
         self._wait_strategy: WaitStrategy = (
@@ -387,12 +385,10 @@ class PlaybackEngine:
             focus_restore_grace_us=self.focus_restore_grace_us,
             late_pulse_drop_threshold_us=self.late_pulse_drop_threshold_us,
             same_key_conflict_policy=self.same_key_conflict_policy,
-            enable_adaptive_lead=self.enable_adaptive_lead,
             enable_event_wait=self.enable_event_wait,
             dispatch_lead_us=self.dispatch_lead_us,
-            estimator=self.estimator,
+            estimator=self.estimator if self.enable_adaptive_lead else None,
             onset_bias_us=self.onset_bias_us,
-            enable_event_pause=self.enable_event_pause,
             enable_reprobe=self.enable_reprobe,
             probe_callback=self.probe_spin_threshold,
         )

@@ -356,8 +356,6 @@ def build_key_actions(
         source_duration_us=source_duration_us,
         playback_duration_us=playback_duration_us,
         diagnostics=tuple(diagnostics),
-        frame_us=policy.frame_us,
-        fps=policy.fps,
         recommended_profile=rec_profile,
         recommended_tempo_scale=rec_tempo_scale,
     )

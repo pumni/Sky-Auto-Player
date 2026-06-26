@@ -12,11 +12,6 @@ class Note:
     key: NoteKey
 
 @dataclass(frozen=True, slots=True)
-class Chord:
-    time_ms: Millis
-    keys: tuple[NoteKey, ...]
-
-@dataclass(frozen=True, slots=True)
 class Song:
     name: str
     notes: tuple[Note, ...]

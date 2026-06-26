@@ -172,6 +172,24 @@ class DispatchHealthMonitor:
         return self._input_path_degraded
 
 
+class _NullEstimator:
+    """Null-object estimator that always returns zero lead and accepts updates as no-ops.
+
+    Replaces all ``if enable_adaptive_lead and estimator is not None`` branches on the hot
+    path so the dispatch loop never needs to guess whether the estimator is active.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def get_lead_us(kind: str = "down", n_keys: int = 1) -> int:
+        return 0
+
+    @staticmethod
+    def update(kind: str, duration_us: int, n_keys: int = 1) -> None:
+        return
+
+
 class DispatchLoop:
     """Core real-time dispatch loop implementation (wait -> drain -> execute)."""
 
@@ -190,11 +208,9 @@ class DispatchLoop:
         focus_restore_grace_us: int = 100_000,
         late_pulse_drop_threshold_us: int | None = None,
         same_key_conflict_policy: str = "degraded",
-        enable_adaptive_lead: bool = False,
         enable_event_wait: bool = False,
         dispatch_lead_us: int = 0,
-        estimator: Any = None,
-        enable_event_pause: bool = False,
+        estimator: Any = _NullEstimator(),
         enable_reprobe: bool = False,
         probe_callback: Callable[[Sleeper], int] | None = None,
         onset_bias_us: int = 0,
@@ -213,21 +229,11 @@ class DispatchLoop:
         self.focus_restore_grace_us = focus_restore_grace_us
         self.late_pulse_drop_threshold_us = late_pulse_drop_threshold_us
         self.same_key_conflict_policy = same_key_conflict_policy
-        self.enable_adaptive_lead = enable_adaptive_lead
         self.enable_event_wait = enable_event_wait
         self.dispatch_lead_us = dispatch_lead_us
-        self.estimator = estimator
-        self.enable_event_pause = enable_event_pause
+        self.estimator = estimator if estimator is not None else _NullEstimator()
         self.enable_reprobe = enable_reprobe
         self.probe_callback = probe_callback
-
-        self._win32_inputs = None
-        if self.enable_event_pause:
-            try:
-                from sky_music.platform.win32 import inputs
-                self._win32_inputs = inputs
-            except (ImportError, AttributeError):
-                pass
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -241,10 +247,8 @@ class DispatchLoop:
     def get_current_leads(self) -> tuple[int, int]:
         if self.dispatch_lead_us > 0:
             lead_down, lead_up = self.dispatch_lead_us, self.dispatch_lead_us
-        elif self.enable_adaptive_lead and self.estimator is not None:
-            lead_down, lead_up = self.estimator.get_lead_us("down"), self.estimator.get_lead_us("up")
         else:
-            lead_down, lead_up = 0, 0
+            lead_down, lead_up = self.estimator.get_lead_us("down"), self.estimator.get_lead_us("up")
         lead_down += self.onset_bias_us
         return lead_down, lead_up
 
@@ -253,15 +257,10 @@ class DispatchLoop:
         if batch.kind == "up":
             if self.dispatch_lead_us > 0:
                 return self.dispatch_lead_us
-            if self.enable_adaptive_lead and self.estimator is not None:
-                return self.estimator.get_lead_us("up")
-            return 0
+            return self.estimator.get_lead_us("up")
         if self.dispatch_lead_us > 0:
             return self.dispatch_lead_us + self.onset_bias_us
-        base = 0
-        if self.enable_adaptive_lead and self.estimator is not None:
-            base = self.estimator.get_lead_us("down", len(batch.intents))
-        return base + self.onset_bias_us
+        return self.estimator.get_lead_us("down", len(batch.intents)) + self.onset_bias_us
 
     def _record_overshoot(self, elapsed_us: int, target_elapsed_us: int) -> None:
         overshoot_us = elapsed_us - target_elapsed_us
@@ -451,8 +450,7 @@ class DispatchLoop:
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
         )
-        if self.enable_adaptive_lead and self.estimator is not None:
-            self.estimator.update("down", result.send_duration_us, n_keys=len(playable))
+        self.estimator.update("down", result.send_duration_us, n_keys=len(playable))
         self.coordinator.activate_sent_downs(
             playable,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -498,6 +496,9 @@ class DispatchLoop:
             reasons.add(release.reason)
             scan_codes_list.append(release.scan_code)
             gen_ids_list.append(release.generation_id)
+        assert len(scan_codes_list) == len(set(scan_codes_list)), (
+            f"duplicate scan codes in pending releases: {scan_codes_list}"
+        )
         deferred_by_us = max(0, max_deferral)
         reason = (
             best.reason
@@ -519,8 +520,7 @@ class DispatchLoop:
             deferred_by_us=deferred_by_us,
             applied_lead_us=lead_up,
         )
-        if self.enable_adaptive_lead and self.estimator is not None:
-            self.estimator.update("up", result.send_duration_us)
+        self.estimator.update("up", result.send_duration_us)
         self.coordinator.complete_releases(
             releases,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -624,10 +624,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
-            if self.enable_event_pause and command_event is not None and self._win32_inputs is not None:
-                self._win32_inputs.wait_for_multiple_objects((command_event,), self._win32_inputs.INFINITE)
-            else:
-                self.sleeper.sleep(self.sleep_policy.poll_s)
+            self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
         if self.health_monitor.require_focus and not focus_signal.is_active():
@@ -642,10 +639,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
-            if self.enable_event_pause and command_event is not None and self._win32_inputs is not None:
-                self._win32_inputs.wait_for_multiple_objects((command_event,), self._win32_inputs.INFINITE)
-            else:
-                self.sleeper.sleep(self.sleep_policy.poll_s)
+            self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
         if state.focus_pause_started_us is not None:
@@ -866,8 +860,6 @@ class DispatchLoop:
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
             results.append(self._dispatch_pending_releases(pending, state, lead_up=lead_up))
-            if self.enable_adaptive_lead and self.estimator is not None:
-                _, lead_up = self.get_current_leads()
 
         for batch in self.coordinator.pop_due_authored(
             now_us, lead_down, lead_for_batch=self._down_lead_for_batch
@@ -878,13 +870,11 @@ class DispatchLoop:
                 results.append(
                     self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
                 )
-                if self.enable_adaptive_lead and self.estimator is not None:
-                    _, lead_up = self.get_current_leads()
             else:
                 down_lead = self._down_lead_for_batch(batch)
-                results.append(self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us))
-                if self.enable_adaptive_lead and self.estimator is not None:
-                    lead_down, _ = self.get_current_leads()
+                results.append(
+                    self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
+                )
 
         return tuple(results)
 

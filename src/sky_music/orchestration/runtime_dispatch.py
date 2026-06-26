@@ -155,13 +155,8 @@ class RuntimeDispatchCoordinator:
         turn dispatch lead into a dropped_conflict (a lost note)."""
         if batch.kind != "down":
             return False
-        for intent in batch.intents:
-            code = intent.scan_code
-            if code in self.active_by_scan_code:
-                return True
-            if code in self.pending_scan_codes:
-                return True
-        return False
+        codes = {intent.scan_code for intent in batch.intents}
+        return bool(codes & (self.active_by_scan_code.keys() | self.pending_scan_codes))
 
     def next_authored_us(
         self,

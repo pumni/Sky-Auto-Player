@@ -327,8 +327,6 @@ class TelemetryLogger:
             "note_count": int(getattr(metadata, "note_count", 0)),
             "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),
             "min_same_key_up_gap_us": getattr(metadata, "min_same_key_up_gap_us", None),
-            "frame_us": getattr(metadata, "frame_us", None),
-            "fps": getattr(metadata, "fps", None),
         }
 
     def get_summary(self) -> dict | None:

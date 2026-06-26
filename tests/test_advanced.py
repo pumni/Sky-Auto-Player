@@ -73,6 +73,7 @@ def test_fault_injection_and_recovery():
                 raise OSError("Inject KeyDown Failure")
             if key_up and self.fail_up:
                 raise OSError("Inject KeyUp Failure")
+        send_scan_code_batch_trusted = send_scan_code_batch
 
     backend = WinSendInputBackend()
     mock_inputs = FaultyInputs()
@@ -119,6 +120,7 @@ def test_fault_injection_cleanup_fail_retry():
                 self.up_calls += 1
                 if self.fail_up:
                     raise OSError(f"KeyUp Failed on pass {self.up_calls}")
+        send_scan_code_batch_trusted = send_scan_code_batch
 
     backend = WinSendInputBackend()
     mock_inputs = MultiFaultyInputs()
@@ -141,6 +143,7 @@ def test_fault_injection_cleanup_fail_retry():
         # Success on 3rd attempt
         
     mock_inputs.send_scan_code_batch = send_scan_code_batch_mock
+    mock_inputs.send_scan_code_batch_trusted = send_scan_code_batch_mock
     
     backend.release_all()
     

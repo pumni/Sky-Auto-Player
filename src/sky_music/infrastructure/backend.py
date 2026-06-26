@@ -67,25 +67,23 @@ class _TrackedKeyState:
         self.last_error: str | None = None
 
     def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
         if not self.active_keys:
-            return unique_scan_codes, ()
+            return scan_codes, ()
         active = self.active_keys
         to_send: list[int] = []
         duplicates: list[int] = []
-        for sc in unique_scan_codes:
+        for sc in scan_codes:
             (duplicates if sc in active else to_send).append(sc)
         return tuple(to_send), tuple(duplicates)
 
     def _decide_up(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
-        unique_scan_codes = tuple(dict.fromkeys(scan_codes))
         active = self.active_keys
         possibly = self.possibly_active_keys
         if not active and not possibly:
-            return (), unique_scan_codes
+            return (), scan_codes
         to_release: list[int] = []
         already_released: list[int] = []
-        for sc in unique_scan_codes:
+        for sc in scan_codes:
             (to_release if (sc in active or sc in possibly) else already_released).append(sc)
         return tuple(to_release), tuple(already_released)
 
@@ -151,17 +149,13 @@ class _TrackedKeyState:
 
 class WinSendInputBackend(_TrackedKeyState):
     """Windows-specific SendInput backend wrapper with safety tracking and panic release."""
-    __slots__ = ("inputs_module", "_send_fn", "_send_fn_module")
+    __slots__ = ("inputs_module",)
 
     def __init__(self):
         super().__init__()
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
         self.inputs_module = inputs
-        self._send_fn = getattr(
-            inputs, "send_scan_code_batch_trusted", inputs.send_scan_code_batch
-        )
-        self._send_fn_module = inputs  # track which module _send_fn was resolved from
         
     def get_health(self) -> BackendHealth:
         return BackendHealth(
@@ -172,21 +166,7 @@ class WinSendInputBackend(_TrackedKeyState):
         )
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
-        # Re-resolve send_fn if inputs_module was replaced (e.g. in tests via monkeypatching)
-        inputs_module = self.inputs_module
-        try:
-            cached_module = self._send_fn_module
-        except AttributeError:
-            cached_module = None
-
-        if cached_module is not inputs_module:
-            self._send_fn = getattr(
-                inputs_module,
-                "send_scan_code_batch_trusted",
-                inputs_module.send_scan_code_batch,
-            )
-            self._send_fn_module = inputs_module
-        self._send_fn(scan_codes, key_up=key_up)
+        self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)
         return time.perf_counter_ns() // 1000
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
