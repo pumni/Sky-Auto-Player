@@ -27,7 +27,7 @@ def test_configure_and_session_resolve_same_policy():
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TIMING_POLICY == main.PLAYBACK_SESSION.resolve_effective_policy(cfg)  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy == main.RUNTIME_STATE.session.resolve_effective_policy(cfg)  # type: ignore[attr-defined]
 
 
 def test_play_fallback_balanced_accepts_scan_code_mode():
@@ -94,8 +94,8 @@ def test_saved_profile_name_has_no_fps_suffix():
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert canonical_profile_name(main.PLAYBACK_SESSION.profile_name) == "audience-safe"  # type: ignore[attr-defined]
-    assert main.TIMING_PROFILE_NAME == "audience-safe@60fps"
+    assert canonical_profile_name(main.RUNTIME_STATE.session.profile_name) == "audience-safe"  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_profile_name == "audience-safe@60fps"
 
 
 def test_calibration_hold_matches_resolve_path():

@@ -59,22 +59,10 @@ from sky_music.orchestration.runtime_session import (
 )
 
 PLAYBACK_DEBUG = False
-CURRENT_SCAN_CODE_MODE = "physical"
 DEBUG_LOG_PATH = None
 DEBUG_START_PERF = None
 DEBUG_LOG_BUFFER = []
-TIMING_POLICY = None
-SLEEP_POLICY = None
-PLAYBACK_SESSION: PlaybackSessionContext | None = None
-TELEMETRY_CSV_ENABLED = False
-DRY_RUN_MODE = False
-TEMPO_SCALE = 1.0
-TIMING_PROFILE_NAME = "balanced"
-VERBOSE_HUD = False
-USE_DISPATCH_THREAD = True
-ENABLE_TIMER_GUARD = True
-ENABLE_WAITABLE_TIMER = True
-ENABLE_GC_PAUSE = True
+
 
 def init_debug_log() -> None:
     global DEBUG_LOG_PATH, DEBUG_START_PERF
@@ -108,27 +96,6 @@ def flush_debug_log() -> None:
 inputs._debug_log_callback = debug_log
 
 
-
-
-def _sync_legacy_runtime_globals() -> None:
-    """Keep historical module globals in sync while runtime state is centralized."""
-    global CURRENT_SCAN_CODE_MODE, TIMING_POLICY, SLEEP_POLICY, PLAYBACK_SESSION
-    global TELEMETRY_CSV_ENABLED, DRY_RUN_MODE, TEMPO_SCALE, TIMING_PROFILE_NAME, VERBOSE_HUD
-    global USE_DISPATCH_THREAD, ENABLE_TIMER_GUARD, ENABLE_WAITABLE_TIMER, ENABLE_GC_PAUSE
-
-    CURRENT_SCAN_CODE_MODE = RUNTIME_STATE.scan_code_mode
-    TIMING_POLICY = RUNTIME_STATE.timing_policy
-    SLEEP_POLICY = RUNTIME_STATE.sleep_policy
-    PLAYBACK_SESSION = RUNTIME_STATE.session
-    TELEMETRY_CSV_ENABLED = RUNTIME_STATE.telemetry_csv_enabled
-    DRY_RUN_MODE = RUNTIME_STATE.dry_run
-    TEMPO_SCALE = RUNTIME_STATE.tempo_scale
-    TIMING_PROFILE_NAME = RUNTIME_STATE.timing_profile_name
-    VERBOSE_HUD = RUNTIME_STATE.verbose_hud
-    USE_DISPATCH_THREAD = RUNTIME_STATE.use_dispatch_thread
-    ENABLE_TIMER_GUARD = RUNTIME_STATE.enable_timer_guard
-    ENABLE_WAITABLE_TIMER = RUNTIME_STATE.enable_waitable_timer
-    ENABLE_GC_PAUSE = RUNTIME_STATE.enable_gc_pause
 
 
 
@@ -490,7 +457,6 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     session = PlaybackSessionContext.from_cli_args(args, cfg)
     spin_override = getattr(args, "spin_threshold_us", None)
     RUNTIME_STATE.apply_session(session, cfg, spin_threshold_us=spin_override)
-    _sync_legacy_runtime_globals()
 
     if args.sky_process_names:
         inputs.EXPECTED_PROCESS_NAMES = {
@@ -632,7 +598,7 @@ def prompt_song_selection(
 ) -> "SongPickerResult | None":
     from sky_music.ui import picker as songs
     session = merge_session_with_overrides(
-        PLAYBACK_SESSION or PlaybackSessionContext.balanced(
+        RUNTIME_STATE.session or PlaybackSessionContext.balanced(
             tempo_scale=tempo,
             fps=fps,
             scan_code_mode=scan_code_mode,
@@ -743,7 +709,6 @@ def main() -> int:
         )
         if res.exit_code != 0:
             return res.exit_code
-        _sync_legacy_runtime_globals()
 
     if getattr(args, "auto_calibrate", False):
         return run_auto_calibrate(getattr(args, "calibration_summary", None))
@@ -785,7 +750,7 @@ def main() -> int:
                     args.countdown,
                     controls=controls,
                     overrides=PlaybackOverrides(
-                        dry_run=DRY_RUN_MODE,
+                        dry_run=RUNTIME_STATE.dry_run,
                         dispatch_lead_us=args.dispatch_lead_us,
                         onset_bias_us=args.onset_bias_us,
                     ),
@@ -804,13 +769,13 @@ def main() -> int:
             resolved_fps = resolve_game_fps(args.fps if cli_fps_explicit else user_cfg.game_fps)
 
             session = merge_session_with_overrides(
-                PLAYBACK_SESSION or PlaybackSessionContext.balanced(
-                    tempo_scale=TEMPO_SCALE,
+                RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+                    tempo_scale=RUNTIME_STATE.tempo_scale,
                     fps=resolved_fps,
-                    scan_code_mode=CURRENT_SCAN_CODE_MODE,
+                    scan_code_mode=RUNTIME_STATE.scan_code_mode,
                 ),
                 profile=canonical_profile_name(user_cfg.default_timing_profile),
-                tempo=TEMPO_SCALE,
+                tempo=RUNTIME_STATE.tempo_scale,
                 fps=resolved_fps,
             )
 
@@ -821,7 +786,7 @@ def main() -> int:
                     initial_profile=session.profile_name,
                     initial_tempo=session.tempo_scale,
                     initial_fps=session.fps,
-                    initial_dry_run=DRY_RUN_MODE,
+                    initial_dry_run=RUNTIME_STATE.dry_run,
                     scan_code_mode=session.scan_code_mode,
                     controls=controls,
                     countdown_seconds=args.countdown,
@@ -839,10 +804,10 @@ def main() -> int:
             try:
                 picker_result = prompt_song_selection(
                     profile=canonical_profile_name(user_cfg.default_timing_profile),
-                    tempo=TEMPO_SCALE,
-                    dry_run=DRY_RUN_MODE,
+                    tempo=RUNTIME_STATE.tempo_scale,
+                    dry_run=RUNTIME_STATE.dry_run,
                     fps=resolved_fps,
-                    scan_code_mode=CURRENT_SCAN_CODE_MODE,
+                    scan_code_mode=RUNTIME_STATE.scan_code_mode,
                     background_mode=args.ui_background,
                 )
             except Exception as exc:
@@ -874,7 +839,7 @@ def main() -> int:
             # P0 Fix: Update persistent loop state with picker decision
             # (Allows picker changes to persist across multiple songs)
             updated_session = merge_session_with_overrides(
-                RUNTIME_STATE.session or PLAYBACK_SESSION or PlaybackSessionContext.balanced(
+                RUNTIME_STATE.session or PlaybackSessionContext.balanced(
                     tempo_scale=RUNTIME_STATE.tempo_scale,
                     scan_code_mode=RUNTIME_STATE.scan_code_mode,
                 ),
@@ -884,7 +849,6 @@ def main() -> int:
             )
             RUNTIME_STATE.apply_session(updated_session, user_cfg)
             RUNTIME_STATE.dry_run = (picker_result.action == "dry_run")
-            _sync_legacy_runtime_globals()
 
             persist_playback_defaults(
                 user_cfg,

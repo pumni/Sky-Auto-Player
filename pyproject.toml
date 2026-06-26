@@ -50,3 +50,6 @@ exclude = [
     ".venv",
     "**/__pycache__",
 ]
+
+[tool.ruff]
+target-version = "py314"

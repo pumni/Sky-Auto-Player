@@ -34,8 +34,8 @@ def test_cli_fps_argument_applies_timing_policy():
     args = parser.parse_args(["--fps", "60"])
     main.configure_from_args(args, AppConfig())
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    assert isinstance(main.TIMING_POLICY, FrameTimingPolicy)
-    assert main.TIMING_POLICY.fps == 60
+    assert isinstance(main.RUNTIME_STATE.timing_policy, FrameTimingPolicy)
+    assert main.RUNTIME_STATE.timing_policy.fps == 60
 
 def test_cli_theme_argument():
     parser = main.build_arg_parser()

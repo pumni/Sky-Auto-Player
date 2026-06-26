@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import math
+import statistics
 from collections import deque
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
@@ -16,9 +16,12 @@ from sky_music.orchestration.runtime_dispatch import (
 )
 from dataclasses import dataclass
 from sky_music.orchestration.playback_supervisor import (
+    CommandSource,
+    FocusSignal,
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
     PLAYBACK_SKIPPED,
+    ProgressSink,
 )
 
 class RuntimeSameKeyConflictError(RuntimeError):
@@ -172,6 +175,11 @@ class DispatchHealthMonitor:
         return self._input_path_degraded
 
 
+class LeadEstimator(Protocol):
+    def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int: ...
+    def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None: ...
+
+
 class _NullEstimator:
     """Null-object estimator that always returns zero lead and accepts updates as no-ops.
 
@@ -210,7 +218,7 @@ class DispatchLoop:
         same_key_conflict_policy: str = "degraded",
         enable_event_wait: bool = False,
         dispatch_lead_us: int = 0,
-        estimator: Any = _NullEstimator(),
+        estimator: LeadEstimator | None = None,
         enable_reprobe: bool = False,
         probe_callback: Callable[[Sleeper], int] | None = None,
         onset_bias_us: int = 0,
@@ -231,7 +239,7 @@ class DispatchLoop:
         self.same_key_conflict_policy = same_key_conflict_policy
         self.enable_event_wait = enable_event_wait
         self.dispatch_lead_us = dispatch_lead_us
-        self.estimator = estimator if estimator is not None else _NullEstimator()
+        self.estimator: LeadEstimator = estimator if estimator is not None else _NullEstimator()
         self.enable_reprobe = enable_reprobe
         self.probe_callback = probe_callback
 
@@ -248,7 +256,7 @@ class DispatchLoop:
         if self.dispatch_lead_us > 0:
             lead_down, lead_up = self.dispatch_lead_us, self.dispatch_lead_us
         else:
-            lead_down, lead_up = self.estimator.get_lead_us("down"), self.estimator.get_lead_us("up")
+            lead_down, lead_up = self.estimator.get_lead_us(ActionKind.DOWN), self.estimator.get_lead_us(ActionKind.UP)
         lead_down += self.onset_bias_us
         return lead_down, lead_up
 
@@ -257,10 +265,10 @@ class DispatchLoop:
         if batch.kind == "up":
             if self.dispatch_lead_us > 0:
                 return self.dispatch_lead_us
-            return self.estimator.get_lead_us("up")
+            return self.estimator.get_lead_us(ActionKind.UP)
         if self.dispatch_lead_us > 0:
             return self.dispatch_lead_us + self.onset_bias_us
-        return self.estimator.get_lead_us("down", len(batch.intents)) + self.onset_bias_us
+        return self.estimator.get_lead_us(ActionKind.DOWN, len(batch.intents)) + self.onset_bias_us
 
     def _record_overshoot(self, elapsed_us: int, target_elapsed_us: int) -> None:
         overshoot_us = elapsed_us - target_elapsed_us
@@ -270,12 +278,9 @@ class DispatchLoop:
     def _recompute_spin_threshold_from_overshoot(self) -> int:
         if len(self._overshoot_samples) < 10:
             return self.spin_threshold_us
-        samples = list(self._overshoot_samples)
-        mean = sum(samples) / len(samples)
-        variance = sum((x - mean) ** 2 for x in samples) / len(samples)
-        stdev = math.sqrt(variance)
-        new_threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
-        return new_threshold
+        mean = statistics.fmean(self._overshoot_samples)
+        stdev = statistics.pstdev(self._overshoot_samples)
+        return max(700, min(3_000, int(mean + 3 * stdev) + 100))
 
     def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
         outcome = self.backend.release_all()
@@ -330,7 +335,6 @@ class DispatchLoop:
         *,
         generation_ids: tuple[int, ...] = (),
         runtime_outcome: str = "sent",
-        deferred_by_us: int = 0,
         applied_lead_us: int = 0,
     ) -> ExecutionResult:
         send_start_raw = self.clock.now_us()
@@ -450,7 +454,7 @@ class DispatchLoop:
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
         )
-        self.estimator.update("down", result.send_duration_us, n_keys=len(playable))
+        self.estimator.update(ActionKind.DOWN, result.send_duration_us, n_keys=len(playable))
         self.coordinator.activate_sent_downs(
             playable,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -515,12 +519,11 @@ class DispatchLoop:
             best.source_action_index,
             action,
             state,
-            generation_ids=tuple(g_id for g_id in gen_ids_list),
+            generation_ids=tuple(gen_ids_list),
             runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
-            deferred_by_us=deferred_by_us,
             applied_lead_us=lead_up,
         )
-        self.estimator.update("up", result.send_duration_us)
+        self.estimator.update(ActionKind.UP, result.send_duration_us)
         self.coordinator.complete_releases(
             releases,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -551,7 +554,7 @@ class DispatchLoop:
         command: str | None,
         state: PlaybackState,
         total_time_us: int,
-        progress_sink: Any,
+        progress_sink: ProgressSink,
     ) -> str | None:
         if command == "quit":
             progress_sink.finish(f"Stopped: {self.telemetry.song_name}")
@@ -611,10 +614,9 @@ class DispatchLoop:
         state: PlaybackState,
         first_action_executed: bool,
         total_time_us: int,
-        command_source: Any,
-        focus_signal: Any,
-        progress_sink: Any,
-        command_event: int | None = None,
+        command_source: CommandSource,
+        focus_signal: FocusSignal,
+        progress_sink: ProgressSink,
     ) -> tuple[bool, str | None]:
         if state.manual_pause_started_us is not None:
             progress_sink.publish(
@@ -685,12 +687,11 @@ class DispatchLoop:
         state: PlaybackState,
         first_action_executed: bool,
         total_time_us: int,
-        command_source: Any,
-        focus_signal: Any,
-        progress_sink: Any,
+        command_source: CommandSource,
+        focus_signal: FocusSignal,
+        progress_sink: ProgressSink,
         *,
         check_focus_signal: bool,
-        command_event: int | None = None,
     ) -> str | None:
         while True:
             needs_service = (
@@ -722,7 +723,6 @@ class DispatchLoop:
                 command_source,
                 focus_signal,
                 progress_sink,
-                command_event=command_event,
             )
             if wait_cmd:
                 return wait_cmd
@@ -737,9 +737,9 @@ class DispatchLoop:
         last_render_time_us: int,
         first_action_executed: bool,
         total_time_us: int,
-        command_source: Any,
-        focus_signal: Any,
-        progress_sink: Any,
+        command_source: CommandSource,
+        focus_signal: FocusSignal,
+        progress_sink: ProgressSink,
         command_event: int | None = None,
     ) -> Any:
         poll_interval_us = 1_000
@@ -754,7 +754,6 @@ class DispatchLoop:
                     focus_signal,
                     progress_sink,
                     check_focus_signal=False,
-                    command_event=command_event,
                 )
                 if service_result:
                     return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed
@@ -770,12 +769,7 @@ class DispatchLoop:
             target_system_us = state.epoch_us + target_elapsed_us
             if remaining_us <= self.spin_threshold_us:
                 self._wait_spin_start_us = elapsed_us
-                spin_fn = getattr(self.wait_strategy, "spin_until_us", None)
-                if spin_fn is not None:
-                    spin_fn(target_system_us, self.clock)
-                else:
-                    while self.clock.now_us() < target_system_us:
-                        pass
+                self.wait_strategy.spin_until_us(target_system_us, self.clock)
                 if self.enable_reprobe:
                     after_elapsed = state.get_elapsed_us(self.clock)
                     self._record_overshoot(after_elapsed, target_elapsed_us)
@@ -789,7 +783,6 @@ class DispatchLoop:
                 focus_signal,
                 progress_sink,
                 check_focus_signal=True,
-                command_event=command_event,
             )
             if service_result:
                 return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed
@@ -853,9 +846,10 @@ class DispatchLoop:
         now_us: int,
         state: PlaybackState,
         first_action_executed: bool,
+        lead_down: int,
+        lead_up: int,
     ) -> tuple[ExecutionResult | None, ...]:
         results: list[ExecutionResult | None] = []
-        lead_down, lead_up = self.get_current_leads()
 
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
@@ -883,9 +877,9 @@ class DispatchLoop:
     def run(
         self,
         state: PlaybackState,
-        command_source: Any,
-        focus_signal: Any,
-        progress_sink: Any,
+        command_source: CommandSource,
+        focus_signal: FocusSignal,
+        progress_sink: ProgressSink,
         total_time_us: int,
         command_event: int | None = None,
     ) -> str:
@@ -923,7 +917,7 @@ class DispatchLoop:
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
-                for result in self._drain_due(now_us, state, first_action_executed):
+                for result in self._drain_due(now_us, state, first_action_executed, lead_down, lead_up):
                     if result is not None:
                         first_action_executed = True
                     observe_result(result)

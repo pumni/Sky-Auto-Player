@@ -19,18 +19,18 @@ def test_timing_profile_parsing():
     # 1. Test balanced profile (default)
     args = parser.parse_args(["--timing-profile", "balanced"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 17_000  # type: ignore[attr-defined]
-    assert main.TIMING_POLICY.min_hold_us == 17_000  # type: ignore[attr-defined]
-    assert not hasattr(main.TIMING_POLICY, "release_gap_us")
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 17_000  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.min_hold_us == 17_000  # type: ignore[attr-defined]
+    assert not hasattr(main.RUNTIME_STATE.timing_policy, "release_gap_us")
 
 
 def test_local_precise_profile_from_builtin_defaults():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--timing-profile", "local-precise"])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.fps == 60  # type: ignore[attr-defined]
-    assert main.TIMING_POLICY.hold_us == 16_667  # type: ignore[attr-defined]
-    assert main.SLEEP_POLICY.spin_threshold_us == 800  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.fps == 60  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 16_667  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.sleep_policy.spin_threshold_us == 800  # type: ignore[attr-defined]
 
 
 def test_runtime_ablation_flags_configure_debug_switches():
@@ -44,10 +44,10 @@ def test_runtime_ablation_flags_configure_debug_switches():
 
     main.configure_from_args(args, AppConfig())
 
-    assert main.USE_DISPATCH_THREAD is False
-    assert main.ENABLE_TIMER_GUARD is False
-    assert main.ENABLE_WAITABLE_TIMER is False
-    assert main.ENABLE_GC_PAUSE is False
+    assert main.RUNTIME_STATE.use_dispatch_thread is False
+    assert main.RUNTIME_STATE.enable_timer_guard is False
+    assert main.RUNTIME_STATE.enable_waitable_timer is False
+    assert main.RUNTIME_STATE.enable_gc_pause is False
 
 
 def test_removed_dense_safe_profile_is_rejected_by_cli():
@@ -68,8 +68,8 @@ def test_saved_profile_restored_with_fps_config():
     assert args.fps == 60
 
     main.configure_from_args(args, cfg)
-    assert main.TIMING_PROFILE_NAME == "audience-safe@60fps"
-    assert canonical_profile_name(main.TIMING_PROFILE_NAME) == "audience-safe"
+    assert main.RUNTIME_STATE.timing_profile_name == "audience-safe@60fps"
+    assert canonical_profile_name(main.RUNTIME_STATE.timing_profile_name) == "audience-safe"
 
     # Simulate picker init on next launch
     assert canonical_profile_name(cfg.default_timing_profile) == "audience-safe"
@@ -152,8 +152,8 @@ def test_timing_overrides_parsing():
         "--min-hold-ms", "15",
     ])
     main.configure_from_args(args, AppConfig())
-    assert main.TIMING_POLICY.hold_us == 30_000  # type: ignore[attr-defined]
-    assert main.TIMING_POLICY.min_hold_us == 15_000  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 30_000  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.min_hold_us == 15_000  # type: ignore[attr-defined]
 
 
 def test_fractional_timing_overrides_parse_as_milliseconds():
@@ -167,9 +167,9 @@ def test_fractional_timing_overrides_parse_as_milliseconds():
 
     main.configure_from_args(args, AppConfig())
 
-    assert main.TIMING_POLICY.hold_us == 10_500  # type: ignore[attr-defined]
-    assert main.TIMING_POLICY.min_hold_us == 7_250  # type: ignore[attr-defined]
-    assert main.TIMING_POLICY.focus_restore_grace_us == 50_500  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 10_500  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.min_hold_us == 7_250  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.focus_restore_grace_us == 50_500  # type: ignore[attr-defined]
 
 
 def test_repeat_release_gap_override_is_removed_from_cli():
@@ -188,13 +188,13 @@ def test_dry_run_simulation_flag():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--dry-run"])
     main.configure_from_args(args, AppConfig())
-    assert main.DRY_RUN_MODE is True
+    assert main.RUNTIME_STATE.dry_run is True
 
 def test_tempo_scale_parsing():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--tempo-scale", "0.85"])
     main.configure_from_args(args, AppConfig())
-    assert main.TEMPO_SCALE == 0.85
+    assert main.RUNTIME_STATE.tempo_scale == 0.85
 
 def test_tempo_scale_invalid_fails():
     parser = main.build_arg_parser()
@@ -223,7 +223,7 @@ def test_telemetry_csv_default_from_config():
     args = parser.parse_args([]) # No CLI flags
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TELEMETRY_CSV_ENABLED is True
+    assert main.RUNTIME_STATE.telemetry_csv_enabled is True
 
 def test_verbose_hud_default_from_config():
     cfg = AppConfig(verbose_hud=True)
@@ -231,7 +231,7 @@ def test_verbose_hud_default_from_config():
     args = parser.parse_args([])
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.VERBOSE_HUD is True
+    assert main.RUNTIME_STATE.verbose_hud is True
 
 def test_game_fps_default_from_config():
     cfg = AppConfig(game_fps=120)
@@ -241,8 +241,8 @@ def test_game_fps_default_from_config():
     main.configure_from_args(args, cfg)
     # Check that TIMING_POLICY is now a FrameTimingPolicy with 120 FPS
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    assert isinstance(main.TIMING_POLICY, FrameTimingPolicy)
-    assert main.TIMING_POLICY.fps == 120
+    assert isinstance(main.RUNTIME_STATE.timing_policy, FrameTimingPolicy)
+    assert main.RUNTIME_STATE.timing_policy.fps == 120
 
 def test_config_fps_override_by_cli():
     cfg = AppConfig(game_fps=60)
@@ -250,7 +250,7 @@ def test_config_fps_override_by_cli():
     args = parser.parse_args(["--fps", "30"])
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TIMING_POLICY.fps == 30  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.fps == 30  # type: ignore[attr-defined]
 
 def test_no_fps_config_or_cli_defaults_to_60fps():
     cfg = AppConfig(game_fps=0)
@@ -258,7 +258,7 @@ def test_no_fps_config_or_cli_defaults_to_60fps():
     args = parser.parse_args([])
     main.apply_config_defaults(args, cfg)
     main.configure_from_args(args, cfg)
-    assert main.TIMING_POLICY.fps == 60  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.fps == 60  # type: ignore[attr-defined]
 
 
 def test_resolve_game_fps_never_zero():

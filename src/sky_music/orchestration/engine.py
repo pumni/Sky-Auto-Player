@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 import threading
 
 from sky_music.config import RtPriorityMode
@@ -394,7 +395,6 @@ class PlaybackEngine:
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
-        import math as _math
         wake_errors: list[int] = []
         for _ in range(10):
             t0 = self.clock.now_us()
@@ -405,9 +405,8 @@ class PlaybackEngine:
         # Use mean + 3σ rather than raw max: a single scheduler hiccup during the probe
         # would inflate max by 2–5ms and push the threshold into territory where nearly
         # every inter-note gap triggers a sleep, defeating the purpose of the spin floor.
-        mean = sum(wake_errors) / len(wake_errors)
-        variance = sum((e - mean) ** 2 for e in wake_errors) / len(wake_errors)
-        stdev = _math.sqrt(variance)
+        mean = statistics.fmean(wake_errors)
+        stdev = statistics.pstdev(wake_errors)
         threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
         self.effective_spin_threshold_us = threshold
 
@@ -624,7 +623,6 @@ class PlaybackEngine:
         *,
         generation_ids: tuple[int, ...] = (),
         runtime_outcome: str = "sent",
-        deferred_by_us: int = 0,
         applied_lead_us: int = 0,
     ) -> ExecutionResult:
         return self._compat_dispatch_loop()._execute_action(
@@ -633,6 +631,5 @@ class PlaybackEngine:
             state=state,
             generation_ids=generation_ids,
             runtime_outcome=runtime_outcome,
-            deferred_by_us=deferred_by_us,
             applied_lead_us=applied_lead_us,
         )

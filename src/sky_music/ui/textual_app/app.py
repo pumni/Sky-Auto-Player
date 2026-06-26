@@ -1345,7 +1345,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         )
         main_mod.RUNTIME_STATE.apply_session(updated_session, user_cfg)
         main_mod.RUNTIME_STATE.dry_run = (picker_result.action == "dry_run")
-        main_mod._sync_legacy_runtime_globals()
 
         persist_playback_defaults(
             user_cfg,
