@@ -408,6 +408,39 @@ def test_estimator_warm_start_uses_first_sample() -> None:
     assert est.get_lead_us(ActionKind.DOWN, 4) == 840
 
 
+def test_linear_model_forgets_old_regime_and_tracks_drift() -> None:
+    # Best-practice RLS with exponential forgetting: the linear backbone must track a shift in
+    # per-machine send latency, not stay pinned to a lifetime average. Small window for determinism.
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=10_000, lin_forget=0.9)
+
+    # Old regime: send ≈ 200·N (line through (1,200),(2,400)).
+    for _ in range(50):
+        est.update(ActionKind.DOWN, 200, n_keys=1)
+        est.update(ActionKind.DOWN, 400, n_keys=2)
+    # Sanity: before drift the unseen bucket extrapolates the old line.
+    assert abs(est.get_lead_us(ActionKind.DOWN, 3) - 600) < 30
+
+    # New regime: send ≈ 400·N (line through (1,400),(2,800)). With a ~10-sample window, the old
+    # regime decays to negligible weight, so the fit should track the NEW line (predict(3) ≈ 1200).
+    for _ in range(60):
+        est.update(ActionKind.DOWN, 400, n_keys=1)
+        est.update(ActionKind.DOWN, 800, n_keys=2)
+
+    predicted_3 = est.get_lead_us(ActionKind.DOWN, 3)
+    assert predicted_3 > 1000, predicted_3  # tracked the drift; a lifetime average would lag near 900
+
+
+def test_lin_forget_one_reproduces_lifetime_fit() -> None:
+    # lin_forget=1.0 disables decay → identical to the old lifetime-sum behaviour.
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=10_000, lin_forget=1.0)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 200, n_keys=1)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 800, n_keys=4)
+    # Fit through (1,200),(4,800): slope 200, intercept 0 → predict(3) = 600.
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
+
+
 def test_estimator_nearest_bucket_when_linear_undefined() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
     # Only one polyphony seen -> slope undefined -> linear model unavailable.

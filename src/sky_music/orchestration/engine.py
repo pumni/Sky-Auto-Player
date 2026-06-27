@@ -52,6 +52,13 @@ class SendLatencyEstimator:
     bucket ≤ N → total down EMA → 0.  The linear model lets a rarely-seen or first-of-its-size
     chord be led correctly (extrapolated) instead of borrowing a smaller chord's smaller lead.
 
+    The linear fit is recursive least squares with an EXPONENTIAL FORGETTING factor (``lin_forget``):
+    each new sample decays the prior weighted sums by ``lin_forget`` before accumulating, giving an
+    effective window of ~1/(1-lin_forget) samples.  This (a) lets the backbone track slow per-machine
+    send-latency drift instead of being a frozen lifetime average, and (b) bounds the accumulators so
+    they cannot grow without limit across long sessions.  The raw integer sample count is kept
+    separate from the decayed weight so the warm-up availability guard is unaffected by forgetting.
+
     Warm-start: once the linear model is available, a bucket's EMA is seeded from the linear
     prediction on its FIRST sample (then refined per-bucket via EMA), so a rare large chord is led
     well from its first occurrence instead of needing a full cold warm-up.
@@ -77,8 +84,12 @@ class SendLatencyEstimator:
         "_count_down_total",
         "_sum_down_total",
         "_ema_down_total",
-        # Online least-squares accumulators for the linear model send ≈ a + b·N (x = n_keys)
-        "_lin_n",
+        # Recursive-least-squares accumulators (exponential forgetting) for send ≈ a + b·N (x = n_keys).
+        # _lin_count is the raw integer sample count (warm-up guard); _lin_w is the decayed weight sum
+        # that plays the role of "n" in the weighted normal equations.
+        "_lin_forget",
+        "_lin_count",
+        "_lin_w",
         "_lin_sx",
         "_lin_sxx",
         "_lin_sy",
@@ -89,10 +100,15 @@ class SendLatencyEstimator:
         "_ema_up",
     )
 
-    def __init__(self, alpha: float = 0.2, max_lead_us: int = 2_000) -> None:
+    def __init__(
+        self, alpha: float = 0.2, max_lead_us: int = 2_000, lin_forget: float = 0.999
+    ) -> None:
         max_poly = self._MAX_POLY
         self._alpha: float = alpha
         self._max_lead_us: int = max_lead_us
+        # Forgetting factor in (0, 1]; 1.0 reproduces the old lifetime-sum behaviour. 0.999 ≈ a
+        # ~1000-sample effective window (about a song's worth of sends).
+        self._lin_forget: float = lin_forget
         self._count_down: list[int] = [0] * (max_poly + 1)
         self._sum_down: list[int] = [0] * (max_poly + 1)
         self._ema_down: list[float] = [0.0] * (max_poly + 1)
@@ -100,7 +116,8 @@ class SendLatencyEstimator:
         self._count_down_total: int = 0
         self._sum_down_total: int = 0
         self._ema_down_total: float = 0.0
-        self._lin_n: int = 0
+        self._lin_count: int = 0
+        self._lin_w: float = 0.0
         self._lin_sx: float = 0.0
         self._lin_sxx: float = 0.0
         self._lin_sy: float = 0.0
@@ -143,12 +160,15 @@ class SendLatencyEstimator:
                     self._alpha * duration_us
                     + (1.0 - self._alpha) * self._ema_down_total
                 )
-            # Linear model accumulators (x = polyphony, y = duration)
-            self._lin_n += 1
-            self._lin_sx += n
-            self._lin_sxx += n * n
-            self._lin_sy += duration_us
-            self._lin_sxy += n * duration_us
+            # RLS accumulators with exponential forgetting (x = polyphony, y = duration). Decay the
+            # prior weighted sums, then fold in the new sample at unit weight.
+            lam = self._lin_forget
+            self._lin_count += 1
+            self._lin_w = self._lin_w * lam + 1.0
+            self._lin_sx = self._lin_sx * lam + n
+            self._lin_sxx = self._lin_sxx * lam + n * n
+            self._lin_sy = self._lin_sy * lam + duration_us
+            self._lin_sxy = self._lin_sxy * lam + n * duration_us
         elif kind == "up":
             self._count_up += 1
             if self._count_up <= self._SEED_SAMPLES:
@@ -165,14 +185,14 @@ class SendLatencyEstimator:
         (otherwise the slope is undefined). Lets an unseen/rare chord size be extrapolated
         instead of borrowing a smaller chord's smaller lead.
         """
-        count = self._lin_n
-        if count < self._SEED_SAMPLES:
+        if self._lin_count < self._SEED_SAMPLES:
             return None
-        denom = count * self._lin_sxx - self._lin_sx * self._lin_sx
+        w = self._lin_w
+        denom = w * self._lin_sxx - self._lin_sx * self._lin_sx
         if denom <= 0:  # all samples share one polyphony → slope undefined
             return None
-        slope = (count * self._lin_sxy - self._lin_sx * self._lin_sy) / denom
-        intercept = (self._lin_sy - slope * self._lin_sx) / count
+        slope = (w * self._lin_sxy - self._lin_sx * self._lin_sy) / denom
+        intercept = (self._lin_sy - slope * self._lin_sx) / w
         return max(0, min(self._max_lead_us, round(intercept + slope * n)))
 
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
@@ -224,13 +244,14 @@ class SendLatencyEstimator:
             "ema_up": self._ema_up if self._count_up >= self._SEED_SAMPLES else None,
             "lin": (
                 {
-                    "n": self._lin_n,
+                    "count": self._lin_count,
+                    "w": self._lin_w,
                     "sx": self._lin_sx,
                     "sxx": self._lin_sxx,
                     "sy": self._lin_sy,
                     "sxy": self._lin_sxy,
                 }
-                if self._lin_n >= self._SEED_SAMPLES
+                if self._lin_count >= self._SEED_SAMPLES
                 else None
             ),
         }
@@ -272,15 +293,23 @@ class SendLatencyEstimator:
         lin = state.get("lin")
         if isinstance(lin, dict):
             try:
-                lin_n = int(lin["n"])
+                if "count" in lin:
+                    lin_count = int(lin["count"])
+                    lin_w = float(lin["w"])
+                else:
+                    # Legacy cache (pre-forgetting): "n" was the undecayed count and also served as
+                    # the weight, so reuse it for both — the restored fit matches what was saved.
+                    lin_count = int(lin["n"])
+                    lin_w = float(lin["n"])
                 lin_sx = float(lin["sx"])
                 lin_sxx = float(lin["sxx"])
                 lin_sy = float(lin["sy"])
                 lin_sxy = float(lin["sxy"])
             except (KeyError, TypeError, ValueError):
                 return
-            if lin_n >= 0:
-                self._lin_n = lin_n
+            if lin_count >= 0:
+                self._lin_count = lin_count
+                self._lin_w = lin_w
                 self._lin_sx = lin_sx
                 self._lin_sxx = lin_sxx
                 self._lin_sy = lin_sy
