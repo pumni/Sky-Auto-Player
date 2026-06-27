@@ -52,6 +52,10 @@ class InputBackend(Protocol):
         """Returns the current health telemetry of the input backend."""
         ...
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        """Returns partial-send counters since the last reset (chord-atomicity diagnostics)."""
+        ...
+
 
 class _TrackedKeyState(ABC):
     __slots__ = ("active_keys", "possibly_active_keys", "failed_release_keys", "last_error")
@@ -87,6 +91,15 @@ class _TrackedKeyState(ABC):
         for sc in scan_codes:
             (to_release if (sc in active or sc in possibly) else already_released).append(sc)
         return tuple(to_release), tuple(already_released)
+
+    def get_send_diagnostics(self) -> dict[str, int]:
+        """Default: no partial-send instrumentation (overridden by the real SendInput backend)."""
+        return {
+            "partial_send_events": 0,
+            "chord_split_events": 0,
+            "keys_deferred": 0,
+            "zero_progress_retries": 0,
+        }
 
     @abstractmethod
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
@@ -166,6 +179,9 @@ class WinSendInputBackend(_TrackedKeyState):
             failed_release_count=len(self.failed_release_keys),
             last_error=self.last_error
         )
+
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return self.inputs_module.get_send_diagnostics()
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
         self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)

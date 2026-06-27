@@ -602,3 +602,76 @@ def test_degraded_same_key_behavior_timeline():
 
     assert res.recommended_profile == "local-precise"
     assert res.recommended_tempo_scale == 0.5
+
+
+# ── Intra-chord micro-stagger (remote-reliability knob) ──────────────────────────────────────
+
+def _chord_song(name: str, keys: tuple[str, ...], time_ms: int = 1000) -> Song:
+    return Song(name=name, notes=tuple(Note(time_ms=Millis(time_ms), key=NoteKey(k)) for k in keys))
+
+
+def test_chord_stagger_off_by_default_keeps_single_batch():
+    """Default (knob unset) preserves one SendInput per chord — the local-optimal behaviour."""
+    song = _chord_song("Chord", ("Key0", "Key1", "Key2"))
+    res = build_key_actions(song, policy=_policy())
+    downs = [a for a in res.actions if a.kind == "down"]
+    assert len(downs) == 1
+    assert len(downs[0].scan_codes) == 3
+
+
+def test_chord_stagger_spreads_chord_onsets_forward_only():
+    song = _chord_song("Chord", ("Key0", "Key1", "Key2"))
+    policy = _policy({"chord_stagger_us": 2000, "chord_stagger_max_us": 15000})
+    res = build_key_actions(song, policy=policy)
+
+    downs = sorted((a for a in res.actions if a.kind == "down"), key=lambda a: a.at_us)
+    # One single-key down per chord note, stepped by 2ms; first key keeps the authored onset.
+    assert [a.at_us for a in downs] == [1_000_000, 1_002_000, 1_004_000]
+    assert all(len(a.scan_codes) == 1 for a in downs)
+    # No note is dropped or duplicated; the chord's key set is preserved.
+    all_codes = {sc for a in downs for sc in a.scan_codes}
+    assert len(all_codes) == 3
+    # Logical chord size is still reported (metrics computed pre-stagger).
+    assert res.max_polyphony == 3
+
+
+def test_chord_stagger_caps_total_spread():
+    keys = ("Key0", "Key1", "Key2", "Key3", "Key4", "Key5", "Key6", "Key7")
+    song = _chord_song("BigChord", keys)
+    policy = _policy({"chord_stagger_us": 3000, "chord_stagger_max_us": 15000})
+    res = build_key_actions(song, policy=policy)
+
+    downs = [a for a in res.actions if a.kind == "down"]
+    offsets = sorted(int(a.at_us) - 1_000_000 for a in downs)
+    # No onset is pushed past the cap, and the authored onset is preserved.
+    assert max(offsets) <= 15000
+    assert min(offsets) == 0
+    # Keys beyond the cap share the final tick (fewer per tick than the unstaggered 8-key burst).
+    total_keys = sum(len(a.scan_codes) for a in downs)
+    assert total_keys == 8
+
+
+def test_chord_stagger_leaves_single_notes_and_releases_untouched():
+    song = _chord_song("OneNote", ("Key0",))
+    policy = _policy({"chord_stagger_us": 2000})
+    res = build_key_actions(song, policy=policy)
+    downs = [a for a in res.actions if a.kind == "down"]
+    ups = [a for a in res.actions if a.kind == "up"]
+    assert len(downs) == 1
+    assert downs[0].at_us == 1_000_000
+    # A chord's releases are not split by the stagger.
+    chord = _chord_song("Chord", ("Key0", "Key1", "Key2"))
+    res2 = build_key_actions(chord, policy=policy)
+    ups2 = [a for a in res2.actions if a.kind == "up"]
+    assert len(ups2) == 1
+    assert len(ups2[0].scan_codes) == 3
+    assert len(ups) == 1
+
+
+def test_chord_stagger_propagates_from_profile_dict_through_frame_policy():
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"chord_stagger_us": 2500, "chord_stagger_max_us": 12000}),
+        fps=60,
+    )
+    assert policy.chord_stagger_us == 2500
+    assert policy.chord_stagger_max_us == 12000

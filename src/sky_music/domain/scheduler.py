@@ -118,6 +118,54 @@ def plan_same_key_hold(
     )
 
 
+def apply_chord_stagger(
+    actions: list[KeyAction],
+    step_us: int,
+    max_us: int,
+) -> list[KeyAction]:
+    """Spread each chord's key-downs across time so each note gets its own game tick.
+
+    A single ``SendInput`` per chord is optimal for *local* latency, but lands every note-on in the
+    same game frame — exactly the burst that Sky's network note-event channel coalesces/drops for
+    *remote* listeners (worse the larger the chord). This onset-only transform gives each key its own
+    instant: the first key keeps the authored onset (never shifted earlier) and each subsequent key
+    is pushed forward by ``step_us``, capped so the total spread never exceeds ``max_us``. Keys that
+    pile at the cap (very large chords) share one tick — still fewer per tick than the unstaggered
+    burst. Releases are untouched: a missed note-off is harmless; only onsets need separating, and
+    per-key release floors in the coordinator already follow each staggered down.
+
+    ``step_us <= 0`` returns the input unchanged (the local-optimal default). Chords are handled in
+    isolation (no cross-chord regrouping), so this never merges notes from neighbouring events.
+    """
+    if step_us <= 0:
+        return actions
+    if not any(a.kind == ActionKind.DOWN and len(a.scan_codes) > 1 for a in actions):
+        return actions
+
+    staggered: list[KeyAction] = []
+    for action in actions:
+        if action.kind != ActionKind.DOWN or len(action.scan_codes) <= 1:
+            staggered.append(action)
+            continue
+        by_offset: dict[int, list[int]] = {}
+        for i, scan_code in enumerate(action.scan_codes):
+            offset = min(i * step_us, max_us)
+            by_offset.setdefault(offset, []).append(scan_code)
+        for offset, scan_codes in by_offset.items():
+            staggered.append(
+                KeyAction(
+                    kind=ActionKind.DOWN,
+                    scan_codes=tuple(scan_codes),  # type: ignore[arg-type]
+                    at_us=Microseconds(int(action.at_us) + offset),
+                    reason=action.reason,
+                )
+            )
+
+    # Same key ordering as Stage 4: up-before-down at equal timestamps (False < True).
+    staggered.sort(key=lambda a: (a.at_us, a.kind == "down"))
+    return staggered
+
+
 def build_key_actions(
     song: Song,
     profile: InstrumentProfile | None = None,
@@ -321,6 +369,15 @@ def build_key_actions(
         )
     if compressed_holds > 0:
         warnings.append(f"Compressed {compressed_holds} note hold(s) due to same-key scheduling pressure.")
+
+    # Stage 6: onset-only intra-chord micro-stagger (remote-reliability knob; no-op when disabled).
+    # Applied AFTER metrics so max_polyphony reflects the authored (logical) chord size, not the
+    # post-split single-key downs. Onsets are only ever pushed forward, never earlier.
+    key_actions_list = apply_chord_stagger(
+        key_actions_list,
+        int(policy.chord_stagger_us),
+        int(policy.chord_stagger_max_us),
+    )
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
     # playback_duration_us is a Phase-5 compatibility alias of duration_us (telemetry/calibration

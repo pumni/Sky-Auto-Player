@@ -1,6 +1,7 @@
 import sys
 import ctypes
 from ctypes import wintypes
+from typing import Any
 from sky_music.layouts import SKY_15_KEY_PROFILE, PHYSICAL_SCAN_CODES, VK_CODES
 from sky_music.platform.win32 import inputs
 

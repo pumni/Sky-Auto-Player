@@ -582,6 +582,16 @@ class PlaybackEngine:
         self._measure_spin_threshold(sleeper, prefix="probe")
 
     def play(self) -> str:
+        # Reset partial-send diagnostics before any sending so the per-run counts (read in the
+        # finally block) reflect only this playback. Single-writer: the dispatch thread is the sole
+        # sender and has not started yet.
+        try:
+            from sky_music.platform.win32 import inputs as _inputs_diag
+
+            _inputs_diag.reset_send_diagnostics()
+        except Exception:
+            pass
+
         # Re-resolve the live game window per run
         if self.require_focus:
             try:
@@ -672,6 +682,22 @@ class PlaybackEngine:
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
+            # Log a partial-send summary for --debug-playback. The telemetry record happens earlier
+            # in DispatchLoop.run's finally (before save); this is only the human-readable log line.
+            try:
+                from sky_music.platform.win32 import inputs as _inputs_diag
+
+                send_diag = _inputs_diag.get_send_diagnostics()
+                if send_diag["partial_send_events"]:
+                    _inputs_diag.debug_log(
+                        "[input] SEND DIAGNOSTICS (this run): "
+                        f"chord_splits={send_diag['chord_split_events']}, "
+                        f"partial_send_events={send_diag['partial_send_events']}, "
+                        f"keys_deferred={send_diag['keys_deferred']}, "
+                        f"zero_progress_retries={send_diag['zero_progress_retries']}"
+                    )
+            except Exception:
+                pass
             if realtime_sleeper is not self.sleeper:
                 close = getattr(realtime_sleeper, "close", None)
                 if close is not None:

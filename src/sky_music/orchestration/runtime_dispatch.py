@@ -142,8 +142,14 @@ class RuntimeDispatchCoordinator:
         turn dispatch lead into a dropped_conflict (a lost note)."""
         if batch.kind != "down":
             return False
-        codes = {intent.scan_code for intent in batch.intents}
-        return bool(codes & (self.active_by_scan_code.keys() | self.pending_scan_codes))
+        active = self.active_by_scan_code
+        pending = self.pending_scan_codes
+        if not active and not pending:
+            return False
+        return any(
+            intent.scan_code in active or intent.scan_code in pending
+            for intent in batch.intents
+        )
 
     def next_authored_us(
         self,
@@ -177,15 +183,13 @@ class RuntimeDispatchCoordinator:
         *,
         lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
     ) -> int | None:
-        deadlines = [
-            deadline
-            for deadline in (
-                self.next_authored_us(dispatch_lead_us, lead_for_batch=lead_for_batch),
-                self.next_pending_release_us(lead_up),
-            )
-            if deadline is not None
-        ]
-        return min(deadlines, default=None)
+        authored = self.next_authored_us(dispatch_lead_us, lead_for_batch=lead_for_batch)
+        pending = self.next_pending_release_us(lead_up)
+        if authored is None:
+            return pending
+        if pending is None:
+            return authored
+        return authored if authored < pending else pending
 
     def is_finished(self) -> bool:
         return self.cursor >= len(self.schedule.batches) and not self.pending_by_generation
@@ -282,10 +286,15 @@ class RuntimeDispatchCoordinator:
         self,
         intents: tuple[RuntimeKeyIntent, ...],
     ) -> tuple[tuple[RuntimeKeyIntent, ...], tuple[RuntimeKeyIntent, ...]]:
+        active = self.active_by_scan_code
+        # Fast path: nothing is held, so no down can conflict — the whole (already-immutable) batch
+        # is playable. Skips two list allocations + a per-intent membership scan on the hot path.
+        if not active:
+            return intents, ()
         playable: list[RuntimeKeyIntent] = []
         conflicts: list[RuntimeKeyIntent] = []
         for intent in intents:
-            if intent.scan_code in self.active_by_scan_code:
+            if intent.scan_code in active:
                 conflicts.append(intent)
                 if intent.generation_id is not None:
                     self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_CONFLICT

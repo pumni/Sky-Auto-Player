@@ -43,10 +43,15 @@ class HybridWaitStrategy:
         # against target_ns directly. Mock clocks for tests set _ns_based = False.
         if getattr(clock, "_ns_based", False):
             tgt_ns = target_system_us * 1000
-            while time.perf_counter_ns() < tgt_ns:
+            # Bind the timer to a local once: this is the tightest loop in the program, so the
+            # per-iteration LOAD_GLOBAL/LOAD_ATTR for `time.perf_counter_ns` is pure overhead.
+            # Tighter iterations also mean finer-grained deadline detection (less overshoot).
+            perf_counter_ns = time.perf_counter_ns
+            while perf_counter_ns() < tgt_ns:
                 pass
         else:
-            while clock.now_us() < target_system_us:
+            now_us = clock.now_us
+            while now_us() < target_system_us:
                 pass
 
     def wait_until_us(

@@ -37,6 +37,15 @@ class TimingPolicy:
     hold_uses_frame_model: bool = False
     min_hold_uses_frame_model: bool = False
 
+    # Intra-chord micro-stagger (remote-reliability knob, onset-only). 0 = OFF (one SendInput per
+    # chord, the local-optimal default). When > 0 the scheduler spreads a chord's key-downs by this
+    # per-key step (capped at chord_stagger_max_us total) so each note lands in its own game tick /
+    # network update — mitigates remote-listener note drops on dense chords. See
+    # docs/chord-stagger-remote-drops.md. Never shifts a chord earlier: the first key keeps the
+    # authored onset; later keys are pushed forward only.
+    chord_stagger_us: Microseconds = Microseconds(0)
+    chord_stagger_max_us: Microseconds = Microseconds(15_000)
+
     @classmethod
     def from_dict(cls, p_dict: dict, **kwargs) -> "TimingPolicy":
         from sky_music.config import DEFAULT_TIMING_PROFILES
@@ -101,9 +110,14 @@ class TimingPolicy:
             hold_override_us = min_hold_override_us
             hold_uses_frame_model = min_hold_uses_frame_model
         
+        chord_stagger_us = max(0, int_value("chord_stagger_us", 0))
+        chord_stagger_max_us = max(0, int_value("chord_stagger_max_us", 15_000))
+
         return cls(
             hold_us=hold_us,
             min_hold_us=min_hold_us,
+            chord_stagger_us=Microseconds(chord_stagger_us),
+            chord_stagger_max_us=Microseconds(chord_stagger_max_us),
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
@@ -151,6 +165,10 @@ class FrameTimingPolicy:
 
     same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
     profile_name: str | None = None
+
+    # Carried unchanged from TimingPolicy; consumed by build_key_actions. See TimingPolicy docstring.
+    chord_stagger_us: Microseconds = Microseconds(0)
+    chord_stagger_max_us: Microseconds = Microseconds(15_000)
 
     @staticmethod
     def materialise_frame_us(frames: float, frame_us: int) -> Microseconds:
@@ -204,6 +222,8 @@ class FrameTimingPolicy:
             focus_restore_grace_us=policy.focus_restore_grace_us,
             same_key_conflict_policy=conflict_policy,
             profile_name=profile_name,
+            chord_stagger_us=policy.chord_stagger_us,
+            chord_stagger_max_us=policy.chord_stagger_max_us,
         )
 
     @classmethod

@@ -81,6 +81,10 @@ class PlaybackSessionContext:
             overrides.append(("min_hold_us", ms_to_us(args.min_hold_ms)))
         if getattr(args, "focus_restore_grace_ms", None) is not None:
             overrides.append(("focus_restore_grace_us", ms_to_us(args.focus_restore_grace_ms)))
+        if getattr(args, "chord_stagger_us", None) is not None:
+            overrides.append(("chord_stagger_us", max(0, int(args.chord_stagger_us))))
+        if getattr(args, "chord_stagger_max_us", None) is not None:
+            overrides.append(("chord_stagger_max_us", max(0, int(args.chord_stagger_max_us))))
 
         return cls(
             profile_name=profile,

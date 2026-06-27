@@ -386,6 +386,8 @@ def send_input_batch(inputs: list[INPUT]) -> None:
             retries_without_progress = 0
             continue
         retries_without_progress += 1
+        global _ZERO_PROGRESS_RETRIES
+        _ZERO_PROGRESS_RETRIES += 1
         if retries_without_progress >= 3:
             err_code = ctypes.get_last_error()
             raise OSError(
@@ -407,6 +409,39 @@ _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
 _ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDict()
 _ARRAY_CACHE_MAX = 8192
 _CACHE_LOCK = threading.RLock()
+
+# Partial-send diagnostics.
+#
+# SendInput is supposed to inject a chord's keys ATOMICALLY in one call. When it returns sent < n,
+# the remaining keys must go in a SECOND SendInput — splitting the chord across two input events
+# with a small gap. That gap is the one sender-side place a chord loses atomicity; the remote then
+# re-quantises it into an audible "one note offset / not pressed" glitch (exactly the reported
+# symptom). These counters make that event observable so we can confirm whether the residual chord
+# glitch is sender-side (partial send) or remote-side (untouchable).
+#
+# Single-writer contract: only the dispatch thread sends. Reset before the thread starts and read
+# after it joins (see PlaybackEngine.play) — no concurrent access, safe under free-threaded builds.
+_PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requested (any n)
+_CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
+_SEND_KEYS_DEFERRED: int = 0         # total keys pushed into a follow-up SendInput
+_ZERO_PROGRESS_RETRIES: int = 0      # SendInput calls that injected nothing (sent == 0)
+
+
+def reset_send_diagnostics() -> None:
+    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _ZERO_PROGRESS_RETRIES
+    _PARTIAL_SEND_EVENTS = 0
+    _CHORD_SPLIT_EVENTS = 0
+    _SEND_KEYS_DEFERRED = 0
+    _ZERO_PROGRESS_RETRIES = 0
+
+
+def get_send_diagnostics() -> dict[str, int]:
+    return {
+        "partial_send_events": _PARTIAL_SEND_EVENTS,
+        "chord_split_events": _CHORD_SPLIT_EVENTS,
+        "keys_deferred": _SEND_KEYS_DEFERRED,
+        "zero_progress_retries": _ZERO_PROGRESS_RETRIES,
+    }
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
@@ -433,6 +468,24 @@ def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) ->
     sent = user32.SendInput(n, input_array, _INPUT_SIZE)
     if sent == n:
         return
+
+    # Partial send: SendInput could not inject the whole batch atomically.
+    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED
+    _PARTIAL_SEND_EVENTS += 1
+    _SEND_KEYS_DEFERRED += (n - sent)
+    is_up = bool(flags & KEYEVENTF_KEYUP)
+    if n > 1 and sent > 0:
+        _CHORD_SPLIT_EVENTS += 1
+        debug_log(
+            f"[input] CHORD SPLIT: only {sent}/{n} keys injected atomically "
+            f"(key_up={is_up}); remaining {n - sent} go in a 2nd SendInput -> chord split, "
+            f"remote may desync this chord. scan_codes={scan_codes_tuple}"
+        )
+    else:
+        debug_log(
+            f"[input] PARTIAL SEND: {sent}/{n} keys injected (key_up={is_up}); "
+            f"deferring {n - sent}. scan_codes={scan_codes_tuple}"
+        )
 
     # Fallback retry path
     if sent > 0:

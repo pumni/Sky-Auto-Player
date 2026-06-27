@@ -4,7 +4,7 @@ import statistics
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
-from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds, ScanCode
+from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
 from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 from sky_music.infrastructure.wait_strategy import WaitStrategy
@@ -252,13 +252,18 @@ class DispatchLoop:
         self._last_reprobe_us: int = 0
         self._reprobe_interval_us: int = 5_000_000  # 5 seconds of elapsed playback time
 
+    def _current_lead_up(self) -> int:
+        if self.dispatch_lead_us > 0:
+            return self.dispatch_lead_us
+        return self.estimator.get_lead_us(ActionKind.UP)
+
     def get_current_leads(self) -> tuple[int, int]:
         if self.dispatch_lead_us > 0:
-            lead_down, lead_up = self.dispatch_lead_us, self.dispatch_lead_us
+            lead_down = self.dispatch_lead_us
         else:
-            lead_down, lead_up = self.estimator.get_lead_us(ActionKind.DOWN), self.estimator.get_lead_us(ActionKind.UP)
+            lead_down = self.estimator.get_lead_us(ActionKind.DOWN)
         lead_down += self.onset_bias_us
-        return lead_down, lead_up
+        return lead_down, self._current_lead_up()
 
     def _down_lead_for_batch(self, batch: RuntimeActionBatch) -> int:
         # onset_bias_us is an onset-only (key-down) knob — never added to releases.
@@ -443,7 +448,7 @@ class DispatchLoop:
 
         action = KeyAction(
             kind=ActionKind.DOWN,
-            scan_codes=tuple(ScanCode(intent.scan_code) for intent in playable),
+            scan_codes=tuple(intent.scan_code for intent in playable),  # type: ignore[arg-type]
             at_us=Microseconds(batch.scheduled_us),
             reason=batch.reason,
         )
@@ -512,7 +517,7 @@ class DispatchLoop:
         )
         action = KeyAction(
             kind=ActionKind.UP,
-            scan_codes=tuple(ScanCode(sc) for sc in scan_codes_list),
+            scan_codes=tuple(scan_codes_list),  # type: ignore[arg-type]
             at_us=Microseconds(scheduled_us),
             reason=reason,
         )
@@ -846,7 +851,6 @@ class DispatchLoop:
         self,
         now_us: int,
         state: PlaybackState,
-        first_action_executed: bool,
         lead_up: int,
     ) -> tuple[ExecutionResult | None, ...]:
         # The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch); a scalar
@@ -895,9 +899,12 @@ class DispatchLoop:
 
         try:
             while not self.coordinator.is_finished():
-                lead_down, lead_up = self.get_current_leads()
+                # The per-batch down lead (_down_lead_for_batch) overrides the scalar dispatch_lead_us
+                # arg inside next_authored_us, so only lead_up is consumed at the loop level. Computing
+                # the discarded down lead here would be a wasted estimator read in the hot window.
+                lead_up = self._current_lead_up()
                 deadline_us = self.coordinator.next_deadline_us(
-                    lead_down, lead_up, lead_for_batch=self._down_lead_for_batch
+                    0, lead_up, lead_for_batch=self._down_lead_for_batch
                 )
                 if deadline_us is None:
                     break
@@ -917,7 +924,7 @@ class DispatchLoop:
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
-                for result in self._drain_due(now_us, state, first_action_executed, lead_up):
+                for result in self._drain_due(now_us, state, lead_up):
                     if result is not None:
                         first_action_executed = True
                     observe_result(result)
@@ -955,4 +962,15 @@ class DispatchLoop:
                 degraded=self.health_monitor.input_path_degraded,
                 warn_us=self.health_monitor.input_path_warn_us,
             )
+            # Partial-send diagnostics: recorded BEFORE save() so they reach the summary. The
+            # dispatch thread is the sole sender and is finishing here, so the counters are final.
+            # Pure instrumentation — never let a backend without it (test fakes) break teardown.
+            get_send_diag = getattr(self.backend, "get_send_diagnostics", None)
+            if get_send_diag is not None:
+                self.telemetry.record_runtime_options(
+                    {
+                        **self.telemetry.runtime_options,
+                        "send_diagnostics": get_send_diag(),
+                    }
+                )
             self.telemetry.save()
