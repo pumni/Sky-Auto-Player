@@ -80,6 +80,9 @@ class TimedBackend:
             last_error=None,
         )
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return {}
+
 
 def test_send_latency_estimator_ema() -> None:
     # Test that alpha=0.2 EMA and capping works

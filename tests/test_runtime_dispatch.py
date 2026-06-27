@@ -150,6 +150,9 @@ class TimedBackend:
             last_error=None,
         )
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return {}
+
 
 class AsymmetricTimedBackend(TimedBackend):
     def __init__(self, clock: FakeClock, *, down_duration_us: int, up_duration_us: int) -> None:

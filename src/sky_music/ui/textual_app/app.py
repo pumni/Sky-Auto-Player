@@ -632,13 +632,13 @@ class SkyPickerApp(App[SongPickerResult | None]):
             
             row_cells = [
                 song_icon,
-                _title_cell(choice.path.stem, normalized_query, match_style),
+                _title_cell(choice.path.stem, normalized_query, match_style).plain,
                 duration,
             ]
             if self.show_notes:
                 row_cells.append(notes)
             if self.show_risk:
-                row_cells.append(_risk_cell(risk, muted, self._theme_tokens))
+                row_cells.append(_risk_cell(risk, muted, self._theme_tokens).plain)
             if self.show_suggested:
                 row_cells.append(suggested)
 

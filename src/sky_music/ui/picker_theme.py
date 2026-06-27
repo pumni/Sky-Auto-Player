@@ -185,7 +185,7 @@ def get_theme_preset(theme_name: str | None = None, active_theme: str = "aurora"
 def get_theme(theme_name: str | None = None, active_theme: str = "aurora") -> tuple[str, dict[str, Any]]:
     requested_theme = (theme_name or active_theme or "aurora").casefold()
     preset = get_theme_preset(requested_theme)
-    legacy_dict = {
+    legacy_dict: dict[str, Any] = {
         "pointer": preset.pointer,
         "song_icon": preset.song_icon,
         "empty_icon": preset.empty_icon,

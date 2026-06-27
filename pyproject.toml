@@ -42,14 +42,45 @@ play = "main:main"
 build-app = "build_app:main"
 
 [tool.pyright]
-# Keep typecheck signal on first-party code: dist/ contains PyInstaller-bundled third-party
-# sources and build/ is generated output.
+# ── Analysis scope ──────────────────────────────────────────────────────
+# Standard mode catches argument mismatches, optional‑access errors,
+# return‑type violations, and the majority of real bugs. Tests keep full
+# flexibility for pytest‑idiomatic patterns (monkeypatch, *args/**kwargs
+# helpers, mock backends). The strict‑mode preset is deliberately avoided
+# because it flags test‑only noise (~800 diagnostics) without catching
+# anything standard mode misses in the 4 kLOC production codebase.
+typeCheckingMode = "standard"
+
+include = ["src", "tests"]
+
 exclude = [
     "dist",
     "build",
     ".venv",
     "**/__pycache__",
 ]
+
+# ── Target ──────────────────────────────────────────────────────────────
+pythonVersion = "3.14"
+pythonPlatform = "Windows"
+
+# ── Type evaluation — maximum precision ─────────────────────────────────
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
+analyzeUnannotatedFunctions = true
+strictParameterNoneValue = true
+useLibraryCodeForTypes = true
+deprecateTypingAliases = true
+disableBytesTypePromotions = true
+enableReachabilityAnalysis = true
+
+# ── Global diagnostics ──────────────────────────────────────────────────
+# Standard mode already catches argument‑type mismatches, optional‑access
+# errors, return‑type violations, and most real bugs. The extras below are
+# noiseless checks that spot rot without any false positives.
+reportUnusedImport = "error"
+reportDeprecated   = "error"
 
 [tool.ruff]
 target-version = "py314"

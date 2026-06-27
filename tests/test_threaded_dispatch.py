@@ -77,6 +77,9 @@ class ThreadRecordingBackend:
             last_error=None,
         )
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return {}
+
 
 class BlockingRenderer:
     def __init__(self, block_s: float) -> None:

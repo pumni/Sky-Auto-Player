@@ -233,7 +233,7 @@ class ProgressRenderer:
         # The inner width is width - 4
         bar_width = max(10, width - 4 - visible_width(time_text) - 2)
         fraction = current / max(total, 0.001)
-        filled = min(bar_width, int(round(fraction * bar_width)))
+        filled = min(bar_width, round(fraction * bar_width))
         bar = f"{ANSI_ACCENT}█{ANSI_RESET}" * filled + f"{ANSI_GRAY}░{ANSI_RESET}" * (bar_width - filled)
 
         song_title_line = f"♪ {ANSI_BOLD}{truncate_cells(song_name, width - 8)}{ANSI_RESET}"
@@ -283,7 +283,7 @@ class ProgressRenderer:
         if self.verbose and self.active_policy is not None:
             pol = self.active_policy
             fps = resolve_game_fps(getattr(pol, "fps", None))
-            frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
+            frame_us = getattr(pol, "frame_us", 0) or round(1_000_000 / fps)
             frame_label = f"{frame_us}us"
             fps_label = f"{fps}fps"
             hold_info = f"hold/min: {pol.hold_us}/{pol.min_hold_us}us"
@@ -326,4 +326,5 @@ class ProgressRenderer:
         self.last_lines_printed = 0
 
 def clear_terminal() -> None:
-    os.system('cls' if os.name == 'nt' else 'clear')
+    import subprocess
+    subprocess.run('cls' if os.name == 'nt' else 'clear', shell=True)

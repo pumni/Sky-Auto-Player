@@ -104,6 +104,9 @@ class TimedBackend:
             last_error=None,
         )
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return {}
+
 
 def action(at_us: int, kind: str, *scan_codes: int) -> KeyAction:
     return KeyAction(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Optional, Self
+from typing import Self
 
 from sky_music.config import RtPriorityMode as RtPriorityMode
 from sky_music.platform.win32 import inputs
@@ -35,10 +35,10 @@ class DispatchThreadPriorityScope:
 
     def __init__(self, mode: RtPriorityMode = "auto") -> None:
         self.mode: RtPriorityMode = mode
-        self.outcome: Optional[RtPriorityOutcome] = None
-        self._mmcss_handle: Optional[int] = None
-        self._thread_handle: Optional[int] = None
-        self._old_priority: Optional[int] = None
+        self.outcome: RtPriorityOutcome | None = None
+        self._mmcss_handle: int | None = None
+        self._thread_handle: int | None = None
+        self._old_priority: int | None = None
 
     def __enter__(self) -> Self:
         if sys.platform != "win32" or self.mode == "off":

@@ -189,7 +189,7 @@ def merged_timing_profiles(cfg: AppConfig) -> dict[str, dict[str, Any]]:
     """Built-in profiles with user overrides from config.json."""
     merged = {name: dict(profile) for name, profile in DEFAULT_TIMING_PROFILES.items()}
     for raw_name, override in cfg.timing_profiles.items():
-        name = normalize_profile_name(str(raw_name))
+        name = normalize_profile_name(raw_name)
         if name not in merged:
             continue
         base = dict(merged[name])
@@ -237,7 +237,7 @@ def persist_default_profile(cfg: AppConfig, profile_name: str) -> None:
 def persist_default_tempo(cfg: AppConfig, tempo_scale: float) -> None:
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
-    cfg.default_tempo_scale = float(tempo_scale)
+    cfg.default_tempo_scale = tempo_scale
     save_config(cfg)
 
 
@@ -256,7 +256,7 @@ def persist_playback_defaults(
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
     cfg.default_timing_profile = canonical_profile_name(profile_name)
-    cfg.default_tempo_scale = float(tempo_scale)
+    cfg.default_tempo_scale = tempo_scale
     cfg.game_fps = normalize_fps_value(fps)
     save_config(cfg)
 
@@ -276,7 +276,7 @@ def persist_calibration_defaults(
     base_profile = dict(profile_dict_for(cfg, profile_key))
 
     cfg.default_timing_profile = canonical
-    cfg.default_tempo_scale = float(tempo_scale)
+    cfg.default_tempo_scale = tempo_scale
     cfg.game_fps = normalize_fps_value(fps)
     cfg.timing_profiles[profile_key] = base_profile
     save_config(cfg)

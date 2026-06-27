@@ -72,7 +72,7 @@ class DefaultNoteResolver(NoteResolver):
             try:
                 sc = _map_virtual_key(vk)
                 if sc:
-                    return int(sc)
+                    return sc
             except (AttributeError, OSError):
                 pass
         return PHYSICAL_SCAN_CODES.get(char, 0)

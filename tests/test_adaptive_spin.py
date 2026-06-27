@@ -78,6 +78,9 @@ class TimedBackend:
     def get_health(self) -> BackendHealth:
         return BackendHealth(0, 0, 0, None)
 
+    def get_send_diagnostics(self) -> dict[str, int]:
+        return {}
+
 
 def test_hybrid_strategy_timer_aware_ladder() -> None:
     clock = FakeClock()
