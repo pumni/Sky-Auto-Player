@@ -140,8 +140,26 @@ class SnapshotRenderer:
             if clamped > 2000:
                 self.release_late_2ms += 1
 
+    @staticmethod
+    def _snapshot_latencies(values: deque[int]) -> list[int]:
+        """Lock-free snapshot of the latency ring buffer.
+
+        The dispatch thread appends to ``values`` on its hot path and must stay lock-free (a writer
+        lock would let this UI-thread reader's sorted()/variance stall key dispatch → jitter). Under
+        the free-threaded build ``list(deque)`` can raise "deque mutated during iteration" when an
+        append lands mid-iteration, so retry a few times (append is O(1); collisions are rare) and
+        fall back to an empty sample set rather than crash the render. A marginally inconsistent
+        window is harmless for p50/p95/σ over 512 samples.
+        """
+        for _ in range(5):
+            try:
+                return list(values)
+            except RuntimeError:
+                continue
+        return []
+
     def debug_stats(self) -> DebugStats:
-        samples = list(self._latencies)
+        samples = self._snapshot_latencies(self._latencies)
         if samples:
             sorted_samples = sorted(samples)
             n = len(sorted_samples)
