@@ -516,7 +516,7 @@ def _run_textual_selftest() -> int:
         def cancel(self) -> None:
             pass
 
-        def close(self, *, wait: bool = False) -> None:
+        def close(self, *, wait: bool = False) -> None:  # noqa: ARG002
             self.closed = True
 
         def snapshot(self) -> object:
@@ -533,7 +533,7 @@ def _run_textual_selftest() -> int:
     async def run_picker_probe() -> None:
         original_get_song_choices = app_module.get_song_choices
         original_metadata = app_module.MetadataCoordinator
-        app_module.get_song_choices = lambda force_refresh=False: [
+        app_module.get_song_choices = lambda force_refresh=False: [  # noqa: ARG005
             Path("songs/Diamonds.json"),
             Path("songs/Dandelions.json"),
         ]

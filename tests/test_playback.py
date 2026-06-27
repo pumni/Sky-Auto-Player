@@ -55,7 +55,7 @@ class CountingControls:
 
     def poll(self):
         self.poll_calls += 1
-        return None
+        return
 
 
 def test_dry_run_playback_execution():

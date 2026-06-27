@@ -30,23 +30,20 @@ def test_static_drift_guard() -> None:
 
         # 1. ThreadPoolExecutor instantiation guard
         # Match ThreadPoolExecutor(...)
-        if "ThreadPoolExecutor(" in content:
-            if rel_path not in allowed_thread_pool:
+        if "ThreadPoolExecutor(" in content and rel_path not in allowed_thread_pool:
                 errors.append(
                     f"ThreadPoolExecutor instantiated in unauthorized file: {file_path.relative_to(src_dir.parent.parent)}"
                 )
 
         # 2. ProcessPoolExecutor instantiation guard
-        if "ProcessPoolExecutor(" in content:
-            if rel_path not in allowed_process_pool:
+        if "ProcessPoolExecutor(" in content and rel_path not in allowed_process_pool:
                 errors.append(
                     f"ProcessPoolExecutor instantiated in unauthorized file: {file_path.relative_to(src_dir.parent.parent)}"
                 )
 
         # 3. threading.Thread instantiation guard
         # We search for threading.Thread or from threading import Thread ... Thread(
-        if "threading.Thread(" in content or " Thread(" in content:
-            if rel_path not in allowed_threading_thread:
+        if ("threading.Thread(" in content or " Thread(" in content) and rel_path not in allowed_threading_thread:
                 errors.append(
                     f"threading.Thread instantiated in unauthorized file: {file_path.relative_to(src_dir.parent.parent)}"
                 )

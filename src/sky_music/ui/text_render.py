@@ -249,10 +249,8 @@ def ansi_gradient_box(
     top_line = "".join(top_parts)
 
     # 2. Bottom rule
-    bot_parts = []
-    bot_parts.append(f"{g_ansi(0)}╰\033[0m")
-    for col in range(1, width - 1):
-        bot_parts.append(f"{g_ansi(col)}─\033[0m")
+    bot_parts = [f"{g_ansi(0)}╰\033[0m"]
+    bot_parts.extend(f"{g_ansi(col)}─\033[0m" for col in range(1, width - 1))
     bot_parts.append(f"{g_ansi(width - 1)}╯\033[0m")
     bot_line = "".join(bot_parts)
 

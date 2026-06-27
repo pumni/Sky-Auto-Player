@@ -56,6 +56,7 @@ Tuning the detector if the onset count is wrong:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import math
 import statistics
@@ -262,10 +263,8 @@ def fmt_t(sec: float) -> str:
 
 
 def main() -> int:
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-    except Exception:
-        pass
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

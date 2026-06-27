@@ -39,7 +39,7 @@ PROFILES_INFO = [
     ("audience-safe", "Audience Safe: helps online players hear notes clearly"),
 ]
 
-def get_profiles_info(fps: int) -> list[tuple[str, str]]:
+def get_profiles_info(_fps: int) -> list[tuple[str, str]]:
     return list(PROFILES_INFO)
 
 TEMPO_OPTIONS = [

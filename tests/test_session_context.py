@@ -151,7 +151,7 @@ def test_strict_timing_profile_validation_enforcement():
     )
     # Trying to resolve "balanced" at 60 FPS should fail validation due to min_hold_us < one frame.
     session = PlaybackSessionContext(profile_name="balanced", fps=60)
-    with pytest.raises(ValueError, match="Unsafe min_hold_us|min_hold_us below 10000us"):
+    with pytest.raises(ValueError, match=r"Unsafe min_hold_us|min_hold_us below 10000us"):
         session.resolve_effective_policy(cfg_unsafe)
 
     # 2. Audience-safe now uses the same frame visibility validation as other profiles.

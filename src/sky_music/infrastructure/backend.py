@@ -108,7 +108,7 @@ class _TrackedKeyState(ABC):
         """Returns raw perf_counter µs after send completed, or None if unavailable."""
         ...
 
-    def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
+    def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:  # noqa: ARG002
         self.last_error = f"key_down error: {error}"
 
     def _handle_up_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
@@ -299,7 +299,7 @@ class WinSendInputBackend(_TrackedKeyState):
                 stuck_keys=tuple(sorted(self.failed_release_keys)),
                 verification_inconclusive=False
             )
-        elif released_successfully:
+        if released_successfully:
             # Clear tracking sets upon verified release
             self.active_keys.clear()
             self.possibly_active_keys.clear()
@@ -310,18 +310,17 @@ class WinSendInputBackend(_TrackedKeyState):
                 stuck_keys=(),
                 verification_inconclusive=False
             )
-        else:
-            with contextlib.suppress(Exception):
-                self.inputs_module.debug_log(
-                    f"[backend] Verification inconclusive: send failed but no stuck keys detected via GetAsyncKeyState. "
-                    f"Keys retained as failed releases: {to_release}"
-                )
-            return ReleaseAllOutcome(
-                attempted=release_tuple,
-                released_successfully=False,
-                stuck_keys=tuple(sorted(self.failed_release_keys)),
-                verification_inconclusive=True
+        with contextlib.suppress(Exception):
+            self.inputs_module.debug_log(
+                f"[backend] Verification inconclusive: send failed but no stuck keys detected via GetAsyncKeyState. "
+                f"Keys retained as failed releases: {to_release}"
             )
+        return ReleaseAllOutcome(
+            attempted=release_tuple,
+            released_successfully=False,
+            stuck_keys=tuple(sorted(self.failed_release_keys)),
+            verification_inconclusive=True
+        )
 
 
 class DryRunBackend(_TrackedKeyState):

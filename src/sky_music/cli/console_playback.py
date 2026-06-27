@@ -56,7 +56,7 @@ def _wait_key_and_exit(code: int = 1) -> None:
     sys.exit(code)
 
 
-def _handle_risk_analysis(report: Any, song: Any, is_dry_run: bool, controls: Any, policy_override_fn: Any = None) -> tuple[bool, str | None, float | None]:
+def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: Any, _policy_override_fn: Any = None) -> tuple[bool, str | None, float | None]:
     """Display risk analysis, prompt user for action if severity is medium/high.
 
     Returns (should_continue, new_profile_name_or_None, new_tempo_scale_or_None).
@@ -97,17 +97,16 @@ def _handle_risk_analysis(report: Any, song: Any, is_dry_run: bool, controls: An
             # Safe to pass: failing to save user profile selection to config.json is non-fatal for playback
             pass
         return True, recommended, None
-    elif choice == "2":
+    if choice == "2":
         print( "  → Tempo scaled to 0.92x")
         return True, None, 0.92
-    elif choice == "3":
+    if choice == "3":
         print( "  → Running dry-run simulation first...")
         return True, None, None
-    elif choice == "5":
+    if choice == "5":
         return False, None, None
-    else:
-        print( "  → Proceeding with current settings.")
-        return True, None, None
+    print( "  → Proceeding with current settings.")
+    return True, None, None
 
 
 def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 1.0, controls: Any = None) -> bool:
@@ -617,16 +616,16 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         return f"{int(value) // 1000}"
 
     COLS = [
-        ("Profile",              lambda n, d: n),
-        ("hold_ms",              lambda n, d: frame_coupled_ms(
+        ("Profile",              lambda n, _d: n),
+        ("hold_ms",              lambda _n, d: frame_coupled_ms(
             d,
             value_key="hold_us",
             unframed_key="hold_unframed_us",
             fallback_unframed_key="min_hold_unframed_us",
         )),
-        ("min_hold_ms",          lambda n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
-        ("grace_ms",             lambda n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
-        ("conflict_policy",      lambda n, d: d.get("same_key_conflict_policy", "degraded")),
+        ("min_hold_ms",          lambda _n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
+        ("grace_ms",             lambda _n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
+        ("conflict_policy",      lambda _n, d: d.get("same_key_conflict_policy", "degraded")),
     ]
 
     rows: list[list[str]] = []

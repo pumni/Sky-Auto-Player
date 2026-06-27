@@ -91,8 +91,7 @@ class DispatchThreadPriorityScope:
                             detail=None
                         )
                         return self
-                    else:
-                        errors.append("SetThreadPriority TIME_CRITICAL returned False")
+                    errors.append("SetThreadPriority TIME_CRITICAL returned False")
                 else:
                     errors.append("GetThreadPriority returned error code")
             except Exception as err:
@@ -121,8 +120,7 @@ class DispatchThreadPriorityScope:
                             detail=None
                         )
                         return self
-                    else:
-                        errors.append("SetThreadPriority HIGHEST returned False")
+                    errors.append("SetThreadPriority HIGHEST returned False")
                 else:
                     errors.append("GetThreadPriority returned error code")
             except Exception as err:

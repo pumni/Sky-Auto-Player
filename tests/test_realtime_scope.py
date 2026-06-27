@@ -154,9 +154,9 @@ def test_realtime_scope_free_threaded_skips_setswitchinterval() -> None:
     and _old_switch_interval stays None so __exit__ performs no revert."""
     initial_interval = sys.getswitchinterval()
 
-    with patch("sky_music.infrastructure.realtime._gil_enabled", return_value=False):
-        with patch("sys.setswitchinterval") as mock_set, \
-             patch("sys.getswitchinterval", return_value=initial_interval):
+    with patch("sky_music.infrastructure.realtime._gil_enabled", return_value=False), \
+         patch("sys.setswitchinterval") as mock_set, \
+         patch("sys.getswitchinterval", return_value=initial_interval):
             scope = RealtimeProcessScope(enabled=False, enable_switch_interval_tuning=True)
             with scope:
                 mock_set.assert_not_called()

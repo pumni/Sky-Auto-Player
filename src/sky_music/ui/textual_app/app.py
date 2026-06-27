@@ -372,7 +372,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         # Initialize responsive columns on start
         self.call_after_refresh(self._apply_responsive_columns)
 
-    def on_resize(self, event: events.Resize) -> None:
+    def on_resize(self, _event: events.Resize) -> None:
         self.call_after_refresh(self._apply_responsive_columns)
 
     def _apply_responsive_columns(self) -> None:
@@ -485,18 +485,18 @@ class SkyPickerApp(App[SongPickerResult | None]):
             inputs.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
             from sky_music.orchestration.telemetry import TelemetryLogger
             resources_list = []
-            try:
-                for snap in self.picker_scope.snapshots():
-                    resources_list.append({
+            with contextlib.suppress(Exception):
+                resources_list = [
+                    {
                         "name": snap.name,
                         "phase": snap.phase,
                         "state": snap.state,
                         "closed": snap.closed,
                         "pending_count": snap.pending_count,
                         "running_count": snap.running_count,
-                    })
-            except Exception:
-                pass
+                    }
+                    for snap in self.picker_scope.snapshots()
+                ]
             TelemetryLogger.last_picker_cleanup = {
                 "ok": False,
                 "resources": resources_list,
@@ -896,9 +896,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
             elif cmd.group in command_groups:
                 command_groups[cmd.group].append((cmd.key, cmd.label, cmd.description))
 
-        for group_name in ("View", "Playback", "Interface", "Library", "System"):
-            if command_groups[group_name]:
-                sections.append((group_name, command_groups[group_name]))
+        sections.extend(
+            (group_name, command_groups[group_name])
+            for group_name in ("View", "Playback", "Interface", "Library", "System")
+            if command_groups[group_name]
+        )
 
         content = Text()
         for index, (section_name, items) in enumerate(sections):
@@ -939,35 +941,34 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 )
             )
             return
-        else:
-            inp = calibration_input_from_summary(summary)
-            rec = calibrate_profile(inp)
-            t = self._theme_tokens
-            accent = t.accent
-            info_lines = [
-                f"[bold {accent}]Profile:[/]   {rec.profile_name}",
-                f"[bold {accent}]Tempo:[/]     {rec.tempo_scale:.2f}x",
-                f"[bold {accent}]Hold:[/]      {rec.hold_us / 1000:.1f}ms",
-                f"[bold {accent}]Severity:[/]  {rec.severity.upper()}",
-                "",
-                f"[bold {accent}]Reason:[/]    {rec.reason}",
-            ]
-            options = [
-                PickerOption(
-                    CalibrationChoice(rec.profile_name, rec.tempo_scale, inp.fps),
-                    "Apply Recommendation",
-                ),
-                PickerOption(None, "Close"),
-            ]
-            self.push_screen(
-                OptionModal(
-                    "Calibration Recommendation",
-                    options,
-                    info_text="\n".join(info_lines),
-                    theme_name=self.active_theme,
-                ),
-                self._apply_calibration,
-            )
+        inp = calibration_input_from_summary(summary)
+        rec = calibrate_profile(inp)
+        t = self._theme_tokens
+        accent = t.accent
+        info_lines = [
+            f"[bold {accent}]Profile:[/]   {rec.profile_name}",
+            f"[bold {accent}]Tempo:[/]     {rec.tempo_scale:.2f}x",
+            f"[bold {accent}]Hold:[/]      {rec.hold_us / 1000:.1f}ms",
+            f"[bold {accent}]Severity:[/]  {rec.severity.upper()}",
+            "",
+            f"[bold {accent}]Reason:[/]    {rec.reason}",
+        ]
+        options = [
+            PickerOption(
+                CalibrationChoice(rec.profile_name, rec.tempo_scale, inp.fps),
+                "Apply Recommendation",
+            ),
+            PickerOption(None, "Close"),
+        ]
+        self.push_screen(
+            OptionModal(
+                "Calibration Recommendation",
+                options,
+                info_text="\n".join(info_lines),
+                theme_name=self.active_theme,
+            ),
+            self._apply_calibration,
+        )
 
     def _apply_calibration(self, value: object | None) -> None:
         if not isinstance(value, CalibrationChoice):

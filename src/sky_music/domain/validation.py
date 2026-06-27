@@ -155,14 +155,16 @@ def validate_key_actions(
 
     # 5. Stuck keys at the end of the song
     if active_keys:
-        for sc in sorted(active_keys):
-            violations.append(ScheduleInvariantViolation(
+        violations.extend(
+            ScheduleInvariantViolation(
                 code="stuck_keys",
                 message=f"Scan code {sc} remains pressed after the end of the playback timeline",
                 at_us=actions[-1].at_us if actions else 0,
                 scan_code=sc,
                 severity="fatal"
-            ))
+            )
+            for sc in sorted(active_keys)
+        )
 
     # 6. Max polyphony check
     active_keys_poly = set()
@@ -278,7 +280,7 @@ def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
         raise ValueError("min_hold_us below 10000us is not allowed for built-ins")
 
 def validate_builtin_timing_profile(
-    name: str,
+    _name: str,
     profile: dict[str, int],
     *,
     selected_fps: int = 60,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from textual.widgets import Input
 
 from sky_music.config import AppConfig
 from sky_music.infrastructure.background import WorkerSnapshot
@@ -132,6 +133,7 @@ def test_search_typing_shortcut_letter_does_not_open_modal(monkeypatch) -> None:
         await pilot.press("p")
         await pilot.pause()
         search = app.query_one("#search")
+        assert isinstance(search, Input)
         assert search.value == "p"
         assert type(app.screen).__name__ == "Screen"
         await pilot.press("escape")
@@ -754,7 +756,7 @@ def test_choose_textual_aborts_on_failed_cleanup(monkeypatch) -> None:
 
     def fake_run(self: SkyPickerApp) -> None:
         TelemetryLogger.last_picker_cleanup = {"ok": False, "error": "boom", "resources": []}
-        return None
+        return
 
     monkeypatch.setattr(SkyPickerApp, "run", fake_run)
     with pytest.raises(RuntimeError, match="cleanup failed before playback"):

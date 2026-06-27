@@ -28,8 +28,7 @@ write("TEST_repeat_staircase", staircase())
 def chords():
       notes, t = [], 0
       for size in (2,3,4,5,6):
-          for k in range(size):
-              notes.append((t, k*2))
+          notes.extend((t, k*2) for k in range(size))
           t += 800
       return notes
 write("TEST_chords", chords())

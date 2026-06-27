@@ -17,8 +17,7 @@ def generate_random_song(num_notes: int = 100) -> Song:
         # 10% chance of a chord (same timestamp)
         if random.random() < 0.1:
             chord_size = random.randint(2, 5)
-            for key in random.sample(note_keys, chord_size):
-                notes.append(Note(time_ms=Millis(current_time_ms), key=NoteKey(key)))
+            notes.extend(Note(time_ms=Millis(current_time_ms), key=NoteKey(key)) for key in random.sample(note_keys, chord_size))
         else:
             key = random.choice(note_keys)
             notes.append(Note(time_ms=Millis(current_time_ms), key=NoteKey(key)))

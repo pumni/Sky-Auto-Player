@@ -80,7 +80,7 @@ class DirectProgressSink:
         elapsed_us: int,
         total_us: int,
         status: str,
-        lateness_us: int | None = None,
+        lateness_us: int | None = None,  # noqa: ARG002
         health: BackendHealth | None = None,
         input_path_degraded: bool = False,
         force: bool = False,
@@ -249,7 +249,7 @@ class PlaybackSupervisor:
     def _run_direct(
         self,
         dispatch_loop: DispatchLoop,
-        coordinator: RuntimeDispatchCoordinator,
+        coordinator: RuntimeDispatchCoordinator,  # noqa: ARG002
         state: PlaybackState,
         total_time_us: int,
     ) -> str:
@@ -274,7 +274,7 @@ class PlaybackSupervisor:
     def _run_threaded(
         self,
         dispatch_loop: DispatchLoop,
-        coordinator: RuntimeDispatchCoordinator,
+        coordinator: RuntimeDispatchCoordinator,  # noqa: ARG002
         state: PlaybackState,
         total_time_us: int,
     ) -> str:

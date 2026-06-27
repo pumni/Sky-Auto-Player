@@ -15,6 +15,7 @@ Then compare the numbers against the in-game telemetry send_duration:
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 
@@ -24,10 +25,8 @@ ITERATIONS = 2000
 
 
 def main() -> int:
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-    except Exception:
-        pass
     from sky_music.platform.win32.inputs import (
         disable_high_precision_timers,
         enable_high_precision_timers,

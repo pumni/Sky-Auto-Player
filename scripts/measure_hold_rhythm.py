@@ -8,6 +8,7 @@ Backend mô phỏng độ trễ SendInput theo phân bố telemetry thật (p50~
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import random
 import statistics
@@ -198,10 +199,8 @@ def sparse(n: int = 400, ioi_ms: int = 200) -> Song:
 
 
 def main() -> None:
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
-    except Exception:
-        pass
     args = sys.argv[1:]
     real_mode = False
     if "--real" in args:

@@ -109,7 +109,7 @@ class SnapshotRenderer:
         total: float,
         song_name: str,
         status: str = "playing",
-        force: bool = False,
+        force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
     ) -> None:
@@ -553,8 +553,7 @@ class PlaybackCard(Static):
             self._risk_severity, preset.accent
         )
         body = [f"{_ANSI_BOLD}{_hex_to_ansi(color)}Risk Level: {self._risk_severity.upper()}{_ANSI_RESET}", ""]
-        for rec in self._risk_recommendations:
-            body.append(f"{muted}• {rec}{_ANSI_RESET}")
+        body.extend(f"{muted}• {rec}{_ANSI_RESET}" for rec in self._risk_recommendations)
         if self._risk_recommendations:
             body.append("")
         for index, label in enumerate(self._risk_options):

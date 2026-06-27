@@ -342,11 +342,11 @@ def _build_config_from_disk() -> AppConfig:
 
     # Validate timing_profiles structure
     timing_profiles_raw = raw.get("timing_profiles", {})
-    timing_profiles = {}
-    if isinstance(timing_profiles_raw, dict):
-        for name, profile_dict in timing_profiles_raw.items():
-            if isinstance(profile_dict, dict):
-                timing_profiles[name] = profile_dict
+    timing_profiles = (
+        {name: profile_dict for name, profile_dict in timing_profiles_raw.items() if isinstance(profile_dict, dict)}
+        if isinstance(timing_profiles_raw, dict)
+        else {}
+    )
 
     spn_raw = raw.get("sky_process_names")
     if isinstance(spn_raw, list):

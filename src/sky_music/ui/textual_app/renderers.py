@@ -41,9 +41,9 @@ def _risk_style(risk: str, muted: str, theme: ThemePreset) -> str:
 
     if risk_upper in ("LOW", "SUCCESS"):
         return f"bold {theme.success}"
-    elif risk_upper in ("MED", "MEDIUM", "WARN", "WARNING"):
+    if risk_upper in ("MED", "MEDIUM", "WARN", "WARNING"):
         return f"bold {theme.warning}"
-    elif risk_upper in ("HIGH", "DANGER", "ERROR"):
+    if risk_upper in ("HIGH", "DANGER", "ERROR"):
         return f"bold {theme.danger}"
     return muted
 

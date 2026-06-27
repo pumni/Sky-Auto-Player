@@ -175,14 +175,15 @@ def test_playback_equivalence() -> None:
     assert res == PLAYBACK_FINISHED
 
     # Record the timeline
-    timeline = []
-    for call in backend.calls:
-        timeline.append({
+    timeline = [
+        {
             "kind": call.kind,
             "scan_codes": list(call.scan_codes),
             "started_us": call.started_us,
             "completed_us": call.completed_us,
-        })
+        }
+        for call in backend.calls
+    ]
 
     # Record generation status counts from telemetry
     summary = engine.telemetry.get_summary()

@@ -113,7 +113,7 @@ class PlaybackSessionContext:
     def display_profile_label(self) -> str:
         return display_profile_name(self.profile_name, self.fps)
 
-    def metadata_cache_key(self, song_path: Any, cfg: AppConfig | None = None) -> tuple[Any, ...]:
+    def metadata_cache_key(self, song_path: Any, cfg: AppConfig | None = None) -> tuple[Any, ...]:  # noqa: ARG002
         # Phase 2A: cfg was previously loaded here via load_config() but was never
         # used in the returned tuple – removing that dead call eliminates a
         # config-file lookup from every render-path invocation of
@@ -151,8 +151,7 @@ class PlaybackSessionContext:
             selected_fps=self.fps,
         )
 
-        for key, value in self.policy_overrides:
-            p_dict[key] = value
+        p_dict.update(self.policy_overrides)
 
         policy = TimingPolicy.from_dict(p_dict)
         if self.same_key_conflict_policy != policy.same_key_conflict_policy:

@@ -9,6 +9,7 @@ Exit code 0 = PASS. Non-zero = FAIL (lists offending songs).
 """
 from __future__ import annotations
 
+import contextlib
 import glob
 import sys
 from collections import defaultdict, deque
@@ -84,10 +85,8 @@ def run_song(path: str, fps: int) -> tuple[int, int, int]:
 
 def main() -> int:
     # Windows consoles default to cp1252; song filenames contain non-Latin-1 chars (e.g. Vietnamese).
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-    except Exception:
-        pass
     files = sorted(
         glob.glob("songs/*.json") + glob.glob("songs/*.skysheet") + glob.glob("songs/*.txt")
     )

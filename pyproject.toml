@@ -91,6 +91,7 @@ extend-select = [
     "SIM",  # flake8-simplify — simplify expressions
     "C4",   # flake8-comprehensions — prefer comprehensions
     "ARG",  # flake8-unused-arguments — catch dead params
+    "RET",  # flake8-return — return consistency
 ]
 ignore = [
     "RUF001", # ambiguous‑unicode in strings — Vietnamese chars are legitimate

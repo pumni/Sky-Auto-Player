@@ -47,9 +47,7 @@ def get_golden_songs():
     )
 
     # 5. golden_long_song_3min
-    long_notes = []
-    for t in range(0, 180000, 500): # Note every 500ms for 3 minutes
-        long_notes.append(Note(time_ms=Millis(t), key=NoteKey(f"Key{t % 15}")))
+    long_notes = [Note(time_ms=Millis(t), key=NoteKey(f"Key{t % 15}")) for t in range(0, 180000, 500)]
     songs["golden_long_song_3min"] = Song(
         name="Golden Long Song 3min",
         notes=tuple(long_notes)
@@ -82,14 +80,15 @@ def generate_snapshots():
         actions = res.actions
         
         # Serialize actions to match KeyAction data fields
-        serialized_actions = []
-        for action in actions:
-            serialized_actions.append({
+        serialized_actions = [
+            {
                 "at_us": action.at_us,
                 "scan_codes": list(action.scan_codes),
                 "kind": action.kind,
                 "reason": action.reason
-            })
+            }
+            for action in actions
+        ]
             
         output_file = snapshots_dir / f"{key}.json"
         with output_file.open("w", encoding="utf-8") as f:

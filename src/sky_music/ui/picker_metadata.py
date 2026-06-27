@@ -483,11 +483,11 @@ def session_to_worker_payload(session: PlaybackSessionContext) -> dict[str, Any]
 
 def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionContext:
     raw_overrides = payload.get("policy_overrides", ())
-    overrides: list[tuple[str, Any]] = []
-    if isinstance(raw_overrides, list | tuple):
-        for item in raw_overrides:
-            if isinstance(item, list | tuple) and len(item) == 2:
-                overrides.append((str(item[0]), item[1]))
+    overrides: list[tuple[str, Any]] = [
+        (str(item[0]), item[1])
+        for item in raw_overrides
+        if isinstance(item, list | tuple) and len(item) == 2
+    ] if isinstance(raw_overrides, list | tuple) else []
 
     conflict_policy = str(payload.get("same_key_conflict_policy", "degraded"))
     if conflict_policy not in {"degraded", "strict"}:

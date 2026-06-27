@@ -315,7 +315,7 @@ class ProgressRenderer:
         output = "\n".join(hud_lines) + "\n"
         print(output, end="", flush=True)
 
-    def finish(self, message: str = "") -> None:
+    def finish(self, _message: str = "") -> None:
         """Erase the live HUD from the terminal. The caller is responsible for
         redrawing (e.g. picker loop) — no status message is printed here."""
         if self._initialized and self.last_lines_printed > 0:

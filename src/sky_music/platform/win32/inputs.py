@@ -21,7 +21,7 @@ else:
             self._name = name
             self.argtypes = None
             self.restype = None
-        def __call__(self, *args, **kwargs):
+        def __call__(self, *_args, **_kwargs):
             return 0
 
     class _MockDLL:

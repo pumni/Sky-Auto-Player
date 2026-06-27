@@ -196,11 +196,11 @@ class _NullEstimator:
     __slots__ = ()
 
     @staticmethod
-    def get_lead_us(kind: str = "down", n_keys: int = 1) -> int:
+    def get_lead_us(kind: str = "down", n_keys: int = 1) -> int:  # noqa: ARG004
         return 0
 
     @staticmethod
-    def update(kind: str, duration_us: int, n_keys: int = 1) -> None:
+    def update(kind: str, duration_us: int, n_keys: int = 1) -> None:  # noqa: ARG004
         return
 
 
