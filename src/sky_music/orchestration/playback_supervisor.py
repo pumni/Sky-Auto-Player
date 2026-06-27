@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from collections import deque
-from contextlib import nullcontext
 import queue
 import threading
 import time
-from typing import Any, Protocol, TYPE_CHECKING
+from collections import deque
+from contextlib import nullcontext
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sky_music.config import RtPriorityMode
 from sky_music.infrastructure.backend import BackendHealth
-from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 from sky_music.infrastructure.focus import FocusGuard
+from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 
 if TYPE_CHECKING:
     from sky_music.orchestration.dispatch_loop import DispatchLoop
-    from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
     from sky_music.orchestration.engine import PlaybackState
+    from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
     from sky_music.orchestration.telemetry import TelemetryLogger
 
 # Standard playback outcome constants
@@ -307,7 +307,9 @@ class PlaybackSupervisor:
                 if not self.enable_timer_guard:
                     inputs.debug_log("[realtime] timer guard disabled")
 
-                from sky_music.infrastructure.rt_priority import DispatchThreadPriorityScope
+                from sky_music.infrastructure.rt_priority import (
+                    DispatchThreadPriorityScope,
+                )
                 priority_scope = DispatchThreadPriorityScope(self.rt_priority_mode)
 
                 with timer_scope, priority_scope:

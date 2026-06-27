@@ -9,38 +9,68 @@ from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
 from sky_music.infrastructure.backend import InputBackend, ReleaseAllOutcome
-from sky_music.infrastructure.focus import FocusGuard, NoopFocusGuard, Win32SkyFocusGuard
+from sky_music.infrastructure.focus import (
+    FocusGuard,
+    NoopFocusGuard,
+    Win32SkyFocusGuard,
+)
 from sky_music.infrastructure.realtime import (
     RealtimeProcessScope,
     _gil_enabled,
     create_realtime_sleeper,
 )
-from sky_music.infrastructure.timing import Clock, PerfCounterClock, RealSleeper, Sleeper, SleepPolicy
-from sky_music.infrastructure.wait_strategy import HybridWaitStrategy, WaitStrategy
-from sky_music.orchestration.runtime_dispatch import (
-    RuntimeDispatchCoordinator,
-    compile_runtime_intents,
+from sky_music.infrastructure.timing import (
+    Clock,
+    PerfCounterClock,
+    RealSleeper,
+    Sleeper,
+    SleepPolicy,
 )
-from sky_music.orchestration.telemetry import TelemetryLogger
+from sky_music.infrastructure.wait_strategy import HybridWaitStrategy, WaitStrategy
 
 # Re-exports kept for compatibility: the decomposition (Phase 6) moved these out of engine.py but
 # callers and tests still import them from here.
 from sky_music.orchestration.dispatch_loop import (
     DispatchHealthMonitor as DispatchHealthMonitor,
+)
+from sky_music.orchestration.dispatch_loop import (
     DispatchLoop as DispatchLoop,
+)
+from sky_music.orchestration.dispatch_loop import (
     ExecutionResult as ExecutionResult,
+)
+from sky_music.orchestration.dispatch_loop import (
     PlaybackState as PlaybackState,
+)
+from sky_music.orchestration.dispatch_loop import (
     RuntimeSameKeyConflictError as RuntimeSameKeyConflictError,
 )
 from sky_music.orchestration.playback_supervisor import (
-    DirectCommandSource as DirectCommandSource,
-    DirectFocusSignal as DirectFocusSignal,
-    DirectProgressSink as DirectProgressSink,
-    PlaybackSupervisor as PlaybackSupervisor,
     PLAYBACK_FINISHED as PLAYBACK_FINISHED,
-    PLAYBACK_SKIPPED as PLAYBACK_SKIPPED,
+)
+from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_QUIT as PLAYBACK_QUIT,
 )
+from sky_music.orchestration.playback_supervisor import (
+    PLAYBACK_SKIPPED as PLAYBACK_SKIPPED,
+)
+from sky_music.orchestration.playback_supervisor import (
+    DirectCommandSource as DirectCommandSource,
+)
+from sky_music.orchestration.playback_supervisor import (
+    DirectFocusSignal as DirectFocusSignal,
+)
+from sky_music.orchestration.playback_supervisor import (
+    DirectProgressSink as DirectProgressSink,
+)
+from sky_music.orchestration.playback_supervisor import (
+    PlaybackSupervisor as PlaybackSupervisor,
+)
+from sky_music.orchestration.runtime_dispatch import (
+    RuntimeDispatchCoordinator,
+    compile_runtime_intents,
+)
+from sky_music.orchestration.telemetry import TelemetryLogger
 
 
 class SendLatencyEstimator:
@@ -74,30 +104,30 @@ class SendLatencyEstimator:
 
     __slots__ = (
         "_alpha",
-        "_max_lead_us",
         # Down buckets: index by n_keys (0 unused, 1..MAX_POLY valid)
         "_count_down",
-        "_sum_down",
-        "_ema_down",
-        "_warm_down",
         # Down total fallback (all samples regardless of bucket)
         "_count_down_total",
-        "_sum_down_total",
+        # Up scalar (unchanged — single EMA for all release durations)
+        "_count_up",
+        "_ema_down",
         "_ema_down_total",
+        "_ema_up",
+        "_lin_count",
         # Recursive-least-squares accumulators (exponential forgetting) for send ≈ a + b·N (x = n_keys).
         # _lin_count is the raw integer sample count (warm-up guard); _lin_w is the decayed weight sum
         # that plays the role of "n" in the weighted normal equations.
         "_lin_forget",
-        "_lin_count",
-        "_lin_w",
         "_lin_sx",
         "_lin_sxx",
-        "_lin_sy",
         "_lin_sxy",
-        # Up scalar (unchanged — single EMA for all release durations)
-        "_count_up",
+        "_lin_sy",
+        "_lin_w",
+        "_max_lead_us",
+        "_sum_down",
+        "_sum_down_total",
         "_sum_up",
-        "_ema_up",
+        "_warm_down",
     )
 
     def __init__(
@@ -355,7 +385,7 @@ class PlaybackEngine:
         require_focus: bool = True,
         clock: Clock | None = None,
         sleeper: Sleeper | None = None,
-        sleep_policy: SleepPolicy = SleepPolicy(),
+        sleep_policy: SleepPolicy | None = None,
         focus_guard: FocusGuard | None = None,
         profile_name: str = "balanced",
         tempo_scale: float = 1.0,
@@ -452,7 +482,7 @@ class PlaybackEngine:
         self.require_focus = require_focus
         self.clock = clock if clock is not None else PerfCounterClock()
         self.sleeper = sleeper if sleeper is not None else RealSleeper()
-        self.sleep_policy = sleep_policy
+        self.sleep_policy = sleep_policy if sleep_policy is not None else SleepPolicy()
 
         # Inject standard FocusGuard depending on requirements
         if focus_guard is None:

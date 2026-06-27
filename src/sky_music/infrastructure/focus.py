@@ -1,5 +1,6 @@
 from typing import Protocol
 
+
 class FocusGuard(Protocol):
     def is_active(self) -> bool:
         """Returns True if the target game window is currently active/focused."""

@@ -1,6 +1,7 @@
+import time
 from dataclasses import dataclass
 from typing import Protocol
-import time
+
 
 class Clock(Protocol):
     def now_us(self) -> int:

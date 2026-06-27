@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
-import math
-
-from sky_music.domain.domain import NoteKey, ScanCode, Microseconds
 
 from sky_music.config import AppConfig
+from sky_music.domain.domain import Microseconds, NoteKey, ScanCode
+
 
 class ActionKind(StrEnum):
     DOWN = "down"
@@ -47,7 +47,7 @@ class TimingPolicy:
     chord_stagger_max_us: Microseconds = Microseconds(15_000)
 
     @classmethod
-    def from_dict(cls, p_dict: dict, **kwargs) -> "TimingPolicy":
+    def from_dict(cls, p_dict: dict, **kwargs) -> TimingPolicy:
         from sky_music.config import DEFAULT_TIMING_PROFILES
         base = DEFAULT_TIMING_PROFILES["balanced"]
         declares_hold = any(
@@ -134,22 +134,22 @@ class TimingPolicy:
         )
 
     @classmethod
-    def from_profile_name(cls, name: str, cfg: AppConfig | None = None) -> "TimingPolicy":
+    def from_profile_name(cls, name: str, cfg: AppConfig | None = None) -> TimingPolicy:
         from sky_music.config import load_config, profile_dict_for
 
         cfg = cfg or load_config()
         return cls.from_dict(profile_dict_for(cfg, name))
 
     @classmethod
-    def local_precise(cls) -> "TimingPolicy":
+    def local_precise(cls) -> TimingPolicy:
         return cls.from_profile_name("local_precise")
 
     @classmethod
-    def audience_safe(cls) -> "TimingPolicy":
+    def audience_safe(cls) -> TimingPolicy:
         return cls.from_profile_name("audience_safe")
 
     @classmethod
-    def balanced(cls) -> "TimingPolicy":
+    def balanced(cls) -> TimingPolicy:
         return cls.from_profile_name("balanced")
 
 
@@ -184,7 +184,7 @@ class FrameTimingPolicy:
         min_hold_min_frame_ratio: float = 1.25,
         *,
         profile_name: str | None = None,
-    ) -> "FrameTimingPolicy":
+    ) -> FrameTimingPolicy:
         if fps is not None and fps > 0:
             # Round the frame period UP: a visibility/safety floor must never be shorter than a
             # real frame. round() truncates (e.g. 1e6/144 = 6944.44 -> 6944, which is below a real
@@ -227,20 +227,20 @@ class FrameTimingPolicy:
         )
 
     @classmethod
-    def from_profile_name(cls, name: str, fps: int | None = None, **kwargs) -> "FrameTimingPolicy":
+    def from_profile_name(cls, name: str, fps: int | None = None, **kwargs) -> FrameTimingPolicy:
         policy = TimingPolicy.from_profile_name(name)
         return cls.from_timing_policy(policy, fps=fps, profile_name=name, **kwargs)
 
     @classmethod
-    def local_precise(cls, **kwargs) -> "FrameTimingPolicy":
+    def local_precise(cls, **kwargs) -> FrameTimingPolicy:
         return cls.from_profile_name("local_precise", **kwargs)
 
     @classmethod
-    def audience_safe(cls, **kwargs) -> "FrameTimingPolicy":
+    def audience_safe(cls, **kwargs) -> FrameTimingPolicy:
         return cls.from_profile_name("audience_safe", **kwargs)
 
     @classmethod
-    def balanced(cls, **kwargs) -> "FrameTimingPolicy":
+    def balanced(cls, **kwargs) -> FrameTimingPolicy:
         return cls.from_profile_name("balanced", **kwargs)
 
 

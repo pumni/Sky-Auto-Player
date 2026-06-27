@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
-from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
 
@@ -202,7 +207,7 @@ def test_playback_equivalence() -> None:
         assert golden_path.exists()
     else:
         # Compare against the golden file
-        with open(golden_path, "r") as f:
+        with open(golden_path) as f:
             golden_data = json.load(f)
         
         assert current_data == golden_data

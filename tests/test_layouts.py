@@ -1,5 +1,6 @@
 from sky_music.domain import NoteKey
-from sky_music.layouts import SKY_15_KEY_PROFILE, SKY_15_KEY_MAP
+from sky_music.layouts import SKY_15_KEY_MAP, SKY_15_KEY_PROFILE
+
 
 def test_layout_completeness():
     """Test that default 15-key profile maps exactly 15 unique key indexes correctly."""
@@ -28,6 +29,7 @@ def test_legacy_compatibility_keys():
 
 def test_mapped_resolver_loads_user32_once(monkeypatch):
     import ctypes
+
     import sky_music.layouts as layouts
     from sky_music.domain import NoteKey
     from sky_music.layouts import DefaultNoteResolver

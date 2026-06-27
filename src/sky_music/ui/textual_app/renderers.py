@@ -54,7 +54,7 @@ def _risk_cell(risk: str, muted: str, theme: ThemePreset) -> Text:
 
 
 def _format_duration(seconds: float) -> str:
-    total_seconds = max(0, int(round(seconds)))
+    total_seconds = max(0, round(seconds))
     minutes, sec = divmod(total_seconds, 60)
     return f"{minutes}:{sec:02d}"
 

@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+
+from sky_music.layouts import SKY_15_KEY_MAP as key_maps
+from sky_music.layouts import VK_CODES
 from sky_music.platform.win32.inputs import is_virtual_key_down
-from sky_music.layouts import SKY_15_KEY_MAP as key_maps, VK_CODES
 
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
@@ -112,9 +114,8 @@ def is_hotkey_down(hotkey: HotkeyBinding) -> bool:
 
     # For plain (no-modifier) hotkeys, require that no modifier is held
     # to prevent Ctrl+F8 accidentally triggering the plain F8 hotkey.
-    if not hotkey.has_modifier:
-        if ctrl_down or alt_down or shift_down:
-            return False
+    if not hotkey.has_modifier and (ctrl_down or alt_down or shift_down):
+        return False
 
     return is_virtual_key_down(hotkey.key_code)
 

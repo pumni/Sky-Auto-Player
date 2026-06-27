@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+
 def test_static_drift_guard() -> None:
     src_dir = Path("src/sky_music")
     assert src_dir.exists()

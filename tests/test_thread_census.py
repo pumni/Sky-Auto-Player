@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from sky_music.domain.domain import Song, Note, NoteKey, Millis
+from sky_music.domain.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.infrastructure.backend import DryRunBackend
 from sky_music.orchestration.engine import PlaybackEngine

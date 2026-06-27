@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from sky_music.domain.domain import Song, InstrumentProfile, NoteKey, Microseconds
-from sky_music.layouts import NoteResolver, DefaultNoteResolver
+from sky_music.domain.domain import InstrumentProfile, Microseconds, NoteKey, Song
 from sky_music.domain.scheduler_types import (
     ActionKind,
     FrameTimingPolicy,
@@ -10,6 +9,8 @@ from sky_music.domain.scheduler_types import (
     ScheduleDiagnostic,
     ScheduleMetadata,
 )
+from sky_music.layouts import DefaultNoteResolver, NoteResolver
+
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""

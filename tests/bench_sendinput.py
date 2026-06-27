@@ -29,9 +29,9 @@ def main() -> int:
     except Exception:
         pass
     from sky_music.platform.win32.inputs import (
-        send_scan_code_batch,
-        enable_high_precision_timers,
         disable_high_precision_timers,
+        enable_high_precision_timers,
+        send_scan_code_batch,
     )
 
     print("Focus an EMPTY NOTEPAD now. Starting in 3 seconds...")

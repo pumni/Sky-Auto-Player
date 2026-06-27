@@ -4,14 +4,22 @@ from dataclasses import dataclass
 
 import pytest
 
+import sky_music.orchestration.engine as engine_module
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
-from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.orchestration.engine import PLAYBACK_FINISHED, PLAYBACK_QUIT, PlaybackEngine
+from sky_music.orchestration.engine import (
+    PLAYBACK_FINISHED,
+    PLAYBACK_QUIT,
+    PlaybackEngine,
+)
 from sky_music.orchestration.runtime_dispatch import compile_runtime_intents
 from sky_music.orchestration.telemetry import TelemetryLogger
-import sky_music.orchestration.engine as engine_module
 
 
 class FakeClock:
@@ -325,7 +333,7 @@ def test_repeat_below_min_hold_is_flagged_infeasible():
     # Without a fixed release-latency margin, the scheduler's feasibility floor is exactly min_hold:
     # a same-key repeat whose interval is below min_hold cannot preserve the hold and is flagged
     # infeasible; a repeat at/above min_hold is feasible.
-    from sky_music.domain import Note, NoteKey, Millis
+    from sky_music.domain import Millis, Note, NoteKey
     from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
     from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 
@@ -1024,7 +1032,7 @@ def test_health_estimator_equivalence_with_random_sequences() -> None:
         if not window:
             return True
         sorted_window = sorted(window)
-        p95_idx = int(round(0.95 * (len(sorted_window) - 1)))
+        p95_idx = round(0.95 * (len(sorted_window) - 1))
         p95_us = sorted_window[p95_idx]
         return p95_us <= warn_us
 
@@ -1045,7 +1053,7 @@ def test_health_estimator_equivalence_with_random_sequences() -> None:
             over_warn_count += 1
 
         L = len(window)
-        new_result = over_warn_count <= L - 1 - int(round(0.95 * (L - 1)))
+        new_result = over_warn_count <= L - 1 - round(0.95 * (L - 1))
         old_result = old_logic(window)
 
         assert new_result == old_result, (
@@ -1088,14 +1096,15 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     assert len(record) == 24
 
     # Assert keys/items/values are correct
-    assert "song" in record.keys()
+    assert "song" in record
     assert ("event_index", 0) in record.items()
     assert "down" in record.values()
 
 
 def test_send_scan_code_batch_cache_and_retry() -> None:
-    import sky_music.platform.win32.inputs as win32_inputs
     from unittest.mock import patch
+
+    import sky_music.platform.win32.inputs as win32_inputs
 
     # 1. Test cache reuse
     win32_inputs._ARRAY_CACHE.clear()
@@ -1151,12 +1160,14 @@ def test_playback_state_epoch_based_continuity() -> None:
 
 
 def test_onset_bias_us_is_applied_only_to_downs() -> None:
-    from sky_music.orchestration.dispatch_loop import DispatchLoop
-    from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
-    from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.orchestration.telemetry import TelemetryLogger
     from sky_music.infrastructure.backend import DryRunBackend
-    from sky_music.orchestration.runtime_dispatch import RuntimeSchedule
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.orchestration.dispatch_loop import DispatchLoop
+    from sky_music.orchestration.runtime_dispatch import (
+        RuntimeDispatchCoordinator,
+        RuntimeSchedule,
+    )
+    from sky_music.orchestration.telemetry import TelemetryLogger
     
     clock = FakeClock()
     sleeper = FakeSleeper(clock)

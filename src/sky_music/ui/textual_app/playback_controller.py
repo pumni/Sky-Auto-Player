@@ -2,15 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
 from sky_music.config import AppConfig
-from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.domain import Song
+from sky_music.domain.analyzer import ScheduleRiskReport, analyze_schedule
+from sky_music.domain.scheduler import (
+    ScheduleBuildError,
+    ScheduleMetadata,
+    build_key_actions,
+)
+from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
+from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.domain.song_repository import get_shared_song_repository
-from sky_music.domain.scheduler import build_key_actions, ScheduleBuildError, ScheduleMetadata
-from sky_music.domain.validation import validate_key_actions, ScheduleInvariantViolation
-from sky_music.domain.analyzer import analyze_schedule, ScheduleRiskReport
+from sky_music.domain.validation import ScheduleInvariantViolation, validate_key_actions
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.domain.scheduler_types import KeyAction, FrameTimingPolicy
+
 
 @dataclass(frozen=True, slots=True)
 class PlaybackPlan:

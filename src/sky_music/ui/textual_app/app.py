@@ -10,23 +10,36 @@ except Exception:
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rapidfuzz import fuzz, process
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
-from sky_music.infrastructure.focus import Win32SkyFocusGuard
-from sky_music.ui.textual_app.playback_app import PlaybackCard, PlaybackCommandBridge, SnapshotRenderer
-from sky_music.ui.textual_app.playback_controller import prepare_playback, rebuild_with, PlaybackPlan, PlaybackError
 from textual.binding import Binding
 from textual.containers import Container
 from textual.reactive import reactive
 from textual.widgets import DataTable, Input
 
+from sky_music.infrastructure.focus import Win32SkyFocusGuard
+from sky_music.ui.textual_app.playback_app import (
+    PlaybackCard,
+    PlaybackCommandBridge,
+    SnapshotRenderer,
+)
+from sky_music.ui.textual_app.playback_controller import (
+    PlaybackError,
+    PlaybackPlan,
+    prepare_playback,
+    rebuild_with,
+)
+
 if TYPE_CHECKING:
-    from sky_music.infrastructure.hotkeys import PlaybackControls
     from textual.widgets._data_table import RowKey
+
+    from sky_music.infrastructure.hotkeys import PlaybackControls
+
+import contextlib
 
 from sky_music.config import (
     AppConfig,
@@ -41,7 +54,13 @@ from sky_music.config import (
     save_config,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.ui.picker import FPS_OPTIONS, PROFILES_INFO, TEMPO_OPTIONS, SongPickerResult
+from sky_music.infrastructure.background import BackgroundScope
+from sky_music.ui.picker import (
+    FPS_OPTIONS,
+    PROFILES_INFO,
+    TEMPO_OPTIONS,
+    SongPickerResult,
+)
 from sky_music.ui.picker_helpers import get_song_choices, save_theme
 from sky_music.ui.picker_metadata import (
     clear_metadata_cache,
@@ -49,23 +68,31 @@ from sky_music.ui.picker_metadata import (
 )
 from sky_music.ui.picker_theme import (
     THEME_PRESETS,
-    remove_accents,
     pad_text,
+    remove_accents,
 )
-from sky_music.ui.textual_app.keymap import COMMANDS
 from sky_music.ui.textual_app.display_widgets import DetailPanel, GradientHeader
-from sky_music.ui.textual_app.modals import CommandModal, InfoModal, OptionModal, PickerOption
-from sky_music.ui.textual_app.theme_css import APP_CSS, TEXTUAL_THEME_TOKENS, TextualThemeTokens
+from sky_music.ui.textual_app.keymap import COMMANDS
+from sky_music.ui.textual_app.modals import (
+    CommandModal,
+    InfoModal,
+    OptionModal,
+    PickerOption,
+)
+from sky_music.ui.textual_app.renderers import (
+    _metadata_cells,
+    _risk_cell,
+    _title_cell,
+    build_detail_text,
+    build_empty_detail_text,
+)
+from sky_music.ui.textual_app.theme_css import (
+    APP_CSS,
+    TEXTUAL_THEME_TOKENS,
+    TextualThemeTokens,
+)
 from sky_music.ui.textual_app.widgets import CustomFooter
 from sky_music.ui.textual_app.workers import MetadataCoordinator
-from sky_music.infrastructure.background import BackgroundScope
-from sky_music.ui.textual_app.renderers import (
-    _title_cell,
-    _risk_cell,
-    _metadata_cells,
-    build_empty_detail_text,
-    build_detail_text,
-)
 
 FUZZY_SCORE_CUTOFF = 60.0
 
@@ -297,16 +324,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.screen.add_class(self._theme_class)
         self.screen.add_class(f"background-{self.background_mode}")
         t = self._theme_tokens
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#appbar", GradientHeader).set_theme(
                 t.gradient, t.foreground, t.detail, t.foreground, lead=t.header_lead
             )
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.query_one(CustomFooter).set_theme(t.key, t.muted)
-        except Exception:
-            pass
 
     def compose(self) -> ComposeResult:
         with Container(id="root"):
@@ -488,18 +511,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
         import sys
         if "pytest" in sys.modules or "unittest" in sys.modules:
             if self._search_timer is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._search_timer.stop()
-                except Exception:
-                    pass
                 self._search_timer = None
             self._perform_search()
         else:
             if self._search_timer is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._search_timer.stop()
-                except Exception:
-                    pass
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
     def _perform_search(self) -> None:
@@ -557,15 +576,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         table = self.query_one("#songs", SongTable)
         t = self._theme_tokens
         if self._marked_row_key is not None:
-            try:
+            with contextlib.suppress(Exception):
                 table.update_cell(cast(RowKey, self._marked_row_key), "marker", t.song_icon)
-            except Exception:
-                pass
         if row_key is not None:
-            try:
+            with contextlib.suppress(Exception):
                 table.update_cell(cast(RowKey, row_key), "marker", t.pointer)
-            except Exception:
-                pass
         self._marked_row_key = row_key
 
     def _sync_marker(self) -> None:
@@ -586,10 +601,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         total = len(self.choices)
         noun = "song" if total == 1 else "songs"
         tagline = f"precision music player  ♪ {total} {noun}"
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#appbar", GradientHeader).set_tagline(tagline)
-        except Exception:
-            pass
 
     def _render_status(self) -> None:
         fps = f"{self.fps}fps"
@@ -606,14 +619,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
             parts.append("tele")
         # Use │ (box-drawing pipe) as separator — matches Claude Code / Codex CLI aesthetic
         chips = " │ ".join(parts)
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#appbar", GradientHeader).set_status(chips)
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.query_one(CustomFooter).refresh()
-        except Exception:
-            pass
         table = self.query_one("#songs", SongTable)
         table.border_subtitle = f"{len(self.filtered)}/{len(self.choices)}"
 
@@ -697,10 +706,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         _search_timer = getattr(self, "_search_timer", None)
         if _search_timer is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _search_timer.stop()
-            except Exception:
-                pass
             self._search_timer = None
             self._perform_search()
 
@@ -730,10 +737,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def action_cancel(self) -> None:
         if self.playback_mode == "countdown":
             self._shutting_down_playback = True
-            try:
+            with contextlib.suppress(Exception):
                 self.query_one("#playback-card", PlaybackCard)._stop_timers()
-            except Exception:
-                pass
             self.exit(None)
             return
         if self.playback_mode == "playing":
@@ -1001,10 +1006,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def action_reload_songs(self) -> None:
         _search_timer = getattr(self, "_search_timer", None)
         if _search_timer is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _search_timer.stop()
-            except Exception:
-                pass
             self._search_timer = None
 
         clear_metadata_cache()
@@ -1069,9 +1072,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             if key == "escape":
                 self._handle_risk_decision("cancel")
                 return True
-        if self.playback_mode == "playing":
-            if key in {"up", "down", "enter"}:
-                return True
+        if self.playback_mode == "playing" and key in {"up", "down", "enter"}:
+            return True
         if self.playback_mode in {"error", "countdown"}:
             if key == "escape":
                 self._restore_picker_after_playback()
@@ -1221,8 +1223,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._show_playback_error("Cleanup Error", f"Failed to stop background workers: {error_msg}")
             return
 
-        from sky_music.orchestration.engine import _LEAD_CACHE_PATH, PlaybackEngine
         from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
+        from sky_music.orchestration.engine import _LEAD_CACHE_PATH, PlaybackEngine
 
         is_dry_run = (picker_result.action == "dry_run")
         backend = DryRunBackend() if is_dry_run else WinSendInputBackend()
@@ -1333,7 +1335,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
             raise RuntimeError("Could not resolve main module to update runtime state.")
 
         from sky_music.config import persist_playback_defaults
-        from sky_music.domain.session_context import merge_session_with_overrides, PlaybackSessionContext
+        from sky_music.domain.session_context import (
+            PlaybackSessionContext,
+            merge_session_with_overrides,
+        )
         user_cfg = load_config()
         updated_session = merge_session_with_overrides(
             main_mod.RUNTIME_STATE.session or PlaybackSessionContext.balanced(

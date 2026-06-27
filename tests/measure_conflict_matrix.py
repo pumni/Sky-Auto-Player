@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from sky_music.domain import Song  # noqa: E402
-from sky_music.domain.parser import parse_song_file, SongParseError  # noqa: E402
+from sky_music.domain.parser import SongParseError, parse_song_file  # noqa: E402
 from sky_music.domain.scheduler import build_key_actions  # noqa: E402
 from sky_music.domain.scheduler_types import FrameTimingPolicy  # noqa: E402
 from sky_music.orchestration.runtime_dispatch import (  # noqa: E402
@@ -204,7 +204,7 @@ def main() -> None:
     # song crosses the wall purely by changing profile/fps.
     # ---------------------------------------------------------------------------------------------
     def same_key_intervals_us(song: Song) -> list[int]:
-        from sky_music.layouts import DefaultNoteResolver, SKY_15_KEY_PROFILE
+        from sky_music.layouts import SKY_15_KEY_PROFILE, DefaultNoteResolver
         resolver = DefaultNoteResolver(SKY_15_KEY_PROFILE)
         last_by_sc: dict[int, int] = {}
         intervals: list[int] = []
@@ -220,7 +220,7 @@ def main() -> None:
                 continue
             if sc <= 0:
                 continue
-            t = int(round(note.time_ms * 1000))
+            t = round(note.time_ms * 1000)
             if (t, sc) in seen:
                 continue
             seen.add((t, sc))

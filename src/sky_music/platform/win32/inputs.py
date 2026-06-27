@@ -1,12 +1,11 @@
 import ctypes
-from ctypes import wintypes
+import sys
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from ctypes import wintypes
 from pathlib import Path
-
-import sys
 
 if sys.platform == "win32":
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -227,7 +226,7 @@ class _HighResolutionTimerScope:
 
     __slots__ = ("_active",)
 
-    def __enter__(self) -> "_HighResolutionTimerScope":
+    def __enter__(self) -> _HighResolutionTimerScope:
         self._active = False
         try:
             if winmm.timeBeginPeriod(TIMER_RESOLUTION_MS) == 0:
@@ -488,10 +487,7 @@ def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) ->
         )
 
     # Fallback retry path
-    if sent > 0:
-        remaining_scan_codes = scan_codes_tuple[sent:]
-    else:
-        remaining_scan_codes = scan_codes_tuple
+    remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
 
     remaining_inputs = [_cached_key_input(sc, flags) for sc in remaining_scan_codes]
     send_input_batch(remaining_inputs)

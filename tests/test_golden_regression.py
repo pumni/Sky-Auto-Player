@@ -3,7 +3,8 @@ from pathlib import Path
 
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import TimingPolicy, FrameTimingPolicy
+from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
+
 
 def get_golden_songs():
     # Map song name keywords to their parsed Song objects
@@ -45,7 +46,7 @@ def test_golden_schedules_regression():
         
         assert len(actual_actions) == len(expected_actions), f"Action count mismatch for {key}."
         
-        for idx, (actual, expected) in enumerate(zip(actual_actions, expected_actions)):
+        for idx, (actual, expected) in enumerate(zip(actual_actions, expected_actions, strict=False)):
             assert actual.at_us == expected["at_us"], f"Timestamp mismatch at index {idx} in {key}."
             assert actual.kind == expected["kind"], f"Kind mismatch at index {idx} in {key}."
             assert list(actual.scan_codes) == expected["scan_codes"], f"Scan code mismatch at index {idx} in {key}."

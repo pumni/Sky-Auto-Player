@@ -6,6 +6,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+
 def find_project_root(start: Path) -> Path:
     for candidate in [start, *start.parents]:
         if (candidate / "pyproject.toml").exists() and (candidate / "Sky-Player.spec").exists():
@@ -41,7 +42,7 @@ def windows_version_tuple(version: str) -> tuple[int, int, int, int]:
     parts = [int(x) for x in re.findall(r"\d+", version)[:4]]
     while len(parts) < 4:
         parts.append(0)
-    p0, p1, p2, p3 = (parts + [0, 0, 0, 0])[:4]
+    p0, p1, p2, p3 = ([*parts, 0, 0, 0, 0])[:4]
     return (p0, p1, p2, p3)
 
 def generate_version_info(version: str) -> None:
@@ -174,7 +175,7 @@ def main() -> None:
         try:
             shutil.rmtree(DIST_DIR)
         except PermissionError as e:
-            raise SystemExit(f"[!] Lỗi dọn dẹp DIST_DIR: {e}.\nGiải pháp: Đóng mọi cửa sổ CMD/Explorer đang mở thư mục {DIST_DIR} và thử lại.")
+            raise SystemExit(f"[!] Lỗi dọn dẹp DIST_DIR: {e}.\nGiải pháp: Đóng mọi cửa sổ CMD/Explorer đang mở thư mục {DIST_DIR} và thử lại.") from e
 
     print("[+] Đang khởi động PyInstaller...")
     subprocess.run(
@@ -203,9 +204,8 @@ def main() -> None:
         if src.exists():
             copy_asset(src, release_dir / asset)
 
-    if not args.skip_test:
-        if not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
-            raise SystemExit(1)
+    if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
+        raise SystemExit(1)
 
     print(f"[v] HOÀN TẤT: {release_dir.resolve()}")
 

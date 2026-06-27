@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -10,7 +11,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 
 from sky_music.ui.picker_theme import THEME_PRESETS, get_theme_preset
-from sky_music.ui.textual_app.keymap import COMMAND_MODAL_HINTS, INFO_MODAL_HINTS, CommandSpec, KeyHint
+from sky_music.ui.textual_app.keymap import (
+    COMMAND_MODAL_HINTS,
+    INFO_MODAL_HINTS,
+    CommandSpec,
+    KeyHint,
+)
 from sky_music.ui.textual_app.widgets import CommandPaletteList, ModalHintBar
 
 
@@ -48,10 +54,8 @@ class PickerModal(ModalScreen[T]):
         modal.border_title = self.title_text
 
         theme = get_theme_preset(self.theme_name)
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#modal-footer", ModalHintBar).set_theme(theme.key, theme.muted)
-        except Exception:
-            pass
         self.on_modal_mounted()
 
     def on_modal_mounted(self) -> None:

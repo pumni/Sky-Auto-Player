@@ -3,9 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from sky_music.config import AppConfig, clear_config_cache, HotkeyDefaults, resolve_game_fps
-
 import main
+from sky_music.config import (
+    AppConfig,
+    HotkeyDefaults,
+    clear_config_cache,
+    resolve_game_fps,
+)
+
 
 @pytest.fixture(autouse=True)
 def _reset_config_cache():
@@ -77,7 +82,8 @@ def test_saved_profile_restored_with_fps_config():
 
 def test_picker_metadata_loads_song_stats():
     from pathlib import Path
-    from sky_music.ui.picker_metadata import get_song_ui_metadata, clear_metadata_cache
+
+    from sky_music.ui.picker_metadata import clear_metadata_cache, get_song_ui_metadata
 
     clear_metadata_cache()
     meta = get_song_ui_metadata(Path("songs/1test copy.json"))
@@ -86,7 +92,7 @@ def test_picker_metadata_loads_song_stats():
 
 
 def test_picker_metadata_marks_invalid_song_as_error(tmp_path):
-    from sky_music.ui.picker_metadata import get_song_ui_metadata, clear_metadata_cache
+    from sky_music.ui.picker_metadata import clear_metadata_cache, get_song_ui_metadata
 
     song_file = tmp_path / "bad.json"
     song_file.write_text(
@@ -111,7 +117,11 @@ def test_display_profile_name_no_double_fps_suffix():
 
 
 def test_canonical_profile_name_strips_fps_suffix():
-    from sky_music.config import AppConfig, canonical_profile_name, merged_timing_profiles
+    from sky_music.config import (
+        AppConfig,
+        canonical_profile_name,
+        merged_timing_profiles,
+    )
 
     assert canonical_profile_name("remote-safe@60fps") == "audience-safe"
     assert canonical_profile_name("local_precise") == "local-precise"
@@ -126,7 +136,7 @@ def test_canonical_profile_name_strips_fps_suffix():
 
 
 def test_load_config_sanitizes_corrupted_profile_with_fps_suffix(tmp_path, monkeypatch):
-    from sky_music.config import load_config, clear_config_cache
+    from sky_music.config import clear_config_cache, load_config
 
     config_file = tmp_path / "config.json"
     config_file.write_text(

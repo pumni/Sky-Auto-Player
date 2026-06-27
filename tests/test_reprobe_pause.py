@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-
-from sky_music.domain import Song, Note, NoteKey, Millis
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.infrastructure.backend import DryRunBackend
 from sky_music.orchestration.engine import PlaybackEngine, PlaybackState
+
 
 class FakeClock:
     def __init__(self, start_us: int = 0) -> None:

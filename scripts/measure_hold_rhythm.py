@@ -14,12 +14,21 @@ import statistics
 import sys
 from pathlib import Path
 
-from sky_music.domain.domain import Song, Note, NoteKey, Millis
+from sky_music.domain.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
-from sky_music.infrastructure.backend import _TrackedKeyState, ReleaseAllOutcome, BackendHealth
-from sky_music.infrastructure.timing import Clock, SleepPolicy, PerfCounterClock, RealSleeper
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    ReleaseAllOutcome,
+    _TrackedKeyState,
+)
+from sky_music.infrastructure.timing import (
+    Clock,
+    PerfCounterClock,
+    RealSleeper,
+    SleepPolicy,
+)
 from sky_music.layouts import SKY_15_KEY_PROFILE
 from sky_music.orchestration.engine import PlaybackEngine
 from sky_music.orchestration.playback_supervisor import PLAYBACK_FINISHED
@@ -117,7 +126,7 @@ def pct(values: list[int], p: float) -> float:
     if not values:
         return 0.0
     s = sorted(values)
-    return float(s[int(round(p * (len(s) - 1)))])
+    return float(s[round(p * (len(s) - 1))])
 
 
 def run_one_song(song: Song, hold_frames: float, real_mode: bool = False) -> dict[str, float]:

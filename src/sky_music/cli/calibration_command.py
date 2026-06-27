@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
 from sky_music.config import AppConfig, persist_calibration_defaults
-from sky_music.orchestration.runtime_session import RuntimeSessionState
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
-    resolve_game_fps,
     apply_recommendation_to_context,
+    resolve_game_fps,
 )
+from sky_music.orchestration.runtime_session import RuntimeSessionState
+
 
 @dataclass(frozen=True, slots=True)
 class CalibrationCommandResult:

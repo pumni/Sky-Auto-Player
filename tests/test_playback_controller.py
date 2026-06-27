@@ -1,12 +1,13 @@
 from sky_music.config import AppConfig
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.domain import Song, Note, NoteKey, Millis
 from sky_music.ui.textual_app.playback_controller import (
-    PlaybackPlan,
     PlaybackError,
+    PlaybackPlan,
     prepare_playback,
     rebuild_with,
 )
+
 
 def test_prepare_playback_success() -> None:
     # A clean simple song

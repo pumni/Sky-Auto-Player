@@ -11,8 +11,8 @@ from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import ResourceState, WorkerSnapshot
 from sky_music.ui.picker_metadata import (
     compute_song_ui_metadata_payloads,
-    hydrate_persistent_metadata_for_paths,
     hydrate_and_fill_raw_metadata,
+    hydrate_persistent_metadata_for_paths,
     peek_cached_song_ui_metadata,
     session_to_worker_payload,
     store_computed_song_ui_metadata_payloads,
@@ -75,9 +75,7 @@ class MetadataCoordinator:
     def _should_stop(self, request_id: int | None = None) -> bool:
         if self._state is not ResourceState.OPEN:
             return True
-        if request_id is not None and request_id != self._latest_request_id:
-            return True
-        return False
+        return bool(request_id is not None and request_id != self._latest_request_id)
 
     def refresh(self, paths: list[Path]) -> None:
         """Begin progressive background metadata warming, hydration, and analysis for all paths."""

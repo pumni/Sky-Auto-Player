@@ -18,8 +18,7 @@ from sky_music.domain.parser import parse_song_file  # noqa: E402
 from sky_music.domain.scheduler import build_key_actions  # noqa: E402
 from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction  # noqa: E402
 from sky_music.domain.session_context import PlaybackSessionContext  # noqa: E402
-from sky_music.layouts import DefaultNoteResolver, SKY_15_KEY_PROFILE  # noqa: E402
-
+from sky_music.layouts import SKY_15_KEY_PROFILE, DefaultNoteResolver  # noqa: E402
 
 SUPPORTED_SUFFIXES = {".json", ".skysheet"}
 
@@ -194,7 +193,7 @@ def audit_corpus(
     for path in paths:
         try:
             songs.append(audit_song(path, policy, tempo_scale, candidate_repeat_gap_us))
-        except Exception as exc:  # noqa: BLE001 - report bad corpus files without aborting the audit.
+        except Exception as exc:
             failed_files.append((path, str(exc)))
     return CorpusRepeatStats(songs=tuple(songs), failed_files=tuple(failed_files))
 

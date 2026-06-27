@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sky_music.infrastructure.doctor as doctor
 
+
 def run_doctor_command(
     *,
     full: bool,

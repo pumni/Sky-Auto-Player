@@ -1,14 +1,24 @@
 from __future__ import annotations
 
-import pytest
-from sky_music.domain import Song
-from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds, ScanCode
-from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
 from typing import cast
 
+import pytest
+
+from sky_music.domain import Song
+from sky_music.domain.scheduler_types import (
+    ActionKind,
+    KeyAction,
+    Microseconds,
+    ScanCode,
+)
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import Clock, SleepPolicy
 from sky_music.infrastructure.wait_strategy import HybridWaitStrategy
-from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_FINISHED
+from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
 
 
 class FakeClock:

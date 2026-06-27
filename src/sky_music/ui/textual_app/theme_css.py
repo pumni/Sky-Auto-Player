@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sky_music.ui.picker_theme import THEME_PRESETS, ThemePreset
 
-
 TextualThemeTokens = ThemePreset
 TEXTUAL_THEME_TOKENS: dict[str, ThemePreset] = THEME_PRESETS
 

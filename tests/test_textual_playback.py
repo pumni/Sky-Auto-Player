@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from textual.widgets import Static
-
 import time
 
-from sky_music.ui.textual_app.playback_app import PlaybackApp, PlaybackCard, PlaybackCommandBridge, SnapshotRenderer
+from textual.widgets import Static
+
+from sky_music.ui.textual_app.playback_app import (
+    PlaybackApp,
+    PlaybackCard,
+    PlaybackCommandBridge,
+    SnapshotRenderer,
+)
+
 
 class FakeEngine:
     def __init__(
@@ -193,19 +199,20 @@ def test_unified_cancel_while_playing_requests_engine_quit() -> None:
 
 
 def test_unified_workflow_integration(monkeypatch) -> None:
-    from sky_music.ui.textual_app import app as app_module
-    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
-    from sky_music.domain import Song
-    from sky_music.domain.scheduler import ScheduleMetadata
-    from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.domain.analyzer import ScheduleRiskReport
-    from sky_music.orchestration.telemetry import TelemetryLogger
-    from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
     from pathlib import Path
     from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.domain.scheduler import ScheduleMetadata
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.infrastructure.background import WorkerSnapshot
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.orchestration.telemetry import TelemetryLogger
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     TEST_SONGS = [Path("songs/Alpha.json")]
 
@@ -1103,7 +1110,7 @@ def test_config_path_is_cwd_independent(tmp_path, monkeypatch) -> None:
     canonical_path = config_module.CONFIG_PATH
     assert canonical_path.is_absolute()
     monkeypatch.chdir(tmp_path)
-    assert config_module.CONFIG_PATH == canonical_path
+    assert canonical_path == config_module.CONFIG_PATH
 
 
 def test_header_fps_matches_policy_fps(monkeypatch) -> None:
@@ -1224,17 +1231,18 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
 
 
 def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
-    from sky_music.ui.textual_app import app as app_module
-    from sky_music.orchestration.telemetry import TelemetryLogger
-    from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
     from pathlib import Path
     from typing import Any
+
+    from sky_music.config import AppConfig
     from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.orchestration.telemetry import TelemetryLogger
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     TEST_SONGS = [Path("songs/Alpha.json")]
@@ -1360,12 +1368,13 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
 
 
 def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
-    from sky_music.ui.textual_app import app as app_module
-    from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
-    from sky_music.ui.textual_app.playback_controller import PlaybackError
     from pathlib import Path
     from typing import Any
+
+    from sky_music.config import AppConfig
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_controller import PlaybackError
 
     TEST_SONGS = [Path("songs/Alpha.json")]
 
@@ -1425,17 +1434,18 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
 
 
 def test_unified_workflow_risk_decisions(monkeypatch) -> None:
-    from sky_music.ui.textual_app import app as app_module
-    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
     from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.domain.analyzer import ScheduleRiskReport
+    from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
-    from pathlib import Path
-    from typing import Any
+    from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     TEST_SONGS = [Path("songs/Alpha.json")]
 
@@ -1567,7 +1577,7 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
 
 
 def test_debug_stats_calculation() -> None:
-    from sky_music.ui.textual_app.playback_app import SnapshotRenderer, PlaybackSnapshot
+    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot, SnapshotRenderer
 
     renderer = SnapshotRenderer()
     
@@ -1623,13 +1633,14 @@ def test_debug_stats_calculation() -> None:
 
 
 def test_playback_screen_toggle_debug(monkeypatch) -> None:
+    from pathlib import Path
+    from typing import Any
+
+    from sky_music.config import AppConfig
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
     from sky_music.ui.textual_app.playback_app import PlaybackCard
-    from pathlib import Path
-    from typing import Any
 
     TEST_SONGS = [Path("songs/Alpha.json")]
 
@@ -1663,10 +1674,10 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
 
     # Mock prepare_playback to bypass risks and return low-risk PlaybackPlan
     from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
@@ -1781,15 +1792,16 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
 def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
     """PlaybackScreen(debug_mode=True/False) sets the attribute correctly;
     and when verbose_hud is True in SkyPickerApp, the panel is visible on mount."""
-    from sky_music.ui.textual_app import app as app_module
-    from sky_music.ui.textual_app.app import SkyPickerApp
-    from sky_music.config import AppConfig
-    from sky_music.ui.textual_app.playback_app import PlaybackCard, PlaybackScreen
     from pathlib import Path
     from typing import Any
 
     # --- Part 1: pure attribute check (no Textual runtime needed) ---
     from unittest.mock import MagicMock
+
+    from sky_music.config import AppConfig
+    from sky_music.ui.textual_app import app as app_module
+    from sky_music.ui.textual_app.app import SkyPickerApp
+    from sky_music.ui.textual_app.playback_app import PlaybackCard, PlaybackScreen
     mock_engine = MagicMock()
     mock_renderer = MagicMock()
 
@@ -1845,10 +1857,10 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
 
     from sky_music.domain import Song
+    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.timing import SleepPolicy
-    from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):

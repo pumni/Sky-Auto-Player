@@ -1,8 +1,10 @@
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from sky_music.domain.session_context import PlaybackSessionContext
+
 from sky_music.config import AppConfig, RtPriorityMode
+from sky_music.domain.session_context import PlaybackSessionContext
+
 
 @dataclass(frozen=True, slots=True)
 class PlaybackOverrides:

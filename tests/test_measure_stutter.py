@@ -5,6 +5,7 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+
 import pytest
 
 # Add tests directory to python path if needed
@@ -58,10 +59,10 @@ def test_imports():
     """Verify that we can import all required functions/symbols from the refactored script."""
     from measure_stutter import (
         analyze_and_report,
-        detect_onsets,
         best_offset,
-        match,
+        detect_onsets,
         load_sent_downs,
+        match,
     )
     assert analyze_and_report is not None
     assert detect_onsets is not None
@@ -98,10 +99,12 @@ def test_golden_regression(tmp_path: Path):
 def test_round_trip(tmp_path: Path):
     """Assert alignment converges and matches all notes perfectly (0 missing, low std/spread)."""
     from measure_stutter import (
+        best_offset,
+        detect_onsets,
         load_sent_downs,
         read_wav_mono,
-        detect_onsets,
-        best_offset,
+    )
+    from measure_stutter import (
         match as greedy_match,
     )
     
@@ -118,7 +121,7 @@ def test_round_trip(tmp_path: Path):
     
     samples, sr = read_wav_mono(str(wav_path))
     detected = detect_onsets(samples, sr, hop_ms=5.0, min_gap_ms=40.0, sensitivity=1.5)
-    sent, intended, counts = load_sent_downs(str(csv_path))
+    sent, _intended, _counts = load_sent_downs(str(csv_path))
     
     # We expect exactly 5 detected onsets
     assert len(detected) == 5

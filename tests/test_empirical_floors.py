@@ -9,7 +9,12 @@ fails loudly instead of silently regressing reliability:
 
 import pytest
 
-from sky_music.config import AppConfig, FrameTimingDefaults, clear_config_cache, load_config
+from sky_music.config import (
+    AppConfig,
+    FrameTimingDefaults,
+    clear_config_cache,
+    load_config,
+)
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 from sky_music.domain.session_context import PlaybackSessionContext
 

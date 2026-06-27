@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import pytest
 from concurrent.futures import Executor, Future
 from typing import Any
+
+import pytest
+
 from sky_music.infrastructure.background import (
+    BackgroundCleanupError,
     BackgroundScope,
     ExecutorResource,
     WorkerSnapshot,
-    BackgroundCleanupError,
 )
 
 

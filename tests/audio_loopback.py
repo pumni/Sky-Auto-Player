@@ -8,14 +8,14 @@ Install optional dependency via:
 """
 from __future__ import annotations
 
-import time
 import threading
+import time
 import wave
 from pathlib import Path
 
 try:
-    import soundcard as sc
     import numpy as np
+    import soundcard as sc
     HAS_SOUNDCARD = True
 except ImportError:
     HAS_SOUNDCARD = False
@@ -99,7 +99,7 @@ def capture_loopback_to_wav(
                 if max_seconds is not None and (elapsed + frames_to_read / samplerate) >= max_seconds:
                     break
     except Exception as e:
-        raise RuntimeError(f"Error during audio loopback capture: {e}")
+        raise RuntimeError(f"Error during audio loopback capture: {e}") from e
 
     if not all_chunks:
         raise RuntimeError("Capture completed but no audio samples were recorded.")

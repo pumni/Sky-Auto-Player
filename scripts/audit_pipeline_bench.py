@@ -30,7 +30,13 @@ from sky_music.orchestration.runtime_dispatch import compile_runtime_intents
 
 # Reuse the deterministic fakes from the test suite.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-from test_runtime_dispatch import FakeClock, FakeSleeper, TimedBackend  # noqa: E402  # type: ignore
+import itertools
+
+from test_runtime_dispatch import (  # type: ignore
+    FakeClock,
+    FakeSleeper,
+    TimedBackend,
+)
 
 
 def _bench(fn, repeats: int) -> float:
@@ -144,7 +150,7 @@ def main() -> None:
 
     downs = [c for c in backend.calls if c.kind == "down"]
     down_times = [c.started_us for c in downs]
-    iois = [b - a for a, b in zip(down_times, down_times[1:])]
+    iois = [b - a for a, b in itertools.pairwise(down_times)]
     print("Structural fidelity (full engine, fake clock):")
     print(f"  down events dispatched   : {len(downs)}")
     if iois:
@@ -213,8 +219,9 @@ def main() -> None:
     print(f"  telemetry.record (enabled)       : {telemetry_cost:8.3f} us")
 
     # 3. send_scan_code_batch struct/array build cost
-    import sky_music.platform.win32.inputs as win32_inputs
     from unittest.mock import patch
+
+    import sky_music.platform.win32.inputs as win32_inputs
 
     chord = (21, 22, 23)
     def run_send_batch():

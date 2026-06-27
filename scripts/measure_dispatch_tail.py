@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import random
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import FrameTimingPolicy
-from sky_music.infrastructure.backend import _TrackedKeyState, ReleaseAllOutcome, BackendHealth
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    ReleaseAllOutcome,
+    _TrackedKeyState,
+)
 from sky_music.infrastructure.timing import PerfCounterClock, RealSleeper, SleepPolicy
 from sky_music.layouts import SKY_15_KEY_PROFILE
 from sky_music.orchestration.engine import PlaybackEngine
 from sky_music.orchestration.playback_supervisor import PLAYBACK_FINISHED
+
 
 class SyntheticLatencyBackend(_TrackedKeyState):
     __slots__ = ("clock", "history")
@@ -180,7 +185,7 @@ def main():
     print("\n" + "=" * 80)
     print(f"{'Metric':<25} | {'Load Off / Def':<15} | {'Load On / 1ms':<15} | {'Load On / 5ms':<15}")
     print("-" * 80)
-    for key in r1.keys():
+    for key in r1:
         print(f"{key:<25} | {r1[key]:>13.1f} | {r2[key]:>13.1f} | {r3[key]:>13.1f}")
     print("=" * 80)
 

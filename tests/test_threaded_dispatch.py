@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import itertools
 import threading
 import time
 from dataclasses import dataclass
 
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
-from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
-from sky_music.platform.win32 import inputs
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.ui.hud import ProgressRenderer
 from sky_music.orchestration.dispatch_loop import PlaybackState
 from sky_music.orchestration.engine import PLAYBACK_QUIT, PlaybackEngine
 from sky_music.orchestration.playback_supervisor import PlaybackSupervisor
 from sky_music.orchestration.telemetry import TelemetryLogger
+from sky_music.platform.win32 import inputs
+from sky_music.ui.hud import ProgressRenderer
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +270,7 @@ def assert_down_intervals_near(
     assert len(down_calls) == expected_count
     intervals_us = [
         (right.perf_ns - left.perf_ns) / 1_000
-        for left, right in zip(down_calls, down_calls[1:])
+        for left, right in itertools.pairwise(down_calls)
     ]
     assert max(abs(actual_us - interval_us) for actual_us in intervals_us) < tolerance_us
 

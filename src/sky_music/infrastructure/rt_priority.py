@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sys
 from dataclasses import dataclass
 from types import TracebackType
@@ -7,6 +8,7 @@ from typing import Self
 
 from sky_music.config import RtPriorityMode as RtPriorityMode
 from sky_music.platform.win32 import inputs
+
 
 @dataclass(frozen=True, slots=True)
 class RtPriorityOutcome:
@@ -26,11 +28,11 @@ class DispatchThreadPriorityScope:
     """
 
     __slots__ = (
+        "_mmcss_handle",
+        "_old_priority",
+        "_thread_handle",
         "mode",
         "outcome",
-        "_mmcss_handle",
-        "_thread_handle",
-        "_old_priority",
     )
 
     def __init__(self, mode: RtPriorityMode = "auto") -> None:
@@ -60,11 +62,8 @@ class DispatchThreadPriorityScope:
                             detail=None
                         )
                         # Try to bind priority to High
-                        try:
+                        with contextlib.suppress(Exception):
                             inputs.av_set_mm_thread_priority(handle, 1) # AVRT_PRIORITY_HIGH = 1
-                        except Exception:
-                            # ignore failure as registration alone is the main win
-                            pass
                         return self
                 except Exception as err:
                     errors.append(f"MMCSS {name} failed: {err}")

@@ -1,6 +1,7 @@
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Literal
+
 from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
 
 # Absolute hard floor for any scheduled key-down, used by the schedule validator as a
@@ -126,7 +127,7 @@ def validate_key_actions(
                     # shorter than one frame can fall between the game's per-frame input
                     # samples. When frame-aware, require >= one frame; otherwise fall back to
                     # the absolute scheduled-hold floor.
-                    down_at, down_idx = active_downs[sc]
+                    down_at, _down_idx = active_downs[sc]
                     hold = action.at_us - down_at
                     frame_floor = int(policy.frame_us) if getattr(policy, "frame_us", 0) else 0
                     policy_min_hold = int(policy.min_hold_us) if getattr(policy, "min_hold_us", 0) else 0

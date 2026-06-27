@@ -1,6 +1,7 @@
-import shutil
 import os
+import shutil
 import time
+
 from sky_music.config import resolve_game_fps
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.backend import BackendHealth

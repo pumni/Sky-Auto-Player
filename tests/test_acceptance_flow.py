@@ -2,16 +2,20 @@
 
 import pytest
 
-from sky_music.config import AppConfig, clear_config_cache, apply_config_defaults, canonical_profile_name
+import main
+from sky_music.config import (
+    AppConfig,
+    apply_config_defaults,
+    canonical_profile_name,
+    clear_config_cache,
+)
+from sky_music.domain.domain import Millis, Note, NoteKey, Song
+from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
+from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
 )
-from sky_music.domain.scheduler import build_key_actions, ScheduleBuildError
-from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
-from sky_music.domain.domain import Song, Note, NoteKey, Millis
-from sky_music.orchestration.calibration import calibrate_profile, CalibrationInput
-
-import main
+from sky_music.orchestration.calibration import CalibrationInput, calibrate_profile
 
 
 @pytest.fixture(autouse=True)

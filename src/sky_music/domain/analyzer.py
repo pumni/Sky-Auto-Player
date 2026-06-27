@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Literal
+
 from sky_music.domain.domain import Note
 from sky_music.domain.scheduler_types import ScheduleMetadata
+
 
 @dataclass(frozen=True, slots=True)
 class DenseCluster:

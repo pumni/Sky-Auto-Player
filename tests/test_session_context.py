@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from sky_music.config import AppConfig, clear_config_cache, FrameTimingDefaults
+from sky_music.config import AppConfig, FrameTimingDefaults, clear_config_cache
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
-    merge_session_with_overrides,
     apply_recommendation_to_context,
+    merge_session_with_overrides,
 )
 from sky_music.ui.picker_metadata import (
     clear_metadata_cache,

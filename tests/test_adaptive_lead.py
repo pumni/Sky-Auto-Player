@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from sky_music.domain import Song
 from sky_music.domain.domain import ScanCode
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
-from sky_music.infrastructure.backend import BackendHealth, InputSendResult, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.orchestration.engine import SendLatencyEstimator, PlaybackEngine, PLAYBACK_FINISHED
-from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator, compile_runtime_intents
+from sky_music.orchestration.engine import (
+    PLAYBACK_FINISHED,
+    PlaybackEngine,
+    SendLatencyEstimator,
+)
+from sky_music.orchestration.runtime_dispatch import (
+    RuntimeDispatchCoordinator,
+    compile_runtime_intents,
+)
 
 
 class FakeClock:

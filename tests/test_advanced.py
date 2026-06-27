@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from sky_music.domain import Song, Note, NoteKey, Millis
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
 from sky_music.infrastructure.backend import WinSendInputBackend
 

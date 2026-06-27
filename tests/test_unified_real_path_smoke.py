@@ -4,13 +4,12 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-
 from sky_music.config import AppConfig
 from sky_music.infrastructure.background import WorkerSnapshot
+from sky_music.orchestration.telemetry import TelemetryLogger
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.textual_app import app as app_module
 from sky_music.ui.textual_app.app import SkyPickerApp
-from sky_music.orchestration.telemetry import TelemetryLogger
 
 SONGS = [
     Path("songs/Alpha.json"),
@@ -19,7 +18,7 @@ SONGS = [
 
 
 class FakeMetadataCoordinator:
-    instances: list["FakeMetadataCoordinator"] = []
+    instances: list[FakeMetadataCoordinator] = []
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         self.refreshed: list[list[Path]] = []
@@ -102,9 +101,12 @@ def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
     monkeypatch.setattr("sky_music.orchestration.engine.PlaybackEngine", MockPlaybackEngine)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        from sky_music.ui.textual_app.playback_controller import prepare_playback, PlaybackError
-        from sky_music.domain import Song, Note, NoteKey, Millis
+        from sky_music.domain import Millis, Note, NoteKey, Song
         from sky_music.domain.session_context import PlaybackSessionContext
+        from sky_music.ui.textual_app.playback_controller import (
+            PlaybackError,
+            prepare_playback,
+        )
 
         song = Song(
             name="Test Song",
@@ -183,9 +185,12 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
     monkeypatch.setattr(SkyPickerApp, "__init__", patched_init)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        from sky_music.ui.textual_app.playback_controller import prepare_playback, PlaybackError
-        from sky_music.domain import Song, Note, NoteKey, Millis
+        from sky_music.domain import Millis, Note, NoteKey, Song
         from sky_music.domain.session_context import PlaybackSessionContext
+        from sky_music.ui.textual_app.playback_controller import (
+            PlaybackError,
+            prepare_playback,
+        )
 
         song = Song(
             name="Test Song",

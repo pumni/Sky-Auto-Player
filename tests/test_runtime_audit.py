@@ -13,10 +13,6 @@ suite leaves implicit:
 """
 from __future__ import annotations
 
-from sky_music.domain import Song
-from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
-
 from test_runtime_dispatch import (
     FakeClock,
     FakeSleeper,
@@ -24,6 +20,10 @@ from test_runtime_dispatch import (
     action,
     play,
 )
+
+from sky_music.domain import Song
+from sky_music.infrastructure.timing import SleepPolicy
+from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
 
 
 class WindowedFocusGuard:

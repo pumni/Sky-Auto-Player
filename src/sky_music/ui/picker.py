@@ -16,8 +16,8 @@ __all__ = [
     "ACTIVE_THEME",
     "FPS_OPTIONS",
     "PROFILES_INFO",
-    "SongPickerResult",
     "TEMPO_OPTIONS",
+    "SongPickerResult",
     "get_profiles_info",
     "save_theme",
 ]

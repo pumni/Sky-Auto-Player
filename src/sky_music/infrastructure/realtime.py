@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import gc
 import sys
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ class WaitableTimerSleeper:
     fallback: Sleeper
 
     @classmethod
-    def create(cls, fallback: Sleeper) -> "WaitableTimerSleeper | None":
+    def create(cls, fallback: Sleeper) -> WaitableTimerSleeper | None:
         handle = inputs.create_high_resolution_waitable_timer()
         if handle is None:
             return None
@@ -88,9 +89,9 @@ class RealtimeProcessScope:
     """
 
     __slots__ = (
+        "_enable_switch_interval_tuning",
         "_enabled",
         "_gc_was_enabled",
-        "_enable_switch_interval_tuning",
         "_old_switch_interval",
     )
 
@@ -110,10 +111,8 @@ class RealtimeProcessScope:
         if self._enabled:
             self._gc_was_enabled = gc.isenabled()
             if self._gc_was_enabled:
-                try:
+                with contextlib.suppress(Exception):
                     gc.collect()
-                except Exception:
-                    pass
                 gc.disable()
                 inputs.debug_log("[realtime] cyclic GC paused for dispatch")
         else:

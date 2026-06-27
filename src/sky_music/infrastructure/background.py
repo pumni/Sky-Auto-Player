@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 from concurrent.futures import Executor, Future
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Protocol
 
 
-class ResourceState(str, Enum):
+class ResourceState(StrEnum):
     OPEN = "open"
     CLOSING = "closing"
     CLOSED = "closed"
     FAILED = "failed"
 
 
-class CleanupPolicy(str, Enum):
+class CleanupPolicy(StrEnum):
     RAISE = "raise"
     LOG_AND_CONTINUE = "log_and_continue"
 
@@ -136,15 +137,11 @@ class BackgroundScope:
     def snapshots(self) -> tuple[WorkerSnapshot, ...]:
         snaps = []
         for r in self._resources:
-            try:
+            with contextlib.suppress(Exception):
                 snaps.append(r.snapshot())
-            except Exception:
-                pass
         for r in self._retired_resources:
-            try:
+            with contextlib.suppress(Exception):
                 snaps.append(r.snapshot())
-            except Exception:
-                pass
         return tuple(snaps)
 
 

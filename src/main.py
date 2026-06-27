@@ -4,58 +4,55 @@ import sys
 import time
 from pathlib import Path
 
-# Import từ các mô-đun chuyên biệt
-from sky_music.platform.win32 import inputs
+from sky_music.cli.calibration_command import (
+    apply_calibration_from_telemetry,
+    run_auto_calibrate,
+)
+from sky_music.cli.console_playback import (
+    _check_textual_support,
+    _print_profile_comparison_table,
+    _wait_key_and_exit,
+    play_selected_song,
+    print_choices_local,
+)
+from sky_music.cli.doctor_command import run_doctor_command
 from sky_music.config import (
-    load_config,
-    apply_config_defaults,
-    HotkeyDefaults,
+    CLI_PROFILE_NAMES,
     AppConfig,
+    HotkeyDefaults,
+    apply_config_defaults,
+    canonical_profile_name,
+    load_config,
     persist_playback_defaults,
     resolve_game_fps,
     sky_process_names_csv,
-    canonical_profile_name,
-    CLI_PROFILE_NAMES,
 )
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
     merge_session_with_overrides,
 )
-from sky_music.platform.win32.inputs import (
-    enable_high_precision_timers,
-    disable_high_precision_timers
-)
-from sky_music.ui.hud import (
-    PLAYBACK_SKIPPED,
-    PLAYBACK_QUIT,
-    clear_terminal
-)
-from sky_music.ui.picker import SongPickerResult
 from sky_music.infrastructure.hotkeys import (
     PlaybackControls,
+    hotkey_conflicts_with_note_keys,
     parse_hotkey,
-    hotkey_conflicts_with_note_keys
 )
+from sky_music.orchestration.runtime_session import (
+    RUNTIME_STATE,
+    PlaybackOverrides,
+)
+
+# Import từ các mô-đun chuyên biệt
+from sky_music.platform.win32 import inputs
+from sky_music.platform.win32.inputs import (
+    disable_high_precision_timers,
+    enable_high_precision_timers,
+)
+from sky_music.ui.hud import PLAYBACK_QUIT, PLAYBACK_SKIPPED, clear_terminal
+from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import (
     SONG_DIR,
     get_song_choices,
     resolve_song_selection,
-)
-from sky_music.cli.console_playback import (
-    _wait_key_and_exit,
-    print_choices_local,
-    play_selected_song,
-    _check_textual_support,
-    _print_profile_comparison_table,
-)
-from sky_music.cli.calibration_command import (
-    run_auto_calibrate,
-    apply_calibration_from_telemetry,
-)
-from sky_music.cli.doctor_command import run_doctor_command
-from sky_music.orchestration.runtime_session import (
-    PlaybackOverrides,
-    RUNTIME_STATE,
 )
 
 PLAYBACK_DEBUG = False
@@ -494,6 +491,7 @@ def _run_textual_selftest() -> int:
 
     try:
         from rapidfuzz import fuzz
+
         from sky_music.ui.textual_app import app as app_module
         from sky_music.ui.textual_app.app import SkyPickerApp
     except Exception as exc:
@@ -612,7 +610,7 @@ def prompt_song_selection(
     fps: int | None = None,
     scan_code_mode: str = "physical",
     background_mode: str | None = None,
-) -> "SongPickerResult | None":
+) -> SongPickerResult | None:
     from sky_music.ui import picker as songs
     session = merge_session_with_overrides(
         RUNTIME_STATE.session or PlaybackSessionContext.balanced(
@@ -889,8 +887,8 @@ def main() -> int:
         disable_high_precision_timers()
 
 def write_crash_log(exc: BaseException) -> None:
-    import traceback
     import time
+    import traceback
     log_dir = Path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"crash_{time.strftime('%Y%m%d_%H%M%S')}.log"

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import math
 import statistics
 from pathlib import Path
@@ -46,7 +47,7 @@ def _pct(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
     s = sorted(values)
-    return float(s[int(round(pct * (len(s) - 1)))])
+    return float(s[round(pct * (len(s) - 1))])
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -71,7 +72,7 @@ def _pearson(xs: list[float], ys: list[float]) -> float:
     sx, sy = statistics.pstdev(xs), statistics.pstdev(ys)
     if sx == 0 or sy == 0:
         return 0.0
-    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=False)) / n
     return cov / (sx * sy)
 
 
@@ -123,7 +124,7 @@ def analyze_one(label: str, rows: list[dict[str, int]]) -> dict:
 
     print("\n  send_duration_us by idle_gap bucket (cold rows = larger gaps):")
     print(f"    {'idle_gap':>16}  {'n':>5}  {'p50':>6}  {'p95':>6}  {'p99':>6}  {'max':>7}")
-    for lo, hi in zip(BUCKET_EDGES_US, BUCKET_EDGES_US[1:]):
+    for lo, hi in itertools.pairwise(BUCKET_EDGES_US):
         bucket = [float(r["send_duration_us"]) for r in rows if lo <= r["idle_gap_us"] < hi]
         if not bucket:
             continue

@@ -129,10 +129,7 @@ class RuntimeDispatchCoordinator:
         self.min_hold_us = max(0, int(min_hold_us))
         self.cursor = 0
         self.active_by_scan_code: dict[int, ActiveKeyGeneration] = {}
-        self.status_by_generation: dict[int, GenerationStatus] = {
-            generation_id: GenerationStatus.SCHEDULED
-            for generation_id in range(schedule.generation_count)
-        }
+        self.status_by_generation: dict[int, GenerationStatus] = dict.fromkeys(range(schedule.generation_count), GenerationStatus.SCHEDULED)
         self.pending_by_generation: dict[int, PendingRelease] = {}
         self.pending_scan_codes: set[int] = set()
 

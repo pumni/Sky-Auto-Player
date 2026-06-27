@@ -1,39 +1,42 @@
 import csv
+import itertools
 import json
-from typing import Any
 import math
-from pathlib import Path
+import random
 import sys
 import time
-import random
+from pathlib import Path
+from typing import Any
+
 from sky_music.infrastructure.backend import BackendHealth
+
 
 class TelemetryRecord:
     __slots__ = (
         "_dict",
-        "song_name",
-        "event_index",
-        "kind",
-        "scheduled_us",
         "actual_us",
-        "lateness_us",
-        "send_duration_us",
-        "scan_codes",
-        "reason",
-        "dispatch_id",
+        "applied_lead_us",
+        "bookkeeping_us",
+        "deferred_by_us",
         "dispatch_completed_us",
+        "dispatch_id",
+        "dispatch_lateness_us",
+        "event_index",
+        "generation_ids",
+        "idle_gap_us",
+        "kind",
+        "lateness_us",
+        "pre_send_spin_us",
+        "reason",
+        "runtime_outcome",
+        "scan_codes",
+        "scheduled_us",
+        "send_duration_pure_us",
+        "send_duration_us",
         "sent_scan_codes",
         "skipped_scan_codes",
-        "generation_ids",
-        "runtime_outcome",
-        "deferred_by_us",
-        "pre_send_spin_us",
-        "idle_gap_us",
+        "song_name",
         "visible_lateness_us",
-        "applied_lead_us",
-        "send_duration_pure_us",
-        "bookkeeping_us",
-        "dispatch_lateness_us",
     )
 
     def __init__(
@@ -383,7 +386,7 @@ class TelemetryLogger:
         # that the runtime collapses into a <=1ms physical dispatch window.
         catch_up_bursts: list[list[dict]] = []
         current_burst: list[dict] = []
-        for previous, current in zip(sent_down_records, sent_down_records[1:]):
+        for previous, current in itertools.pairwise(sent_down_records):
             actual_gap_us = current["actual_us"] - previous["actual_us"]
             authored_gap_us = current["scheduled_us"] - previous["scheduled_us"]
             collapsed = (
@@ -443,7 +446,7 @@ class TelemetryLogger:
             if not values:
                 return 0.0
             s = sorted(values)
-            idx = int(round(pct * (len(s) - 1)))
+            idx = round(pct * (len(s) - 1))
             return float(s[idx])
 
         def _stats(values: list[int], thresholds: bool = False) -> dict:
@@ -806,7 +809,10 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 
             # Perform calibration recommendation if requested
             if recommend:
-                from sky_music.orchestration.calibration import calibrate_profile, calibration_input_from_summary
+                from sky_music.orchestration.calibration import (
+                    calibrate_profile,
+                    calibration_input_from_summary,
+                )
                 inp = calibration_input_from_summary(data)
                 rec = calibrate_profile(inp)
                 

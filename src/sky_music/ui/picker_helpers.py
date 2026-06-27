@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+
 from sky_music.platform.win32 import inputs
 
 SONG_DIR: Path = Path("songs")

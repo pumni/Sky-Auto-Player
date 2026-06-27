@@ -1,9 +1,15 @@
 import json
 from pathlib import Path
 from typing import Any
-from sky_music.domain.domain import Song, Note, NoteKey, Millis
-from sky_music.domain.validation import SongParseError, SongValidationError, validate_song_structure
+
+from sky_music.domain.domain import Millis, Note, NoteKey, Song
+from sky_music.domain.validation import (
+    SongParseError,
+    SongValidationError,
+    validate_song_structure,
+)
 from sky_music.layouts import SKY_15_KEY_PROFILE
+
 
 def _parse_note(idx: int, raw_note: Any, profile: Any, filepath_str: str) -> Note:
     """Helper to parse a single note object."""
@@ -23,7 +29,7 @@ def _parse_note(idx: int, raw_note: Any, profile: Any, filepath_str: str) -> Not
         try:
             t = int(t)
         except (ValueError, TypeError):
-            raise SongValidationError(f"[{filepath_str}] Note index {idx} has invalid time: {t!r} (expected integer)")
+            raise SongValidationError(f"[{filepath_str}] Note index {idx} has invalid time: {t!r} (expected integer)") from None
             
     if t < 0:
         raise SongValidationError(f"[{filepath_str}] Note index {idx} has negative timestamp: {t}")
@@ -50,7 +56,7 @@ def parse_song_file(filepath: Path, profile=None) -> Song:
         with filepath.open('r', encoding='utf-8') as f:
             data = json.load(f)
     except json.JSONDecodeError as exc:
-        raise SongParseError(f"[{filepath_str}] Invalid JSON formatting: {exc}")
+        raise SongParseError(f"[{filepath_str}] Invalid JSON formatting: {exc}") from exc
         
     # Support lists at root (e.g. legacy structure was an array [song_dict])
     if isinstance(data, list):

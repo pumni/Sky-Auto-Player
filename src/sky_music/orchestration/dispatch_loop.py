@@ -3,26 +3,32 @@ from __future__ import annotations
 import statistics
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
+
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
-from sky_music.infrastructure.backend import BackendHealth, InputBackend, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    BackendHealth,
+    InputBackend,
+    ReleaseAllOutcome,
+)
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 from sky_music.infrastructure.wait_strategy import WaitStrategy
+from sky_music.orchestration.playback_supervisor import (
+    PLAYBACK_FINISHED,
+    PLAYBACK_QUIT,
+    PLAYBACK_SKIPPED,
+    CommandSource,
+    FocusSignal,
+    ProgressSink,
+)
 from sky_music.orchestration.runtime_dispatch import (
     PendingRelease,
     RuntimeActionBatch,
     RuntimeDispatchCoordinator,
     RuntimeKeyIntent,
 )
-from dataclasses import dataclass
-from sky_music.orchestration.playback_supervisor import (
-    CommandSource,
-    FocusSignal,
-    PLAYBACK_FINISHED,
-    PLAYBACK_QUIT,
-    PLAYBACK_SKIPPED,
-    ProgressSink,
-)
+
 
 class RuntimeSameKeyConflictError(RuntimeError):
     """Raised when confirmed runtime hold makes a strict same-key down infeasible."""
@@ -91,8 +97,8 @@ class PlaybackState:
         return max(0, now_us - self.epoch_us)
 
 if TYPE_CHECKING:
-    from sky_music.orchestration.telemetry import TelemetryLogger
     from sky_music.infrastructure.focus import FocusGuard
+    from sky_music.orchestration.telemetry import TelemetryLogger
 
 
 class DispatchHealthMonitor:
@@ -161,7 +167,7 @@ class DispatchHealthMonitor:
             self._send_over_warn_count += 1
 
         L = len(self._send_duration_window)
-        if self._send_over_warn_count <= L - 1 - int(round(0.95 * (L - 1))):
+        if self._send_over_warn_count <= L - 1 - round(0.95 * (L - 1)):
             self._input_path_warn_started_us = None
             return
         if self._input_path_warn_started_us is None:
@@ -411,8 +417,7 @@ class DispatchLoop:
     ) -> ExecutionResult | None:
         if now_us is None:
             now_us = state.get_elapsed_us(self.clock)
-        if self.late_pulse_drop_threshold_us is not None:
-            if now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
+        if self.late_pulse_drop_threshold_us is not None and now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
                 self.coordinator.drop_expired_downs(batch.intents)
                 self._record_without_dispatch(
                     idx=batch.source_action_index,

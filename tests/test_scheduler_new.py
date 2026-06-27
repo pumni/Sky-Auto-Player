@@ -1,14 +1,21 @@
+import itertools
+
 import pytest
 
-from sky_music.domain import Song, Note, NoteKey, Millis
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import (
-    ScheduledNoteDraft,
     ScheduleBuildError,
+    ScheduledNoteDraft,
     build_key_actions,
     normalise_note_drafts,
     plan_same_key_hold,
 )
-from sky_music.domain.scheduler_types import TimingPolicy, KeyAction, FrameTimingPolicy, Microseconds
+from sky_music.domain.scheduler_types import (
+    FrameTimingPolicy,
+    KeyAction,
+    Microseconds,
+    TimingPolicy,
+)
 
 
 def _policy(d: dict | None = None) -> FrameTimingPolicy:
@@ -248,7 +255,7 @@ def test_onsets_are_not_shifted_or_clamped():
     res = build_key_actions(song, policy=policy)
     downs = [int(a.at_us) for a in res.actions if a.kind == "down"]
     assert downs == [0, 500_000, 1_000_000, 1_500_000]
-    assert [b - a for a, b in zip(downs, downs[1:])] == [500_000, 500_000, 500_000]
+    assert [b - a for a, b in itertools.pairwise(downs)] == [500_000, 500_000, 500_000]
 
 def test_chord_window_field_is_removed():
     frame_policy = FrameTimingPolicy.from_profile_name("balanced", fps=120)
@@ -473,6 +480,7 @@ def test_local_precise_raw_hold_and_min_hold_are_unified():
 
 def test_scheduled_note_draft_has_single_time_field():
     from dataclasses import fields
+
     from sky_music.domain.scheduler import ScheduledNoteDraft
 
     names = {field.name for field in fields(ScheduledNoteDraft)}
@@ -508,11 +516,11 @@ def test_min_hold_frame_floor_clamp():
     assert p_custom.min_hold_us == 35001
 
 def test_timing_profile_validators():
-    from sky_music.domain.validation import (
-        validate_timing_profile,
-        validate_builtin_timing_profile,
-    )
     from sky_music.config import DEFAULT_TIMING_PROFILES
+    from sky_music.domain.validation import (
+        validate_builtin_timing_profile,
+        validate_timing_profile,
+    )
 
     # Verify all built-in profiles pass validate_builtin_timing_profile
     for name, p in DEFAULT_TIMING_PROFILES.items():
@@ -538,7 +546,10 @@ def test_hold_ordering_invariant_rejects_hold_below_min_hold():
     Previously hold_us was never validated, so e.g. audience_safe with hold_us=1
     sailed through every check while silently breaking the hold semantics.
     """
-    from sky_music.domain.validation import validate_hold_ordering, validate_timing_profile
+    from sky_music.domain.validation import (
+        validate_hold_ordering,
+        validate_timing_profile,
+    )
 
     with pytest.raises(ValueError, match="hold_us"):
         validate_hold_ordering({"hold_us": 1, "min_hold_us": 22000})

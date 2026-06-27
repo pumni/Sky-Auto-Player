@@ -297,7 +297,7 @@ def main() -> int:
     print(f"[HEARD] {len(heard)} audio onsets detected")
 
     # ---- sent downs + gate ----
-    sent, intended, counts = load_sent_downs(args.csv)
+    sent, _intended, counts = load_sent_downs(args.csv)
     print(
         f"[SENDER AUDIT] intended_down={counts['intended']} sent_down={counts['sent']} "
         f"dropped_conflict={counts['dropped_conflict']} dropped_expired={counts['dropped_expired']} "

@@ -1,7 +1,11 @@
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from sky_music.infrastructure.realtime import RealtimeProcessScope, DISPATCH_SWITCH_INTERVAL_S, _gil_enabled
+from sky_music.infrastructure.realtime import (
+    DISPATCH_SWITCH_INTERVAL_S,
+    RealtimeProcessScope,
+    _gil_enabled,
+)
 
 
 def test_realtime_scope_saves_and_restores_switch_interval() -> None:

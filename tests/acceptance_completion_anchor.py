@@ -15,13 +15,18 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_runtime_dispatch import FakeClock, FakeSleeper, TimedBackend, TimedCall  # noqa: E402
+from test_runtime_dispatch import (
+    FakeClock,
+    FakeSleeper,
+    TimedBackend,
+    TimedCall,
+)
 
-from sky_music.domain.parser import parse_song_file  # noqa: E402
-from sky_music.domain.scheduler import build_key_actions  # noqa: E402
-from sky_music.domain.scheduler_types import FrameTimingPolicy  # noqa: E402
-from sky_music.infrastructure.timing import SleepPolicy  # noqa: E402
-from sky_music.orchestration.engine import PlaybackEngine  # noqa: E402
+from sky_music.domain.parser import parse_song_file
+from sky_music.domain.scheduler import build_key_actions
+from sky_music.domain.scheduler_types import FrameTimingPolicy
+from sky_music.infrastructure.timing import SleepPolicy
+from sky_music.orchestration.engine import PlaybackEngine
 
 # Worst-case adversarial host latency: the down injection is slow, the up is fast.
 # Under start-anchor this drives observed hold = min_hold + up - down = min_hold - 230 (all below

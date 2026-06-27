@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import replace as copy_replace
 from dataclasses import dataclass
-from typing import Any, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 from sky_music.config import (
     AppConfig,
@@ -64,7 +64,7 @@ class PlaybackSessionContext:
         fps = resolve_game_fps(fps_raw)
 
         def ms_to_us(value: float | int) -> int:
-            return int(round(float(value) * 1000))
+            return round(float(value) * 1000)
 
         base_dict = profile_dict_for(cfg, profile)
         base_policy = TimingPolicy.from_dict(base_dict)

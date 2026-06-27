@@ -5,6 +5,7 @@ import pytest
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.validation import SongValidationError
 
+
 @pytest.fixture
 def tmp_song_file(tmp_path):
     """Utility fixture to write temporary song files."""

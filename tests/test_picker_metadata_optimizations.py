@@ -1,18 +1,20 @@
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 import sky_music.ui.picker_metadata as pm
-from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.config import AppConfig, clear_config_cache
+from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.ui.picker_metadata import (
+    _path_session_ram_cache,
+    _persistent_cache_key,
+    _pkey_ram_cache,
     clear_metadata_cache,
     get_cached_song_ui_metadata,
     peek_cached_song_ui_metadata,
     warm_persistent_metadata_cache,
     worker_process_warmup,
-    _pkey_ram_cache,
-    _path_session_ram_cache,
-    _persistent_cache_key,
 )
 
 
@@ -100,8 +102,8 @@ def test_warm_persistent_metadata_cache_adaptive_limit(tmp_path: Path) -> None:
         warm_persistent_metadata_cache(limit=None, song_paths=None)
         # Check the execute call
         mock_conn.execute.assert_called()
-        args, kwargs = mock_conn.execute.call_args
-        sql, params = args
+        args, _kwargs = mock_conn.execute.call_args
+        _sql, params = args
         assert params == (500,)
 
         # 2. Explicit limit
@@ -124,8 +126,9 @@ def test_worker_process_warmup_returns_true() -> None:
 
 
 def test_compute_raw_song_ui_metadata_correctness(tmp_path: Path) -> None:
-    from sky_music.ui.picker_metadata import compute_raw_song_ui_metadata
     import json
+
+    from sky_music.ui.picker_metadata import compute_raw_song_ui_metadata
 
     # Test cases mapping input notes to expected outputs
     test_scenarios = [
@@ -208,9 +211,9 @@ def test_compute_raw_song_ui_metadata_correctness(tmp_path: Path) -> None:
 
 def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> None:
     from sky_music.ui.picker_metadata import (
+        _path_session_ram_cache,
         hydrate_persistent_metadata_for_paths,
         populate_raw_song_ui_metadata_for_paths,
-        _path_session_ram_cache,
     )
     song_path = tmp_path / "dummy_song_background.json"
     song_path.write_text('{"name": "Background test", "songNotes": []}', encoding="utf-8")
@@ -229,7 +232,10 @@ def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> N
 
     # 2. Test persistent metadata hydration seeds the cache
     # First, let's store it as persistent metadata
-    from sky_music.ui.picker_metadata import store_computed_song_ui_metadata_payloads, SongUiMetadata
+    from sky_music.ui.picker_metadata import (
+        SongUiMetadata,
+        store_computed_song_ui_metadata_payloads,
+    )
     meta = SongUiMetadata(
         path=song_path,
         name="Background test",

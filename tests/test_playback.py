@@ -2,18 +2,18 @@ import sys
 
 import pytest
 
-from sky_music.domain import Song, Note, NoteKey, Millis
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import TimingPolicy, KeyAction, FrameTimingPolicy
+from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction, TimingPolicy
 from sky_music.infrastructure.backend import DryRunBackend
+from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import (
-    PlaybackEngine,
-    PlaybackState,
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
     PLAYBACK_SKIPPED,
+    PlaybackEngine,
+    PlaybackState,
 )
-from sky_music.infrastructure.timing import SleepPolicy
 
 
 def _frame_policy(d: dict | None = None) -> FrameTimingPolicy:
@@ -116,7 +116,7 @@ def test_telemetry_includes_send_duration_us(tmp_path):
     res = engine.play()
     assert res == PLAYBACK_FINISHED
 
-    with open(engine.telemetry.log_filepath, "r", newline="") as f:
+    with open(engine.telemetry.log_filepath, newline="") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
         assert len(rows) == 2

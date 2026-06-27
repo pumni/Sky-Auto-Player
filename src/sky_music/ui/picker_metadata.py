@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sqlite3
@@ -11,9 +12,9 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Literal
 
+from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.domain.song_repository import get_shared_song_repository
-from sky_music.config import AppConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,10 +318,8 @@ def _close_persistent_cache_connection() -> None:
     """Close the thread-local SQLite connection if open (call on thread shutdown)."""
     conn: sqlite3.Connection | None = getattr(_tls, "db_conn", None)
     if conn is not None:
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
         _tls.db_conn = None
 
 
@@ -610,10 +609,8 @@ def store_computed_song_ui_metadata_payloads(
                 except Exception:
                     pass
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             conn.rollback()  # type: ignore[possibly-unbound]
-        except Exception:
-            pass
         return 0
 
     return stored
@@ -710,8 +707,8 @@ def get_song_ui_metadata(
 ) -> SongUiMetadata:
     session = session or PlaybackSessionContext.balanced()
     try:
-        from sky_music.domain.scheduler import build_key_actions
         from sky_music.domain.analyzer import analyze_schedule
+        from sky_music.domain.scheduler import build_key_actions
 
         # build_key_actions builds the (now unified) DefaultNoteResolver when resolver is None.
         resolver = None
@@ -1031,10 +1028,8 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
         _close_persistent_cache_connection()
         with _write_counter_lock:
             _write_counter = 0
-        try:
+        with contextlib.suppress(Exception):
             PERSISTENT_CACHE_PATH.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def _get_song_recommendation(

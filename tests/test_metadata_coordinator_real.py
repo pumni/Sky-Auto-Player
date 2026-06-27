@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.ui.textual_app.workers import MetadataCoordinator

@@ -1,31 +1,37 @@
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
+import contextlib
 import queue
 import threading
+from collections import deque
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import Static
 from textual.screen import Screen
+from textual.widgets import Static
 
 from sky_music.config import load_config, resolve_game_fps
 from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
-from sky_music.ui.hud import format_duration, _hex_to_ansi
+from sky_music.ui.hud import _hex_to_ansi, format_duration
 from sky_music.ui.picker_theme import get_theme_preset
-from sky_music.ui.text_render import ansi_box, ansi_gradient_box, truncate_cells, visible_width
+from sky_music.ui.text_render import (
+    ansi_box,
+    ansi_gradient_box,
+    truncate_cells,
+    visible_width,
+)
 from sky_music.ui.textual_app.theme_css import TEXTUAL_THEME_TOKENS, TextualThemeTokens
 
 if TYPE_CHECKING:
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+    from sky_music.domain.validation import ScheduleInvariantViolation
     from sky_music.infrastructure.backend import BackendHealth
     from sky_music.infrastructure.hotkeys import HotkeyBinding
     from sky_music.orchestration.engine import PlaybackEngine
-    from sky_music.domain.validation import ScheduleInvariantViolation
-    from sky_music.domain.scheduler_types import FrameTimingPolicy
 
 class PlaybackCommandBridge:
     """Merges global hotkey polling with UI-originated playback commands."""
@@ -462,10 +468,8 @@ class PlaybackCard(Static):
         for attr in ("_timer", "_poll_timer"):
             timer = getattr(self, attr, None)
             if timer is not None:
-                try:
+                with contextlib.suppress(Exception):
                     timer.stop()
-                except Exception:
-                    pass
                 setattr(self, attr, None)
 
     def _request_playback_command(self, command: str) -> None:
@@ -614,7 +618,7 @@ class PlaybackCard(Static):
 
         bar_width = max(10, width - 4 - visible_width(time_text) - 2)
         fraction = current / max(total, 0.001)
-        filled = min(bar_width, int(round(fraction * bar_width)))
+        filled = min(bar_width, round(fraction * bar_width))
         bar = f"{accent}█{_ANSI_RESET}" * filled + f"{gray}░{_ANSI_RESET}" * (bar_width - filled)
 
         song_title_line = f"♪ {_ANSI_BOLD}{truncate_cells(self.song_name, width - 8)}{_ANSI_RESET}"
@@ -663,7 +667,7 @@ class PlaybackCard(Static):
             if self.active_policy is not None:
                 pol = self.active_policy
                 fps = resolve_game_fps(getattr(pol, "fps", None))
-                frame_us = getattr(pol, "frame_us", 0) or int(round(1_000_000 / fps))
+                frame_us = getattr(pol, "frame_us", 0) or round(1_000_000 / fps)
                 timing_label = f"{fps}fps ({frame_us}us)"
                 body.append(f"{gray}Timing: {timing_label}  ·  hold/min: {pol.hold_us}/{pol.min_hold_us}us{_ANSI_RESET}")
 
@@ -817,7 +821,7 @@ class PlaybackApp(App[str]):
         bar_width = 40
         total = max(snap.total, 0.001)
         fraction = min(1.0, max(0.0, snap.current / total))
-        filled = int(round(fraction * bar_width))
+        filled = round(fraction * bar_width)
 
         t = TEXTUAL_THEME_TOKENS[self.theme_name]
         bar_str = f"[{t.accent}]" + "█" * filled + "[/]" + f"[{t.muted}]" + "░" * (bar_width - filled) + "[/]"
@@ -977,7 +981,7 @@ class PlaybackScreen(Screen[str]):
         bar_width = 40
         total = max(snap.total, 0.001)
         fraction = min(1.0, max(0.0, snap.current / total))
-        filled = int(round(fraction * bar_width))
+        filled = round(fraction * bar_width)
 
         t = TEXTUAL_THEME_TOKENS[self.theme_name]
         bar_str = f"[{t.accent}]" + "█" * filled + "[/]" + f"[{t.muted}]" + "░" * (bar_width - filled) + "[/]"
@@ -1046,12 +1050,12 @@ class PlaybackScreen(Screen[str]):
             # Line 3: Timing: {fps}fps ({frame_us}us) · hold/min {hold}/{min}us · {profile} {tempo}×
             if self.active_policy is not None:
                 fps = resolve_game_fps(getattr(self.active_policy, "fps", None))
-                frame_us = getattr(self.active_policy, "frame_us", 0) or int(round(1_000_000 / fps))
+                frame_us = getattr(self.active_policy, "frame_us", 0) or round(1_000_000 / fps)
                 hold_us = getattr(self.active_policy, "hold_us", 0)
                 min_hold = getattr(self.active_policy, "min_hold_us", 0)
             else:
                 fps = resolve_game_fps(None)
-                frame_us = int(round(1_000_000 / fps))
+                frame_us = round(1_000_000 / fps)
                 hold_us = 0
                 min_hold = 0
             timing_str = (

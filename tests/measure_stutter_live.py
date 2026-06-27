@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,8 +28,8 @@ except ImportError:
 from measure_stutter import (
     analyze_and_report,
     detect_onsets,
-    read_wav_mono,
     load_sent_downs,
+    read_wav_mono,
 )
 
 

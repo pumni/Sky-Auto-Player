@@ -22,6 +22,7 @@ the correct granularity for the ~0.05-0.07 ms sender criterion.
 """
 import argparse
 import csv
+import itertools
 import statistics
 
 
@@ -30,7 +31,7 @@ def _segment(times, gap_ms):
     if not times:
         return []
     blocks, current = [], [times[0]]
-    for prev, cur in zip(times, times[1:]):
+    for prev, cur in itertools.pairwise(times):
         if (cur - prev) * 1000 > gap_ms:
             blocks.append(current)
             current = [cur]

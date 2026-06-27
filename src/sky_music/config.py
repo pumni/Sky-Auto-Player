@@ -48,7 +48,7 @@ class FrameTimingDefaults:
     min_hold_min_frame_ratio: float = 1.25
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "FrameTimingDefaults":
+    def from_dict(cls, raw: dict[str, Any]) -> FrameTimingDefaults:
         def ratio(key: str, default: float) -> float:
             val = raw.get(key, default)
             try:

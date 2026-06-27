@@ -1,7 +1,9 @@
-from abc import ABC, abstractmethod
-from typing import Protocol
-from dataclasses import dataclass
+import contextlib
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Protocol
+
 
 @dataclass(frozen=True, slots=True)
 class ReleaseAllOutcome:
@@ -58,7 +60,7 @@ class InputBackend(Protocol):
 
 
 class _TrackedKeyState(ABC):
-    __slots__ = ("active_keys", "possibly_active_keys", "failed_release_keys", "last_error")
+    __slots__ = ("active_keys", "failed_release_keys", "last_error", "possibly_active_keys")
 
     active_keys: set[int]
     possibly_active_keys: set[int]
@@ -234,13 +236,11 @@ class WinSendInputBackend(_TrackedKeyState):
                 self.last_error = f"release_all pass {pass_idx} error: {e}"
                 if pass_idx == 2:
                     self.failed_release_keys.update(to_release)
-                    try:
+                    with contextlib.suppress(Exception):
                         self.inputs_module.debug_log(
                             f"[backend] Panic release failed after 3 passes: {e}. "
                             f"Remaining stuck keys: {self.failed_release_keys}"
                         )
-                    except Exception:
-                        pass
                 else:
                     time.sleep(0.015)
                     
@@ -256,13 +256,11 @@ class WinSendInputBackend(_TrackedKeyState):
                     pass
                     
         if stuck_scan_codes:
-            try:
+            with contextlib.suppress(Exception):
                 self.inputs_module.debug_log(
                     f"[backend] Stuck keys detected during best-effort verification: {stuck_scan_codes}. "
                     f"Retrying emergency release with backoff..."
                 )
-            except Exception:
-                pass
                 
             for retry_pass in range(2):
                 time.sleep(0.050 * (retry_pass + 1))  # Backoff: 50ms, then 100ms
@@ -275,10 +273,8 @@ class WinSendInputBackend(_TrackedKeyState):
                         if vk is not None and self.inputs_module.is_virtual_key_down(vk):
                             still_stuck.append(sc)
                     if not still_stuck:
-                        try:
+                        with contextlib.suppress(Exception):
                             self.inputs_module.debug_log("[backend] Best-effort verification: Emergency release retries succeeded!")
-                        except Exception:
-                            pass
                         self.active_keys.clear()
                         self.possibly_active_keys.clear()
                         self.failed_release_keys.clear()
@@ -293,12 +289,10 @@ class WinSendInputBackend(_TrackedKeyState):
                     self.last_error = f"Emergency retry {retry_pass} failed: {e}"
                     
             self.failed_release_keys.update(stuck_scan_codes)
-            try:
+            with contextlib.suppress(Exception):
                 self.inputs_module.debug_log(
                     f"[backend] CRITICAL (Best-effort Verification): Keys remain stuck after emergency retry: {stuck_scan_codes}"
                 )
-            except Exception:
-                pass
             return ReleaseAllOutcome(
                 attempted=release_tuple,
                 released_successfully=False,
@@ -317,13 +311,11 @@ class WinSendInputBackend(_TrackedKeyState):
                 verification_inconclusive=False
             )
         else:
-            try:
+            with contextlib.suppress(Exception):
                 self.inputs_module.debug_log(
                     f"[backend] Verification inconclusive: send failed but no stuck keys detected via GetAsyncKeyState. "
                     f"Keys retained as failed releases: {to_release}"
                 )
-            except Exception:
-                pass
             return ReleaseAllOutcome(
                 attempted=release_tuple,
                 released_successfully=False,

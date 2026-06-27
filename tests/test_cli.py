@@ -1,12 +1,15 @@
 import sys
 from pathlib import Path
+
 import pytest
+
 from sky_music.config import AppConfig, clear_config_cache
 
 src_dir = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 import main  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _reset_config_cache():

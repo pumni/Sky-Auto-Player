@@ -62,7 +62,7 @@ fine_gap_orders = (
       (20,2,11,0,8,17,1,14,5,3),
       (5,0,20,2,14,8,3,17,1,11),
 )
-for suffix, gaps in zip(("a", "b", "c"), fine_gap_orders):
+for suffix, gaps in zip(("a", "b", "c"), fine_gap_orders, strict=False):
       write(f"TEST_repeat_gap_fine_{suffix}", staircase_gap(reps=20, gaps=gaps))
 
 # Nhịp đều, ĐAN XEN 2 phím khác nhau -> không dính same-key repeat pressure,

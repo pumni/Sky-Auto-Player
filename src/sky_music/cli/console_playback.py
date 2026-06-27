@@ -1,42 +1,43 @@
 from __future__ import annotations
 
+import itertools
 import os
-import sys
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
+import sky_music.infrastructure.doctor as doctor
 from sky_music.config import (
     AppConfig,
-    load_config,
-    persist_default_profile,
     canonical_profile_name,
-    resolve_game_fps,
+    load_config,
     merged_timing_profiles,
+    persist_default_profile,
+    resolve_game_fps,
+)
+from sky_music.domain.session_context import (
+    PlaybackSessionContext,
+    merge_session_with_overrides,
+)
+from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.orchestration.runtime_session import (
+    RUNTIME_STATE,
+    PlaybackOverrides,
+)
+from sky_music.platform.win32 import inputs as _inputs
+from sky_music.ui.hud import (
+    PLAYBACK_QUIT,
+    ProgressRenderer,
+    clear_terminal,
 )
 from sky_music.ui.picker_helpers import (
     SONG_DIR,
     SUPPORTED_EXTENSIONS,
     countdown_before_playback,
 )
-from sky_music.orchestration.runtime_session import (
-    PlaybackOverrides,
-    RUNTIME_STATE,
-)
-from sky_music.domain.session_context import (
-    PlaybackSessionContext,
-    merge_session_with_overrides,
-)
-from sky_music.ui.hud import (
-    PLAYBACK_QUIT,
-    clear_terminal,
-    ProgressRenderer,
-)
-from sky_music.infrastructure.hotkeys import PlaybackControls
-import sky_music.infrastructure.doctor as doctor
-from sky_music.ui.text_render import clamp_terminal_width, ansi_box
-from sky_music.platform.win32 import inputs as _inputs
+from sky_music.ui.text_render import ansi_box, clamp_terminal_width
 
 
 def _wait_key_and_exit(code: int = 1) -> None:
@@ -186,7 +187,7 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
             print()
             print_ansi_box("SKY MUSIC HELPER", [header_line], border_color=ANSI_CYAN)
             print()
-            print_ansi_box("Checks", check_lines + [col1], border_color=ANSI_CYAN)
+            print_ansi_box("Checks", [*check_lines, col1], border_color=ANSI_CYAN)
             print()
             print_ansi_box("Status", [status_line, controls_line], border_color=ANSI_YELLOW)
             print()
@@ -274,8 +275,8 @@ def print_choices_local(song_choices: list[Path]) -> None:
 
 def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     max_chord = max((len(a.scan_codes) for a in actions if a.kind == "down"), default=0)
-    down_timestamps = sorted(list(set(a.at_us for a in actions if a.kind == "down")))
-    min_timestamp_gap_us = min((b - a for a, b in zip(down_timestamps, down_timestamps[1:])), default=0)
+    down_timestamps = sorted({a.at_us for a in actions if a.kind == "down"})
+    min_timestamp_gap_us = min((b - a for a, b in itertools.pairwise(down_timestamps)), default=0)
     
     min_ts_gap_str = f"{min_timestamp_gap_us / 1000:.1f} ms" if min_timestamp_gap_us > 0 else "N/A"
     min_sk_gap_us = sched_meta.shortest_same_key_interval_us
@@ -314,8 +315,7 @@ def _check_textual_support() -> str | None:
             STD_OUTPUT_HANDLE = ctypes.c_ulong(-11)
             handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
             mode = ctypes.wintypes.DWORD()
-            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-                if not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) and not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
                     return (
                         "Console hiện tại không hỗ trợ ANSI / Virtual Terminal Processing. "
                         "Hãy mở ứng dụng từ Windows Terminal (wt.exe) hoặc "
@@ -341,12 +341,15 @@ def play_selected_song(
     controls: PlaybackControls | None = None,
     overrides: PlaybackOverrides | None = None,
 ) -> str:
+    from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
     from sky_music.domain.song_repository import get_shared_song_repository
-    from sky_music.domain.scheduler import build_key_actions, ScheduleBuildError
-    from sky_music.infrastructure.backend import WinSendInputBackend, DryRunBackend
+    from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
     from sky_music.orchestration.engine import _LEAD_CACHE_PATH, PlaybackEngine
     from sky_music.ui.textual_app import TEXTUAL_THEME_TOKENS
-    from sky_music.ui.textual_app.playback_app import SnapshotRenderer, run_playback_textual
+    from sky_music.ui.textual_app.playback_app import (
+        SnapshotRenderer,
+        run_playback_textual,
+    )
 
     try:
         song = get_shared_song_repository().load(selected_song)
@@ -439,9 +442,7 @@ def play_selected_song(
     # If picker already decided (force_profile/tempo supplied), skip the prompt
     if report.severity != "low" and force_profile is None and force_tempo is None:
         should_prompt = True
-        if report.severity == "medium" and not user_cfg.safety.prompt_on_medium_risk:
-            should_prompt = False
-        elif report.severity == "high" and not user_cfg.safety.prompt_on_high_risk:
+        if (report.severity == "medium" and not user_cfg.safety.prompt_on_medium_risk) or (report.severity == "high" and not user_cfg.safety.prompt_on_high_risk):
             should_prompt = False
 
         if should_prompt:
@@ -530,7 +531,7 @@ def play_selected_song(
             accent_hex=_theme_tokens.accent,
             theme_name=_active_theme_name,
         )
-        setattr(renderer, "active_policy", active_policy)
+        renderer.active_policy = active_policy
 
     # Clear preflight/countdown output so the live HUD starts on a clean terminal.
     # ProgressRenderer only erases its own previously-rendered lines; static print()

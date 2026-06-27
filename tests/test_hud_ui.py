@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
 from sky_music.domain.scheduler_types import FrameTimingPolicy
+from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
 from sky_music.ui.hud import ProgressRenderer
 from sky_music.ui.text_render import strip_ansi
 

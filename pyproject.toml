@@ -31,9 +31,9 @@ py-modules = ["main", "build_app"]
 [dependency-groups]
 dev = [
     "pyinstaller>=6.0.0",
-    "pyright>=1.1.410",
+    "pyright>=1.1.411",
     "pytest-textual-snapshot>=1.1.0",
-    "ruff>=0.15.16",
+    "ruff>=0.15.20",
     "soundcard>=0.4.6",
 ]
 
@@ -43,12 +43,8 @@ build-app = "build_app:main"
 
 [tool.pyright]
 # ── Analysis scope ──────────────────────────────────────────────────────
-# Standard mode catches argument mismatches, optional‑access errors,
-# return‑type violations, and the majority of real bugs. Tests keep full
-# flexibility for pytest‑idiomatic patterns (monkeypatch, *args/**kwargs
-# helpers, mock backends). The strict‑mode preset is deliberately avoided
-# because it flags test‑only noise (~800 diagnostics) without catching
-# anything standard mode misses in the 4 kLOC production codebase.
+# Standard mode throughout — strict-mode reportUnknown* diagnostics are
+# library‑boundary noise (Textual, Win32 ctypes) and not actionable.
 typeCheckingMode = "standard"
 
 include = ["src", "tests"]
@@ -84,3 +80,26 @@ reportDeprecated   = "error"
 
 [tool.ruff]
 target-version = "py314"
+
+[tool.ruff.lint]
+extend-select = [
+    "UP",   # pyupgrade — modern syntax for 3.14
+    "I",    # isort — consistent import ordering
+    "B",    # flake8-bugbear — bug detection
+    "RUF",  # ruff-specific — noqa validation etc.
+    "PERF", # perflint — performance patterns
+    "SIM",  # flake8-simplify — simplify expressions
+    "C4",   # flake8-comprehensions — prefer comprehensions
+    "ARG",  # flake8-unused-arguments — catch dead params
+]
+ignore = [
+    "RUF001", # ambiguous‑unicode in strings — Vietnamese chars are legitimate
+    "RUF002", # ambiguous‑unicode in docstrings
+    "RUF003", # ambiguous‑unicode in comments
+    "RUF009", # function call in dataclass default — Microseconds(n) is a NewType, fine
+    "RUF012", # mutable class default — Textual BINDINGS lists are standard idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["ARG"]          # utility scripts — unused params are expected
+"tests/*" = ["ARG", "SIM115"]  # test fixtures: unused params, contextlib patterns

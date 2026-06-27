@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from sky_music.infrastructure.background import WorkerSnapshot
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import get_song_choices
 from sky_music.ui.picker_metadata import SongUiMetadata
+from sky_music.ui.picker_theme import THEME_PRESETS, remove_accents
 from sky_music.ui.textual_app import app as app_module
 from sky_music.ui.textual_app.app import (
     TEXTUAL_THEME_TOKENS,
@@ -22,8 +24,6 @@ from sky_music.ui.textual_app.app import (
     choose_song_interactively_textual,
     rank_song_choices,
 )
-from sky_music.ui.picker_theme import THEME_PRESETS, remove_accents
-
 
 SONGS = [
     Path("songs/Alpha.json"),
@@ -33,7 +33,7 @@ SONGS = [
 
 
 class FakeMetadataCoordinator:
-    instances: list["FakeMetadataCoordinator"] = []
+    instances: list[FakeMetadataCoordinator] = []
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         self.refreshed: list[list[Path]] = []
@@ -132,7 +132,7 @@ def test_search_typing_shortcut_letter_does_not_open_modal(monkeypatch) -> None:
         await pilot.press("p")
         await pilot.pause()
         search = app.query_one("#search")
-        assert getattr(search, "value") == "p"
+        assert search.value == "p"
         assert type(app.screen).__name__ == "Screen"
         await pilot.press("escape")
 
@@ -739,10 +739,8 @@ def test_textual_cleanup_failure_is_recorded(monkeypatch) -> None:
             await pilot.press("escape")
 
     # on_unmount re-raises after recording; tolerate whichever way Textual routes it.
-    try:
+    with contextlib.suppress(Exception):
         run_picker(scenario())
-    except Exception:
-        pass
 
     cleanup = TelemetryLogger.last_picker_cleanup
     assert cleanup is not None
@@ -798,8 +796,8 @@ def test_custom_footer() -> None:
 
 
 def test_risk_cell_semantic_colors() -> None:
-    from sky_music.ui.textual_app.app import _risk_cell
     from sky_music.ui.picker_theme import THEME_PRESETS
+    from sky_music.ui.textual_app.app import _risk_cell
     theme = THEME_PRESETS["aurora"]
     # LOW risk uses theme.success
     low_cell = _risk_cell("LOW", "muted", theme)
@@ -819,8 +817,8 @@ def test_risk_cell_semantic_colors() -> None:
 
 
 def test_classic_risk_cell_uses_style_not_color_only() -> None:
-    from sky_music.ui.textual_app.app import _risk_cell
     from sky_music.ui.picker_theme import THEME_PRESETS
+    from sky_music.ui.textual_app.app import _risk_cell
 
     classic = THEME_PRESETS["classic"]
 
@@ -874,10 +872,13 @@ def test_dispatch_lead_us_propagates_to_playback_engine(monkeypatch) -> None:
     monkeypatch.setattr("sky_music.orchestration.engine.PlaybackEngine", MockPlaybackEngine)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        from sky_music.ui.textual_app.playback_controller import prepare_playback, PlaybackError
-        from sky_music.domain import Song, Note, NoteKey, Millis
+        from sky_music.domain import Millis, Note, NoteKey, Song
         from sky_music.domain.session_context import PlaybackSessionContext
         from sky_music.ui.picker import SongPickerResult
+        from sky_music.ui.textual_app.playback_controller import (
+            PlaybackError,
+            prepare_playback,
+        )
 
         song = Song(
             name="Test Song",

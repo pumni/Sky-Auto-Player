@@ -8,11 +8,18 @@ import types
 
 import pytest
 
-from sky_music.domain.domain import Song, Note, NoteKey, Millis
+from sky_music.domain.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend, InputSendResult
-from sky_music.orchestration.engine import PlaybackEngine, ExecutionResult, PLAYBACK_FINISHED
-
+from sky_music.infrastructure.backend import (
+    DryRunBackend,
+    InputSendResult,
+    WinSendInputBackend,
+)
+from sky_music.orchestration.engine import (
+    PLAYBACK_FINISHED,
+    ExecutionResult,
+    PlaybackEngine,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -68,7 +75,7 @@ class TestExecutionResult:
 
 
 def test_telemetry_summary_includes_schedule_metadata():
-    from sky_music.domain.scheduler_types import ScheduleMetadata, Microseconds
+    from sky_music.domain.scheduler_types import Microseconds, ScheduleMetadata
     from sky_music.orchestration.telemetry import TelemetryLogger
 
     logger = TelemetryLogger("test", enabled=True)
@@ -305,7 +312,7 @@ class TestWinBackendDuplicateDownProtection:
         _result = backend.key_down((0x15, 0x16))
         # Only 0x16 should have been sent
         assert len(calls) == 1
-        sent_codes, key_up = calls[0]
+        sent_codes, _key_up = calls[0]
         assert 0x16 in sent_codes
         assert 0x15 not in sent_codes
 
@@ -367,7 +374,7 @@ class TestFpsTimingPolicyUpgrade:
     def test_fps_upgrades_to_frame_timing_policy(self):
         """When --fps is set and the profile is not already fps-aware, TIMING_POLICY
         should be promoted to a FrameTimingPolicy with correct frame_us."""
-        from sky_music.domain.scheduler_types import TimingPolicy, FrameTimingPolicy
+        from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 
         base_policy = TimingPolicy.balanced()
         fps = 60
@@ -382,7 +389,7 @@ class TestFpsTimingPolicyUpgrade:
 
     def test_fps_none_does_not_upgrade(self):
         """When --fps is None, TimingPolicy stays as is."""
-        from sky_music.domain.scheduler_types import TimingPolicy, FrameTimingPolicy
+        from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 
         policy = TimingPolicy.balanced()
         assert not isinstance(policy, FrameTimingPolicy)

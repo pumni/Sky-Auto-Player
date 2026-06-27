@@ -1,8 +1,9 @@
 """Tái hiện: local_precise@144 -> đổi profile/fps -> quay lại local_precise@144.
 Đo min_hold hiệu dụng ở từng bước qua ĐÚNG các hàm persist/load thật."""
 from __future__ import annotations
-import sys
+
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -10,8 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import sky_music.config as config
 from sky_music.config import (
-    load_config, clear_config_cache,
-    persist_default_profile, persist_default_fps, persist_calibration_defaults, profile_dict_for,
+    clear_config_cache,
+    load_config,
+    persist_calibration_defaults,
+    persist_default_fps,
+    persist_default_profile,
+    profile_dict_for,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
 

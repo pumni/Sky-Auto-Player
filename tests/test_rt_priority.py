@@ -1,4 +1,5 @@
 from unittest.mock import patch
+
 import pytest
 
 from sky_music.infrastructure.rt_priority import DispatchThreadPriorityScope
@@ -73,9 +74,7 @@ def test_priority_ladder_auto_fallback_to_highest(mock_win32_platform, mock_inpu
     def side_effect(thread_handle: int, priority: int) -> bool:
         if priority == 15:
             return False
-        if priority == 2:
-            return True
-        return False
+        return priority == 2
 
     mock_inputs.set_thread_priority.side_effect = side_effect
 

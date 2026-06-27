@@ -1,9 +1,10 @@
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from sky_music.config import resolve_game_fps
+
 
 @dataclass(frozen=True, slots=True)
 class CalibrationInput:
