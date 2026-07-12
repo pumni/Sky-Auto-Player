@@ -5,6 +5,24 @@
 > **Mục tiêu:** Dọn dead code + rút ngắn "prologue" giữa spin-end và `SendInput` (giảm `visible_lateness` thật) + nâng type-safety, **không thay đổi hành vi timing/đồng thời của hợp âm**.
 > **Trạng thái mã hiện tại:** branch `main` sạch. Mọi tham chiếu dòng dưới đây ứng với cây hiện tại — hãy đọc lại file trước mỗi sửa đổi để khớp chính xác.
 
+> ⚠ **CẬP NHẬT 2026-07-13 — phần lớn Phase đã thực thi.** Bảng dưới ánh xạ Phase → commit / refactor.
+>
+> | Phase | Nội dung | Trạng thái | Commit / refactor |
+> |---|---|---|---|
+> | **A.1-A.4** | Rút ngắn prologue (lead path dedup + `getattr` spin + generator dedup) | DONE | `7cdb8fb perf(dispatch): trim hot-path allocations and tighten spin loop` + refactor 2026-07 (unified `_lead_for(kind, n_keys)` helper) |
+> | **B.1-B.4** | Protocol `LeadEstimator` + default dedup | DONE | `LeadEstimator` Protocol ở `dispatch_loop.py:184`; engine truyền trực tiếp `_NullEstimator()` khi adaptive-lead tắt (refactor 2026-07) |
+> | **C.1-C.3** | `statistics` dedup cho spin threshold | DONE | toàn bộ dùng `statistics.fmean`/`statistics.pstdev` |
+> | **D.1** | Gỡ `deferred_by_us` trong `_execute_action` | DONE | tham số đã gỡ khỏi signature |
+> | **D.2** | `command_event` trong `_process_wait_states` | NOT NEEDED | `_process_wait_states` không bao giờ được thêm `command_event` |
+> | **E** | `Any` → `Protocol` cho command/focus/progress | DONE | không còn `: Any` nào trong `dispatch_loop.py` |
+> | **F** | Gỡ global mirror "legacy" | DONE | `822c439 refactor(main): replace legacy globals with runtime state` |
+> | **G.1** | ruff `target-version = "py314"` | DONE | `0b571eb refactor: tighten lint rules and simplify helpers` |
+> | **G.2** | `requires-python` align | DONE | refactor 2026-07 (`pyproject.toml:14` → `>=3.14,<3.15`) |
+>
+> Refactor 2026-07 cover đồng thời A.5 (`_safe_debug_log` helper thay 5 khối `contextlib.suppress(Exception)` trong `release_all`) và A.7 (sort key scheduler bằng `_UP_BEFORE_DOWN_RANK` dict thay `a.kind == "down"` bool-as-int).
+>
+> Tài liệu này vẫn có giá trị lịch sử (mô tả quy trình + guardrail). Đường gửi hiện tại ở `docs/rt-dispatch-architecture.md`.
+
 ---
 
 ## 0. Bắt buộc đọc trước khi bắt đầu

@@ -6,6 +6,22 @@
 > Tuân thủ AGENTS.md: scheduler thuần & test được, type hints, thêm test timing edge-case,
 > 3 cổng `pytest`/`ruff`/`pyright` phải xanh.
 
+> ⚠ **CẬP NHẬT 2026-07-13 — Phase A đã thực thi.**
+>
+> | Phase | Nội dung | Trạng thái | Commit |
+> |---|---|---|---|
+> | **A.1** `SendLatencyEstimator` bucket theo polyphony | DONE | `712c02e feat(orchestration): add per-batch lead and polyphonic estimator` |
+> | **A.2** N vào đường tính lead (per-batch) | DONE | `712c02e` |
+> | **A.3** `lead_for_batch` ở `DispatchLoop` | DONE | `712c02e` |
+> | **A.4** Bảo toàn hành vi & giới hạn | DONE | test xanh |
+> | **A.5** Tests | DONE | `tests/test_adaptive_lead.py` (5+ test, bao gồm `test_estimator_*` × 5 + `test_down_lead_for_batch_*`) |
+> | **A.6** Tiêu chí nghiệm thu (định lượng) | DONE | A/B số đo ở `docs/rt-dispatch-architecture.md` §7: median 420µs → -3µs ở 144 FPS |
+> | **A extension** RLS exponential forgetting | DONE | `1a94ce2 feat(engine): add exponential forgetting to latency estimator` (thay lifetime-sum RLS cũ để tránh tackle uớc tính nhớ trọn đời) |
+> | **B** Giảm độ đục per-phím (no-GIL) | NOT STARTED | đặt sau A; hiện tại dispatch loop đã tight-spin → no-GIL decoupled khỏi UI, nên lợi ích Phase B giảm đáng kể |
+> | **C** Chuẩn hóa No-GIL (config, độc lập) | SUPERSEDED | đã được cover bởi `c27ae67 feat(infra): detect GIL state and guard switch-interval tuning` + `.python-version` pin `3.14+freethreaded` |
+>
+> Tài liệu này vẫn có giá trị lịch sử: bằng chứng §0 về drift p50 theo polyphony là quantitative anchor cho Phase A. Trạng thái post-graduation ở `docs/rt-dispatch-architecture.md` §7.
+
 ---
 
 ## 0. Bằng chứng (đo từ `logs/playback_telemetry_20260625-190007-8707.csv`)

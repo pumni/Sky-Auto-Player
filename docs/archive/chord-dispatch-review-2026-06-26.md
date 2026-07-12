@@ -5,6 +5,33 @@
 > **Trọng tâm:** Tính đồng thời của hợp âm, anti-pattern, dead code, mức tối ưu theo Python 3.14 (free-threaded).
 > **Trạng thái:** Báo cáo đánh giá — chưa thực hiện thay đổi mã nguồn nào.
 
+> ⚠ **CẬP NHẬT 2026-07-13 — phần lớn vấn đề đã được xử lý/implicit-cleanup sau khi doc viết.**
+> Báo cáo này vẫn có giá trị lịch sử, nhưng đa số mục §3-§7 đã được vá bởi các commit sau
+> (xem bảng dưới). Trạng thái đường gửi hiện tại sự thật là ở `docs/rt-dispatch-architecture.md`.
+>
+> | Mục review | Trạng thái | Commit / refactor |
+> |---|---|---|
+> | §3 **A1** legacy globals | DONE | `822c439 refactor(main): replace legacy globals with runtime state` |
+> | §3 **A2** `getattr` spin dead branch | DONE | `7cdb8fb perf(dispatch): trim hot-path allocations and tighten spin loop` |
+> | §3 **A4** generator in tuple | DONE | `7cdb8fb` |
+> | §3 **A5** `try/except` lồng trong `release_all` | DONE | refactor 2026-07 (`_safe_debug_log` helper trong `infrastructure/backend.py:WinSendInputBackend.release_all`) |
+> | §3 **A6** manual mean/variance | DONE | `statistics.fmean`/`pstdev` trên toàn codebase |
+> | §3 **A7** bool-as-int sort key | DONE | refactor 2026-07 (`_UP_BEFORE_DOWN_RANK` trong `domain/scheduler.py`) |
+> | §4 dead param `deferred_by_us` | DONE | đã gỡ khỏi `_execute_action` |
+> | §4 dead `command_event` | NOT NEEDED | `_process_wait_states` không bao giờ được thêm `command_event` |
+> | §7.4 **L1**+**L2** lead path duplication | DONE | refactor 2026-07 (unified `_lead_for(kind, n_keys)` trong `dispatch_loop.py`) |
+> | §7.4 **L3** linear no-forgetting | DONE | `1a94ce2 feat(engine): add exponential forgetting to latency estimator` |
+> | §7.4 **L4** `_MAX_POLY=6` cap | KEEP (by design) | tài liệu trong §7.4 doc |
+> | §7.4 **L5** 5-sample cold start | KEEP (by design) | tài liệu trong §7.4 doc |
+> | §7.4 **L6** lead cảm nhận residual prologue | KEEP (unsolvable) | lead chỉ bù `send_duration`, prologue là bias không thể bù |
+> | §7.4 **L7** `max_lead_us=2_000` floor | KEEP | lan can an toàn |
+> | §5 Python 3.14 free-threaded | Phần lớn DONE | `c27ae67 feat(infra): detect GIL state and guard switch-interval tuning` + `0b571eb` |
+> | §6 **G.1** ruff `target-version` | DONE | `0b571eb refactor: tighten lint rules and simplify helpers` set `target-version = "py314"` |
+> | §6 **G.2** `requires-python` align | DONE | refactor 2026-07 align `pyproject.toml:14` về `>=3.14,<3.15` |
+> | **Phase E (Any → Protocol)** | DONE | không còn `: Any` nào trong `dispatch_loop.py` |
+>
+> Còn lại không vá: các knob-by-design (L4, L5, L6, L7) là đánh đổi có lý do; xem `docs/timing-principles.md` §7 cho ground truth và `docs/rt-dispatch-architecture.md` §7 cho số đo A/B gần nhất.
+
 ---
 
 ## 1. Kiến trúc & luồng từ `uv run play`
