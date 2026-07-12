@@ -100,7 +100,6 @@ class SendLatencyEstimator:
     """
 
     _SEED_SAMPLES = 5
-    _MAX_POLY = 6
 
     __slots__ = (
         "_alpha",
@@ -128,12 +127,13 @@ class SendLatencyEstimator:
         "_sum_down_total",
         "_sum_up",
         "_warm_down",
+        "max_poly",
     )
 
     def __init__(
-        self, alpha: float = 0.2, max_lead_us: int = 2_000, lin_forget: float = 0.999
+        self, alpha: float = 0.2, max_lead_us: int = 2_000, lin_forget: float = 0.999, max_poly: int = 6
     ) -> None:
-        max_poly = self._MAX_POLY
+        self.max_poly = max_poly
         self._alpha: float = alpha
         self._max_lead_us: int = max_lead_us
         # Forgetting factor in (0, 1]; 1.0 reproduces the old lifetime-sum behaviour. 0.999 ≈ a
@@ -158,7 +158,7 @@ class SendLatencyEstimator:
 
     def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None:
         if kind == "down":
-            n = max(1, min(self._MAX_POLY, n_keys))
+            n = max(1, min(self.max_poly, n_keys))
             self._count_down[n] += 1
             if self._warm_down[n]:
                 self._ema_down[n] = (
@@ -227,7 +227,7 @@ class SendLatencyEstimator:
 
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
         if kind == "down":
-            n = max(1, min(self._MAX_POLY, n_keys))
+            n = max(1, min(self.max_poly, n_keys))
             # Exact bucket usable (seeded or warm-started)?
             if self._warm_down[n]:
                 return max(0, min(self._max_lead_us, round(self._ema_down[n])))
@@ -260,10 +260,10 @@ class SendLatencyEstimator:
         """
         return {
             "version": 1,
-            "max_poly": self._MAX_POLY,
+            "max_poly": self.max_poly,
             "ema_down": {
                 str(n): self._ema_down[n]
-                for n in range(1, self._MAX_POLY + 1)
+                for n in range(1, self.max_poly + 1)
                 if self._warm_down[n]
             },
             "ema_down_total": (
@@ -305,7 +305,7 @@ class SendLatencyEstimator:
                     val = float(raw_val)
                 except (TypeError, ValueError):
                     continue
-                if 1 <= n <= self._MAX_POLY and 0.0 <= val <= sane_max:
+                if 1 <= n <= self.max_poly and 0.0 <= val <= sane_max:
                     self._ema_down[n] = val
                     self._warm_down[n] = True
                     if self._count_down[n] < self._SEED_SAMPLES:
@@ -432,7 +432,15 @@ class PlaybackEngine:
         self.enable_switch_interval_tuning = bool(enable_switch_interval_tuning)
         self.enable_adaptive_lead = bool(enable_adaptive_lead)
         self.enable_adaptive_spin = bool(enable_adaptive_spin)
-        self.estimator = SendLatencyEstimator()
+        max_chord = max(
+            (
+                len(batch.intents)
+                for batch in self.runtime_schedule.batches
+                if batch.kind == "down"
+            ),
+            default=0,
+        )
+        self.estimator = SendLatencyEstimator(max_poly=max(6, max_chord))
         # Per-machine warm-start: seed the estimator from a prior session so the first notes of
         # each chord size are led correctly instead of paying full cold-start lateness (the first
         # _SEED_SAMPLES events of every bucket would otherwise dispatch with lead 0). Best-effort.
@@ -671,6 +679,24 @@ class PlaybackEngine:
                 pass
 
         self._record_thread_census()
+
+        if self._should_use_dispatch_thread():
+            try:
+                from sky_music.platform.win32 import inputs
+
+                shapes_to_prewarm: set[tuple[tuple[int, ...], bool]] = set()
+                for batch in self.runtime_schedule.batches:
+                    if batch.kind == "down":
+                        shapes_to_prewarm.add((tuple(i.scan_code for i in batch.intents), False))
+                distinct_keys = set()
+                for action in self.actions:
+                    distinct_keys.update(action.scan_codes)
+                for sc in distinct_keys:
+                    shapes_to_prewarm.add(((sc,), True))
+
+                inputs.prewarm_input_arrays(shapes_to_prewarm)
+            except Exception:
+                pass
 
         # Wait for initial focus if required to prevent "Focus lost" showing immediately at start
         if self.require_focus and not self.focus_guard.is_active():

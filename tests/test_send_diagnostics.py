@@ -65,12 +65,11 @@ def test_single_key_partial_is_not_a_chord_split(monkeypatch):
     assert diag["partial_send_events"] == 1
     assert diag["keys_deferred"] == 1
 
-def test_send_while_unfocused_counted_when_inactive(monkeypatch):
+def test_send_while_unfocused_counted_when_inactive():
     inputs.reset_send_diagnostics()
-    monkeypatch.setattr(inputs.user32, "SendInput", lambda count, array, size: count)
-    monkeypatch.setattr(inputs, "is_sky_active", lambda: False)
-
-    inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
+    
+    # Counter is now explicitly bumped by the orchestration loop when focus is lost
+    inputs.note_send_while_unfocused()
 
     diag = inputs.get_send_diagnostics()
     assert diag["send_while_unfocused"] == 1

@@ -225,7 +225,8 @@ def test_final_spin_does_not_poll_controls_or_focus():
 
     assert engine.play() == PLAYBACK_FINISHED
     assert controls.poll_calls == 0
-    assert guard.is_active_calls == 1
+    # 1 call from engine.play() startup, 1 call from health_monitor during _execute_action
+    assert guard.is_active_calls == 2
 
 class MockControls:
     def __init__(self, command=None):

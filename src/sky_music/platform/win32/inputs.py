@@ -3,7 +3,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from ctypes import wintypes
 from pathlib import Path
 
@@ -428,7 +428,7 @@ _PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requ
 _CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
 _SEND_KEYS_DEFERRED: int = 0         # total keys pushed into a follow-up SendInput
 _ZERO_PROGRESS_RETRIES: int = 0      # SendInput calls that injected nothing (sent == 0)
-_SEND_WHILE_UNFOCUSED: int = 0       # SendInput calls attempted when Sky was not active
+_SEND_WHILE_UNFOCUSED: int = 0       # Note: No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor focus cache (TTL 2ms)
 _MIN_SAME_KEY_UP_GAP_US: int | None = None
 _IMPOSSIBLE_SAME_KEY_REPEATS: int = 0
 
@@ -443,6 +443,10 @@ def reset_send_diagnostics() -> None:
     _SEND_WHILE_UNFOCUSED = 0
     _MIN_SAME_KEY_UP_GAP_US = None
     _IMPOSSIBLE_SAME_KEY_REPEATS = 0
+
+def note_send_while_unfocused() -> None:
+    global _SEND_WHILE_UNFOCUSED
+    _SEND_WHILE_UNFOCUSED += 1
 
 
 def get_send_diagnostics() -> dict[str, int]:
@@ -473,11 +477,19 @@ def _cached_key_input(scan_code: int, flags: int) -> INPUT:
             _INPUT_CACHE[cache_key] = cached
     return cached
 
+def prewarm_input_arrays(shapes: Iterable[tuple[tuple[int, ...], bool]]) -> None:
+    for scan_codes_tuple, is_up in shapes:
+        flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if is_up else 0)
+        cache_key = (scan_codes_tuple, flags)
+        with _CACHE_LOCK:
+            if cache_key not in _ARRAY_CACHE:
+                if len(_ARRAY_CACHE) >= _ARRAY_CACHE_MAX:
+                    _ARRAY_CACHE.popitem(last=False)
+                key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
+                _ARRAY_CACHE[cache_key] = (INPUT * len(scan_codes_tuple))(*key_inputs)
+
 def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
     n = len(scan_codes_tuple)
-    if not is_sky_active():
-        global _SEND_WHILE_UNFOCUSED
-        _SEND_WHILE_UNFOCUSED += 1
 
     cache_key = (scan_codes_tuple, flags)
     with _CACHE_LOCK:

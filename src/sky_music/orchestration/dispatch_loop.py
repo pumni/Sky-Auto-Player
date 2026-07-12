@@ -47,6 +47,7 @@ class ExecutionResult:
     is_critically_late: bool   # True when lateness_us > 10_000 (10 ms)
     kind: str = "down"         # "down" (onset) or "up" (release) — used to separate counters
     dispatch_completed_us: int = 0
+    deferred_by_us: int = 0
     visible_lateness_us: int = 0
     sent_scan_codes: tuple[int, ...] = ()
     skipped_scan_codes: tuple[int, ...] = ()
@@ -347,6 +348,7 @@ class DispatchLoop:
         generation_ids: tuple[int, ...] = (),
         runtime_outcome: str = "sent",
         applied_lead_us: int = 0,
+        deferred_by_us: int = 0,
     ) -> ExecutionResult:
         send_start_raw = self.clock.now_us()
         send_start_us = state.get_elapsed_us(self.clock, send_start_raw)
@@ -359,6 +361,13 @@ class DispatchLoop:
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
         self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
+
+        if not self.health_monitor.focus_is_active():
+            try:
+                from sky_music.platform.win32 import inputs
+                inputs.note_send_while_unfocused()
+            except ImportError:
+                pass
 
         if send_result.send_completed_us is not None:
             send_duration_pure_us = send_result.send_completed_us - send_start_raw
@@ -386,6 +395,7 @@ class DispatchLoop:
             is_critically_late=lateness_us > 10_000,
             kind=action.kind,
             dispatch_completed_us=send_end_us,
+            deferred_by_us=deferred_by_us,
             visible_lateness_us=visible_lateness_us,
             sent_scan_codes=send_result.sent,
             skipped_scan_codes=send_result.skipped_duplicates,
@@ -534,6 +544,7 @@ class DispatchLoop:
             generation_ids=tuple(gen_ids_list),
             runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
             applied_lead_us=lead_up,
+            deferred_by_us=deferred_by_us,
         )
         self.estimator.update(ActionKind.UP, result.send_duration_us)
         self.coordinator.complete_releases(

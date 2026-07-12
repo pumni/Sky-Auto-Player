@@ -409,6 +409,18 @@ def test_estimator_linear_extrapolation_for_unseen_bucket() -> None:
     assert est.get_lead_us(ActionKind.DOWN, 4) == 800
 
 
+def test_estimator_extrapolates_beyond_default_max_poly() -> None:
+    # A song with an 8-key chord sets max_poly=8 on the estimator
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000, max_poly=8)
+    # Seed buckets 1 and 4 -> slope 200, intercept 0
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 200, n_keys=1)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 800, n_keys=4)
+    # Chord 8 phím nhận lead ngoại suy đúng theo linear model thay vì bucket-6
+    assert est.get_lead_us(ActionKind.DOWN, 8) == 1600
+
+
 def test_estimator_warm_start_uses_first_sample() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
     # Seed buckets 1 and 2 so the linear model (slope 200, intercept 0) is available.
