@@ -741,22 +741,11 @@ class PlaybackEngine:
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
-            # Log a partial-send summary for --debug-playback. The telemetry record happens earlier
-            # in DispatchLoop.run's finally (before save); this is only the human-readable log line.
-            try:
-                from sky_music.platform.win32 import inputs as _inputs_diag
-
-                send_diag = _inputs_diag.get_send_diagnostics()
-                if send_diag["partial_send_events"]:
-                    _inputs_diag.debug_log(
-                        "[input] SEND DIAGNOSTICS (this run): "
-                        f"chord_splits={send_diag['chord_split_events']}, "
-                        f"partial_send_events={send_diag['partial_send_events']}, "
-                        f"keys_deferred={send_diag['keys_deferred']}, "
-                        f"zero_progress_retries={send_diag['zero_progress_retries']}"
-                    )
-            except Exception:
-                pass
+            # Partial-send diagnostics are logged from DispatchLoop.run's finally block (where the
+            # dispatch thread reads its own counters — no data race). This block was intentionally
+            # removed from here in the race-fix refactor; do not reintroduce a reader of the module-
+            # level send-diagnostic counters from the main thread while the dispatcher may still be
+            # writing them under free-threaded Python.
             if realtime_sleeper is not self.sleeper:
                 close = getattr(realtime_sleeper, "close", None)
                 if close is not None:

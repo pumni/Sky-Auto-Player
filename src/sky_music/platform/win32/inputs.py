@@ -418,8 +418,10 @@ _CACHE_LOCK = threading.RLock()
 # symptom). These counters make that event observable so we can confirm whether the residual chord
 # glitch is sender-side (partial send) or remote-side (untouchable).
 #
-# Single-writer contract: only the dispatch thread sends. Reset before the thread starts and read
-# after it joins (see PlaybackEngine.play) — no concurrent access, safe under free-threaded builds.
+# Best-effort diagnostics: the dispatch thread is the sole writer during normal playback.
+# get_send_diagnostics() should only be called while the dispatch thread is guaranteed not to be
+# writing — i.e. inside the dispatch loop itself or after the thread has joined. The engine's
+# finally block reads these from the telemetry record, not directly.
 _PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requested (any n)
 _CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
 _SEND_KEYS_DEFERRED: int = 0         # total keys pushed into a follow-up SendInput

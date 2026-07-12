@@ -970,12 +970,24 @@ class DispatchLoop:
             # Partial-send diagnostics: recorded BEFORE save() so they reach the summary. The
             # dispatch thread is the sole sender and is finishing here, so the counters are final.
             # Pure instrumentation — never let a backend without it (test fakes) break teardown.
+            # The debug_log lives here on the dispatch thread (not in engine.py's finally) so
+            # reading the counters never races with the writer — critical under free-threaded builds.
             get_send_diag = getattr(self.backend, "get_send_diagnostics", None)
             if get_send_diag is not None:
+                send_diag = get_send_diag()
                 self.telemetry.record_runtime_options(
                     {
                         **self.telemetry.runtime_options,
-                        "send_diagnostics": get_send_diag(),
+                        "send_diagnostics": send_diag,
                     }
                 )
+                if send_diag.get("partial_send_events"):
+                    from sky_music.platform.win32 import inputs as _inputs_diag
+                    _inputs_diag.debug_log(
+                        "[input] SEND DIAGNOSTICS (this run): "
+                        f"chord_splits={send_diag.get('chord_split_events', 0)}, "
+                        f"partial_send_events={send_diag.get('partial_send_events', 0)}, "
+                        f"keys_deferred={send_diag.get('keys_deferred', 0)}, "
+                        f"zero_progress_retries={send_diag.get('zero_progress_retries', 0)}"
+                    )
             self.telemetry.save()
