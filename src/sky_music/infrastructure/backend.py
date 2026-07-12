@@ -18,6 +18,9 @@ class BackendHealth:
     possibly_active_count: int
     failed_release_count: int
     last_error: str | None
+    min_same_key_up_gap_us: int | None = None
+    impossible_same_key_repeats: int = 0
+    send_while_unfocused: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +104,8 @@ class _TrackedKeyState(ABC):
             "chord_split_events": 0,
             "keys_deferred": 0,
             "zero_progress_retries": 0,
+            "send_while_unfocused": 0,
+            "impossible_same_key_repeats": 0,
         }
 
     @abstractmethod
@@ -164,6 +169,56 @@ class _TrackedKeyState(ABC):
         )
 
 
+_watchdog_proc = None
+_watchdog_thread = None
+
+def _start_watchdog_once():
+    global _watchdog_proc, _watchdog_thread
+    if _watchdog_proc is not None:
+        return
+    import atexit
+    import subprocess
+    import sys
+    import threading
+
+    # CREATE_NO_WINDOW = 0x08000000
+    creationflags = 0x08000000 if sys.platform == "win32" else 0
+    try:
+        _watchdog_proc = subprocess.Popen(
+            [sys.executable, "-m", "sky_music.watchdog"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags
+        )
+    except Exception:
+        # If watchdog fails to spawn, we just run without it (fallback)
+        return
+
+    def heartbeat():
+        while True:
+            try:
+                proc = _watchdog_proc
+                if proc is None or proc.poll() is not None:
+                    break
+                stdin = proc.stdin
+                if stdin:
+                    stdin.write(b'\x00')
+                    stdin.flush()
+            except Exception:
+                break
+            time.sleep(0.5)
+
+    _watchdog_thread = threading.Thread(target=heartbeat, daemon=True)
+    _watchdog_thread.start()
+
+    def _cleanup():
+        if _watchdog_proc and _watchdog_proc.stdin:
+            with contextlib.suppress(Exception):
+                _watchdog_proc.stdin.close()
+    atexit.register(_cleanup)
+
+
 class WinSendInputBackend(_TrackedKeyState):
     """Windows-specific SendInput backend wrapper with safety tracking and panic release."""
     __slots__ = ("inputs_module",)
@@ -173,13 +228,18 @@ class WinSendInputBackend(_TrackedKeyState):
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
         self.inputs_module = inputs
+        _start_watchdog_once()
         
     def get_health(self) -> BackendHealth:
+        diag = self.inputs_module.get_send_diagnostics()
         return BackendHealth(
             active_count=len(self.active_keys),
             possibly_active_count=len(self.possibly_active_keys),
             failed_release_count=len(self.failed_release_keys),
-            last_error=self.last_error
+            last_error=self.last_error,
+            min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
+            impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
+            send_while_unfocused=diag.get("send_while_unfocused", 0)
         )
 
     def get_send_diagnostics(self) -> dict[str, int]:
@@ -332,11 +392,15 @@ class DryRunBackend(_TrackedKeyState):
         self.history: list[tuple[str, tuple[int, ...]]] = []  # Records (action_type, scan_codes)
         
     def get_health(self) -> BackendHealth:
+        diag = self.get_send_diagnostics()
         return BackendHealth(
             active_count=len(self.active_keys),
             possibly_active_count=len(self.possibly_active_keys),
             failed_release_count=len(self.failed_release_keys),
-            last_error=self.last_error
+            last_error=self.last_error,
+            min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
+            impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
+            send_while_unfocused=diag.get("send_while_unfocused", 0)
         )
 
     def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:

@@ -127,7 +127,7 @@ def _evaluate_risk_severity(res: ScheduleMetadata, dense_clusters_list: list[Den
         severity = "high"
         reasons_list.append("infeasible same-key repeats")
         recommendations.append(
-            f"{res.impossible_same_key_repeats} same-key repeat(s) are below min_hold and cannot be scheduled without overlap."
+            f"{res.impossible_same_key_repeats} same-key repeat(s) faster than one frame - the game may merge them."
         )
         recommendations.append(
             "Reduce tempo or edit the arrangement so the same key has more time between downs."

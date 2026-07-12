@@ -648,6 +648,11 @@ class PlaybackEngine:
             from sky_music.platform.win32 import inputs as _inputs_diag
 
             _inputs_diag.reset_send_diagnostics()
+            if self.telemetry.schedule_summary is not None:
+                _inputs_diag.set_schedule_diagnostics(
+                    min_gap=self.telemetry.schedule_summary.get("min_same_key_up_gap_us"),
+                    impossible_repeats=self.telemetry.schedule_summary.get("impossible_same_key_repeats", 0),
+                )
         except Exception:
             pass
 

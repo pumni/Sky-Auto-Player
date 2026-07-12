@@ -6,7 +6,12 @@ import pytest
 
 import sky_music.orchestration.engine as engine_module
 from sky_music.domain import Song
-from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+from sky_music.domain.scheduler_types import (
+    ActionKind,
+    KeyAction,
+    Microseconds,
+    ScanCode,
+)
 from sky_music.infrastructure.backend import (
     BackendHealth,
     InputSendResult,
@@ -118,6 +123,7 @@ class TimedBackend:
         self.send_duration_us = send_duration_us
         self.active: set[int] = set()
         self.calls: list[TimedCall] = []
+        self.release_all_calls: list[int] = []
 
     def _finish(self, kind: str, scan_codes: tuple[int, ...]) -> None:
         started_us = self.clock.time_us
@@ -141,6 +147,7 @@ class TimedBackend:
         return InputSendResult(sent=sent, skipped_duplicates=skipped, success=True)
 
     def release_all(self) -> ReleaseAllOutcome:
+        self.release_all_calls.append(self.clock.time_us)
         attempted = tuple(sorted(self.active))
         self.active.clear()
         return ReleaseAllOutcome(
@@ -1195,3 +1202,58 @@ def test_onset_bias_us_is_applied_only_to_downs() -> None:
     assert lead_down == 1500
     # lead_up should be exactly dispatch_lead_us (1000)
     assert lead_up == 1000
+
+class FakeFocusGuard:
+    def __init__(self, clock: FakeClock, focuses: tuple[tuple[int, bool], ...]) -> None:
+        self.clock = clock
+        self.focuses = list(focuses)
+        self.active = True
+
+    def is_active(self) -> bool:
+        while self.focuses and self.clock.time_us >= self.focuses[0][0]:
+            _, active = self.focuses.pop(0)
+            self.active = active
+        print(f"FakeFocusGuard is_active at {self.clock.time_us} returning {self.active}")
+        return self.active
+
+    def focus(self) -> bool:
+        self.active = True
+        return True
+
+
+def test_focus_loss_suspends_and_regain_releases():
+    clock = FakeClock()
+    sleeper = FakeSleeper(clock)
+    backend = TimedBackend(clock, send_duration_us=0)
+    # Start focused, lose focus at 15_000, regain at 50_000
+    focus_guard = FakeFocusGuard(clock, ((15_000, False), (50_000, True)))
+    
+    actions = [
+        KeyAction(ActionKind.DOWN, (ScanCode(1),), Microseconds(0)),
+        KeyAction(ActionKind.DOWN, (ScanCode(2),), Microseconds(10_000)),
+        KeyAction(ActionKind.DOWN, (ScanCode(3),), Microseconds(20_000)),
+        KeyAction(ActionKind.UP, (ScanCode(1), ScanCode(2)), Microseconds(30_000)),
+        KeyAction(ActionKind.DOWN, (ScanCode(4),), Microseconds(60_000)),
+        KeyAction(ActionKind.UP, (ScanCode(3), ScanCode(4)), Microseconds(70_000)),
+    ]
+    
+    engine = PlaybackEngine(
+        song=Song(name="test", notes=()),
+        actions=tuple(actions),
+        backend=backend,
+        telemetry_enabled=False,
+        require_focus=True,
+        focus_guard=focus_guard,
+        clock=clock,
+        sleeper=sleeper,
+        sleep_policy=SleepPolicy(spin_threshold_us=-1, poll_s=0.001),
+        min_hold_us=5_000,
+        focus_restore_grace_us=1000,
+        late_pulse_drop_threshold_us=10_000,
+        use_dispatch_thread=False,
+    )
+    engine.play()
+    
+    downs = [c for c in backend.calls if c.kind == "down"]
+    assert [c.scan_codes for c in downs] == [(1,), (2,), (3,), (4,)]
+    assert backend.release_all_calls == [55_000, 110_000]

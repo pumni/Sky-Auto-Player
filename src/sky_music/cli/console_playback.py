@@ -289,6 +289,9 @@ def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     print(f"    Min timestamp gap           : {min_ts_gap_str}")
     print(f"    Min same-key gap            : {min_sk_gap_str}")
     print(f"    Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}")
+    if sched_meta.impossible_same_key_repeats > 0:
+        print(f"                                  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @60fps - the game may merge them)")
+    print(f"    Risky same-key repeats      : {sched_meta.risky_same_key_repeats}")
     print(f"    Duplicate same-key slots    : {sched_meta.duplicate_note_count}")
     print()
 

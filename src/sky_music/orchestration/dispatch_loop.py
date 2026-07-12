@@ -417,6 +417,7 @@ class DispatchLoop:
     ) -> ExecutionResult | None:
         if now_us is None:
             now_us = state.get_elapsed_us(self.clock)
+
         if self.late_pulse_drop_threshold_us is not None and now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
                 self.coordinator.drop_expired_downs(batch.intents)
                 self._record_without_dispatch(
@@ -642,7 +643,7 @@ class DispatchLoop:
 
         if self.health_monitor.require_focus and not focus_signal.is_active():
             if state.focus_pause_started_us is None:
-                self._release_all_and_cancel_runtime()
+                self.coordinator.cancel_all()
                 state.focus_pause_started_us = self.clock.now_us()
             status_val = "waiting_for_focus" if not first_action_executed else "focus_lost"
             progress_sink.publish(
@@ -675,6 +676,8 @@ class DispatchLoop:
             if self.enable_reprobe and self.probe_callback is not None and self.sleeper is not None:
                 new_threshold = self.probe_callback(self.sleeper)
                 self.spin_threshold_us = new_threshold
+
+            self.backend.release_all()
 
             pause_duration_us = self.clock.now_us() - state.focus_pause_started_us
             state.update_pause_time(pause_duration_us)

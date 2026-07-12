@@ -167,6 +167,7 @@ class AppConfig:
     # --no-adaptive-lead / --no-adaptive-spin are the kill switches.
     enable_adaptive_lead:         bool          = True
     enable_adaptive_spin:         bool          = True
+    use_ll_hook:                  bool          = False
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
     frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
@@ -415,6 +416,7 @@ def _build_config_from_disk() -> AppConfig:
         rt_priority_mode             = cast(RtPriorityMode, str(raw.get("rt_priority_mode", AppConfig.rt_priority_mode))),
         enable_adaptive_lead         = bool(raw.get("enable_adaptive_lead", AppConfig.enable_adaptive_lead)),
         enable_adaptive_spin         = bool(raw.get("enable_adaptive_spin", AppConfig.enable_adaptive_spin)),
+        use_ll_hook                  = bool(raw.get("use_ll_hook", AppConfig.use_ll_hook)),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
@@ -461,6 +463,7 @@ def save_config(cfg: AppConfig) -> None:
     raw["rt_priority_mode"]             = cfg.rt_priority_mode
     raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
     raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
+    raw["use_ll_hook"]                  = cfg.use_ll_hook
     raw["hotkeys"] = {
         "pause":   cfg.hotkeys.pause,
         "skip":    cfg.hotkeys.skip,

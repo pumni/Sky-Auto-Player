@@ -10,6 +10,7 @@ from sky_music.platform.win32 import inputs
 def test_full_send_records_no_partial(monkeypatch):
     inputs.reset_send_diagnostics()
     monkeypatch.setattr(inputs.user32, "SendInput", lambda count, array, size: count)
+    monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
 
     inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
 
@@ -19,6 +20,8 @@ def test_full_send_records_no_partial(monkeypatch):
         "chord_split_events": 0,
         "keys_deferred": 0,
         "zero_progress_retries": 0,
+        "send_while_unfocused": 0,
+        "impossible_same_key_repeats": 0,
     }
 
 
@@ -32,6 +35,7 @@ def test_partial_send_is_counted_as_chord_split(monkeypatch):
         return count - 1 if calls["n"] == 1 else count
 
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
+    monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
 
     inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
 
@@ -51,6 +55,7 @@ def test_single_key_partial_is_not_a_chord_split(monkeypatch):
         return 0 if calls["n"] == 1 else count
 
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
+    monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
 
     inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
 
@@ -59,3 +64,13 @@ def test_single_key_partial_is_not_a_chord_split(monkeypatch):
     assert diag["chord_split_events"] == 0
     assert diag["partial_send_events"] == 1
     assert diag["keys_deferred"] == 1
+
+def test_send_while_unfocused_counted_when_inactive(monkeypatch):
+    inputs.reset_send_diagnostics()
+    monkeypatch.setattr(inputs.user32, "SendInput", lambda count, array, size: count)
+    monkeypatch.setattr(inputs, "is_sky_active", lambda: False)
+
+    inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
+
+    diag = inputs.get_send_diagnostics()
+    assert diag["send_while_unfocused"] == 1

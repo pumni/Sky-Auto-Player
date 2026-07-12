@@ -48,6 +48,8 @@ WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
 
+SKY_PLAYER_SIGNATURE = 0x5C1B9111
+
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
         ("wVk", wintypes.WORD),
@@ -426,23 +428,40 @@ _PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requ
 _CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
 _SEND_KEYS_DEFERRED: int = 0         # total keys pushed into a follow-up SendInput
 _ZERO_PROGRESS_RETRIES: int = 0      # SendInput calls that injected nothing (sent == 0)
+_SEND_WHILE_UNFOCUSED: int = 0       # SendInput calls attempted when Sky was not active
+_MIN_SAME_KEY_UP_GAP_US: int | None = None
+_IMPOSSIBLE_SAME_KEY_REPEATS: int = 0
 
 
 def reset_send_diagnostics() -> None:
-    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _ZERO_PROGRESS_RETRIES
+    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _ZERO_PROGRESS_RETRIES, _SEND_WHILE_UNFOCUSED
+    global _MIN_SAME_KEY_UP_GAP_US, _IMPOSSIBLE_SAME_KEY_REPEATS
     _PARTIAL_SEND_EVENTS = 0
     _CHORD_SPLIT_EVENTS = 0
     _SEND_KEYS_DEFERRED = 0
     _ZERO_PROGRESS_RETRIES = 0
+    _SEND_WHILE_UNFOCUSED = 0
+    _MIN_SAME_KEY_UP_GAP_US = None
+    _IMPOSSIBLE_SAME_KEY_REPEATS = 0
 
 
 def get_send_diagnostics() -> dict[str, int]:
-    return {
+    res = {
         "partial_send_events": _PARTIAL_SEND_EVENTS,
         "chord_split_events": _CHORD_SPLIT_EVENTS,
         "keys_deferred": _SEND_KEYS_DEFERRED,
         "zero_progress_retries": _ZERO_PROGRESS_RETRIES,
+        "send_while_unfocused": _SEND_WHILE_UNFOCUSED,
+        "impossible_same_key_repeats": _IMPOSSIBLE_SAME_KEY_REPEATS,
     }
+    if _MIN_SAME_KEY_UP_GAP_US is not None:
+        res["min_same_key_up_gap_us"] = _MIN_SAME_KEY_UP_GAP_US
+    return res
+
+def set_schedule_diagnostics(min_gap: int | None, impossible_repeats: int) -> None:
+    global _MIN_SAME_KEY_UP_GAP_US, _IMPOSSIBLE_SAME_KEY_REPEATS
+    _MIN_SAME_KEY_UP_GAP_US = min_gap
+    _IMPOSSIBLE_SAME_KEY_REPEATS = impossible_repeats
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
@@ -450,12 +469,16 @@ def _cached_key_input(scan_code: int, flags: int) -> INPUT:
         cached = _INPUT_CACHE.get(cache_key)
         if cached is None:
             cached = INPUT(type=INPUT_KEYBOARD)
-            cached.ki = KEYBDINPUT(0, scan_code, flags, 0, 0)
+            cached.ki = KEYBDINPUT(0, scan_code, flags, 0, SKY_PLAYER_SIGNATURE)
             _INPUT_CACHE[cache_key] = cached
     return cached
 
 def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
     n = len(scan_codes_tuple)
+    if not is_sky_active():
+        global _SEND_WHILE_UNFOCUSED
+        _SEND_WHILE_UNFOCUSED += 1
+
     cache_key = (scan_codes_tuple, flags)
     with _CACHE_LOCK:
         input_array = _ARRAY_CACHE.get(cache_key)
