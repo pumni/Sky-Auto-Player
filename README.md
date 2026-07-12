@@ -1,9 +1,9 @@
 <div align="center">
   <p align="center">
-    <a href="https://github.com/pumni/Sky-Player/releases"><img src="https://img.shields.io/github/downloads/pumni/Sky-Player/total?style=for-the-badge&label=downloads" alt="Downloads"></a>
-    <img src="https://img.shields.io/badge/version-2.3.0-blue?style=for-the-badge" alt="Version">
-    <a href="https://github.com/pumni/Sky-Player/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pumni/Sky-Player?style=for-the-badge" alt="License"></a>
-    <img src="https://img.shields.io/github/stars/pumni/Sky-Player?style=for-the-badge&label=stars" alt="Stars">
+    <a href="https://github.com/pumni/Sky-Player/releases"><img src="https://img.shields.io/github/downloads/pumni/Sky-Player/total?style=for-the-badge&label=downloads&logo=github&color=success" alt="Downloads"></a>
+    <a href="https://github.com/pumni/Sky-Player/releases/latest"><img src="https://img.shields.io/github/v/release/pumni/Sky-Player?style=for-the-badge&label=version&color=blue&logo=python" alt="Latest Version"></a>
+    <a href="https://github.com/pumni/Sky-Player/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pumni/Sky-Player?style=for-the-badge&color=orange" alt="License"></a>
+    <a href="https://github.com/pumni/Sky-Player/stargazers"><img src="https://img.shields.io/github/stars/pumni/Sky-Player?style=for-the-badge&label=stars&color=gold" alt="Stars"></a>
   </p>
 
   # Sky Player
