@@ -196,3 +196,83 @@ class InfoModal(PickerModal[None]):
 
     def dismiss(self, result: Any = None) -> None:  # type: ignore[override]
         super().dismiss(result)
+
+
+class UpdateModal(PickerModal[str | None]):
+    """Modal to notify the user of an available update."""
+
+    BINDINGS = [("escape", "remind", "Remind me later")]
+
+    def __init__(
+        self,
+        latest_version: str,
+        current_version: str,
+        release_notes: str,
+        *,
+        theme_name: str = "aurora",
+    ) -> None:
+        PickerModal.__init__(
+            self,
+            f"Update Available: v{latest_version}",
+            [
+                KeyHint("enter", "Select"),
+                KeyHint("escape", "Remind later"),
+            ],
+            theme_name=theme_name,
+        )
+        self.current_version = current_version
+        self.release_notes = release_notes
+        self.options = [
+            PickerOption("download", "Download and restart"),
+            PickerOption("remind", "Remind me later"),
+            PickerOption("skip", "Skip this version"),
+        ]
+
+    def compose_modal_content(self) -> ComposeResult:
+        from textual.containers import VerticalScroll
+        from textual.widgets import Markdown
+
+        yield Static(f"You are currently running v{self.current_version}.\n", id="update-info")
+
+        if self.release_notes:
+            with VerticalScroll(id="update-notes-container"):
+                yield Markdown(self.release_notes, id="update-notes")
+
+        yield Static("", id="update-spacer")
+        yield OptionList(*(o.label for o in self.options), id="modal-options")
+
+    def on_modal_mounted(self) -> None:
+        import contextlib
+
+        from textual.containers import VerticalScroll
+        with contextlib.suppress(Exception):
+            container = self.query_one("#update-notes-container", VerticalScroll)
+            container.styles.height = "auto"
+            container.styles.max_height = 12
+            container.styles.margin = (0, 0, 1, 0)
+            container.styles.border = ("ascii", "gray")
+            
+        self.set_focus(self.query_one("#modal-options", OptionList))
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss("remind")
+        elif event.key == "enter":
+            event.stop()
+            self._select_current()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self._select_current()
+
+    def _select_current(self) -> None:
+        options = self.query_one("#modal-options", OptionList)
+        idx = options.highlighted
+        if idx is not None:
+            self.dismiss(str(self.options[idx].value))
+        else:
+            self.dismiss("remind")
+
+    def action_remind(self) -> None:
+        self.dismiss("remind")

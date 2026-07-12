@@ -356,6 +356,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_mount(self) -> None:
         self._apply_theme_class()
+        self._check_post_update_flag()
         paths = get_song_choices(force_refresh=True)
         self.choices = [
             SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
@@ -371,6 +372,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._update_header_tagline()
         # Initialize responsive columns on start
         self.call_after_refresh(self._apply_responsive_columns)
+        self.check_for_updates_worker()
 
     def on_resize(self, _event: events.Resize) -> None:
         self.call_after_refresh(self._apply_responsive_columns)
@@ -1359,6 +1361,73 @@ class SkyPickerApp(App[SongPickerResult | None]):
             tempo_scale=picker_result.tempo_scale,
             fps=picker_result.fps,
         )
+
+    def _check_post_update_flag(self) -> None:
+        from sky_music.infrastructure.update_installer import (
+            install_dir_for_frozen,
+            post_update_flag_path,
+        )
+        with contextlib.suppress(Exception):
+            flag = post_update_flag_path(install_dir_for_frozen())
+            if flag.exists():
+                self.notify(f"Sky Player successfully updated to v{VERSION}!", severity="information", timeout=5)
+                flag.unlink()
+
+    from textual import work
+
+    @work(thread=True)
+    def check_for_updates_worker(self) -> None:
+        from sky_music.orchestration.update_service import (
+            check_for_update,
+            record_successful_check,
+            should_auto_check,
+        )
+        if not should_auto_check(self.cfg):
+            return
+        
+        result = check_for_update(self.cfg, current_version=VERSION)
+        if result.error is None:
+            record_successful_check(self.cfg)
+        
+        if result.update is not None:
+            self.call_from_thread(self._prompt_update, result)
+
+    def _prompt_update(self, result: Any) -> None:
+        from sky_music.ui.textual_app.modals import UpdateModal
+        if result.update is None:
+            return
+        
+        modal = UpdateModal(
+            latest_version=result.update.latest_version,
+            current_version=result.current_version,
+            release_notes=result.update.release_notes,
+            theme_name=self.active_theme,
+        )
+        self.push_screen(modal, lambda res: self._handle_update_response(res, result.update))
+
+    def _handle_update_response(self, response: str | None, release: Any) -> None:
+        from sky_music.orchestration.update_service import record_skip
+        if response == "skip":
+            record_skip(self.cfg, release.latest_version)
+            self.notify(f"Skipped version {release.latest_version}", timeout=3)
+        elif response == "download":
+            self.notify("Downloading update... Please wait.", severity="information", timeout=5)
+            self.download_and_apply_update_worker(release)
+            
+    @work(thread=True)
+    def download_and_apply_update_worker(self, release: Any) -> None:
+        from sky_music.orchestration.update_service import (
+            apply_staged_update,
+            download_and_verify_update,
+        )
+        outcome = download_and_verify_update(release)
+        if outcome.staged:
+            self.call_from_thread(self.notify, "Update ready! Restarting...", severity="information", timeout=3)
+            import time
+            time.sleep(1)
+            apply_staged_update(outcome.staged)
+        else:
+            self.call_from_thread(self.notify, f"Update failed: {outcome.error}", severity="error", timeout=5)
 
 
 def _get_main_module():

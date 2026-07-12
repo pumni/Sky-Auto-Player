@@ -86,7 +86,7 @@ def test_picker_metadata_loads_song_stats():
     from sky_music.ui.picker_metadata import clear_metadata_cache, get_song_ui_metadata
 
     clear_metadata_cache()
-    meta = get_song_ui_metadata(Path("songs/1test copy.json"))
+    meta = get_song_ui_metadata(Path("songs/All Of Me.json"))
     assert meta.note_count > 0
     assert meta.duration_seconds > 0
 

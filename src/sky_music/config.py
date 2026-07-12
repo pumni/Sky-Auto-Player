@@ -107,6 +107,44 @@ DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.ex
 
 
 @dataclass
+class UpdateSettings:
+    auto_check: bool = True
+    skip_version: str = ""
+    check_interval_s: int = 86400
+    last_check_ts: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Any) -> UpdateSettings:
+        if not isinstance(data, dict):
+            return cls()
+        
+        interval = data.get("check_interval_s", 86400)
+        if not isinstance(interval, int) or isinstance(interval, bool):
+            interval = 86400
+        elif interval < 0:
+            interval = 0
+
+        last_check = data.get("last_check_ts", 0)
+        if not isinstance(last_check, int) or isinstance(last_check, bool):
+            last_check = 0
+
+        skip = data.get("skip_version", "")
+        if not isinstance(skip, str):
+            skip = ""
+            
+        auto_chk = data.get("auto_check", True)
+        if not isinstance(auto_chk, bool):
+            auto_chk = True
+
+        return cls(
+            auto_check=auto_chk,
+            skip_version=skip,
+            check_interval_s=interval,
+            last_check_ts=last_check,
+        )
+
+
+@dataclass
 class AppConfig:
     """Typed representation of config.json values.
 
@@ -136,6 +174,7 @@ class AppConfig:
     songs_dir:                   str           = "songs"
     sky_process_names:           list[str]     = field(default_factory=lambda: list(DEFAULT_SKY_PROCESS_NAMES))
     allow_title_fallback:        bool          = False
+    update:                      UpdateSettings = field(default_factory=UpdateSettings)
 
 
 _runtime_cfg: AppConfig | None = None
@@ -324,6 +363,7 @@ def _build_config_from_disk() -> AppConfig:
     hk_raw = raw.get("hotkeys", {}) if isinstance(raw.get("hotkeys"), dict) else {}
     sf_raw = raw.get("safety", {})   if isinstance(raw.get("safety"),  dict) else {}
     ft_raw = raw.get("frame_timing", {}) if isinstance(raw.get("frame_timing"), dict) else {}
+    up_raw = raw.get("update", {})
 
     hotkeys = HotkeyDefaults(
         pause   = str(hk_raw.get("pause",   HotkeyDefaults.pause)),
@@ -339,6 +379,7 @@ def _build_config_from_disk() -> AppConfig:
     )
 
     frame_timing = FrameTimingDefaults.from_dict(ft_raw)
+    update_settings = UpdateSettings.from_dict(up_raw)
 
     # Validate timing_profiles structure
     timing_profiles_raw = raw.get("timing_profiles", {})
@@ -381,6 +422,7 @@ def _build_config_from_disk() -> AppConfig:
         songs_dir                    = str(raw.get("songs_dir", AppConfig.songs_dir)),
         sky_process_names            = sky_process_names,
         allow_title_fallback         = bool(raw.get("allow_title_fallback", AppConfig.allow_title_fallback)),
+        update                       = update_settings,
     )
 
 
@@ -438,6 +480,12 @@ def save_config(cfg: AppConfig) -> None:
     raw["songs_dir"]                    = cfg.songs_dir
     raw["sky_process_names"]            = cfg.sky_process_names
     raw["allow_title_fallback"]         = cfg.allow_title_fallback
+    raw["update"] = {
+        "auto_check": cfg.update.auto_check,
+        "skip_version": cfg.update.skip_version,
+        "check_interval_s": cfg.update.check_interval_s,
+        "last_check_ts": cfg.update.last_check_ts,
+    }
     raw["schema_version"]               = SCHEMA_VERSION
 
     global _runtime_cfg
@@ -508,3 +556,18 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
 
     if getattr(args, "sky_process_names", None) == parser_defaults["sky_process_names"]:
         args.sky_process_names = sky_process_names_csv(cfg)
+
+
+def persist_update_skip_version(cfg: AppConfig, version: str) -> None:
+    cfg.update.skip_version = version
+    save_config(cfg)
+
+
+def persist_update_check_ts(cfg: AppConfig, ts: int) -> None:
+    cfg.update.last_check_ts = ts
+    save_config(cfg)
+
+
+def persist_update_auto_check(cfg: AppConfig, auto: bool) -> None:
+    cfg.update.auto_check = auto
+    save_config(cfg)

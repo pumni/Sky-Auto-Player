@@ -48,14 +48,14 @@ def test_risk_profile_switch_keeps_fps():
 
 
 def test_metadata_cache_key_differs_by_fps():
-    song = Path("songs/1test copy.json")
+    song = Path("songs/All Of Me.json")
     no_fps = PlaybackSessionContext.balanced()
     at_30 = PlaybackSessionContext.balanced(fps=30)
     assert no_fps.metadata_cache_key(song) != at_30.metadata_cache_key(song)
 
 
 def test_metadata_uses_session_fps_for_schedule():
-    song = Path("songs/1test copy.json")
+    song = Path("songs/All Of Me.json")
     meta_no_fps = get_song_ui_metadata(song, PlaybackSessionContext.balanced())
     meta_30 = get_song_ui_metadata(song, PlaybackSessionContext.balanced(fps=30))
     assert meta_no_fps.note_count == meta_30.note_count
