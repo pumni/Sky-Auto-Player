@@ -163,6 +163,22 @@ if sys.platform == "win32":
     kernel32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
     kernel32.SetThreadPriority.restype = wintypes.BOOL
 
+    kernel32.GetCurrentProcess.argtypes = ()
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    # K32EmptyWorkingSet (kernel32) forwards to psapi's EmptyWorkingSet on modern Windows
+    # and needs no extra DLL load. SetProcessWorkingSetSizeEx is the documented fallback.
+    if hasattr(kernel32, "K32EmptyWorkingSet"):
+        kernel32.K32EmptyWorkingSet.argtypes = (wintypes.HANDLE,)
+        kernel32.K32EmptyWorkingSet.restype = wintypes.BOOL
+    if hasattr(kernel32, "SetProcessWorkingSetSizeEx"):
+        kernel32.SetProcessWorkingSetSizeEx.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            wintypes.DWORD,
+        )
+        kernel32.SetProcessWorkingSetSizeEx.restype = wintypes.BOOL
+
     if avrt is not None:
         avrt.AvSetMmThreadCharacteristicsW.argtypes = (
             wintypes.LPCWSTR,
@@ -214,6 +230,37 @@ def disable_high_precision_timers() -> None:
         return
     winmm.timeEndPeriod(TIMER_RESOLUTION_MS)
     _timer_resolution_enabled = False
+
+
+def trim_working_set() -> bool:
+    """Best-effort: ask Windows to trim this process's resident working set.
+
+    Call this ONLY after the real-time dispatch flow has fully finished — the dispatch
+    thread joined, per-song objects dropped, and gc.collect() run. Never during playback:
+    re-faulting cold pages back in would add jitter to key timing.
+
+    Why it exists: after a dense song the Python allocator has freed thousands of
+    per-note objects, but the freed pages stay resident (Task Manager shows RSS that
+    never drops — exactly the reported symptom). ``EmptyWorkingSet`` hands those pages
+    back to the OS immediately. Genuinely-freed allocator regions are released for good;
+    any still-live cold page is transparently re-faulted (a cheap soft fault) on next
+    use. No-op off win32; fully best-effort — never raises into the caller.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        proc = kernel32.GetCurrentProcess()
+        empty = getattr(kernel32, "K32EmptyWorkingSet", None)
+        if empty is not None:
+            return bool(empty(proc))
+        set_ws = getattr(kernel32, "SetProcessWorkingSetSizeEx", None)
+        if set_ws is not None:
+            # (SIZE_T)-1 for both min and max tells the OS to trim as many pages as it can.
+            size_max = ctypes.c_size_t(-1).value
+            return bool(set_ws(proc, size_max, size_max, 0))
+    except Exception as exc:
+        debug_log(f"[realtime] working-set trim failed: {exc}")
+    return False
 
 
 class _HighResolutionTimerScope:
