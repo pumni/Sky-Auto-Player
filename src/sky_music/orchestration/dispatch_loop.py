@@ -155,19 +155,18 @@ class DispatchHealthMonitor:
         if self.input_path_warn_us <= 0:
             return
 
-        evicted = None
-        if len(self._send_duration_window) == self._send_duration_window.maxlen:
-            evicted = self._send_duration_window[0]
-
+        window = self._send_duration_window
+        # Evict before append so we read the outgoing element once (deque[0]) only when full.
+        evicted: int | None = window[0] if len(window) == window.maxlen else None
         val = max(0, int(send_duration_us))
-        self._send_duration_window.append(val)
+        window.append(val)
 
         if evicted is not None and evicted > self.input_path_warn_us:
             self._send_over_warn_count -= 1
         if val > self.input_path_warn_us:
             self._send_over_warn_count += 1
 
-        L = len(self._send_duration_window)
+        L = len(window)
         if self._send_over_warn_count <= L - 1 - round(0.95 * (L - 1)):
             self._input_path_warn_started_us = None
             return
@@ -493,7 +492,36 @@ class DispatchLoop:
     ) -> ExecutionResult | None:
         if not releases:
             return None
-        # Single pass: find representative, collect min/max/sets/scancodes/gen_ids
+
+        # Fast path: single release is dominant in real songs. Avoids every set/list allocation.
+        if len(releases) == 1:
+            only = releases[0]
+            deferral = only.down_dispatch_started_us + self.min_hold_us - only.scheduled_release_us
+            deferred_by_us = max(0, deferral)
+            action = KeyAction(
+                kind=ActionKind.UP,
+                scan_codes=(only.scan_code,),  # type: ignore[arg-type]
+                at_us=Microseconds(only.scheduled_release_us),
+                reason=only.reason,
+            )
+            result = self._execute_action(
+                only.source_action_index,
+                action,
+                state,
+                generation_ids=(only.generation_id,),
+                runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
+                applied_lead_us=lead_up,
+                deferred_by_us=deferred_by_us,
+            )
+            self.estimator.update(ActionKind.UP, result.send_duration_us)
+            self.coordinator.complete_releases(
+                releases,
+                tuple(int(sc) for sc in result.sent_scan_codes),
+                tuple(int(sc) for sc in result.skipped_scan_codes),
+            )
+            return result
+
+        # Multi-release path (chords / deferred batches): single pass over releases.
         best = releases[0]
         best_key = (
             best.effective_release_us,
@@ -502,8 +530,9 @@ class DispatchLoop:
         )
         scheduled_us = best.scheduled_release_us
         max_deferral = 0
-        source_action_indices: set[int] = set()
-        reasons: set[str] = set()
+        first_source_idx = best.source_action_index
+        first_reason = best.reason
+        all_same_source = True
         scan_codes_list: list[int] = []
         gen_ids_list: list[int] = []
         for release in releases:
@@ -517,8 +546,8 @@ class DispatchLoop:
             deferral = release.down_dispatch_started_us + self.min_hold_us - release.scheduled_release_us
             if deferral > max_deferral:
                 max_deferral = deferral
-            source_action_indices.add(release.source_action_index)
-            reasons.add(release.reason)
+            if release.source_action_index != first_source_idx or release.reason != first_reason:
+                all_same_source = False
             scan_codes_list.append(release.scan_code)
             gen_ids_list.append(release.generation_id)
         if len(scan_codes_list) != len(set(scan_codes_list)):
@@ -526,11 +555,7 @@ class DispatchLoop:
                 f"duplicate scan codes in pending releases: {scan_codes_list}"
             )
         deferred_by_us = max(0, max_deferral)
-        reason = (
-            best.reason
-            if len(source_action_indices) == 1 and len(reasons) == 1
-            else "mixed_deferred_release"
-        )
+        reason = best.reason if all_same_source else "mixed_deferred_release"
         action = KeyAction(
             kind=ActionKind.UP,
             scan_codes=tuple(scan_codes_list),  # type: ignore[arg-type]
@@ -549,8 +574,8 @@ class DispatchLoop:
         self.estimator.update(ActionKind.UP, result.send_duration_us)
         self.coordinator.complete_releases(
             releases,
-            tuple(int(scan_code) for scan_code in result.sent_scan_codes),
-            tuple(int(scan_code) for scan_code in result.skipped_scan_codes),
+            tuple(int(sc) for sc in result.sent_scan_codes),
+            tuple(int(sc) for sc in result.skipped_scan_codes),
         )
         return result
 
@@ -876,14 +901,23 @@ class DispatchLoop:
         now_us: int,
         state: PlaybackState,
         lead_up: int,
-    ) -> tuple[ExecutionResult | None, ...]:
-        # The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch); a scalar
-        # down lead would be overridden by it inside pop_due_authored anyway, so none is threaded in.
-        results: list[ExecutionResult | None] = []
+        observe: object = None,
+    ) -> None:
+        """Drain all due actions at *now_us* and immediately observe each result.
 
+        Accepts an optional ``observe`` callable (ExecutionResult | None) -> None so the
+        caller avoids building a tuple of results just to iterate over it.  The default
+        ``None`` sentinel means "skip the observe call" (used internally when the result
+        is not needed, e.g. the run() loop provides its own closure).
+
+        The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch);
+        a scalar down lead would be overridden inside pop_due_authored anyway.
+        """
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
-            results.append(self._dispatch_pending_releases(pending, state, lead_up=lead_up))
+            result = self._dispatch_pending_releases(pending, state, lead_up=lead_up)
+            if observe is not None:
+                observe(result)  # type: ignore[operator]
 
         for batch in self.coordinator.pop_due_authored(
             now_us, lead_for_batch=self._down_lead_for_batch
@@ -891,16 +925,12 @@ class DispatchLoop:
             if batch.kind == "up":
                 self._request_up_batch(batch, state)
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)
-                results.append(
-                    self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
-                )
+                result = self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
             else:
                 down_lead = self._down_lead_for_batch(batch)
-                results.append(
-                    self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
-                )
-
-        return tuple(results)
+                result = self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
+            if observe is not None:
+                observe(result)  # type: ignore[operator]
 
     def run(
         self,
@@ -920,6 +950,16 @@ class DispatchLoop:
                 return
             if exec_result.runtime_outcome != "deferred_release":
                 progress_sink.update_counters(exec_result.lateness_us, exec_result.kind)
+
+        # Defined once (not per loop iteration) so the hot dispatch window never allocates a
+        # fresh closure per note. ``first_action_executed`` is captured by reference, so the
+        # loop's own reassignment of it (from the wait-deadline return) and this closure's
+        # nonlocal write target the same variable — identical behaviour to an inline def.
+        def _observe(result: ExecutionResult | None) -> None:
+            nonlocal first_action_executed
+            if result is not None:
+                first_action_executed = True
+            observe_result(result)
 
         try:
             while not self.coordinator.is_finished():
@@ -948,10 +988,7 @@ class DispatchLoop:
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
-                for result in self._drain_due(now_us, state, lead_up):
-                    if result is not None:
-                        first_action_executed = True
-                    observe_result(result)
+                self._drain_due(now_us, state, lead_up, observe=_observe)
 
                 if self.enable_reprobe and now_us - self._last_reprobe_us >= self._reprobe_interval_us:
                     new_threshold = self._recompute_spin_threshold_from_overshoot()

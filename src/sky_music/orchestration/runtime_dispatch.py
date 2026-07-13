@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -129,9 +129,31 @@ class RuntimeDispatchCoordinator:
         self.min_hold_us = max(0, int(min_hold_us))
         self.cursor = 0
         self.active_by_scan_code: dict[int, ActiveKeyGeneration] = {}
-        self.status_by_generation: dict[int, GenerationStatus] = dict.fromkeys(range(schedule.generation_count), GenerationStatus.SCHEDULED)
+        # Live status dict: holds ONLY generations in a non-terminal state
+        # (ACTIVE / RELEASE_PENDING), so its size is bounded by live polyphony —
+        # a few dozen entries — not by the song length. SCHEDULED is the implicit
+        # default for any generation_id < generation_count that has no entry.
+        # Terminal states (RELEASED / DROPPED_* / CANCELLED) are folded into O(1)
+        # running counters the instant a generation reaches them (see _terminalize),
+        # so per-note state is never retained for the whole song. This is the
+        # difference between O(note_count) and O(polyphony) resident memory during
+        # playback — the former made RSS climb steadily and never drop for dense songs.
+        self.status_by_generation: dict[int, GenerationStatus] = {}
+        self._terminal_counts: dict[GenerationStatus, int] = {}
+        self._generation_count: int = schedule.generation_count
         self.pending_by_generation: dict[int, PendingRelease] = {}
         self.pending_scan_codes: set[int] = set()
+
+    def _terminalize(self, generation_id: int, status: GenerationStatus) -> None:
+        """Fold a generation into its terminal-status counter and drop its live entry.
+
+        Terminal states are final (a generation never transitions out of RELEASED /
+        DROPPED_* / CANCELLED), so the per-generation entry carries no further
+        information once reached — counting it and dropping it keeps the live dict
+        bounded by polyphony while the aggregate counts stay exact.
+        """
+        self.status_by_generation.pop(generation_id, None)
+        self._terminal_counts[status] = self._terminal_counts.get(status, 0) + 1
 
     def _early_pop_blocked(self, batch: RuntimeActionBatch) -> bool:
         """No-early-conflict guard predicate: a down batch may not be popped BEFORE its authored
@@ -193,8 +215,21 @@ class RuntimeDispatchCoordinator:
 
     def generation_status_counts(self) -> dict[str, int]:
         """Return counts for every runtime generation terminal/intermediate status."""
-        counts = Counter(self.status_by_generation.values())
-        return {status.value: counts[status] for status in GENERATION_STATUSES}
+        # Terminal states live in the O(1) counters; the live dict holds only the
+        # non-terminal (ACTIVE / RELEASE_PENDING) generations. The remainder
+        # (generation_count minus terminals minus live non-terminals) are still
+        # implicitly SCHEDULED. This yields the same distribution the old
+        # per-generation dict produced, at O(polyphony) instead of O(note_count).
+        counts: dict[GenerationStatus, int] = dict(self._terminal_counts)
+        nonterminal = 0
+        for status in self.status_by_generation.values():
+            counts[status] = counts.get(status, 0) + 1
+            nonterminal += 1
+        terminal_total = sum(self._terminal_counts.values())
+        implicit_scheduled = self._generation_count - terminal_total - nonterminal
+        if implicit_scheduled > 0:
+            counts[GenerationStatus.SCHEDULED] = counts.get(GenerationStatus.SCHEDULED, 0) + implicit_scheduled
+        return {status.value: counts.get(status, 0) for status in GENERATION_STATUSES}
 
     def pop_due_pending(self, now_us: int, lead_up: int = 0) -> tuple[PendingRelease, ...]:
         if not self.pending_by_generation:
@@ -261,7 +296,7 @@ class RuntimeDispatchCoordinator:
                 if generation_id is None:
                     continue
                 if intent.scan_code != only_sent:
-                    self.status_by_generation[generation_id] = GenerationStatus.DROPPED_BACKEND
+                    self._terminalize(generation_id, GenerationStatus.DROPPED_BACKEND)
                     continue
                 self.active_by_scan_code[intent.scan_code] = ActiveKeyGeneration(
                     generation_id=generation_id,
@@ -279,7 +314,7 @@ class RuntimeDispatchCoordinator:
             if intent.generation_id is None:
                 continue
             if intent.scan_code not in sent:
-                self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_BACKEND
+                self._terminalize(intent.generation_id, GenerationStatus.DROPPED_BACKEND)
                 continue
             self.active_by_scan_code[intent.scan_code] = ActiveKeyGeneration(
                 generation_id=intent.generation_id,
@@ -317,7 +352,7 @@ class RuntimeDispatchCoordinator:
             if intent.scan_code in active:
                 conflicts.append(intent)
                 if intent.generation_id is not None:
-                    self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_CONFLICT
+                    self._terminalize(intent.generation_id, GenerationStatus.DROPPED_CONFLICT)
             else:
                 playable.append(intent)
         return tuple(playable), tuple(conflicts)
@@ -325,7 +360,7 @@ class RuntimeDispatchCoordinator:
     def drop_expired_downs(self, intents: tuple[RuntimeKeyIntent, ...]) -> None:
         for intent in intents:
             if intent.generation_id is not None:
-                self.status_by_generation[intent.generation_id] = GenerationStatus.DROPPED_EXPIRED
+                self._terminalize(intent.generation_id, GenerationStatus.DROPPED_EXPIRED)
 
     def request_releases(
         self,
@@ -399,8 +434,9 @@ class RuntimeDispatchCoordinator:
                 active = self.active_by_scan_code.get(pending.scan_code)
                 if active is not None and active.generation_id == pending.generation_id:
                     self.active_by_scan_code.pop(pending.scan_code, None)
-                self.status_by_generation[pending.generation_id] = (
-                    GenerationStatus.RELEASED if pending.scan_code in sent_scan_codes else GenerationStatus.DROPPED_BACKEND
+                self._terminalize(
+                    pending.generation_id,
+                    GenerationStatus.RELEASED if pending.scan_code in sent_scan_codes else GenerationStatus.DROPPED_BACKEND,
                 )
             return
         sent = set(sent_scan_codes)
@@ -411,18 +447,19 @@ class RuntimeDispatchCoordinator:
             active = self.active_by_scan_code.get(pending.scan_code)
             if active is not None and active.generation_id == pending.generation_id:
                 self.active_by_scan_code.pop(pending.scan_code, None)
-            self.status_by_generation[pending.generation_id] = (
-                GenerationStatus.RELEASED if pending.scan_code in sent else GenerationStatus.DROPPED_BACKEND
+            self._terminalize(
+                pending.generation_id,
+                GenerationStatus.RELEASED if pending.scan_code in sent else GenerationStatus.DROPPED_BACKEND,
             )
 
     def cancel_all(self) -> tuple[int, ...]:
-        cancelled = tuple(
-            sorted(active.generation_id for active in self.active_by_scan_code.values())
-        )
-        for generation_id in cancelled:
-            self.status_by_generation[generation_id] = GenerationStatus.CANCELLED
-        for generation_id in self.pending_by_generation:
-            self.status_by_generation[generation_id] = GenerationStatus.CANCELLED
+        active_gen_ids = {active.generation_id for active in self.active_by_scan_code.values()}
+        cancelled = tuple(sorted(active_gen_ids))
+        # A RELEASE_PENDING generation is still present in active_by_scan_code (its down was
+        # never popped), so the two sets overlap — union so each cancelled generation is
+        # counted exactly once (matching the old dict, where the second write was idempotent).
+        for generation_id in active_gen_ids | self.pending_by_generation.keys():
+            self._terminalize(generation_id, GenerationStatus.CANCELLED)
         self.active_by_scan_code.clear()
         self.pending_by_generation.clear()
         self.pending_scan_codes.clear()
