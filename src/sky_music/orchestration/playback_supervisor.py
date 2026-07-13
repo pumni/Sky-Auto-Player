@@ -122,6 +122,8 @@ class QueueCommandSource:
         self._commands = commands
 
     def poll(self) -> str | None:
+        if self._commands.empty():
+            return None
         try:
             return self._commands.get_nowait()
         except queue.Empty:

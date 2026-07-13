@@ -574,6 +574,15 @@ class PlaybackEngine:
         coordinator: RuntimeDispatchCoordinator,
         sleeper: Sleeper,
     ) -> DispatchLoop:
+        import weakref
+        
+        engine_ref = weakref.ref(self)
+        def weak_probe(s: Sleeper) -> int:
+            engine = engine_ref()
+            if engine is not None:
+                return engine.probe_spin_threshold(s)
+            return 700
+
         return DispatchLoop(
             coordinator=coordinator,
             clock=self.clock,
@@ -593,7 +602,7 @@ class PlaybackEngine:
             estimator=self.estimator if self.enable_adaptive_lead else None,
             onset_bias_us=self.onset_bias_us,
             enable_reprobe=self.enable_reprobe,
-            probe_callback=self.probe_spin_threshold,
+            probe_callback=weak_probe,
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
