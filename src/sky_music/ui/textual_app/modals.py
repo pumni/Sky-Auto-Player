@@ -133,6 +133,18 @@ class CommandModal(PickerModal[str | None]):
 
     def on_modal_mounted(self) -> None:
         self.set_focus(self.query_one("#command-filter", Input))
+        # Cap the palette's max height based on the current terminal so a
+        # shorter terminal reveals native scroll behaviour *inside the
+        # OptionList* (giving us the highlight-to-top scroll UX) rather than
+        # letting the palette overflow into the modal-content area (where
+        # scroll_visible() does not bring the highlighted row into focus).
+        # Window budget: viewport - filter (3+1) - footer (1+1) - modal
+        # padding (2) - ambient row (1) = ~ viewport - 9 — but at least 4 to
+        # keep a patch of the list visible even on the smallest terminals.
+        viewport_height = self.app.size.height
+        palette = self.query_one("#modal-options", CommandPaletteList)
+        cap = max(4, viewport_height - 9)
+        palette.styles.max_height = cap
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "command-filter":
@@ -142,6 +154,15 @@ class CommandModal(PickerModal[str | None]):
 
     def on_command_palette_list_command_highlighted(self, event: CommandPaletteList.CommandHighlighted) -> None:
         event.stop()
+        # The palette itself manages scroll-to-highlight (OptionList's
+        # watch_highlighted hook calls scroll_to_highlight, which only has an
+        # effect when max-height has been capped to a viewport-derived value
+        # — that capping happens in ``on_modal_mounted`` so the user sees the
+        # native OptionList scrollbar + the highlighted row is auto-kept-in
+        # view on every arrow / PageDown navigation. Access ``event.command``
+        # for clarity (and to keep the static analyser from flagging the
+        # ``event`` arg as unused) but there is otherwise nothing to do.
+        _ = event.command
 
     def on_command_palette_list_command_selected(self, event: CommandPaletteList.CommandSelected) -> None:
         event.stop()
@@ -154,18 +175,46 @@ class CommandModal(PickerModal[str | None]):
         self.query_one("#modal-options", CommandPaletteList).select_highlighted()
 
     def on_key(self, event: events.Key) -> None:
+        # Escape always closes the modal, no matter which widget is focused.
         if event.key == "escape":
             event.stop()
             self.dismiss(None)
-        elif event.key == "up":
+            return
+
+        # When the focus is inside the CommandPaletteList, let OptionList own
+        # the keyboard: it already handles up/down/enter plus PageUp/PageDown,
+        # Home/End, and mouse-wheel — forwarding those keys here would silently
+        # strip the modern scroll UX the list inherits from OptionList.
+        if self.focused is not None and self.query_one("#command-filter", Input) is not self.focused:
+            return
+
+        # From the filter input we only need to bridge the keys that Input
+        # itself does not consume and that OptionList does not see because its
+        # focus is on the Input instead. Pagination keys in particular have
+        # meaning in the palette, so forward them to the OptionList's own
+        # built-in actions.
+        palette = self.query_one("#modal-options", CommandPaletteList)
+        if event.key == "up":
             event.stop()
-            self.query_one("#modal-options", CommandPaletteList).move_highlight(-1)
+            palette.move_highlight(-1)
         elif event.key == "down":
             event.stop()
-            self.query_one("#modal-options", CommandPaletteList).move_highlight(1)
+            palette.move_highlight(1)
         elif event.key == "enter":
             event.stop()
-            self.query_one("#modal-options", CommandPaletteList).select_highlighted()
+            palette.select_highlighted()
+        elif event.key == "pagedown":
+            event.stop()
+            palette.action_page_down()
+        elif event.key == "pageup":
+            event.stop()
+            palette.action_page_up()
+        elif event.key == "home":
+            event.stop()
+            palette.action_first()
+        elif event.key == "end":
+            event.stop()
+            palette.action_last()
 
     def action_cancel(self) -> None:
         self.dismiss(None)

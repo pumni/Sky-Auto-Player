@@ -72,6 +72,13 @@ def _theme_css(name: str, t: TextualThemeTokens) -> str:
     CommandModal.theme-{name} CommandPaletteList {{
         background: transparent;
         color: {t.foreground};
+        scrollbar-color: {t.accent};
+        scrollbar-color-hover: {t.accent};
+        scrollbar-color-active: {t.foreground};
+    }}
+    CommandModal.theme-{name} CommandPaletteList > .option-list--option-highlighted {{
+        background: {t.cursor_background};
+        color: {t.cursor_foreground};
     }}
     CommandModal.theme-{name} #command-filter {{
         background: transparent;
@@ -107,13 +114,79 @@ BASE_CSS = """
     OptionModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     CommandModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     InfoModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
-    /* Wider modal; percentage cap keeps it from overflowing narrow terminals */
-    #modal { width: 86; max-width: 92%; height: auto; max-height: 84%; padding: 1 2; }
-    #modal-content { height: auto; max-height: 24; background: transparent; overflow-y: auto; }
-    #modal-info { height: auto; max-height: 10; margin-bottom: 1; padding: 0 1; }
-    #command-filter { height: 3; margin: 0 1 1 1; padding: 0 1; }
-    #modal-options { height: auto; max-height: 24; background: transparent; overflow-y: auto; padding: 0 1; }
-    #info { height: auto; max-height: 20; background: transparent; overflow-y: auto; }
+    /* Modern modal: width derives from content (capped), height from content
+       (capped to viewport). 76 cols keeps it readable on a 120-col terminal
+       instead of stretching wide; max-width 90% keeps it inside thin terminals.
+       Max-height 88% leaves room for the screen border + ambient padding. */
+    #modal {
+        width: 76;
+        max-width: 90%;
+        height: auto;
+        max-height: 88%;
+        padding: 1 2;
+    }
+    /* Modal body uses a vertical flex layout; children keep their natural
+       heights and the palette grows to fill the remaining space. ``max-height``
+       caps the modal so it never eats the entire viewport — we leave ~12% of
+       the rows as ambient padding around the modal. ``overflow-y: auto`` on
+       the body lets the *whole* modal body scroll when its natural content
+       overflows the modal's own height (rare but possible on very short
+       terminals where even the normal content does not fit). */
+    #modal-content {
+        height: 1fr;
+        max-height: 100%;
+        background: transparent;
+        overflow-y: auto;
+    }
+    #modal-info {
+        height: auto;
+        max-height: 10;
+        margin: 0 1 1 1;
+        padding: 0 1;
+    }
+    /* Filter stays compact and flush — no left margin so it reads as part of
+       the modal surface; bottom margin gives breathing room to the palette. */
+    #command-filter {
+        height: 3;
+        margin: 0 1 1 1;
+        padding: 0 1;
+    }
+    /* CommandModal-specific layout: filter (3) -> palette -> footer (1)
+       inside #modal-content. Scroll behaviour is layered:
+         * ``#modal`` (max-height 88%) caps the modal to ~88% of the viewport.
+         * ``#modal-content`` (height 1fr + overflow-y auto) lets the body
+           itself scroll if the natural content exceeds the modal alloc.
+         * The palette's ``overflow-y: auto`` plus ``max-height: 18`` means
+           once the option count (12 commands + 5 group headers = 17 rows)
+           exceeds the allocated space, OptionList shows its own scrollbar
+           and supports native wheel / PageDown / Home / End navigation.
+       On tall terminals the palette stops growing at max-height 18 so the
+       modal does not look sparse, and on short terminals the modal-content
+       overflow-y takes over so the user can still scroll to reach the
+       footer + filter even when the modal caps tightly. */
+    CommandModal CommandPaletteList {
+        height: auto;
+        min-height: 4;
+        max-height: 18;
+        margin: 0 1;
+        scrollbar-size-vertical: 1;
+        scrollbar-background: transparent;
+        overflow-y: auto;
+    }
+    #modal-options {
+        height: auto;
+        max-height: 24;
+        background: transparent;
+        overflow-y: auto;
+        padding: 0 1;
+    }
+    #info {
+        height: auto;
+        max-height: 20;
+        background: transparent;
+        overflow-y: auto;
+        padding: 0 1;
+    }
     #modal-footer { height: 1; margin-top: 1; }
 """
 

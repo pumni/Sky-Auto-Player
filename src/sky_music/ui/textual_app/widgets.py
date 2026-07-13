@@ -156,6 +156,13 @@ class CommandPaletteList(OptionList):
         # Build initial option rows (headers + commands) and delegate to the
         # OptionList constructor.
         OptionList.__init__(self, *self._build_options(), **kwargs)
+        # Modern, scrollbar-on-demand scroll behaviour — the whole point of
+        # subclassing OptionList is so the user can wheel/drag to reveal
+        # commands hidden past the visible viewport. ``allow_vertical_scroll``
+        # is a read-only derived property (``is_scrollable and
+        # show_vertical_scrollbar``); OptionList is always scrollable when it
+        # has options, so flipping ``show_vertical_scrollbar`` is enough.
+        self.show_vertical_scrollbar = True
 
     # ── Construction helpers ────────────────────────────────────────────────
 
@@ -171,7 +178,7 @@ class CommandPaletteList(OptionList):
         for group_name in self.GROUP_ORDER:
             if group_name not in grouped:
                 continue
-            header_prompt = Text(group_name, style="bold")
+            header_prompt = Text(group_name.upper(), style="bold dim")
             options.append(Option(header_prompt, id=f"__header__:{group_name}", disabled=True))
             options.extend(
                 Option(self._format_command_prompt(cmd), id=f"cmd:{cmd.id}")
@@ -181,13 +188,29 @@ class CommandPaletteList(OptionList):
 
     @staticmethod
     def _format_command_prompt(cmd: CommandSpec) -> Text:
-        """Render a single command row as a styled Text prompt."""
+        """Render a single command row as a styled Text prompt.
+
+        Modern ''command palette'' layout — pattern shared by VS Code /
+        Linear / Raycast:
+
+            <key> <label> · <description>
+
+        - ``key``   is padded to a fixed 8-cell column so single-char keys
+          (``v``, ``p``) align with multi-char ones (``Ctrl+R``, ``F3``);
+          rendered bold so it reads as a keyboard shortcut chip.
+        - ``label`` sits flush against the key (no padding) so the entry
+          reads naturally; ``·`` separators keep ``description`` cleanly
+          detached — no column alignment needed for the description, which
+          means descriptions of any length stay on one row.
+        - ``description`` is dim so it visually de-emphasises the help text
+          without losing readability.
+        """
         key_str = pad_text(cmd.key, 8)
-        label_str = pad_text(cmd.label, 20)
         line = Text()
         line.append("  ")
         line.append(key_str, style="bold")
-        line.append(label_str)
+        line.append(cmd.label, style="bold")
+        line.append(" · ", style="dim")
         line.append(cmd.description, style="dim")
         return line
 
