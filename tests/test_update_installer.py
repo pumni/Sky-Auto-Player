@@ -24,7 +24,6 @@ import pytest
 from sky_music.domain.update_checker import UpdateInfo
 from sky_music.infrastructure.update_installer import (
     UpdateInstallerError,
-    _quote,
     compute_sha256,
     download_zip,
     extract_zip,
@@ -344,18 +343,6 @@ def test_fetch_sha256_sidecar_handles_garbage_payload() -> None:
     ) is None
 
 
-# ── _quote ─────────────────────────────────────────────────────────────────────
-
-
-def test_quote_normal_path() -> None:
-    assert _quote(Path(r"C:\Temp\xf")) == r'"C:\Temp\xf"'
-
-
-def test_quote_rejects_embedded_quote() -> None:
-    with pytest.raises(UpdateInstallerError, match="path with quote"):
-        _quote(Path(r'C:\ev"il'))
-
-
 # ── write_apply_batch ──────────────────────────────────────────────────────────
 
 
@@ -380,11 +367,10 @@ def test_write_apply_batch_writes_expected_skeleton(tmp_path: Path) -> None:
     raw = batch_path.read_bytes()
     text = raw.decode("ascii")
     assert text.startswith("@echo off")
-    assert "robocopy" in text
-    assert "/E /MOVE /R:2 /W:1" in text
+    assert "Rename-Item" in text
     assert "Sky-Player.exe" in text
-    assert "type nul" in text  # sentinel touch line
-    assert text.endswith('del "%~f0"\r\n')  # self-delete
+    assert "New-Item" in text  # sentinel touch via PowerShell
+    assert text.rstrip().endswith('del "%~f0"')  # self-delete
     # The batch uses \r\n line endings consistently.
     assert b"\r\n" in raw
     assert b"\n" not in raw.replace(b"\r\n", b"")

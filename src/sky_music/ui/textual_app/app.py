@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 try:
-    import importlib.metadata
-    VERSION = importlib.metadata.version("sky-player")
-except Exception:
-    VERSION = "0.1.0"
+    from sky_music._version import __version__ as VERSION
+except ImportError:
+    try:
+        import importlib.metadata
+        VERSION = importlib.metadata.version("sky-player")
+    except Exception:
+        VERSION = "0.0.0-dev"
 
+import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -297,6 +301,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.picker_scope = BackgroundScope(phase="picker")
         self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
         self._search_timer = None
+        self._update_available_version: str | None = None
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -361,6 +366,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_mount(self) -> None:
         self._apply_theme_class()
         self._check_post_update_flag()
+        self._apply_pending_update_indicator()
         paths = get_song_choices(force_refresh=True)
         self.choices = [
             SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
@@ -1379,14 +1385,38 @@ class SkyPickerApp(App[SongPickerResult | None]):
             post_update_flag_path,
         )
         with contextlib.suppress(Exception):
-            flag = post_update_flag_path(install_dir_for_frozen())
+            install_dir = install_dir_for_frozen()
+            flag = post_update_flag_path(install_dir)
             if flag.exists():
                 self.notify(f"Sky Player successfully updated to v{VERSION}!", severity="information", timeout=5)
                 flag.unlink()
+            # Remove any .old.* backup directories from previous updates.
+            import shutil
+            for old_dir in install_dir.parent.glob(f"{install_dir.name}.old.*"):
+                shutil.rmtree(old_dir, ignore_errors=True)
+
+    def _clear_pending_update_indicator(self) -> None:
+        self._update_available_version = None
+        with contextlib.suppress(Exception):
+            self.query_one("#appbar", GradientHeader).set_version(f"v{VERSION}")
+
+    def _apply_pending_update_indicator(self) -> None:
+        pending = self.cfg.update.pending_update_version
+        if pending:
+            self._update_available_version = pending
+            with contextlib.suppress(Exception):
+                self.query_one("#appbar", GradientHeader).set_version(
+                    f"v{VERSION} \u2191", highlight=True, highlight_color=self._theme_tokens.accent
+                )
+
+    def _schedule_restart(self, staged: Any, install_dir: Path | None) -> None:
+        from sky_music.orchestration.update_service import apply_staged_update
+        self.notify("Update ready! Restarting...", severity="information", timeout=3)
+        self.set_timer(1.0, lambda: apply_staged_update(staged, install_dir=install_dir))
 
     from textual import work
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def check_for_updates_worker(self, *, force: bool = False) -> None:
         from sky_music.orchestration.update_service import (
             check_for_update,
@@ -1399,6 +1429,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         result = check_for_update(self.cfg, current_version=VERSION)
         if result.error is None:
             record_successful_check(self.cfg)
+            if result.update is None and self.cfg.update.pending_update_version:
+                from sky_music.config import persist_pending_update_version
+                persist_pending_update_version(self.cfg, "")
+                self.call_from_thread(self._clear_pending_update_indicator)
         elif force:
             # Surface errors only when the user explicitly requested a check.
             # Auto-check stays silent on transient network failures.
@@ -1420,14 +1454,37 @@ class SkyPickerApp(App[SongPickerResult | None]):
             )
 
     def _prompt_update(self, result: Any) -> None:
-        from sky_music.ui.textual_app.modals import UpdateModal
         if result.update is None:
             return
-        
+
+        from sky_music.config import persist_pending_update_version
+
+        self._update_available_version = result.update.latest_version
+        persist_pending_update_version(self.cfg, result.update.latest_version)
+        with contextlib.suppress(Exception):
+            self.query_one("#appbar", GradientHeader).set_version(
+                f"v{VERSION} \u2191", highlight=True, highlight_color=self._theme_tokens.accent
+            )
+
+        # auto_apply mode: skip modal, go straight to download
+        if self.cfg.update.auto_apply:
+            self.notify(
+                f"Downloading v{result.update.latest_version}...",
+                severity="information",
+                timeout=5,
+            )
+            self.download_and_apply_update_worker(result.update)
+            return
+
+        self.notify(
+            f"Update v{result.update.latest_version} available! (press Esc to dismiss)",
+            severity="information",
+            timeout=6,
+        )
+        from sky_music.ui.textual_app.modals import UpdateModal
         modal = UpdateModal(
             latest_version=result.update.latest_version,
             current_version=result.current_version,
-            release_notes=result.update.release_notes,
             theme_name=self.active_theme,
         )
         self.push_screen(modal, lambda res: self._handle_update_response(res, result.update))
@@ -1440,19 +1497,39 @@ class SkyPickerApp(App[SongPickerResult | None]):
         elif response == "download":
             self.notify("Downloading update... Please wait.", severity="information", timeout=5)
             self.download_and_apply_update_worker(release)
+        elif response == "github":
+            self._open_update_url(release)
+
+    def _open_update_url(self, release: Any) -> None:
+        url = getattr(release, "html_url", "") or ""
+        if not url:
+            self.notify("No release page available.", severity="error", timeout=4)
+            return
+        import webbrowser
+        webbrowser.open(url)
+        self.notify(f"Download page opened in browser: {url}", timeout=8)
             
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def download_and_apply_update_worker(self, release: Any) -> None:
-        from sky_music.orchestration.update_service import (
-            apply_staged_update,
-            download_and_verify_update,
-        )
-        outcome = download_and_verify_update(release)
+        from sky_music.orchestration.update_service import download_and_verify_update
+        install_dir: Path | None = None
+        if getattr(sys, "frozen", False):
+            from sky_music.infrastructure.update_installer import install_dir_for_frozen
+            install_dir = install_dir_for_frozen()
+
+        def _progress(downloaded: int, total: int | None) -> None:
+            if total:
+                pct = downloaded * 100 // total
+                self.call_from_thread(
+                    self.notify,
+                    f"Downloading update: {pct}% ({downloaded // 1024 // 1024} of {total // 1024 // 1024} MiB)",
+                    severity="information",
+                    timeout=2,
+                )
+
+        outcome = download_and_verify_update(release, install_dir=install_dir, progress=_progress)
         if outcome.staged:
-            self.call_from_thread(self.notify, "Update ready! Restarting...", severity="information", timeout=3)
-            import time
-            time.sleep(1)
-            apply_staged_update(outcome.staged)
+            self.call_from_thread(self._schedule_restart, outcome.staged, install_dir)
         else:
             self.call_from_thread(self.notify, f"Update failed: {outcome.error}", severity="error", timeout=5)
 

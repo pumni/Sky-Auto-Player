@@ -38,6 +38,7 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_update_settings_defaults() -> None:
     s = UpdateSettings()
     assert s.auto_check is True
+    assert s.auto_apply is False
     assert s.skip_version == ""
     assert s.check_interval_s == 86400
     assert s.last_check_ts == 0
@@ -46,12 +47,14 @@ def test_update_settings_defaults() -> None:
 def test_update_settings_from_dict_full() -> None:
     raw: dict[str, Any] = {
         "auto_check": False,
+        "auto_apply": True,
         "skip_version": "2.4.0",
         "check_interval_s": 3600,
         "last_check_ts": 1718200000,
     }
     s = UpdateSettings.from_dict(raw)
     assert s.auto_check is False
+    assert s.auto_apply is True
     assert s.skip_version == "2.4.0"
     assert s.check_interval_s == 3600
     assert s.last_check_ts == 1718200000
@@ -60,6 +63,7 @@ def test_update_settings_from_dict_full() -> None:
 def test_update_settings_from_dict_optional_keys_use_defaults() -> None:
     s = UpdateSettings.from_dict({"auto_check": False})
     assert s.auto_check is False
+    assert s.auto_apply is False
     assert s.skip_version == ""
     assert s.check_interval_s == 86400
     assert s.last_check_ts == 0
@@ -68,6 +72,7 @@ def test_update_settings_from_dict_optional_keys_use_defaults() -> None:
 def test_update_settings_from_dict_non_dict_returns_defaults() -> None:
     s = UpdateSettings.from_dict("not a dict")  # type: ignore[arg-type]
     assert s.auto_check is True  # default
+    assert s.auto_apply is False
     assert s.check_interval_s == 86400
 
 

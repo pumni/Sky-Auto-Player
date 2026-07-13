@@ -31,6 +31,8 @@ class GradientHeader(Static):
         self._title_color = "#ffffff"
         self._tagline_color = "#cbd5e1"
         self._status_color = "#ffffff"
+        self._version_highlight = False
+        self._version_highlight_color: str = ""
 
     def set_theme(
         self,
@@ -53,6 +55,13 @@ class GradientHeader(Static):
 
     def set_status(self, status: str) -> None:
         self._status = status
+        self.refresh()
+
+    def set_version(self, version: str, *, highlight: bool = False, highlight_color: str = "") -> None:
+        self._version = version
+        self._version_highlight = highlight
+        if highlight and highlight_color:
+            self._version_highlight_color = highlight_color
         self.refresh()
 
     def on_resize(self) -> None:
@@ -100,7 +109,15 @@ class GradientHeader(Static):
             top.append("─", style=g(cell_idx))
 
         if version_str:
-            top.append(version_str, style=f"{self._tagline_color}")
+            if self._version_highlight and self._version_highlight_color and "\u2191" in version_str:
+                before, arrow, after = version_str.partition("\u2191")
+                if before:
+                    top.append(before, style=f"{self._tagline_color}")
+                top.append(arrow, style=f"bold {self._version_highlight_color}")
+                if after:
+                    top.append(after, style=f"{self._tagline_color}")
+            else:
+                top.append(version_str, style=f"{self._tagline_color}")
 
         top.append("╮", style=g(width - 1))
 

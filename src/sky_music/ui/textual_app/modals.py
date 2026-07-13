@@ -256,7 +256,6 @@ class UpdateModal(PickerModal[str | None]):
         self,
         latest_version: str,
         current_version: str,
-        release_notes: str,
         *,
         theme_name: str = "aurora",
     ) -> None:
@@ -269,38 +268,41 @@ class UpdateModal(PickerModal[str | None]):
             ],
             theme_name=theme_name,
         )
+        self.latest_version = latest_version
         self.current_version = current_version
-        self.release_notes = release_notes
         self.options = [
-            PickerOption("download", "Download and restart"),
+            PickerOption("github", "Download from GitHub"),
+            PickerOption("download", "Download and auto-apply"),
             PickerOption("remind", "Remind me later"),
             PickerOption("skip", "Skip this version"),
         ]
 
     def compose_modal_content(self) -> ComposeResult:
-        from textual.containers import VerticalScroll
-        from textual.widgets import Markdown
-
-        yield Static(f"You are currently running v{self.current_version}.\n", id="update-info")
-
-        if self.release_notes:
-            with VerticalScroll(id="update-notes-container"):
-                yield Markdown(self.release_notes, id="update-notes")
-
+        yield Static(
+            f"You are currently running v{self.current_version}.\n"
+            f"v{self.latest_version} is available.\n",
+            id="update-info",
+        )
         yield Static("", id="update-spacer")
         yield OptionList(*(o.label for o in self.options), id="modal-options")
+        yield Static(
+            "Auto-apply overwrites files in-place.\n"
+            "If interrupted, re-download manually from GitHub.",
+            id="update-caution",
+        )
 
     def on_modal_mounted(self) -> None:
-        import contextlib
+        from textual.css.query import NoMatches
 
-        from textual.containers import VerticalScroll
-        with contextlib.suppress(Exception):
-            container = self.query_one("#update-notes-container", VerticalScroll)
-            container.styles.height = "auto"
-            container.styles.max_height = 12
-            container.styles.margin = (0, 0, 1, 0)
-            container.styles.border = ("ascii", "gray")
-            
+        try:
+            caution = self.query_one("#update-caution", Static)
+            caution.styles.color = "gray"
+            caution.styles.opacity = 0.7
+            caution.styles.text_style = "italic"
+            caution.styles.margin = (1, 0, 0, 0)
+        except NoMatches:
+            pass
+
         self.set_focus(self.query_one("#modal-options", OptionList))
 
     def on_key(self, event: events.Key) -> None:

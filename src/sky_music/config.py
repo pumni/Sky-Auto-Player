@@ -109,9 +109,11 @@ DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.ex
 @dataclass
 class UpdateSettings:
     auto_check: bool = True
+    auto_apply: bool = False
     skip_version: str = ""
     check_interval_s: int = 86400
     last_check_ts: int = 0
+    pending_update_version: str = ""
 
     @classmethod
     def from_dict(cls, data: Any) -> UpdateSettings:
@@ -136,11 +138,21 @@ class UpdateSettings:
         if not isinstance(auto_chk, bool):
             auto_chk = True
 
+        auto_app = data.get("auto_apply", False)
+        if not isinstance(auto_app, bool):
+            auto_app = False
+
+        pending = data.get("pending_update_version", "")
+        if not isinstance(pending, str):
+            pending = ""
+
         return cls(
             auto_check=auto_chk,
+            auto_apply=auto_app,
             skip_version=skip,
             check_interval_s=interval,
             last_check_ts=last_check,
+            pending_update_version=pending,
         )
 
 
@@ -488,6 +500,7 @@ def save_config(cfg: AppConfig) -> None:
         "skip_version": cfg.update.skip_version,
         "check_interval_s": cfg.update.check_interval_s,
         "last_check_ts": cfg.update.last_check_ts,
+        "pending_update_version": cfg.update.pending_update_version,
     }
     raw["schema_version"]               = SCHEMA_VERSION
 
@@ -573,4 +586,9 @@ def persist_update_check_ts(cfg: AppConfig, ts: int) -> None:
 
 def persist_update_auto_check(cfg: AppConfig, auto: bool) -> None:
     cfg.update.auto_check = auto
+    save_config(cfg)
+
+
+def persist_pending_update_version(cfg: AppConfig, version: str) -> None:
+    cfg.update.pending_update_version = version
     save_config(cfg)

@@ -22,6 +22,7 @@ operations in their own worker.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
@@ -121,17 +122,21 @@ def record_skip(cfg: AppConfig, version: str) -> None:
 def download_and_verify_update(
     release: UpdateInfo,
     *,
+    install_dir: Path | None = None,
     staging_parent: Path | None = None,
     timeout: float = 60.0,
+    progress: Callable[[int, int | None], None] | None = None,
 ) -> DownloadOutcome:
     """Fetch, (optionally) verify, and stage an update zip.
 
-    Pulls the sidecar ``.sha256`` URL from ``release.sha256_url`` (resolved at
-    parse time in :func:`parse_release_payload`). If the sidecar is found and
-    fetch succeeds, stage_update verifies the downloaded zip against it before
-    extracting. If the sidecar is missing, the download is staged without a
-    checksum — callers that want to enforce integrity should refuse if the
-    sidecar is absent.
+    When ``install_dir`` is provided, the staging directory is created as a
+    versioned sibling (``Sky-Player-v{version}``) on the same volume, enabling
+    an atomic rename swap during apply.
+
+    Pulls the sidecar ``.sha256`` URL from ``release.sha256_url``. If the
+    sidecar is found and fetch succeeds, ``stage_update`` verifies the
+    downloaded zip against it before extracting. If the sidecar is missing,
+    the download is staged without a checksum.
 
     ``staging_parent`` defaults to a ``sky-updates`` subdir of the system tmp.
     """
@@ -139,22 +144,33 @@ def download_and_verify_update(
     if not download_url:
         return DownloadOutcome(staged=None, error="release has no download asset")
 
+    versioned_dir = install_dir is not None
     if staging_parent is None:
-        import tempfile
-
-        staging_parent = Path(tempfile.gettempdir()) / "sky-updates"
+        if install_dir is not None:
+            staging_parent = install_dir.resolve().parent
+        else:
+            import tempfile
+            staging_parent = Path(tempfile.gettempdir()) / "sky-updates"
     staging_parent.mkdir(parents=True, exist_ok=True)
 
-    sha256_sum: str | None = None
     sha256_url = getattr(release, "sha256_url", "") or ""
+    sha256_sum: str | None = None
     if sha256_url:
         sha256_sum = fetch_sha256_sidecar(sha256_url, timeout=timeout)
+        if sha256_sum is None:
+            return DownloadOutcome(
+                staged=None,
+                error="SHA256 checksum unavailable — refusing insecure download",
+            )
+    # sha256_url empty = release ships no sidecar; proceed without verification
     try:
         staged = stage_update(
             release,
             staging_parent=staging_parent,
             timeout=timeout,
             sha256_sum=sha256_sum,
+            versioned_dir=versioned_dir,
+            progress=progress,
         )
     except UpdateInstallerError as exc:
         return DownloadOutcome(staged=None, error=str(exc))

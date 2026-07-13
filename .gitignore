@@ -52,5 +52,8 @@ windows_version_info.txt
 .tmp/
 .ruff_cache/
 
+# Build-generated version file (rewritten by build_app.py)
+src/sky_music/_version.py
+
 # Local uv environment overrides (copy from .env.example)
 .env
