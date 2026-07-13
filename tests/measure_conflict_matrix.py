@@ -1,12 +1,12 @@
-"""Đo số note bị rớt (dropped_conflict) theo (profile x fps x send_duration).
+"""Measure dropped notes (dropped_conflict) by (profile x fps x send_duration).
 
-Chạy PlaybackEngine THẬT trên virtual clock (FakeClock + TimedBackend), không chờ
-real-time, nên quét cả corpus trong vài giây. Mọi con số rớt note đến thẳng từ
-RuntimeDispatchCoordinator.split_down_intents -> dropped_conflict.
+Runs the REAL PlaybackEngine on a virtual clock (FakeClock + TimedBackend) without
+real-time waits, so the entire corpus is scanned in a few seconds. Every dropped-note
+count comes directly from RuntimeDispatchCoordinator.split_down_intents -> dropped_conflict.
 
 Usage:
-    python tests/measure_conflict_matrix.py            # toàn corpus, bảng tổng hợp
-    python tests/measure_conflict_matrix.py "blue"     # lọc theo tên (substring)
+    python tests/measure_conflict_matrix.py            # full corpus, summary table
+    python tests/measure_conflict_matrix.py "blue"     # filter by name (substring)
 """
 from __future__ import annotations
 

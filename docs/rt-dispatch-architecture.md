@@ -100,7 +100,7 @@ close old instances before editing `config.json` by hand.
 
 | Arm | down visible_lateness p50/p99/max (µs) | lateness p99 | drops |
 |---|---|---|---|
-| Control ×2 | +420 / 1781 / 5740 và +407 / 2076 / 7697 | 553 / 1446 | 0 |
+| Control ×2 | +420 / 1781 / 5740 and +407 / 2076 / 7697 | 553 / 1446 | 0 |
 | Adaptive lead | **−3** / 760 / 2915 | 561 | 0 |
 | Event wait | +401 / **1026** / 4408 | **104** | 0 |
 | Adaptive spin | +409 / 1029 / **2458** | **80** | 0 |

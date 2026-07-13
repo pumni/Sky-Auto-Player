@@ -460,6 +460,8 @@ class PlaybackCard(Static):
             return
         self._exited = True
         self._stop_timers()
+        self.engine = None
+        self.command_bridge = None
         callback = self._playback_result_callback
         if callable(callback):
             callback(result)
@@ -479,6 +481,8 @@ class PlaybackCard(Static):
 
     def _poll(self) -> None:
         self._poll_debug_hotkey()
+        if self.renderer is None:
+            return
         snap = self.renderer.get_snapshot()
         if snap is not None:
             self._snapshot = snap

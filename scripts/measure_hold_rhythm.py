@@ -1,10 +1,10 @@
-"""Sweep hold (min_hold cố định 1 frame) và đo phân bố lateness của ONSET (down).
+"""Sweep hold (min_hold fixed at 1 frame) and measure the lateness distribution of ONSET (down).
 
-H-CONTENTION đúng  <=> p95/p99 lateness của down tăng đơn điệu theo hold.
-H-CONTENTION sai   <=> lateness của down phẳng theo hold (=> nguyên nhân ở phía game).
+H-CONTENTION true  <=> p95/p99 lateness of down increases monotonically with hold.
+H-CONTENTION false <=> lateness of down is flat across hold (=> root cause on the game side).
 
-Backend mô phỏng độ trễ SendInput theo phân bố telemetry thật (p50~477us, p99~953us)
-để đường đơn luồng có chi phí gửi giống thực tế. KHÔNG phụ thuộc game/window.
+Backend simulates SendInput delay according to real telemetry distribution (p50~477us, p99~953us)
+so the single-thread path has realistic dispatch cost. Does NOT depend on game/window.
 """
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ from sky_music.orchestration.playback_supervisor import PLAYBACK_FINISHED
 FPS = 60
 FRAME_US = math.ceil(1_000_000 / FPS)
 HOLD_FRAMES_SWEEP = [1.0, 1.25, 1.5, 2.0]
-TRUNCATE_US = 30_000_000  # 30s đầu mỗi bài cho nhanh; tăng nếu cần độ phủ.
-SEED = 12345  # cố định để các lần chạy so sánh được
+TRUNCATE_US = 30_000_000  # first 30s of each song for speed; increase if coverage needed.
+SEED = 12345  # fixed so runs are comparable
 
 class FakeClock:
     def __init__(self, start_us: int = 0):

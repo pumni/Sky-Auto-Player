@@ -10,10 +10,10 @@ def write(name, notes):
               [{"time": t, "key": f"Key{k}"} for t, k in notes]}, indent=2),
           encoding="utf-8")
 
-# --- Bài V: visibility — 15 note đơn, mỗi phím 1 lần, cách 700ms (không lặp phím) ---
+# --- Song V: visibility — 15 single notes, each key once, 700ms apart (no key repeat) ---
 write("TEST_visibility", [(i*700, i) for i in range(15)])
 
-# --- Bài R: repeat staircase — 1 phím (Key7), 8 block x 8 lần, interval giảm dần ---
+# --- Song R: repeat staircase — 1 key (7), 8 blocks x 8 reps, decreasing intervals ---
 def staircase(key=7, reps=8, intervals=(220,180,150,120,100,85,70,55), block_gap=1500):
       notes, t = [], 0
       for interval in intervals:
@@ -24,7 +24,7 @@ def staircase(key=7, reps=8, intervals=(220,180,150,120,100,85,70,55), block_gap
       return notes
 write("TEST_repeat_staircase", staircase())
 
-  # --- Bài C (tùy chọn): polyphony — hợp âm 2..6 phím đồng thời, cách 800ms ---
+  # --- Song C (optional): polyphony — chords of 2..6 simultaneous keys, 800ms apart ---
 def chords():
       notes, t = [], 0
       for size in (2,3,4,5,6):
@@ -34,13 +34,13 @@ def chords():
 write("TEST_chords", chords())
 
 def staircase_gap(key=7, reps=10, hold_ms=24,
-                    gaps=(50,40,30,24,20,17,14,11,8,5),  # ms, giảm dần quanh 1 frame(16.7)
+                    gaps=(50,40,30,24,20,17,14,11,8,5),  # ms, decreasing around 1 frame (16.7)
                     block_gap=2000):
-      """Mỗi block 'reps' lần bấm cùng phím; gap_thực = interval - hold_ms.
-         Block cách nhau block_gap ms để tiếng ngân tắt hẳn & dễ tách onset."""
+      """Each block: 'reps' presses on the same key; actual_gap = interval - hold_ms.
+         Blocks separated by block_gap ms to let the note ring out & ease onset splitting."""
       notes, t = [], 0
       for g in gaps:
-          interval = g + hold_ms          # gap_thực = interval - hold = g
+          interval = g + hold_ms          # actual_gap = interval - hold = g
           for _ in range(reps):
               notes.append((t, key))
               t += interval
@@ -64,21 +64,21 @@ fine_gap_orders = (
 for suffix, gaps in zip(("a", "b", "c"), fine_gap_orders, strict=False):
       write(f"TEST_repeat_gap_fine_{suffix}", staircase_gap(reps=20, gaps=gaps))
 
-# Nhịp đều, ĐAN XEN 2 phím khác nhau -> không dính same-key repeat pressure,
-# nên unevenness đo được là THUẦN do frame-sampling/lead, không phải gap floor.
+# Even rhythm, INTERLEAVING 2 different keys -> no same-key repeat pressure,
+# so the measured unevenness is PURELY from frame-sampling/lead, not a gap floor.
 def metronome_alt(keys=(0, 2), interval_ms=200, count=64):
       return [(i * interval_ms, keys[i % len(keys)]) for i in range(count)]
 
-write("TEST_metro_alt_200", metronome_alt(interval_ms=200))   # 5 nốt/s, dễ tách onset
-write("TEST_metro_alt_120", metronome_alt(interval_ms=120))   # ép mạnh hơn
+write("TEST_metro_alt_200", metronome_alt(interval_ms=200))   # 5 notes/s, easy onset separation
+write("TEST_metro_alt_120", metronome_alt(interval_ms=120))   # more aggressive
 
-# Phiên bản CÙNG phím để đối chứng (có dính gap floor) — chỉ dùng ở EXP-4 nếu cần
+# SAME-key variant as control (hits the gap floor) — used in EXP-4 only if needed
 write("TEST_metro_same_200", [(i * 200, 7) for i in range(64)])
 
-# O1: nhịp 120 BPM (500 ms) để khớp metronome chuẩn khi đo độ trễ tuyệt đối
+# O1: 120 BPM (500 ms) rhythm to match a standard metronome for absolute latency measurement
 write("TEST_metro_alt_500", metronome_alt(interval_ms=500, count=40))
 
-# O2/O8: hợp âm "rải" — các phím cách nhau RẤT NHỎ để dò ngưỡng gom chord (chord_merge)
+# O2/O8: "rolled" chords — keys VERY CLOSE together to probe the chord-merging threshold (chord_merge)
 def rolled_chord(keys=(0, 2, 4, 6), spread_ms=18, blocks=8, block_gap=1500):
       notes, t = [], 0
       for _ in range(blocks):

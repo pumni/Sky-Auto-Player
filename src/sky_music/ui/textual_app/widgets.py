@@ -7,9 +7,10 @@ from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.message import Message
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
+from textual.widgets.option_list import Option
 
-from sky_music.ui.picker_theme import get_theme_preset, pad_text, remove_accents
+from sky_music.ui.picker_theme import pad_text, remove_accents
 from sky_music.ui.text_render import cell_width
 from sky_music.ui.textual_app.keymap import PICKER_HINTS, CommandSpec, KeyHint
 
@@ -111,11 +112,31 @@ class CustomFooter(AppFooter):
         AppFooter.__init__(self, PICKER_HINTS, **kwargs)
 
 
-class CommandPaletteList(Static):
-    """Custom widget for grouped command selection."""
+class CommandPaletteList(OptionList):
+    """Grouped, filterable command palette built on :class:`OptionList`.
+
+    Subclassing ``OptionList`` (rather than drawing into a ``Static`` surface)
+    buys us modern Textual scroll behaviour for free: native scrollbar,
+    mouse-wheel, click-to-scroll, PageUp/PageDown, Home/End, and automatic
+    keep-highlight-in-view — all the UX the previous Static-based widget
+    was missing when the terminal was shorter than the option list.
+
+    Layout
+    ------
+    For each group (in ``GROUP_ORDER``) we emit a *disabled* Option whose
+    prompt is the group header, followed by an Option per command in that
+    group. Disabled options cannot be highlighted/selected by ``OptionList``
+    but are still part of the scrollable surface, so headers travel with their
+    commands when the user scrolls.
+
+    Message compatibility
+    ---------------------
+    ``CommandHighlighted`` and ``CommandSelected`` messages are posted so
+    ``CommandModal`` keeps working unchanged — we just bridge OptionList's
+    built-in ``OptionSelected`` / ``HighlightChanged`` events onto them.
+    """
 
     app: SkyPickerApp
-    can_focus = True
     GROUP_ORDER = ["View", "Playback", "Interface", "Library", "System"]
 
     class CommandHighlighted(Message):
@@ -129,44 +150,83 @@ class CommandPaletteList(Static):
             self.command = command
 
     def __init__(self, commands: list[CommandSpec], **kwargs: Any) -> None:
-        Static.__init__(self, "", **kwargs)
         self.commands = commands
         self.filter_text = ""
         self.selectable_commands: list[CommandSpec] = self._filtered_commands()
-        self.highlighted_index = 0
-        self._row_commands: list[CommandSpec | None] = []
+        # Build initial option rows (headers + commands) and delegate to the
+        # OptionList constructor.
+        OptionList.__init__(self, *self._build_options(), **kwargs)
+
+    # ── Construction helpers ────────────────────────────────────────────────
+
+    def _build_options(self) -> list[Option]:
+        """Materialise the visible options: group header (disabled) +
+        one Option per matched command, in GROUP_ORDER order.
+        """
+        grouped: dict[str, list[CommandSpec]] = {}
+        for cmd in self.selectable_commands:
+            grouped.setdefault(cmd.group, []).append(cmd)
+
+        options: list[Option] = []
+        for group_name in self.GROUP_ORDER:
+            if group_name not in grouped:
+                continue
+            header_prompt = Text(group_name, style="bold")
+            options.append(Option(header_prompt, id=f"__header__:{group_name}", disabled=True))
+            options.extend(
+                Option(self._format_command_prompt(cmd), id=f"cmd:{cmd.id}")
+                for cmd in grouped[group_name]
+            )
+        return options
+
+    @staticmethod
+    def _format_command_prompt(cmd: CommandSpec) -> Text:
+        """Render a single command row as a styled Text prompt."""
+        key_str = pad_text(cmd.key, 8)
+        label_str = pad_text(cmd.label, 20)
+        line = Text()
+        line.append("  ")
+        line.append(key_str, style="bold")
+        line.append(label_str)
+        line.append(cmd.description, style="dim")
+        return line
+
+    # ── Filter ──────────────────────────────────────────────────────────────
 
     def set_filter(self, value: str) -> None:
+        """Rebuild the option list with the given filter applied.
+
+        Resetting options via :meth:`OptionList.clear_options` + ``add_options``
+        is the canonical Textual API here — it preserves scroll/selection
+        bookkeeping that a hand-rolled refresh would not.
+        """
         self.filter_text = value.strip()
         self.selectable_commands = self._filtered_commands()
-        self.highlighted_index = 0
-        self.refresh()
+        self.clear_options()
+        new_opts = self._build_options()
+        if new_opts:
+            self.add_options(new_opts)
+            # Highlight the first real (non-disabled) command.
+            first_idx = self._first_command_index()
+            if first_idx is not None:
+                self.highlighted = first_idx
         if self.selectable_commands:
-            self.post_message(self.CommandHighlighted(self.selectable_commands[self.highlighted_index]))
+            self.post_message(self.CommandHighlighted(self.selectable_commands[0]))
 
-    def move_highlight(self, delta: int) -> None:
-        if not self.selectable_commands:
-            return
-        self.highlighted_index = (self.highlighted_index + delta) % len(self.selectable_commands)
-        self.refresh()
-        self.post_message(self.CommandHighlighted(self.selectable_commands[self.highlighted_index]))
-
-    def select_highlighted(self) -> None:
-        if self.selectable_commands:
-            self.post_message(self.CommandSelected(self.selectable_commands[self.highlighted_index]))
+    def _first_command_index(self) -> int | None:
+        """Index of the first selectable (non-header) option, or None."""
+        for i, opt in enumerate(self._options):  # type: ignore[attr-defined]
+            opt_id = getattr(opt, "id", None) or ""
+            if opt_id.startswith("cmd:"):
+                return i
+        return None
 
     def _matches_filter(self, command: CommandSpec) -> bool:
         query = remove_accents(self.filter_text).casefold()
         if not query:
             return True
         haystack = " ".join(
-            (
-                command.id,
-                command.key,
-                command.label,
-                command.description,
-                command.group,
-            )
+            (command.id, command.key, command.label, command.description, command.group)
         )
         return query in remove_accents(haystack).casefold()
 
@@ -180,117 +240,84 @@ class CommandPaletteList(Static):
             ),
         )
 
-    def _render_rows(self) -> list[CommandSpec | None]:
-        grouped: dict[str, list[CommandSpec]] = {}
-        rows: list[CommandSpec | None] = []
-        for cmd in self.selectable_commands:
-            grouped.setdefault(cmd.group, []).append(cmd)
+    # ── Bridging OptionList events onto Command{Highlighted,Selected} ───────
 
-        first = True
-        for group_name in self.GROUP_ORDER:
-            if group_name not in grouped:
-                continue
-            if not first:
-                rows.append(None)
-            first = False
-            rows.append(None)
-            rows.extend(grouped[group_name])
-        return rows
-
-    def on_mount(self) -> None:
-        self._row_commands = self._render_rows()
-        if self.selectable_commands:
-            self.post_message(self.CommandHighlighted(self.selectable_commands[self.highlighted_index]))
-
-    def on_key(self, event: events.Key) -> None:
-        if event.key == "up":
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Map OptionList click/Enter to ``CommandSelected``."""
+        cmd = self._command_for_option_index(getattr(event, "option_index", None))
+        if cmd is not None:
             event.stop()
-            self.move_highlight(-1)
-        elif event.key == "down":
+            self.post_message(self.CommandSelected(cmd))
+
+    def on_option_list_option_highlighted(  # type: ignore[override]
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        cmd = self._command_for_option_index(getattr(event, "option_index", None))
+        if cmd is not None:
             event.stop()
-            self.move_highlight(1)
-        elif event.key == "enter":
-            event.stop()
-            self.select_highlighted()
+            self.post_message(self.CommandHighlighted(cmd))
 
-    def on_mouse_move(self, event: events.MouseMove) -> None:
-        rows = self._row_commands or self._render_rows()
-        if 0 <= event.y < len(rows):
-            command = rows[event.y]
-            if command is None:
-                return
-            try:
-                index = self.selectable_commands.index(command)
-            except ValueError:
-                return
-            if index != self.highlighted_index:
-                self.highlighted_index = index
-                self.refresh()
-                self.post_message(self.CommandHighlighted(command))
-
-    def on_click(self, event: events.Click) -> None:
-        rows = self._row_commands or self._render_rows()
-        if 0 <= event.y < len(rows):
-            command = rows[event.y]
-            if command is None:
-                return
-            self.highlighted_index = self.selectable_commands.index(command)
-            self.refresh()
-            self.post_message(self.CommandHighlighted(command))
-            self.post_message(self.CommandSelected(command))
-
-    def render(self) -> Text:
+    def _command_for_option_index(self, idx: int | None) -> CommandSpec | None:
+        """Translate an OptionList row index (which includes header rows)
+        into the corresponding ``CommandSpec``. Returns None for headers
+        and out-of-range indices.
+        """
+        if idx is None:
+            return None
         try:
-            t = get_theme_preset(self.app.active_theme)
-        except Exception:
-            from sky_music.ui.picker_theme import THEME_PRESETS
-            t = THEME_PRESETS["aurora"]
+            opt = self._options[idx]  # type: ignore[attr-defined]
+        except (IndexError, AttributeError):
+            return None
+        opt_id = getattr(opt, "id", None) or ""
+        if not opt_id.startswith("cmd:"):
+            return None
+        cmd_id = opt_id[len("cmd:") :]
+        for c in self.selectable_commands:
+            if c.id == cmd_id:
+                return c
+        return None
 
-        grouped: dict[str, list[CommandSpec]] = {}
-        for cmd in self.selectable_commands:
-            grouped.setdefault(cmd.group, []).append(cmd)
+    # ── External API used by tests / callers ───────────────────────────────
 
-        txt = Text()
-        self._row_commands = []
+    @property
+    def highlighted_index(self) -> int:
+        """Index into ``selectable_commands`` of the currently highlighted
+        command (skipping header rows), or 0 if nothing is highlighted.
+        """
+        raw = self.highlighted
+        if raw is None:
+            return 0
+        cmd = self._command_for_option_index(raw)
+        if cmd is None:
+            return 0
+        try:
+            return self.selectable_commands.index(cmd)
+        except ValueError:
+            return 0
+
+    @highlighted_index.setter
+    def highlighted_index(self, value: int) -> None:
         if not self.selectable_commands:
-            empty = f'No commands match "{self.filter_text}"' if self.filter_text else "No commands available"
-            txt.append(empty, style=t.muted)
-            return txt
+            return
+        idx = max(0, min(value, len(self.selectable_commands) - 1))
+        cmd = self.selectable_commands[idx]
+        # Find the OptionList row index that carries this command.
+        for i, opt in enumerate(self._options):  # type: ignore[attr-defined]
+            if (getattr(opt, "id", None) or "") == f"cmd:{cmd.id}":
+                self.highlighted = i
+                return
 
-        highlighted_cmd = self.selectable_commands[self.highlighted_index]
+    def move_highlight(self, delta: int) -> None:
+        """Move the highlight by ``delta`` skipping header rows."""
+        n = len(self.selectable_commands)
+        if n == 0:
+            return
+        self.highlighted_index = (self.highlighted_index + delta) % n
 
-        first = True
-        for group_name in self.GROUP_ORDER:
-            if group_name not in grouped:
-                continue
-            if not first:
-                txt.append("\n\n")
-                self._row_commands.append(None)
-            first = False
+    def select_highlighted(self) -> None:
+        if self.selectable_commands:
+            self.post_message(self.CommandSelected(self.selectable_commands[self.highlighted_index]))
 
-            txt.append(group_name, style=f"bold {t.key}")
-            self._row_commands.append(None)
+    # ── Render is handled by OptionList itself; we only mark up prompts ─────
 
-            for cmd in grouped[group_name]:
-                txt.append("\n")
-                is_selected = cmd.id == highlighted_cmd.id
-                self._row_commands.append(cmd)
-
-                key_str = pad_text(cmd.key, 8)
-                label_str = pad_text(cmd.label, 20)
-
-                if is_selected:
-                    line = Text()
-                    line.append("▌ ", style=f"bold {t.accent}")
-                    line.append(key_str, style=f"bold {t.accent}")
-                    line.append(label_str, style=f"bold {t.foreground}")
-                    line.append(cmd.description, style=t.detail)
-                    txt.append(line)
-                else:
-                    line = Text()
-                    line.append("  ")
-                    line.append(key_str, style=f"{t.accent_dim}")
-                    line.append(label_str, style=f"{t.foreground}")
-                    line.append(cmd.description, style=t.muted)
-                    txt.append(line)
-        return txt
+    # No custom render(): OptionList handles scrollbar, viewport, etc.

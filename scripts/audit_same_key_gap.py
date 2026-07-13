@@ -1,7 +1,7 @@
 """Audit same-key interval & up-gap across the song corpus, swept over hold.
 
-Kết luận: nếu min(min_same_key_up_gap_us) >= frame_us ở MỌI mức hold thử nghiệm,
-thì H-SAMEKEY KHÔNG bind -> loại khỏi phân tích (khớp timing-principles §5.2/§6).
+Conclusion: if min(min_same_key_up_gap_us) >= frame_us at EVERY tested hold level,
+then H-SAMEKEY does NOT bind -> exclude from analysis (matches timing-principles §5.2/§6).
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ HOLD_FRAMES_SWEEP = [1.0, 1.25, 1.5, 2.0]
 
 
 def policy_for(hold_frames: float) -> FrameTimingPolicy:
-    # Decouple hold from min_hold: hold tăng, min_hold cố định 1 frame.
+    # Decouple hold from min_hold: hold increases, min_hold stays fixed at 1 frame.
     base = TimingPolicy.from_dict({
         "min_hold_frames": 1.0,
         "min_hold_unframed_us": 22_000,
@@ -43,7 +43,7 @@ def main() -> None:
             try:
                 song = parse_song_file(sp, SKY_15_KEY_PROFILE)
                 res = build_key_actions(song, policy=policy)
-            except Exception as e:  # bài lỗi parse — bỏ qua, ghi chú
+            except Exception as e:  # song failed to parse — skip, log note
                 print(f"  [skip] {sp.name}: {e}")
                 continue
             gap = res.min_same_key_up_gap_us

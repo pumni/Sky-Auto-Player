@@ -43,7 +43,7 @@ from sky_music.ui.text_render import ansi_box, clamp_terminal_width
 def _wait_key_and_exit(code: int = 1) -> None:
     """Print a 'press any key' prompt then exit — keeps the console window open
     when the exe is launched by double-click so the user can read the error."""
-    print("\nNhấn phím bất kỳ để thoát...", file=sys.stderr, flush=True)
+    print("\nPress any key to exit...", file=sys.stderr, flush=True)
     try:
         if sys.platform == "win32":
             import msvcrt
@@ -300,9 +300,9 @@ def _check_textual_support() -> str | None:
     """Return a human-readable failure reason if Textual cannot run, or None if it can."""
     if not sys.stdout.isatty():
         return (
-            "stdout không phải terminal tương tác (isatty = False). "
-            "Hãy chạy Sky Player trực tiếp trong một cửa sổ terminal, "
-            "không phải qua pipe hay redirect."
+            "stdout is not an interactive terminal (isatty = False). "
+            "Run Sky Player directly in a terminal window, "
+            "not through a pipe or redirect."
         )
     if sys.platform != "win32":
         return None  # non-Windows terminals generally support Textual
@@ -319,9 +319,9 @@ def _check_textual_support() -> str | None:
             mode = ctypes.wintypes.DWORD()
             if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) and not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
                     return (
-                        "Console hiện tại không hỗ trợ ANSI / Virtual Terminal Processing. "
-                        "Hãy mở ứng dụng từ Windows Terminal (wt.exe) hoặc "
-                        "bật 'Let Windows decide' trong Settings > System > For developers > Terminal."
+                        "The current console does not support ANSI / Virtual Terminal Processing. "
+                        "Launch the app from Windows Terminal (wt.exe) or "
+                        "enable 'Let Windows decide' under Settings > System > For developers > Terminal."
                     )
         except Exception:
             pass  # cannot query — assume capable
@@ -332,8 +332,8 @@ def _check_textual_support() -> str | None:
     if os.environ.get("TERM_PROGRAM") == "vscode":
         return None
     return (
-        "Terminal không được nhận diện là hỗ trợ Textual trên Windows. "
-        "Chạy từ Windows Terminal. "
+        "Terminal is not recognised as supporting Textual on Windows. "
+        "Run from Windows Terminal. "
     )
 
 

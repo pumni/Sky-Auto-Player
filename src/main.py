@@ -41,7 +41,7 @@ from sky_music.orchestration.runtime_session import (
     PlaybackOverrides,
 )
 
-# Import từ các mô-đun chuyên biệt
+# Imports from specialised modules
 from sky_music.platform.win32 import inputs
 from sky_music.platform.win32.inputs import (
     disable_high_precision_timers,
@@ -89,7 +89,7 @@ def flush_debug_log() -> None:
     finally:
         DEBUG_LOG_BUFFER.clear()
 
-# Kết nối hàm debug_log của main.py sang inputs.py để đồng bộ logging
+# Bridge main.py's debug_log into inputs.py for unified logging
 inputs._debug_log_callback = debug_log
 
 
@@ -629,7 +629,7 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║          Sky Player — Yêu cầu hệ thống không đáp ứng        ║\n"
+            "║          Sky Player — System requirements not met         ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             f"║  {unsupported_reason[:62]:<62}║\n",
             file=sys.stderr,
@@ -661,10 +661,10 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║        Sky Player — Lỗi tải Textual UI                      ║\n"
+            "║        Sky Player — Textual UI failed to load              ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
-            f"║  Module bị thiếu: {str(exc)[:44]:<44}          ║\n"
-            "║  Đây là lỗi đóng gói. Hãy báo cáo lỗi này.                ║\n"
+            f"║  Missing module: {str(exc)[:44]:<44}            ║\n"
+            "║  This is a packaging error. Please report this bug.       ║\n"
             "╚══════════════════════════════════════════════════════════════╝\n",
             file=sys.stderr,
         )
@@ -673,7 +673,7 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║        Sky Player — Textual UI gặp lỗi nghiêm trọng         ║\n"
+            "║        Sky Player — Textual UI encountered a fatal error   ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             f"║  {str(exc)[:62]:<62}║\n"
             "╚══════════════════════════════════════════════════════════════╝\n",

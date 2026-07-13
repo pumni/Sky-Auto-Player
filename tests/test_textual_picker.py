@@ -450,9 +450,17 @@ def test_command_palette_filters_and_runs_match(monkeypatch) -> None:
         for key in ("t", "h", "e", "m", "e"):
             await pilot.press(key)
         await pilot.pause()
-        palette_text = str(app.screen.query_one("#modal-options").render())
-        assert "Change Theme" in palette_text
-        assert "Adjust Tempo" not in palette_text
+        # Filter is applied to CommandPaletteList.options; we inspect those
+        # instead of parsing the rendered surface (OptionList render output
+        # is a Panel, not a flat text).
+        options_widget = app.screen.query_one("#modal-options")
+        option_prompts = [
+            str(getattr(opt, "prompt", ""))
+            for opt in getattr(options_widget, "_options", [])
+        ]
+        joined = "\n".join(option_prompts)
+        assert "Change Theme" in joined
+        assert "Adjust Tempo" not in joined
         await pilot.press("enter")
         await pilot.pause()
         assert type(app.screen).__name__ == "OptionModal"

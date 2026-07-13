@@ -101,7 +101,7 @@ def run_smoke_test(exe_path: Path) -> bool:
         print(f"[!] Missing executable: {exe_path}")
         return False
 
-    print(f"[+] Đang chạy Smoke Test: {exe_path} --selftest-textual")
+    print(f"[+] Running Smoke Test: {exe_path} --selftest-textual")
     try:
         result = subprocess.run(
             [str(exe_path), "--selftest-textual"],
@@ -111,14 +111,14 @@ def run_smoke_test(exe_path: Path) -> bool:
             cwd=str(exe_path.parent),
         )
     except Exception as exc:
-        print(f"[!] Lỗi khi chạy Smoke Test: {exc}")
+        print(f"[!] Error while running Smoke Test: {exc}")
         return False
 
     if result.returncode == 0:
-        print("[v] Smoke Test THÀNH CÔNG.")
+        print("[v] Smoke Test SUCCEEDED.")
         return True
 
-    print("[!] Smoke Test THẤT BẠI!")
+    print("[!] Smoke Test FAILED!")
     print(result.stderr or result.stdout)
     return False
 
@@ -151,7 +151,7 @@ def kill_hanging_selftest(release_dir: Path) -> None:
 
 def main() -> None:
     if sys.platform != "win32":
-        raise SystemExit("[!] Lỗi: Dự án này chỉ hỗ trợ build trên Windows.")
+        raise SystemExit("[!] Error: This project only supports building on Windows.")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-test", action="store_true")
@@ -169,15 +169,15 @@ def main() -> None:
         try:
             shutil.rmtree(BUILD_DIR)
         except PermissionError as e:
-            print(f"[!] Lỗi dọn dẹp BUILD_DIR: {e}. Đang thử tiếp tục...")
+            print(f"[!] Error cleaning BUILD_DIR: {e}. Attempting to continue...")
             
     if DIST_DIR.exists():
         try:
             shutil.rmtree(DIST_DIR)
         except PermissionError as e:
-            raise SystemExit(f"[!] Lỗi dọn dẹp DIST_DIR: {e}.\nGiải pháp: Đóng mọi cửa sổ CMD/Explorer đang mở thư mục {DIST_DIR} và thử lại.") from e
+            raise SystemExit(f"[!] Error cleaning DIST_DIR: {e}.\nFix: close any CMD/Explorer windows currently open in {DIST_DIR} and try again.") from e
 
-    print("[+] Đang khởi động PyInstaller...")
+    print("[+] Starting PyInstaller...")
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_FILE)],
         check=True,
@@ -189,10 +189,10 @@ def main() -> None:
     if not raw_dist.exists():
         raise RuntimeError(f"PyInstaller output missing: {raw_dist}")
 
-    print(f"[+] Chuyển artifact sang {release_dir.name}...")
+    print(f"[+] Moving artifact to {release_dir.name}...")
     shutil.move(str(raw_dist), str(release_dir))
 
-    print("[+] Sao chép assets...")
+    print("[+] Copying assets...")
     for asset in REQUIRED_ASSETS:
         src = PROJECT_ROOT / asset
         if not src.exists():
@@ -207,7 +207,7 @@ def main() -> None:
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)
 
-    print(f"[v] HOÀN TẤT: {release_dir.resolve()}")
+    print(f"[v] DONE: {release_dir.resolve()}")
 
 if __name__ == "__main__":
     main()

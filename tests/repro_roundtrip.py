@@ -1,5 +1,5 @@
-"""Tái hiện: local_precise@144 -> đổi profile/fps -> quay lại local_precise@144.
-Đo min_hold hiệu dụng ở từng bước qua ĐÚNG các hàm persist/load thật."""
+"""Reproduce: local_precise@144 -> switch profile/fps -> back to local_precise@144.
+Measure effective min_hold at each step through the REAL persist/load functions."""
 from __future__ import annotations
 
 import json
@@ -38,12 +38,12 @@ def main():
     config.CONFIG_PATH = tmp / "config.json"
     print(f"temp config: {config.CONFIG_PATH}\n")
 
-    # --- Baseline: tươi, chưa có file config ---
+    # --- Baseline: fresh, no config file yet ---
     clear_config_cache()
     cfg = load_config(force_reload=True)
     base = show("FRESH (no config file)", cfg)
 
-    # --- B1: đổi sang balanced@60 rồi quay lại local-precise@144 (luồng picker) ---
+    # --- B1: switch to balanced@60 then back to local-precise@144 (picker flow) ---
     print("\n[B] picker round-trip qua persist_default_* :")
     persist_default_profile(load_config(), "balanced")
     persist_default_fps(load_config(), 60)
@@ -52,22 +52,22 @@ def main():
     persist_default_fps(load_config(), 144)
     b = show("after -> back to local-precise@144", load_config())
 
-    # --- C: chèn 1 lần calibration (ghi timing_profiles) ở giữa ---
-    print("\n[C] có chạy lệnh 'calibration' ở giữa (persist_calibration_defaults) :")
-    # giả lập calibration khuyến nghị local_precise với fps khác
+    # --- C: insert 1 calibration run (writes timing_profiles) in between ---
+    print("\n[C] calibration run in between (persist_calibration_defaults) :")
+    # simulate calibration recommending local_precise with a different fps
     for cal_profile, cal_fps in (("balanced", 60), ("local-precise", 60), ("local-precise", 240)):
         clear_config_cache()
-        cfg = load_config(force_reload=True)  # reset về tươi mỗi kịch bản
+        cfg = load_config(force_reload=True)  # reset to fresh per scenario
         persist_calibration_defaults(load_config(), profile_name=cal_profile, tempo_scale=1.0, fps=cal_fps)
         show(f"after calibration({cal_profile}@{cal_fps})", load_config())
         persist_default_profile(load_config(), "local-precise")
         persist_default_fps(load_config(), 144)
         after = show("  then user sets back local-precise@144", load_config())
-        flag = "  <-- KHÁC baseline!" if after != base else ""
+        flag = "  <-- DIFFERENT from baseline!" if after != base else ""
         print(f"      baseline={base}  after={after}{flag}")
 
-    # --- D: round-trip qua DISK (process restart) ---
-    print("\n[D] ghi đĩa rồi reload (mô phỏng khởi động lại app) :")
+    # --- D: round-trip through DISK (simulate app restart) ---
+    print("\n[D] write to disk then reload (simulate app restart) :")
     clear_config_cache()
     cfg = load_config(force_reload=True)
     persist_calibration_defaults(load_config(), profile_name="local-precise", tempo_scale=1.0, fps=240)

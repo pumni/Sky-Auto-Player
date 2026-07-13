@@ -92,7 +92,7 @@ THEME_PRESETS: dict[str, ThemePreset] = {
         modal_background="#101010",
         modal_title="#e5e7eb",
         match="#ffffff",
-        success="#2dd4bf",  # teal mềm hơn một chút
+        success="#2dd4bf",  # a softer teal
         warning="#fbbf24",
         danger="#f87171",
     ),

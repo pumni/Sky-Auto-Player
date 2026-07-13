@@ -83,22 +83,22 @@ To record game audio accurately on Windows without background noise:
 
 ---
 
-## 2. Phase G Validation Results (Vietnamese Detail Record)
+## 2. Phase G Validation Results (Detailed Record)
 
-*Mục này ghi lại chi tiết kết quả đo thực tế của Phase G vào ngày 2026-06-06 nhằm xác nhận độ tin cậy của cơ chế completion-anchor.*
+*This section records the detailed measurement results of Phase G on 2026-06-06 to confirm the reliability of the completion-anchor mechanism.*
 
-### Gate Tầng 2 (per-block, không phải toàn bài)
-Ở `local_precise @144fps`, `min_hold = 6945 us`. Một block same-key chỉ là gate "phải 12/12 sent" khi:
-$$\text{headroom} = \text{interval} - \text{min\_hold} > \text{jitter dispatch thật của máy}$$
-(đo được ~2.5 ms spike trên máy dev). Vì vậy block **8 ms+** (headroom $\ge 1$ ms) là gate hợp lệ; block **7 ms** (~55 us headroom) ở đúng sát mép sàn nên nếu rớt là tín hiệu giới hạn vật lý của tempo/profile, không phải lỗi logic của anchor. 
+### Tier-2 Gate (per-block, not per-song)
+Under `local_precise @144fps`, `min_hold = 6945 us`. A same-key block passes the "must be 12/12 sent" gate when:
+$$\text{headroom} = \text{interval} - \text{min\_hold} > \text{real machine dispatch jitter}$$
+(measured ~2.5 ms spike on the dev machine). Therefore blocks **8 ms+** (headroom $\ge 1$ ms) are valid gates; block **7 ms** (~55 us headroom) sits right on the floor edge, so any drop is a physical limit of tempo/profile, not a logic error in the anchor.
 
-Đo thực tế (run1/run2 với fix start-anchor): mọi block 8 ms+ đều đạt 12/12; chỉ block 7 ms rớt 4 note — khớp đúng dự đoán lý thuyết. Điều này chứng minh anchor đã hoạt động chính xác ở mức gửi (sender) cho mọi interval có headroom lớn hơn jitter hệ thống.
+Actual measurement (run1/run2 with start-anchor fix): every 8 ms+ block achieved 12/12; only the 7 ms block dropped 4 notes — matching the theoretical prediction exactly. This proves the anchor operates correctly at the sender level for every interval whose headroom exceeds system jitter.
 
-### Kết quả đo chi tiết (2026-06-06)
-Thử nghiệm với bài `TEST_repeat_clean_144` (các block cùng phím có interval 20/24/30/40/55/70 ms), chạy profile `local_precise` ở 144 FPS trên 2 lượt chơi thực tế kèm thu âm game:
-* **Sender gate:** Cả 2 lượt đều đạt `intended_down = sent_down = 72`, `dropped_conflict/expired/suppressed_stale_up = 0` $\rightarrow$ dữ liệu gửi đi hoàn toàn sạch, audio thu được là ground truth hợp lệ.
-* **Game onsets:** Cả 2 lượt đều nhận **72/72** nốt, toàn bộ 6 block đều đạt 12/12 nốt $\rightarrow$ không mất nốt nào, không mất block nào.
-* **Sender IOI per block:** Dao động cực nhỏ từ 0.0027 đến 0.0243 ms (thấp hơn nhiều so với ngưỡng biên 0.05–0.07 ms).
-* **Game-only jitter per block:** Đạt std từ 1.88 đến 5.77 ms (hoàn toàn do độ trễ nội bộ của game/audio và bộ tách onset, không phải từ phía gửi).
+### Detailed Measurement Results (2026-06-06)
+Tested with song `TEST_repeat_clean_144` (same-key blocks at intervals 20/24/30/40/55/70 ms), profile `local_precise` at 144 FPS, 2 real play-throughs with game audio recording:
+* **Sender gate:** Both runs achieved `intended_down = sent_down = 72`, `dropped_conflict/expired/suppressed_stale_up = 0` $\rightarrow$ sent data is completely clean, recorded audio is valid ground truth.
+* **Game onsets:** Both runs registered **72/72** notes, all 6 blocks achieved 12/12 notes $\rightarrow$ zero dropped notes, zero lost blocks.
+* **Sender IOI per block:** Varied from 0.0027 to 0.0243 ms (well below the 0.05–0.07 ms detection threshold).
+* **Game-only jitter per block:** Std from 1.88 to 5.77 ms (entirely from game/audio internal latency and the onset splitter, not from the sender side).
 
-**Kết luận:** Cơ chế completion-anchor không làm rớt nốt same-key nào trong thực tế đối với các khoảng interval có headroom nằm trên biên độ jitter của máy. Không cần tăng thêm bất kỳ margin cố định nào vào profile.
+**Conclusion:** The completion-anchor mechanism does not drop same-key notes in practice for intervals whose headroom lies above the machine's jitter amplitude. No additional fixed margin needs to be added to any profile.

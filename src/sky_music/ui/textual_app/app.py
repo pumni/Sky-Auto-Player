@@ -151,6 +151,7 @@ class SongTable(DataTable[str]):
         Binding("h", "toggle_hud", "HUD", priority=True, show=False),
         Binding("f3", "toggle_telemetry", "Telemetry", priority=True, show=False),
         Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
+        Binding("u", "check_for_update", "Update", priority=True, show=False),
     ]
 
     def _run_action(self, name: str) -> None:
@@ -185,6 +186,9 @@ class SongTable(DataTable[str]):
 
     def action_reload_songs(self) -> None:
         self._run_action("reload_songs")
+
+    def action_check_for_update(self) -> None:
+        self._run_action("check_for_update")
 
 
 @dataclass(frozen=True, slots=True)
@@ -862,6 +866,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self.action_open_theme()
         elif command == "help":
             self.action_open_help()
+        elif command == "update":
+            self.action_check_for_update()
 
     def action_toggle_preview(self) -> None:
         self.preview_visible = not self.preview_visible
@@ -1025,6 +1031,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._render_table(reset_cursor=True)
         self._render_detail()
         self.metadata.refresh(paths)  # type: ignore[attr-defined]
+
+    def action_check_for_update(self) -> None:
+        # Manual check bypasses the throttle and surfaces errors to the user.
+        self.notify("Checking for updates...", severity="information", timeout=3)
+        self.check_for_updates_worker(force=True)
 
     def quiesce(self) -> None:
         try:
@@ -1376,21 +1387,37 @@ class SkyPickerApp(App[SongPickerResult | None]):
     from textual import work
 
     @work(thread=True)
-    def check_for_updates_worker(self) -> None:
+    def check_for_updates_worker(self, *, force: bool = False) -> None:
         from sky_music.orchestration.update_service import (
             check_for_update,
             record_successful_check,
             should_auto_check,
         )
-        if not should_auto_check(self.cfg):
+        if not force and not should_auto_check(self.cfg):
             return
-        
+
         result = check_for_update(self.cfg, current_version=VERSION)
         if result.error is None:
             record_successful_check(self.cfg)
-        
+        elif force:
+            # Surface errors only when the user explicitly requested a check.
+            # Auto-check stays silent on transient network failures.
+            self.call_from_thread(
+                self.notify,
+                f"Update check failed: {result.error}",
+                severity="error",
+                timeout=6,
+            )
+
         if result.update is not None:
             self.call_from_thread(self._prompt_update, result)
+        elif result.error is None and force:
+            self.call_from_thread(
+                self.notify,
+                f"Sky Player v{VERSION} is up to date.",
+                severity="information",
+                timeout=4,
+            )
 
     def _prompt_update(self, result: Any) -> None:
         from sky_music.ui.textual_app.modals import UpdateModal

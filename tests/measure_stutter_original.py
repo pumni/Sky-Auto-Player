@@ -12,8 +12,8 @@ game's audio engine). This script closes that gap by comparing, on the same run:
 and produces the three decisive verdicts that split "before-send" from "after-send":
 
   1. MISSING NOTES  — downs the runtime emitted but that produced NO audio onset.
-     => the note was lost AFTER the player (OS delivery dropped it, or the game saw a
-        sub-frame hold and never registered it). This is the "game không nhận" case.
+      => the note was lost AFTER the player (OS delivery dropped it, or the game saw a
+         sub-frame hold and never registered it). This is the "game didn't register" case.
   2. STUTTER GAPS   — pairs where the audio inter-onset interval is much larger than the
      scheduled interval, with the song timestamp printed so you can confirm "yes, that is
      where I heard the hitch". A gap here with a CLEAN telemetry IOI = the stall is
@@ -394,7 +394,7 @@ def main() -> int:
         print("      If telemetry lateness at these rows is small (see logs CSV), the stall is")
         print("      AFTER send (OS delivery / game). If telemetry is also late there, it is before send.")
     else:
-        print("   none — no coarse stalls in the audio. The 'nấc' is then either sub-perceptual")
+        print("   none — no coarse stalls in the audio. The 'audio hitch' is then either sub-perceptual")
         print("   timing scatter (see jitter below) or not present in this run.")
 
     # ---- 3. GAME-ONLY JITTER ----

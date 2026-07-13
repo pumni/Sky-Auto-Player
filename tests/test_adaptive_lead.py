@@ -417,7 +417,7 @@ def test_estimator_extrapolates_beyond_default_max_poly() -> None:
         est.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
         est.update(ActionKind.DOWN, 800, n_keys=4)
-    # Chord 8 phím nhận lead ngoại suy đúng theo linear model thay vì bucket-6
+    # 8-key chord receives extrapolated lead matching the linear model instead of bucket-6
     assert est.get_lead_us(ActionKind.DOWN, 8) == 1600
 
 
