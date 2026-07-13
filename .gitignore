@@ -51,3 +51,6 @@ windows_version_info.txt
 .uv-cache/
 .tmp/
 .ruff_cache/
+
+# Local uv environment overrides (copy from .env.example)
+.env

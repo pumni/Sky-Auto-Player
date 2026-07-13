@@ -58,6 +58,8 @@ a = Analysis(
     # Exclude dev-only packages that are never needed at runtime.
     # (pyinstaller itself, type checkers, linters, audio-capture dev tool)
     # Do NOT exclude tkinter/numpy without confirming they are unused.
+    # Stdlib trims below are verified via `scripts/audit_free_threaded_wheels.py`
+    # gate — extend only after grepping `src/` for transitive use.
     excludes=[
         "pyinstaller",
         "pyright",
@@ -65,6 +67,8 @@ a = Analysis(
         "soundcard",
         "pytest",
         "_pytest",
+        "xmlrpc",
+        "pydoc",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
