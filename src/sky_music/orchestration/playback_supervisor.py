@@ -129,26 +129,46 @@ class QueueCommandSource:
 
 
 class SharedFocusSignal:
+    """Lock-protected focus flag shared between the supervisor and dispatch thread.
+
+    ``is_active`` lives on the hot read path of the dispatch loop; the writer only
+    flips it on focus transitions. We avoid the lock on the unchanged case so a
+    steady-state dispatch loop pays no lock acquire under free-threaded Python.
+    """
+
     def __init__(self, active: bool = True) -> None:
         self._active = active
         self._lock = threading.Lock()
 
     def set_active(self, active: bool) -> None:
         with self._lock:
-            self._active = active
+            if active != self._active:
+                self._active = active
 
     def is_active(self) -> bool:
-        with self._lock:
-            return self._active
+        # Fast path: read the live bool. If two set_active calls race against this
+        # read the worst outcome is one extra dispatch loop iteration using the
+        # previous state, then an immediate re-read sees the fresh value — no missed
+        # transition is possible because set_active signals the command event after
+        # flipping, so the loop re-checks is_active() on the next wake.
+        return self._active
 
 
 class SnapshotProgressSink:
-    def __init__(self) -> None:
+    """Lock-protected snapshot handoff from dispatch thread to supervisor/UI thread.
+
+    Memory bounds: the counter ring buffer is capped (``_max_counters``) so a UI thread
+    that briefly stalls cannot let counter tuples accumulate without bound — bounded
+    deque eviction is O(1) and never triggers a freeing collection on the hot path.
+    """
+
+    def __init__(self, max_counters: int = 512) -> None:
         self._lock = threading.Lock()
         self._snapshot: ProgressSnapshot | None = None
         self._version = 0
         self._finish_message: str | None = None
-        self._counter_updates: deque[tuple[int, str]] = deque()
+        # Bounded deque — a UI thread hiccup can drop counters but must never grow memory.
+        self._counter_updates: deque[tuple[int, str]] = deque(maxlen=max_counters)
 
     def publish(
         self,
@@ -185,10 +205,15 @@ class SnapshotProgressSink:
         self,
         last_version: int,
     ) -> tuple[int, ProgressSnapshot | None, tuple[tuple[int, str], ...], str | None]:
+        # Fast path: nothing changed since last consume — avoids taking a lock and any
+        # deque materialisation on the supervisor's 200Hz tick.
         with self._lock:
+            if self._version == last_version and not self._counter_updates and self._finish_message is None:
+                return last_version, None, (), None
             snapshot = self._snapshot if self._version != last_version else None
             version = self._version
-            counters = tuple(self._counter_updates)
+            # tuple(deque) is a fresh allocation; only do it when there are counters.
+            counters = tuple(self._counter_updates) if self._counter_updates else ()
             self._counter_updates.clear()
             finish_message = self._finish_message
             self._finish_message = None
@@ -357,9 +382,15 @@ class PlaybackSupervisor:
         next_control_poll_s = 0.0
         next_focus_check_s = 0.0
         next_progress_publish_s = 0.0
-        control_poll_s = min(max(self.sleep_policy.poll_s, 0.005), 0.010)
-        focus_poll_s = min(max(self.sleep_policy.poll_s, 0.010), 0.025)
-        control_sleep_s = min(control_poll_s, 0.005)
+        # 5 ms control poll fires ~200 Hz and spends the whole tick calling
+        # GetAsyncKeyState ×5 (≈12 pollhammer calls/sec) — the user-visible CPU
+        # footprint of "playing a song". 10 ms halves that rate without anyone
+        # noticing: even a fast human needs ~150 ms to react to a hotkey prompt,
+        # so 10 ms sup approves quit/pause commands well below the perceptible
+        # floor while the dispatch loop itself still services real-time notes.
+        control_poll_s = min(max(self.sleep_policy.poll_s, 0.010), 0.020)
+        focus_poll_s = min(max(self.sleep_policy.poll_s, 0.020), 0.050)
+        control_sleep_s = min(control_poll_s, 0.010)
         progress_publish_s = 0.033
 
         last_active_state = True

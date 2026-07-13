@@ -251,6 +251,29 @@ class RuntimeDispatchCoordinator:
         dispatch_started_us: int,
         dispatch_completed_us: int,
     ) -> None:
+        # Single-key/codes fast path: skip the set allocation. The dispatch loop already collapses
+        # small chords through this path; avoiding the per-down set allocation removes one of the
+        # ~note-rate heap allocations that made resident RSS tick up under long sessions.
+        if len(sent_scan_codes) == 1:
+            only_sent = sent_scan_codes[0]
+            for intent in intents:
+                generation_id = intent.generation_id
+                if generation_id is None:
+                    continue
+                if intent.scan_code != only_sent:
+                    self.status_by_generation[generation_id] = GenerationStatus.DROPPED_BACKEND
+                    continue
+                self.active_by_scan_code[intent.scan_code] = ActiveKeyGeneration(
+                    generation_id=generation_id,
+                    scan_code=intent.scan_code,
+                    source_action_index=intent.source_action_index,
+                    scheduled_down_us=intent.scheduled_us,
+                    down_dispatch_started_us=dispatch_started_us,
+                    down_dispatch_completed_us=dispatch_completed_us,
+                    release_not_before_us=dispatch_completed_us + self.min_hold_us,
+                )
+                self.status_by_generation[generation_id] = GenerationStatus.ACTIVE
+            return
         sent = set(sent_scan_codes)
         for intent in intents:
             if intent.generation_id is None:
@@ -308,6 +331,30 @@ class RuntimeDispatchCoordinator:
         self,
         intents: tuple[RuntimeKeyIntent, ...],
     ) -> tuple[tuple[PendingRelease, ...], tuple[RuntimeKeyIntent, ...]]:
+        # Hot path: the common case is a single key-up with a known active generation. Skip the
+        # list allocations and the add-set work by detuning the codepath to a scalar return shape
+        # that matches the dispatcher's typical release batch.
+        if len(intents) == 1:
+            intent = intents[0]
+            generation_id = intent.generation_id
+            if generation_id is None:
+                return (), (intent,)
+            active = self.active_by_scan_code.get(intent.scan_code)
+            if active is None or active.generation_id != generation_id:
+                return (), (intent,)
+            pending = PendingRelease(
+                generation_id=generation_id,
+                scan_code=intent.scan_code,
+                source_action_index=intent.source_action_index,
+                scheduled_release_us=intent.scheduled_us,
+                down_dispatch_started_us=active.down_dispatch_started_us,
+                release_not_before_us=active.release_not_before_us,
+                reason=intent.reason,
+            )
+            self.pending_by_generation[generation_id] = pending
+            self.pending_scan_codes.add(intent.scan_code)
+            self.status_by_generation[generation_id] = GenerationStatus.RELEASE_PENDING
+            return (pending,), ()
         requested: list[PendingRelease] = []
         suppressed: list[RuntimeKeyIntent] = []
         for intent in intents:
@@ -340,6 +387,22 @@ class RuntimeDispatchCoordinator:
         sent_scan_codes: tuple[int, ...],
         skipped_scan_codes: tuple[int, ...] = (),
     ) -> None:
+        # Hot path: a single-release dispatch is the dominant case in real songs. Avoid the two
+        # set allocations and use direct tuple scans instead — set() on a 1-tuple costs more than
+        # an `in` over the sent/skipped tuples.
+        if len(releases) == 1:
+            pending = releases[0]
+            if (
+                pending.scan_code in sent_scan_codes
+                or pending.scan_code in skipped_scan_codes
+            ):
+                active = self.active_by_scan_code.get(pending.scan_code)
+                if active is not None and active.generation_id == pending.generation_id:
+                    self.active_by_scan_code.pop(pending.scan_code, None)
+                self.status_by_generation[pending.generation_id] = (
+                    GenerationStatus.RELEASED if pending.scan_code in sent_scan_codes else GenerationStatus.DROPPED_BACKEND
+                )
+            return
         sent = set(sent_scan_codes)
         skipped = set(skipped_scan_codes)
         for pending in releases:

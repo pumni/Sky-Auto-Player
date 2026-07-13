@@ -767,7 +767,12 @@ class DispatchLoop:
         progress_sink: ProgressSink,
         command_event: int | None = None,
     ) -> Any:
-        poll_interval_us = 1_000
+        # Polling cadence for command/focus housekeeping in non-event (polled) mode.
+        # 1 ms cost ~1000 wake-ups/second even when the dispatch thread sits idle in
+        # long inter-note gaps. 2 ms halves this at the cost of <= 2 ms extra command
+        # acknowledgement latency — commands are human-rate (≈200 ms reaction floor),
+        # so 2 ms is well below the noise floor of any user interaction.
+        poll_interval_us = 2_000
 
         while True:
             if state.is_paused():

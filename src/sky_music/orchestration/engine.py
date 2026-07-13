@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import gc
 import json
 import statistics
 import threading
@@ -785,6 +787,16 @@ class PlaybackEngine:
             # RT scope's timing window — playback is already done — and fully best-effort.
             if self._lead_cache_enabled:
                 save_lead_cache(self.lead_cache_path, self.estimator.export_state())  # type: ignore[arg-type]
+            # Force-collect once here so the cyclic GC sweep that RealtimeProcessScope re-enabled on
+            # __exit__ actually frees the per-event garbage the dispatch thread generated during
+            # playback (ExecutionResult, batch tuples, dispatch bookkeeping lists, telemetry
+            # records). Without this hint the next collection can be deferred multiple seconds,
+            # which is why Task Manager shows resident RSS refusing to drop after a song ends.
+            # Outside the RT timing window — playback is over — so a one-shot full collection is
+            # harmless and bounded by what dispatch just allocated.
+            if self.enable_gc_pause:
+                with contextlib.suppress(Exception):
+                    gc.collect()
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (
