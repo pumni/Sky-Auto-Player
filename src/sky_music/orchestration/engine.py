@@ -666,6 +666,15 @@ class PlaybackEngine:
         except Exception:
             pass
 
+        # Rebuild the RuntimeSchedule if a previous play() on this engine released it.
+        # ``actions`` is the persistent source of truth; the compiled schedule (batches, intent
+        # graph) is large and is dropped once playback ends so it does not pin RSS in any UI that
+        # keeps the engine alive between songs. Re-compiling on a fresh play() is cheap compared
+        # to a song's playback time. ``estimator`` was sized against this same ``actions`` in
+        # ``__init__`` (max_poly = max(6, max_chord)), so it remains correctly sized.
+        if self.runtime_schedule is None:
+            self.runtime_schedule = compile_runtime_intents(self.actions)
+
         # Re-resolve the live game window per run
         if self.require_focus:
             try:
@@ -787,16 +796,25 @@ class PlaybackEngine:
             # RT scope's timing window — playback is already done — and fully best-effort.
             if self._lead_cache_enabled:
                 save_lead_cache(self.lead_cache_path, self.estimator.export_state())  # type: ignore[arg-type]
-            # Force-collect once here so the cyclic GC sweep that RealtimeProcessScope re-enabled on
-            # __exit__ actually frees the per-event garbage the dispatch thread generated during
-            # playback (ExecutionResult, batch tuples, dispatch bookkeeping lists, telemetry
-            # records). Without this hint the next collection can be deferred multiple seconds,
-            # which is why Task Manager shows resident RSS refusing to drop after a song ends.
+            # Release the per-song data so a UI that keeps the engine instance alive between
+            # playback sessions doesn't pin the compiled schedule + runtime coordinator in RSS.
+            # ``self.actions`` is the persistent source of truth and stays; ``runtime_schedule``
+            # is rebuilt on the next ``play()`` call (cheap vs. a song's playback time). The
+            # dispatch thread holds its own local coordinator reference and has already cleaned
+            # up its local telemetry / dispatch bookkeeping by the time this finally runs.
+            self._runtime_coordinator = None
+            self._compat_loop = None
+            self.runtime_schedule = None
+            # Force-collect once here (unconditional, not gated on ``enable_gc_pause``) so the
+            # cyclic GC sweep that RealtimeProcessScope re-enabled on __exit__ actually frees the
+            # per-event garbage the dispatch thread generated during playback (ExecutionResult,
+            # batch tuples, dispatch bookkeeping lists, telemetry records). Without this hint the
+            # next generation-2 collection can be deferred multiple seconds, which is why Task
+            # Manager shows resident RSS refusing to drop after a song ends or after F9.
             # Outside the RT timing window — playback is over — so a one-shot full collection is
             # harmless and bounded by what dispatch just allocated.
-            if self.enable_gc_pause:
-                with contextlib.suppress(Exception):
-                    gc.collect()
+            with contextlib.suppress(Exception):
+                gc.collect()
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (
@@ -838,7 +856,15 @@ class PlaybackEngine:
 
     def _compat_dispatch_loop(self) -> DispatchLoop:
         if self._compat_loop is None:
-            coordinator = RuntimeDispatchCoordinator(self.runtime_schedule, self.min_hold_us)
+            # Legacy shim: only used by pre-decomposition tests that build the loop BEFORE
+            # play(). If a consumer ever calls it after the engine has released its per-song
+            # data (i.e. ``runtime_schedule is None``), rebuild on demand from ``actions`` —
+            # mirrors the top-of-play() guard for the production path.
+            schedule = self.runtime_schedule
+            if schedule is None:
+                schedule = compile_runtime_intents(self.actions)
+                self.runtime_schedule = schedule
+            coordinator = RuntimeDispatchCoordinator(schedule, self.min_hold_us)
             self._compat_loop = self._build_dispatch_loop(coordinator, self.sleeper)
         return self._compat_loop
 

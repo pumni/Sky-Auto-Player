@@ -545,12 +545,9 @@ def test_generation_status_counts_surface_released_conflict_and_cancelled_run():
     )
 
     assert engine.play() == PLAYBACK_QUIT
-    assert engine._runtime_coordinator is not None
-    counts = engine._runtime_coordinator.generation_status_counts()
-    assert counts["released"] == 1
-    assert counts["dropped_conflict"] == 1
-    assert counts["cancelled"] == 1
-
+    # Verifies via the persisted telemetry snapshot rather than the live coordinator, since the
+    # engine now releases its coordinator and runtime_schedule once play() returns so the UI can
+    # drop RSS after F9 / song end without waiting for natural ref-count collection.
     summary = engine.telemetry.get_summary()
     assert summary is not None
     assert summary["released_count"] == 1

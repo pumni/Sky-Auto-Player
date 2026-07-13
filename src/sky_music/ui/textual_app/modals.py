@@ -303,7 +303,9 @@ class UpdateModal(PickerModal[str | None]):
         except NoMatches:
             pass
 
-        self.set_focus(self.query_one("#modal-options", OptionList))
+        options = self.query_one("#modal-options", OptionList)
+        options.highlighted = 1
+        self.set_focus(options)
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
