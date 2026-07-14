@@ -28,6 +28,7 @@ These files represent the current system state and contracts:
 * [core-dispatch-hygiene-and-tail-latency-plan.md](core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
 * [main-path-cleanup-and-build-quality-plan.md](main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
 * [2026-06_wasapi-loopback-measurement-plan.md](2026-06_wasapi-loopback-measurement-plan.md) — Active implementation plan for automated after-send measurement using WASAPI loopback.
+* [rust-migration-plan.md](rust-migration-plan.md) — Proposed plan: migrate the real-time dispatch hot path (send/wait/runtime) from Python ctypes into a dedicated Rust dispatch worker via PyO3, keeping Python for orchestration/UI only.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
   * **O10.6:** Focus restore grace safety margin (`focus_restore_grace_us`).

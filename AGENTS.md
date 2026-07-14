@@ -68,6 +68,12 @@ Dependency management — use only `uv sync` / `uv add` / `uv add --dev`. Never 
 
 The release pipeline chains every step below; each gate must pass before the next runs. uv does **not** auto-discover `.env` — every command in this section must use `--env-file .env` (or set `UV_ENV_FILE=.env` once in the user environment).
 
+> **Rust precheck (added when `rust/` is present).** If the workspace contains a `rust/` subdirectory, run the wheel-build precheck **before** step 1:
+> ```powershell
+> uv run python scripts/build_rust_wheel.py
+> ```
+> The precheck is a no-op when `rust/` is absent (pure-Python branches). It depends on `maturin` (declared in `[dependency-groups.dev]` of `pyproject.toml`) and a Rust toolchain matching `rust/rust-toolchain.toml` (`stable`, `x86_64-pc-windows-msvc`). `pip install maturin` is forbidden — always `uv sync` first.
+
 1. **`uv` cache lives on the same volume as the workspace.** Copy `.env.example` to `.env` (gitignored). `UV_CACHE_DIR=.uv-cache` pins cache inside the repo so Windows hardlinks do not cross-volume and trigger `uv`'s "failed to hardlink, falling back to full copy" warning. The default cache location (`%LOCALAPPDATA%\uv`) sits on `C:` while this project lives on `V:` — leave the env var in place.
 2. **Free-threaded interpreter is mandatory.** `.python-version` is `3.14+freethreaded`. Before building, run `uv run --env-file .env python scripts/audit_free_threaded_wheels.py` — it verifies the interpreter has the GIL disabled at runtime, that each runtime dep satisfies its PEP 440 specifier (mirrored from `pyproject.toml`), and (for native deps) still imports under no-GIL (which implies a true `cp314t` wheel).
 3. **Build app** with `uv run --env-file .env python -m build_app`. PyInstaller uses `Sky-Player.spec` (`onedir` COLLECT strategy). The spec strips a few unused stdlib modules from the bundle (`xmlrpc`, `pydoc`) — do not extend the `excludes` list without first grepping `src/` for transitive use.
