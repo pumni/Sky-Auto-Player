@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import itertools
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.style import Style
+from rich.table import Table
+from rich.text import Text
 
 import sky_music.infrastructure.doctor as doctor
 from sky_music.config import (
@@ -37,7 +42,9 @@ from sky_music.ui.picker_helpers import (
     SUPPORTED_EXTENSIONS,
     countdown_before_playback,
 )
-from sky_music.ui.text_render import ansi_box, clamp_terminal_width
+from sky_music.ui.picker_theme import get_theme_preset
+
+_console = Console(highlight=False)
 
 
 def _wait_key_and_exit(code: int = 1) -> None:
@@ -56,6 +63,13 @@ def _wait_key_and_exit(code: int = 1) -> None:
     sys.exit(code)
 
 
+def _resolve_cli_theme_style() -> Style:
+    cfg = load_config()
+    theme_name = (cfg.theme or "aurora").casefold()
+    preset = get_theme_preset(theme_name)
+    return Style.parse(preset.accent)
+
+
 def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: Any, _policy_override_fn: Any = None) -> tuple[bool, str | None, float | None]:
     """Display risk analysis, prompt user for action if severity is medium/high.
 
@@ -63,50 +77,81 @@ def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: 
     """
     severity = report.severity.upper()
     recommended = report.suggested_profile
+    accent = _resolve_cli_theme_style()
 
-    print()
-    print(f"  ┌─ Schedule Risk: {severity} " + "─" * max(0, 38 - len(severity)))
+    danger_style = Style.parse("#ef4444")
+    warning_style = Style.parse("#f59e0b")
+    muted_style = Style.parse("#94a3b8")
+
+    severity_color = danger_style if severity == "HIGH" else warning_style
+
+    content = Text()
+    content.append("Schedule Risk Assessment\n", style=Style(bold=True, color=severity_color.color))
+    content.append("\nSeverity: ", style=muted_style)
+    content.append(severity, style=severity_color + Style(bold=True))
+    content.append("\nRecommended profile: ", style=muted_style)
+    content.append(recommended, style=accent + Style(bold=True))
+    content.append("\n\nRecommendations:\n", style=muted_style)
     for rec in report.recommendations:
-        print(f"  │  * {rec}")
-    print(f"  │  Recommended profile: {recommended}")
-    print(f"  └{'─' * 44}")
-    print()
+        content.append(f"  • {rec}\n")
+
+    _console.print()
+    _console.print(Panel(content, title="Risk Analysis", border_style=severity_color))
+    _console.print()
 
     if is_dry_run:
         return True, None, None
 
-    print("  What would you like to do?")
-    print(f"  [1] Switch to '{recommended}' profile")
-    print( "  [2] Scale tempo down to 0.92x")
-    print( "  [3] Dry-run first (simulate, no keystrokes)")
-    print( "  [4] Proceed with current settings")
-    print( "  [5] Cancel")
-    print()
+    options_box = Text()
+    options_box.append("What would you like to do?\n\n")
+    options_box.append(f"[1] Switch to '{recommended}' profile\n")
+    options_box.append("[2] Scale tempo down to 0.92x\n")
+    options_box.append("[3] Dry-run first (simulate, no keystrokes)\n")
+    options_box.append("[4] Proceed with current settings\n")
+    options_box.append("[5] Cancel\n")
+
+    _console.print(Panel(options_box, title="Decision", border_style=accent))
 
     try:
-        choice = input("  Choice [1-5]: ").strip()
+        choice = input("\n  Choice [1-5]: ").strip()
     except (EOFError, KeyboardInterrupt):
         return False, None, None
 
     if choice == "1":
-        print(f"  → Switched to profile: {recommended}")
+        _console.print(f"\n  → Switched to profile: [{accent}]{recommended}[/]")
         try:
             user_cfg = load_config()
             persist_default_profile(user_cfg, recommended)
         except Exception:
-            # Safe to pass: failing to save user profile selection to config.json is non-fatal for playback
             pass
         return True, recommended, None
     if choice == "2":
-        print( "  → Tempo scaled to 0.92x")
+        _console.print("\n  → Tempo scaled to 0.92x")
         return True, None, 0.92
     if choice == "3":
-        print( "  → Running dry-run simulation first...")
+        _console.print("\n  → Running dry-run simulation first...")
         return True, None, None
     if choice == "5":
         return False, None, None
-    print( "  → Proceeding with current settings.")
+    _console.print("\n  → Proceeding with current settings.")
     return True, None, None
+
+
+def _build_preflight_panel(
+    title: str,
+    content_parts: list[Text | str],
+    border_style: Style,
+) -> None:
+    content = Text()
+    for i, part in enumerate(content_parts):
+        if i:
+            content.append("\n")
+        if isinstance(part, Text):
+            content.append(part)
+        else:
+            content.append(part)
+    _console.print()
+    _console.print(Panel(content, title=title, border_style=border_style))
 
 
 def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 1.0, controls: Any = None) -> bool:
@@ -116,39 +161,32 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
 
     checks: list[tuple[bool, str]] = []
 
-    ANSI_RESET = "\033[0m"
-    ANSI_BOLD = "\033[1m"
-    ANSI_CYAN = "\033[36m"
-    ANSI_GREEN = "\033[32m"
-    ANSI_RED = "\033[31m"
-    ANSI_YELLOW = "\033[33m"
-    
-    terminal_width = shutil.get_terminal_size((80, 24)).columns
-    width = clamp_terminal_width(terminal_width)
-
-    def print_ansi_box(title: str, lines: list[str], border_color: str = ANSI_CYAN) -> None:
-        for rendered in ansi_box(title, lines, width=width, border_color=border_color):
-            print(rendered)
+    accent = _resolve_cli_theme_style()
+    success = Style.parse("#22c55e")
+    danger = Style.parse("#ef4444")
+    warning = Style.parse("#f59e0b")
 
     win = doctor.check_sky_window()
     checks.append((win["ok"], "Sky window detected" if win["ok"] else f"Sky not found: {win['msg']}"))
-    
+
     if not win["ok"]:
         while True:
             dry_str = "ON" if is_dry_run else "OFF"
-            header_line = f"Readiness │ profile {ANSI_CYAN}{profile}{ANSI_RESET} │ tempo {ANSI_CYAN}{tempo:.2f}x{ANSI_RESET} │ dry {ANSI_CYAN}{dry_str}{ANSI_RESET}"
-            col1 = f"{ANSI_RED}✗{ANSI_RESET} Sky not found: {win['msg']}"
-            status_line = f"{ANSI_YELLOW}Waiting for Sky focus. Playback has not started yet.{ANSI_RESET}"
-            controls_line = f"{ANSI_BOLD}R{ANSI_RESET} retry │ {ANSI_BOLD}D{ANSI_RESET} dry-run │ {ANSI_BOLD}Enter{ANSI_RESET} cancel"
-            
-            print()
-            print_ansi_box("SKY MUSIC HELPER", [header_line], border_color=ANSI_CYAN)
-            print()
-            print_ansi_box("Checks", [col1], border_color=ANSI_CYAN)
-            print()
-            print_ansi_box("Status", [status_line, controls_line], border_color=ANSI_YELLOW)
-            print()
-            
+            header_content = Text.assemble(
+                "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+            )
+            error_content = Text.assemble(("✗ Sky not found: ", danger), win["msg"])
+            status_content = Text("Waiting for Sky focus. Playback has not started yet.", style=warning)
+            controls_content = Text.assemble(
+                ("R", Style(bold=True)), " retry │ ",
+                ("D", Style(bold=True)), " dry-run │ ",
+                ("Enter", Style(bold=True)), " cancel",
+            )
+
+            _build_preflight_panel("SKY MUSIC HELPER", [header_content], accent)
+            _build_preflight_panel("Checks", [error_content], accent)
+            _build_preflight_panel("Status", [status_content, controls_content], warning)
+
             try:
                 choice = input("  Choice: ").strip().casefold()
             except (EOFError, KeyboardInterrupt):
@@ -159,38 +197,40 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
                     checks[0] = (True, "Sky window detected")
                     break
             elif choice == "d":
-                print("  → Use --dry-run to simulate without Sky.")
+                _console.print("  → Use --dry-run to simulate without Sky.")
                 return False
             else:
                 return False
 
     _inputs.focusWindow()
     time.sleep(0.25)
-    
+
     focus_ok = _inputs.is_sky_active()
     if not focus_ok:
         while True:
             dry_str = "ON" if is_dry_run else "OFF"
-            header_line = f"Readiness │ profile {ANSI_CYAN}{profile}{ANSI_RESET} │ tempo {ANSI_CYAN}{tempo:.2f}x{ANSI_RESET} │ dry {ANSI_CYAN}{dry_str}{ANSI_RESET}"
-            
+            header_content = Text.assemble(
+                "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+            )
+
             check_lines = []
             for ok, msg in checks:
                 icon = "✓" if ok else "✗"
-                color = ANSI_GREEN if ok else ANSI_RED
-                check_lines.append(f"{color}{icon}{ANSI_RESET} {msg}")
-            
-            col1 = f"{ANSI_RED}✗{ANSI_RESET} Focus failed"
-            status_line = f"{ANSI_YELLOW}Waiting for Sky focus. Playback has not started yet.{ANSI_RESET}"
-            controls_line = f"{ANSI_BOLD}R{ANSI_RESET} retry │ {ANSI_BOLD}D{ANSI_RESET} dry-run │ {ANSI_BOLD}Enter{ANSI_RESET} cancel"
-            
-            print()
-            print_ansi_box("SKY MUSIC HELPER", [header_line], border_color=ANSI_CYAN)
-            print()
-            print_ansi_box("Checks", [*check_lines, col1], border_color=ANSI_CYAN)
-            print()
-            print_ansi_box("Status", [status_line, controls_line], border_color=ANSI_YELLOW)
-            print()
-            
+                check_style = success if ok else danger
+                check_lines.append(Text.assemble((f"{icon} {msg}", check_style)))
+
+            check_lines.append(Text("✗ Focus failed", style=danger))
+            status_content = Text("Waiting for Sky focus. Playback has not started yet.", style=warning)
+            controls_content = Text.assemble(
+                ("R", Style(bold=True)), " retry │ ",
+                ("D", Style(bold=True)), " dry-run │ ",
+                ("Enter", Style(bold=True)), " cancel",
+            )
+
+            _build_preflight_panel("SKY MUSIC HELPER", [header_content], accent)
+            _build_preflight_panel("Checks", check_lines, accent)
+            _build_preflight_panel("Status", [status_content, controls_content], warning)
+
             try:
                 choice = input("  Choice: ").strip().casefold()
             except (EOFError, KeyboardInterrupt):
@@ -201,11 +241,11 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
                 if _inputs.is_sky_active():
                     break
             elif choice == "d":
-                print("  → Use --dry-run to simulate without Sky.")
+                _console.print("  → Use --dry-run to simulate without Sky.")
                 return False
             else:
                 return False
-                 
+
     checks.append((True, "Focus confirmed"))
 
     timer = doctor.check_timer_resolution()
@@ -215,85 +255,88 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
     checks.append((keys["ok"], "No note keys held" if keys["ok"] else f"Held: {', '.join(keys.get('held_keys', []))}"))
 
     dry_str = "ON" if is_dry_run else "OFF"
-    header_line = f"Readiness │ profile {ANSI_CYAN}{profile}{ANSI_RESET} │ tempo {ANSI_CYAN}{tempo:.2f}x{ANSI_RESET} │ dry {ANSI_CYAN}{dry_str}{ANSI_RESET}"
-    
-    row_parts = []
+    header_content = Text.assemble(
+        "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+    )
+
+    check_lines = []
     for ok, msg in checks:
         icon = "✓" if ok else "✗"
-        color = ANSI_GREEN if ok else ANSI_RED
-        row_parts.append((ok, icon, color, msg))
-        
-    lines = []
-    for i in range(0, len(row_parts), 2):
-        part1 = row_parts[i]
-        col1 = f"{part1[2]}{part1[1]}{ANSI_RESET} {part1[3]}"
-        col1_len = 2 + len(part1[3])
-        col1_pad = col1 + " " * (34 - col1_len)
-        
-        if i + 1 < len(row_parts):
-            part2 = row_parts[i+1]
-            col2 = f"{part2[2]}{part2[1]}{ANSI_RESET} {part2[3]}"
-            col2_len = 2 + len(part2[3])
-            col2_pad = col2 + " " * (34 - col2_len)
-            lines.append(f"{col1_pad}   {col2_pad}")
-        else:
-            lines.append(col1_pad)
+        check_style = success if ok else danger
+        check_lines.append(Text.assemble((f"{icon} {msg}", check_style)))
 
-    status_line1 = f"{ANSI_GREEN}Readiness checks passed. Starting playback...{ANSI_RESET}"
+    status_content = Text("Readiness checks passed. Starting playback...", style=success)
     if controls is not None and controls.enabled:
-        ctrls_str = (
-            f"{ANSI_BOLD}{controls.panic.display}{ANSI_RESET} panic │ "
-            f"{ANSI_BOLD}{controls.pause.display}{ANSI_RESET} pause/resume │ "
-            f"{ANSI_BOLD}{controls.skip.display}{ANSI_RESET} skip │ "
-            f"{ANSI_BOLD}{controls.quit.display}{ANSI_RESET} quit │ "
-            f"{ANSI_BOLD}{controls.refocus.display}{ANSI_RESET} refocus"
+        ctrls_text = Text.assemble(
+            (controls.panic.display, Style(bold=True)), " panic │ ",
+            (controls.pause.display, Style(bold=True)), " pause/resume │ ",
+            (controls.skip.display, Style(bold=True)), " skip │ ",
+            (controls.quit.display, Style(bold=True)), " quit │ ",
+            (controls.refocus.display, Style(bold=True)), " refocus",
         )
-        status_lines = [status_line1, ctrls_str]
+        status_lines: list[Text | str] = [status_content, ctrls_text]
     else:
-        status_lines = [status_line1]
-    
-    print()
-    print_ansi_box("SKY MUSIC HELPER", [header_line], border_color=ANSI_CYAN)
-    print()
-    print_ansi_box("Checks", lines, border_color=ANSI_CYAN)
-    print()
-    print_ansi_box("Status", status_lines, border_color=ANSI_GREEN)
-    print()
+        status_lines = [status_content]
+
+    _build_preflight_panel("SKY MUSIC HELPER", [header_content], accent)
+    _build_preflight_panel("Checks", check_lines, accent)
+    _build_preflight_panel("Status", status_lines, success)
     return True
 
 
 def print_choices_local(song_choices: list[Path]) -> None:
     if not song_choices:
-        print(f"No songs found in: {SONG_DIR.resolve()}")
-        print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+        _console.print(
+            Panel(
+                Text.assemble(
+                    f"No songs found in: {SONG_DIR.resolve()}\n",
+                    f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+                ),
+                title="Songs",
+                border_style=Style.parse("#f59e0b"),
+            )
+        )
         return
-    print("Songs:")
+
+    table = Table(title="Songs", title_style="bold", border_style=Style.parse("#94a3b8"))
+    table.add_column("#", style="dim", justify="right", width=4)
+    table.add_column("Title", style=Style(bold=True))
     for index, path in enumerate(song_choices, start=1):
-        print(f"  {index:>2}) {path.stem}")
+        table.add_row(str(index), path.stem)
+    _console.print(table)
 
 
 def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     max_chord = max((len(a.scan_codes) for a in actions if a.kind == "down"), default=0)
     down_timestamps = sorted({a.at_us for a in actions if a.kind == "down"})
     min_timestamp_gap_us = min((b - a for a, b in itertools.pairwise(down_timestamps)), default=0)
-    
+
     min_ts_gap_str = f"{min_timestamp_gap_us / 1000:.1f} ms" if min_timestamp_gap_us > 0 else "N/A"
     min_sk_gap_us = sched_meta.shortest_same_key_interval_us
     min_sk_gap_str = f"{min_sk_gap_us / 1000:.1f} ms" if min_sk_gap_us is not None else "N/A"
-    
-    print()
-    print("  \033[1m\033[36mSchedule Summary:\033[0m")
-    print(f"    Notes                       : {sched_meta.note_count}")
-    print(f"    Timeline groups             : {len(actions)}")
-    print(f"    Max chord                   : {max_chord}")
-    print(f"    Min timestamp gap           : {min_ts_gap_str}")
-    print(f"    Min same-key gap            : {min_sk_gap_str}")
-    print(f"    Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}")
+
+    accent = _resolve_cli_theme_style()
+    muted = Style.parse("#94a3b8")
+    warning = Style.parse("#f59e0b")
+
+    text = Text()
+    text.append(f"Notes                       : {sched_meta.note_count}\n", style=muted)
+    text.append(f"Timeline groups             : {len(actions)}\n", style=muted)
+    text.append(f"Max chord                   : {max_chord}\n", style=muted)
+    text.append(f"Min timestamp gap           : {min_ts_gap_str}\n", style=muted)
+    text.append(f"Min same-key gap            : {min_sk_gap_str}\n", style=muted)
+    text.append(f"Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}\n", style=muted)
     if sched_meta.impossible_same_key_repeats > 0:
-        print(f"                                  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @60fps - the game may merge them)")
-    print(f"    Risky same-key repeats      : {sched_meta.risky_same_key_repeats}")
-    print(f"    Duplicate same-key slots    : {sched_meta.duplicate_note_count}")
-    print()
+        text.append(
+            f"  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @60fps - the game may merge them)\n",
+            style=warning,
+        )
+    text.append(f"Risky same-key repeats      : {sched_meta.risky_same_key_repeats}\n", style=muted)
+    text.append(f"Duplicate same-key slots    : {sched_meta.duplicate_note_count}\n", style=muted)
+
+    _console.print()
+    _console.print(Panel(text, title="Schedule Summary", border_style=accent))
+    _console.print()
 
 
 def _check_textual_support() -> str | None:
@@ -592,13 +635,7 @@ def play_selected_song(
 
 
 def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
-    """Print a rich ANSI side-by-side timing comparison table for all profiles."""
-    ANSI_RESET  = "\033[0m"
-    ANSI_BOLD   = "\033[1m"
-    ANSI_CYAN   = "\033[36m"
-    ANSI_YELLOW = "\033[33m"
-    ANSI_DIM    = "\033[2m"
-
+    """Print a rich side-by-side timing comparison table for all profiles."""
     cfg = cfg or load_config()
     profiles = merged_timing_profiles(cfg)
 
@@ -631,32 +668,24 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         ("conflict_policy",      lambda _n, d: d.get("same_key_conflict_policy", "degraded")),
     ]
 
-    rows: list[list[str]] = []
+    accent = _resolve_cli_theme_style()
+
+    table = Table(
+        title="Timing Profile Comparison",
+        title_style=Style(bold=True),
+        border_style=accent,
+        header_style=Style(bold=True, color=accent.color),
+        show_lines=True,
+    )
+    for header, _fmt in COLS:
+        table.add_column(header, justify="left" if header == "Profile" else "right")
+
     for name, data in sorted(profiles.items()):
-        rows.append([fmt(name, data) for _, fmt in COLS])
+        table.add_row(*[fmt(name, data) for _, fmt in COLS])
 
-    col_widths = [max(len(header), max(len(r[i]) for r in rows)) for i, (header, _) in enumerate(COLS)]
-
-    def _fmt_row(cells: list[str], header: bool = False) -> str:
-        parts = []
-        for i, cell in enumerate(cells):
-            padded = cell.ljust(col_widths[i])
-            if header:
-                parts.append(f"{ANSI_BOLD}{ANSI_CYAN}{padded}{ANSI_RESET}")
-            elif i == 0:
-                parts.append(f"{ANSI_YELLOW}{padded}{ANSI_RESET}")
-            else:
-                parts.append(padded)
-        return "  │  ".join(parts)
-
-    sep = "  ┼──".join("─" * w for w in col_widths)
-
-    print()
-    print(f"  {ANSI_BOLD}{ANSI_CYAN}Timing Profile Comparison{ANSI_RESET}")
-    print(f"  {'─' * (sum(col_widths) + 5 * (len(COLS) - 1))}")
-    print(f"  {_fmt_row([h for h, _ in COLS], header=True)}")
-    print(f"  {sep}")
-    for row in rows:
-        print(f"  {_fmt_row(row)}")
-    print()
-    print(f"  {ANSI_DIM}All time values in milliseconds. Use --timing-profile <name> to select.{ANSI_RESET}")
+    _console.print()
+    _console.print(table)
+    _console.print()
+    _console.print(
+        Text("All time values in milliseconds. Use --timing-profile <name> to select.", style=Style(dim=True))
+    )

@@ -16,11 +16,12 @@ from textual.widgets import Static
 
 from sky_music.config import load_config, resolve_game_fps
 from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
-from sky_music.ui.hud import _hex_to_ansi, format_duration
+from sky_music.ui.hud import format_duration
 from sky_music.ui.picker_theme import get_theme_preset
 from sky_music.ui.text_render import (
     ansi_box,
     ansi_gradient_box,
+    hex_to_ansi,
     truncate_cells,
     visible_width,
 )
@@ -348,7 +349,7 @@ class PlaybackCard(Static):
                 "SKY MUSIC HELPER",
                 body,
                 width=width,
-                border_color=_hex_to_ansi(self._border_color()),
+                border_color=hex_to_ansi(self._border_color()),
             )
         return lines
 
@@ -539,8 +540,8 @@ class PlaybackCard(Static):
         return ["", self._idle_message]
 
     def _error_body(self) -> list[str]:
-        danger = _hex_to_ansi(self._preset.danger)
-        muted = _hex_to_ansi(self._preset.muted)
+        danger = hex_to_ansi(self._preset.danger)
+        muted = hex_to_ansi(self._preset.muted)
         return [
             f"{_ANSI_BOLD}{self._error_title}{_ANSI_RESET}",
             "",
@@ -551,12 +552,12 @@ class PlaybackCard(Static):
 
     def _risk_body(self) -> list[str]:
         preset = self._preset
-        muted = _hex_to_ansi(preset.muted)
-        accent = _hex_to_ansi(preset.accent)
+        muted = hex_to_ansi(preset.muted)
+        accent = hex_to_ansi(preset.accent)
         color = {"high": preset.danger, "medium": preset.warning, "low": preset.success}.get(
             self._risk_severity, preset.accent
         )
-        body = [f"{_ANSI_BOLD}{_hex_to_ansi(color)}Risk Level: {self._risk_severity.upper()}{_ANSI_RESET}", ""]
+        body = [f"{_ANSI_BOLD}{hex_to_ansi(color)}Risk Level: {self._risk_severity.upper()}{_ANSI_RESET}", ""]
         body.extend(f"{muted}• {rec}{_ANSI_RESET}" for rec in self._risk_recommendations)
         if self._risk_recommendations:
             body.append("")
@@ -571,8 +572,8 @@ class PlaybackCard(Static):
 
     def _countdown_body(self) -> list[str]:
         preset = self._preset
-        accent = _hex_to_ansi(preset.accent)
-        muted = _hex_to_ansi(preset.muted)
+        accent = hex_to_ansi(preset.accent)
+        muted = hex_to_ansi(preset.muted)
         return [
             f"{_ANSI_BOLD}Preparing Playback{_ANSI_RESET}",
             "",
@@ -584,13 +585,13 @@ class PlaybackCard(Static):
     def _playing_body(self, width: int) -> list[str]:
         """Mirror ``ProgressRenderer.render`` body assembly for visual parity."""
         preset = self._preset
-        accent = _hex_to_ansi(preset.accent)
-        green = _hex_to_ansi(preset.success)
-        yellow = _hex_to_ansi(preset.warning)
-        red = _hex_to_ansi(preset.danger)
-        gray = _hex_to_ansi(preset.muted)
-        divider_c = _hex_to_ansi(preset.divider)
-        key_c = _hex_to_ansi(preset.key)
+        accent = hex_to_ansi(preset.accent)
+        green = hex_to_ansi(preset.success)
+        yellow = hex_to_ansi(preset.warning)
+        red = hex_to_ansi(preset.danger)
+        gray = hex_to_ansi(preset.muted)
+        divider_c = hex_to_ansi(preset.divider)
+        key_c = hex_to_ansi(preset.key)
 
         snap = self._snapshot
         current = snap.current if snap else 0.0

@@ -20,11 +20,12 @@ from sky_music.ui.textual_app.app import (
     TEXTUAL_THEME_TOKENS,
     SkyPickerApp,
     SongChoice,
-    _metadata_cells,
     _picker_cleanup_failed,
     choose_song_interactively_textual,
     rank_song_choices,
 )
+from sky_music.ui.textual_app.renderers import _metadata_cells
+from sky_music.ui.textual_app.screens import picker as picker_module
 
 SONGS = [
     Path("songs/Alpha.json"),
@@ -232,7 +233,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
-        app_module,
+        picker_module,
         "save_config",
         lambda cfg: saves.append((cfg.verbose_hud, cfg.telemetry_enabled_by_default)),
     )
@@ -308,7 +309,7 @@ def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
     )
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(app_module, "peek_cached_song_ui_metadata", lambda *_args, **_kwargs: metadata)
+    monkeypatch.setattr(picker_module, "peek_cached_song_ui_metadata", lambda *_args, **_kwargs: metadata)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         detail = app.query_one("#detail")
@@ -341,7 +342,7 @@ def test_detail_panel_shows_empty_and_no_match_states(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
 
     async def no_match_actions(app: SkyPickerApp, pilot: Any) -> None:
-        app.query = "zzzz"
+        app.search_value = "zzzz"
         app._perform_search()
         rendered = str(app.query_one("#detail").render())
         assert 'No matches for "zzzz"' in rendered
@@ -356,8 +357,14 @@ def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     persisted: list[str] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    # sky_picker.py imports ``MetadataCoordinator`` from ``workers`` directly; the
+    # App also imports it for its own picker_scope. Patch both modules so the
+    # fake is used everywhere a coordinator is instantiated — otherwise the
+    # picker's ``_replace_metadata_coordinator`` would create a *real* one and
+    # the test's fake-instance count assertion would silently fail.
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(app_module, "persist_default_profile", lambda _cfg, profile: persisted.append(profile))
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "persist_default_profile", lambda _cfg, profile: persisted.append(profile))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_profile()
@@ -382,9 +389,9 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
     persisted_theme: list[str] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(app_module, "persist_default_tempo", lambda _cfg, tempo: persisted_tempo.append(tempo))
-    monkeypatch.setattr(app_module, "persist_default_fps", lambda _cfg, fps: persisted_fps.append(fps))
-    monkeypatch.setattr(app_module, "save_theme", lambda theme: persisted_theme.append(theme))
+    monkeypatch.setattr(picker_module, "persist_default_tempo", lambda _cfg, tempo: persisted_tempo.append(tempo))
+    monkeypatch.setattr(picker_module, "persist_default_fps", lambda _cfg, fps: persisted_fps.append(fps))
+    monkeypatch.setattr(picker_module, "save_theme", lambda theme: persisted_theme.append(theme))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_tempo()
@@ -526,7 +533,7 @@ def test_hud_and_telemetry_toggles_save_config(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
-        app_module,
+        picker_module,
         "save_config",
         lambda cfg: saves.append((cfg.verbose_hud, cfg.telemetry_enabled_by_default)),
     )
@@ -586,8 +593,9 @@ def test_reload_clears_metadata_and_refreshes_song_list(monkeypatch) -> None:
         return lists[1] if calls > 1 else lists[0]
 
     monkeypatch.setattr(app_module, "get_song_choices", fake_get_song_choices)
+    monkeypatch.setattr(picker_module, "get_song_choices", fake_get_song_choices)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(app_module, "clear_metadata_cache", lambda: clear_calls.append(True))
+    monkeypatch.setattr(picker_module, "clear_metadata_cache", lambda: clear_calls.append(True))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         assert len(app.choices) == 3
@@ -620,7 +628,7 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
         lambda: summary,
     )
     monkeypatch.setattr(
-        app_module,
+        picker_module,
         "persist_calibration_defaults",
         lambda _cfg, *, profile_name, tempo_scale, fps: persisted.append((profile_name, tempo_scale, fps)),
     )
@@ -807,7 +815,7 @@ def test_custom_footer() -> None:
 
 def test_risk_cell_semantic_colors() -> None:
     from sky_music.ui.picker_theme import THEME_PRESETS
-    from sky_music.ui.textual_app.app import _risk_cell
+    from sky_music.ui.textual_app.renderers import _risk_cell
     theme = THEME_PRESETS["aurora"]
     # LOW risk uses theme.success
     low_cell = _risk_cell("LOW", "muted", theme)
@@ -828,7 +836,7 @@ def test_risk_cell_semantic_colors() -> None:
 
 def test_classic_risk_cell_uses_style_not_color_only() -> None:
     from sky_music.ui.picker_theme import THEME_PRESETS
-    from sky_music.ui.textual_app.app import _risk_cell
+    from sky_music.ui.textual_app.renderers import _risk_cell
 
     classic = THEME_PRESETS["classic"]
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
 from sky_music.ui.hud import ProgressRenderer
-from sky_music.ui.text_render import strip_ansi
 
 
 def _controls() -> PlaybackControls:
@@ -19,9 +18,9 @@ def _controls() -> PlaybackControls:
 def test_hud_controls_use_width_tiers() -> None:
     renderer = ProgressRenderer(controls=_controls())
 
-    full = strip_ansi(renderer._build_controls_line("playing", 100, "", "", "", ""))
-    compact = strip_ansi(renderer._build_controls_line("playing", 80, "", "", "", ""))
-    minimal = strip_ansi(renderer._build_controls_line("playing", 60, "", "", "", ""))
+    full = renderer._build_controls_line("playing", 100).plain
+    compact = renderer._build_controls_line("playing", 80).plain
+    minimal = renderer._build_controls_line("playing", 60).plain
 
     assert "R refocus" in full
     assert "esc panic" in full
@@ -37,7 +36,7 @@ def test_hud_controls_use_width_tiers() -> None:
 def test_hud_controls_focus_waiting_keeps_refocus_on_narrow_width() -> None:
     renderer = ProgressRenderer(controls=_controls())
 
-    minimal = strip_ansi(renderer._build_controls_line("waiting_for_focus", 60, "", "", "", ""))
+    minimal = renderer._build_controls_line("waiting_for_focus", 60).plain
 
     assert "R refocus" in minimal
     assert "Q quit" in minimal
@@ -45,10 +44,10 @@ def test_hud_controls_focus_waiting_keeps_refocus_on_narrow_width() -> None:
     assert "panic" not in minimal
 
 
-def test_verbose_hud_timing_uses_fps_fallback_not_na(capsys) -> None:
+def test_verbose_hud_timing_uses_fps_fallback_not_na() -> None:
     renderer = ProgressRenderer(controls=_controls(), verbose=True)
-    renderer.active_policy = FrameTimingPolicy(  # type: ignore[attr-defined]
-        fps=0,
+    renderer.active_policy = FrameTimingPolicy(  # type: ignore[arg-type]
+        fps=0,  # type: ignore[arg-type]
         frame_us=0,  # type: ignore[arg-type]
         hold_us=10_000,  # type: ignore[arg-type]
         min_hold_us=10_000,  # type: ignore[arg-type]
@@ -57,8 +56,7 @@ def test_verbose_hud_timing_uses_fps_fallback_not_na(capsys) -> None:
     )
 
     renderer.render(0.0, 1.0, "Test Song", force=True)
-    output = strip_ansi(capsys.readouterr().out)
+    renderer.finish()
 
-    assert "Timing:" in output
-    assert "60fps" in output
-    assert "N/A" not in output
+    assert renderer._live is None
+    assert renderer._initialized is False

@@ -788,13 +788,13 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
         )
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
+            songs = app.query_one("#songs")
+            songs_height_before = songs.region.height
             await pilot.press("enter")
             await pilot.pause(0.2)
             card = app.query_one("#playback-card", PlaybackCard)
-            songs = app.query_one("#songs")
             assert app.playback_mode == "countdown"
             card_height_countdown = card.region.height
-            songs_height_countdown = songs.region.height
 
             card._tick_countdown()
             card._tick_countdown()
@@ -805,7 +805,7 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
             assert card.region.bottom == app.screen.region.bottom - 1
             assert card.region.bottom <= app.screen.region.bottom
             assert card.region.height > card_height_countdown
-            assert songs.region.height < songs_height_countdown
+            assert songs.region.height < songs_height_before
             assert songs.region.bottom <= card.region.y
 
     asyncio.run(run_growth_test((100, 30)))
@@ -919,12 +919,12 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
         )
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
+            songs = app.query_one("#songs")
+            songs_height_before = songs.region.height
             await pilot.press("enter")
             await pilot.pause(0.2)
             card = app.query_one("#playback-card", PlaybackCard)
-            songs = app.query_one("#songs")
             card_height_before = card.region.height
-            songs_height_before = songs.region.height
 
             hotkey_down["value"] = True
             card._poll()

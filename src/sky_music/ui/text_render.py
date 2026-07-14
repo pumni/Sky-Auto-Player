@@ -14,6 +14,21 @@ from typing import Literal
 
 from rich.cells import cell_len as _pt_cwidth
 
+
+def hex_to_ansi(hex_color: str) -> str:
+    """Convert a CSS hex color (#rrggbb or #rgb) to an ANSI 24-bit fg escape.
+
+    Returns bright-cyan as a safe fallback for malformed input.
+    """
+    c = hex_color.lstrip("#")
+    try:
+        if len(c) == 3:
+            c = "".join(ch * 2 for ch in c)
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        return f"\033[38;2;{r};{g};{b}m"
+    except (ValueError, IndexError):
+        return "\033[96m"
+
 # Terminals narrower/wider than this are clamped so every panel renders at the
 # same width regardless of which screen drew it (picker, preflight, comparison).
 TERMINAL_WIDTH_MIN = 60
@@ -203,26 +218,16 @@ def ansi_gradient_box(
     inner_width = max(0, width - 4)
     stops = [Color.parse(c) for c in gradient]
 
-    def _hex_to_ansi(hex_color: str) -> str:
-        c = hex_color.lstrip("#")
-        if len(c) == 3:
-            c = "".join(ch * 2 for ch in c)
-        try:
-            r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-            return f"\033[38;2;{r};{g};{b}m"
-        except (ValueError, IndexError):
-            return "\033[96m"
-
     def g_ansi(i: int) -> str:
         if not stops:
             return ""
         if len(stops) == 1:
-            return _hex_to_ansi(stops[0].hex)
+            return hex_to_ansi(stops[0].hex)
         pos = (i / max(width - 1, 1)) * (len(stops) - 1)
         k = int(pos)
         if k >= len(stops) - 1:
-            return _hex_to_ansi(stops[-1].hex)
-        return _hex_to_ansi(stops[k].blend(stops[k + 1], pos - k).hex)
+            return hex_to_ansi(stops[-1].hex)
+        return hex_to_ansi(stops[k].blend(stops[k + 1], pos - k).hex)
 
     # 1. Top rule
     top_parts = []
@@ -237,7 +242,7 @@ def ansi_gradient_box(
         title_cells = cell_width(title_str)
 
     if title_str:
-        t_style = _hex_to_ansi(title_color) if title_color else g_ansi(col)
+        t_style = hex_to_ansi(title_color) if title_color else g_ansi(col)
         top_parts.append(f"{t_style}\033[1m{title_str}\033[0m")
         col += title_cells
 
@@ -255,8 +260,8 @@ def ansi_gradient_box(
     bot_line = "".join(bot_parts)
 
     # 3. Middle rule border colors
-    left_border = f"{_hex_to_ansi(side_color)}│\033[0m" if side_color else f"{g_ansi(0)}│\033[0m"
-    right_border = f"{_hex_to_ansi(side_color)}│\033[0m" if side_color else f"{g_ansi(width - 1)}│\033[0m"
+    left_border = f"{hex_to_ansi(side_color)}│\033[0m" if side_color else f"{g_ansi(0)}│\033[0m"
+    right_border = f"{hex_to_ansi(side_color)}│\033[0m" if side_color else f"{g_ansi(width - 1)}│\033[0m"
 
     out = [top_line]
     for line in lines:
