@@ -103,14 +103,23 @@ class _TrackedKeyState(ABC):
             "partial_send_events": 0,
             "chord_split_events": 0,
             "keys_deferred": 0,
+            "keys_dropped": 0,
+            "keys_retried": 0,
             "zero_progress_retries": 0,
             "send_while_unfocused": 0,
             "impossible_same_key_repeats": 0,
         }
 
     @abstractmethod
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
-        """Returns raw perf_counter µs after send completed, or None if unavailable."""
+    def _emit(
+        self, scan_codes: tuple[int, ...], *, key_up: bool
+    ) -> tuple[tuple[int, ...], int | None]:
+        """Inject keys. Returns (actually_sent_scan_codes, send_completed_us).
+
+        ``actually_sent_scan_codes`` is a prefix of ``scan_codes`` matching what the OS
+        injected. Note-on may be a strict prefix (musical no-retry policy); note-off
+        should normally return the full tuple after remainder completion.
+        """
         ...
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:  # noqa: ARG002
@@ -130,17 +139,21 @@ class _TrackedKeyState(ABC):
 
         self.possibly_active_keys.update(to_send)
         try:
-            send_completed_us = self._emit(to_send, key_up=False)
+            actually_sent, send_completed_us = self._emit(to_send, key_up=False)
         except Exception as error:
             self._handle_down_error(to_send, error)
             raise
 
-        self.active_keys.update(to_send)
+        # Track only keys the OS actually injected. Unsent prefix-tail is dropped by the
+        # musical no-retry policy — do not mark them active (would invent stuck state).
+        self.active_keys.update(actually_sent)
         self.possibly_active_keys.difference_update(to_send)
+        full = len(actually_sent) == len(to_send)
         return InputSendResult(
-            sent=to_send,
+            sent=actually_sent,
             skipped_duplicates=duplicates,
-            success=True,
+            success=full,
+            error=None if full else f"partial note-on: {len(actually_sent)}/{len(to_send)}",
             send_completed_us=send_completed_us,
         )
 
@@ -153,18 +166,25 @@ class _TrackedKeyState(ABC):
             return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
 
         try:
-            send_completed_us = self._emit(to_release, key_up=True)
+            actually_sent, send_completed_us = self._emit(to_release, key_up=True)
         except Exception as error:
             self._handle_up_error(to_release, error)
             raise
 
-        self.active_keys.difference_update(to_release)
-        self.possibly_active_keys.difference_update(to_release)
-        self.failed_release_keys.difference_update(to_release)
+        self.active_keys.difference_update(actually_sent)
+        self.possibly_active_keys.difference_update(actually_sent)
+        self.failed_release_keys.difference_update(actually_sent)
+        # If a safety-path emit still left keys out (should be rare), keep them failed
+        # so release_all can reclaim them. Emitters return a prefix of to_release.
+        if len(actually_sent) < len(to_release):
+            self.failed_release_keys.update(to_release[len(actually_sent) :])
+            self.last_error = f"partial note-off: {len(actually_sent)}/{len(to_release)}"
+        full = len(actually_sent) == len(to_release)
         return InputSendResult(
-            sent=to_release,
+            sent=actually_sent,
             skipped_duplicates=already_released,
-            success=True,
+            success=full,
+            error=None if full else f"partial note-off: {len(actually_sent)}/{len(to_release)}",
             send_completed_us=send_completed_us,
         )
 
@@ -245,9 +265,20 @@ class WinSendInputBackend(_TrackedKeyState):
     def get_send_diagnostics(self) -> dict[str, int]:
         return self.inputs_module.get_send_diagnostics()
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
-        self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)
-        return time.perf_counter_ns() // 1000
+    def _emit(
+        self, scan_codes: tuple[int, ...], *, key_up: bool
+    ) -> tuple[tuple[int, ...], int | None]:
+        landed = self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)
+        completed_us = time.perf_counter_ns() // 1000
+        # Mocks/legacy callables may return None; treat as full success.
+        if landed is None:
+            return scan_codes, completed_us
+        sent_n = max(0, min(int(landed), len(scan_codes)))
+        if sent_n >= len(scan_codes):
+            return scan_codes, completed_us
+        if sent_n <= 0:
+            return (), completed_us
+        return scan_codes[:sent_n], completed_us
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:
         self.last_error = f"key_down error: {error}"
@@ -403,9 +434,11 @@ class DryRunBackend(_TrackedKeyState):
             send_while_unfocused=diag.get("send_while_unfocused", 0)
         )
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
+    def _emit(
+        self, scan_codes: tuple[int, ...], *, key_up: bool
+    ) -> tuple[tuple[int, ...], int | None]:
         self.history.append(("up" if key_up else "down", tuple(sorted(scan_codes))))
-        return None
+        return scan_codes, None
             
     def release_all(self) -> ReleaseAllOutcome:
         to_release = self.active_keys | self.possibly_active_keys | self.failed_release_keys

@@ -19,5 +19,5 @@ def test_prewarm_populates_cache_with_correct_flags(monkeypatch):
     assert ((0x15, 0x16), up_flags) in inputs._ARRAY_CACHE
     
     # Verify that calling send_scan_code_batch_impl directly doesn't increase cache size (cache hit)
-    inputs._send_scan_code_batch_impl((0x15,), down_flags)
+    inputs._send_scan_code_batch_impl((0x15,), down_flags, complete_remainder=False)
     assert len(inputs._ARRAY_CACHE) == 2

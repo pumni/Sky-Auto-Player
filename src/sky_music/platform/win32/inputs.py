@@ -414,19 +414,24 @@ _CACHE_LOCK = threading.RLock()
 # Partial-send diagnostics.
 #
 # SendInput is supposed to inject a chord's keys ATOMICALLY in one call. When it returns sent < n,
-# the remaining keys must go in a SECOND SendInput — splitting the chord across two input events
-# with a small gap. That gap is the one sender-side place a chord loses atomicity; the remote then
-# re-quantises it into an audible "one note offset / not pressed" glitch (exactly the reported
-# symptom). These counters make that event observable so we can confirm whether the residual chord
-# glitch is sender-side (partial send) or remote-side (untouchable).
+# a SECOND SendInput for the remainder would split the chord across two events with a timing gap —
+# the one sender-side place musical atomicity breaks (late/ghost notes, remote desync).
+#
+# Musical policy (note-on / key_up=False): NEVER complete the remainder. Report the prefix that
+# actually landed; the backend/coordinator drop the unsent keys (DROPPED_BACKEND) instead of
+# injecting them late. Incomplete chord > staggered wrong notes.
+#
+# Safety policy (note-off / release_all / key_up=True): still complete the remainder so keys
+# cannot stick. A split release is inaudible compared with a stuck key in-game.
 #
 # Best-effort diagnostics: the dispatch thread is the sole writer during normal playback.
 # get_send_diagnostics() should only be called while the dispatch thread is guaranteed not to be
-# writing — i.e. inside the dispatch loop itself or after the thread has joined. The engine's
-# finally block reads these from the telemetry record, not directly.
+# writing — i.e. inside the dispatch loop itself or after the thread has joined.
 _PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requested (any n)
 _CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
-_SEND_KEYS_DEFERRED: int = 0         # total keys pushed into a follow-up SendInput
+_SEND_KEYS_DEFERRED: int = 0         # keys not in the first atomic SendInput (split or drop)
+_SEND_KEYS_DROPPED: int = 0          # keys intentionally NOT retried (musical note-on path)
+_SEND_KEYS_RETRIED: int = 0          # keys completed on a follow-up SendInput (note-off / safety)
 _ZERO_PROGRESS_RETRIES: int = 0      # SendInput calls that injected nothing (sent == 0)
 _SEND_WHILE_UNFOCUSED: int = 0       # Note: No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor focus cache (TTL 2ms)
 _MIN_SAME_KEY_UP_GAP_US: int | None = None
@@ -434,11 +439,14 @@ _IMPOSSIBLE_SAME_KEY_REPEATS: int = 0
 
 
 def reset_send_diagnostics() -> None:
-    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _ZERO_PROGRESS_RETRIES, _SEND_WHILE_UNFOCUSED
+    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _SEND_KEYS_DROPPED
+    global _SEND_KEYS_RETRIED, _ZERO_PROGRESS_RETRIES, _SEND_WHILE_UNFOCUSED
     global _MIN_SAME_KEY_UP_GAP_US, _IMPOSSIBLE_SAME_KEY_REPEATS
     _PARTIAL_SEND_EVENTS = 0
     _CHORD_SPLIT_EVENTS = 0
     _SEND_KEYS_DEFERRED = 0
+    _SEND_KEYS_DROPPED = 0
+    _SEND_KEYS_RETRIED = 0
     _ZERO_PROGRESS_RETRIES = 0
     _SEND_WHILE_UNFOCUSED = 0
     _MIN_SAME_KEY_UP_GAP_US = None
@@ -454,6 +462,8 @@ def get_send_diagnostics() -> dict[str, int]:
         "partial_send_events": _PARTIAL_SEND_EVENTS,
         "chord_split_events": _CHORD_SPLIT_EVENTS,
         "keys_deferred": _SEND_KEYS_DEFERRED,
+        "keys_dropped": _SEND_KEYS_DROPPED,
+        "keys_retried": _SEND_KEYS_RETRIED,
         "zero_progress_retries": _ZERO_PROGRESS_RETRIES,
         "send_while_unfocused": _SEND_WHILE_UNFOCUSED,
         "impossible_same_key_repeats": _IMPOSSIBLE_SAME_KEY_REPEATS,
@@ -514,53 +524,98 @@ def _lookup_or_build_input_array(
             _ARRAY_CACHE[cache_key] = input_array
     return input_array
 
-def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
+def _send_scan_code_batch_impl(
+    scan_codes_tuple: tuple[int, ...],
+    flags: int,
+    *,
+    complete_remainder: bool,
+) -> int:
+    """Inject scan codes via one SendInput; return how many keys from the prefix landed.
+
+    ``complete_remainder``:
+      - False (musical note-on): never open a second SendInput for leftovers — report the
+        atomic prefix only so late/ghost notes cannot appear.
+      - True (note-off / panic release): finish remaining keys so held keys cannot stick.
+    """
     n = len(scan_codes_tuple)
+    if n == 0:
+        return 0
     input_array = _lookup_or_build_input_array(scan_codes_tuple, flags)
 
-    sent = user32.SendInput(n, input_array, _INPUT_SIZE)
+    sent_raw = int(user32.SendInput(n, input_array, _INPUT_SIZE))
+    # Clamp: a hostile/misbehaving return must not index past the tuple.
+    sent = max(0, min(sent_raw, n))
     if sent == n:
-        return
+        return n
 
-    # Partial send: SendInput could not inject the whole batch atomically.
+    # Partial (or zero) send: first call did not deliver the whole batch atomically.
     global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED
+    global _SEND_KEYS_DROPPED, _SEND_KEYS_RETRIED
+    missed = n - sent
     _PARTIAL_SEND_EVENTS += 1
-    _SEND_KEYS_DEFERRED += (n - sent)
+    _SEND_KEYS_DEFERRED += missed
     is_up = bool(flags & KEYEVENTF_KEYUP)
     if n > 1 and sent > 0:
         _CHORD_SPLIT_EVENTS += 1
+
+    if not complete_remainder:
+        # Musical path: stop. Unsent keys are dropped (not retried late).
+        _SEND_KEYS_DROPPED += missed
+        if n > 1 and sent > 0:
+            debug_log(
+                f"[input] CHORD SPLIT (no retry): only {sent}/{n} keys injected atomically "
+                f"(key_up={is_up}); dropping remaining {missed} to preserve timing. "
+                f"scan_codes={scan_codes_tuple}"
+            )
+        else:
+            debug_log(
+                f"[input] PARTIAL SEND (no retry): {sent}/{n} keys injected (key_up={is_up}); "
+                f"dropping {missed}. scan_codes={scan_codes_tuple}"
+            )
+        return sent
+
+    # Safety path (releases): complete remainder — split release beats a stuck key.
+    _SEND_KEYS_RETRIED += missed
+    if n > 1 and sent > 0:
         debug_log(
-            f"[input] CHORD SPLIT: only {sent}/{n} keys injected atomically "
-            f"(key_up={is_up}); remaining {n - sent} go in a 2nd SendInput -> chord split, "
-            f"remote may desync this chord. scan_codes={scan_codes_tuple}"
+            f"[input] CHORD SPLIT (release complete): only {sent}/{n} keys injected atomically "
+            f"(key_up={is_up}); finishing remaining {missed}. scan_codes={scan_codes_tuple}"
         )
     else:
         debug_log(
-            f"[input] PARTIAL SEND: {sent}/{n} keys injected (key_up={is_up}); "
-            f"deferring {n - sent}. scan_codes={scan_codes_tuple}"
+            f"[input] PARTIAL SEND (release complete): {sent}/{n} keys injected (key_up={is_up}); "
+            f"finishing {missed}. scan_codes={scan_codes_tuple}"
         )
 
-    # Fallback retry path
     remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
-
     remaining_inputs = [_cached_key_input(sc, flags) for sc in remaining_scan_codes]
     send_input_batch(remaining_inputs)
+    return n
 
-def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
+
+def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> int:
+    """Send scan codes. Always completes remainder (panic/release safety). Returns keys landed."""
     if not scan_codes:
-        return
+        return 0
     scan_codes_tuple = tuple(dict.fromkeys(scan_codes))
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-    _send_scan_code_batch_impl(scan_codes_tuple, flags)
+    # release_all / watchdog use this path — never leave keys half-released.
+    return _send_scan_code_batch_impl(scan_codes_tuple, flags, complete_remainder=True)
 
-def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> None:
+def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> int:
+    """Hot-path send. Note-on never retries partial; note-off completes remainder. Returns keys landed."""
     if not scan_codes:
-        return
+        return 0
     if len(scan_codes) != len(set(scan_codes)):
         raise ValueError(f"send_scan_code_batch_trusted received duplicates: {scan_codes}")
     scan_codes_tuple = tuple(scan_codes)
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-    _send_scan_code_batch_impl(scan_codes_tuple, flags)
+    # key_up=True → complete_remainder (stuck-key safety). key_up=False → musical atomicity.
+    return _send_scan_code_batch_impl(
+        scan_codes_tuple,
+        flags,
+        complete_remainder=key_up,
+    )
 
 def get_process_name_by_pid(pid: int) -> str | None:
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000

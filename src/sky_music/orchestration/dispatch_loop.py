@@ -1063,6 +1063,8 @@ class DispatchLoop:
                         f"chord_splits={send_diag.get('chord_split_events', 0)}, "
                         f"partial_send_events={send_diag.get('partial_send_events', 0)}, "
                         f"keys_deferred={send_diag.get('keys_deferred', 0)}, "
+                        f"keys_dropped={send_diag.get('keys_dropped', 0)}, "
+                        f"keys_retried={send_diag.get('keys_retried', 0)}, "
                         f"zero_progress_retries={send_diag.get('zero_progress_retries', 0)}"
                     )
             self.telemetry.save()
