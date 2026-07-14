@@ -185,15 +185,11 @@ def test_playback_equivalence() -> None:
         for call in backend.calls
     ]
 
-    # Record generation status counts from telemetry
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    generation_counts = {
-        "cancelled_generation_count": summary.get("cancelled_generation_count", 0),
-        "dropped_conflict_count": summary.get("dropped_conflict_count", 0),
-        "dropped_backend_count": summary.get("dropped_backend_count", 0),
-        "released_count": summary.get("released_count", 0),
-    }
+    # Record full generation-status distribution from telemetry
+    # (engine.telemetry.generation_status_counts holds the entire 8-key dict,
+    #  unlike get_summary() which projects only 4 keys.)
+    generation_counts = dict(engine.telemetry.generation_status_counts)
+    assert generation_counts, "generation_status_counts should be non-empty after playback"
 
     current_data = {
         "calls": timeline,

@@ -129,15 +129,17 @@ class RuntimeDispatchCoordinator:
         self.min_hold_us = max(0, int(min_hold_us))
         self.cursor = 0
         self.active_by_scan_code: dict[int, ActiveKeyGeneration] = {}
-        # Live status dict: holds ONLY generations in a non-terminal state
-        # (ACTIVE / RELEASE_PENDING), so its size is bounded by live polyphony —
-        # a few dozen entries — not by the song length. SCHEDULED is the implicit
-        # default for any generation_id < generation_count that has no entry.
-        # Terminal states (RELEASED / DROPPED_* / CANCELLED) are folded into O(1)
-        # running counters the instant a generation reaches them (see _terminalize),
-        # so per-note state is never retained for the whole song. This is the
-        # difference between O(note_count) and O(polyphony) resident memory during
-        # playback — the former made RSS climb steadily and never drop for dense songs.
+        # Live status dict: bidirectional invariant —
+        #   |status_by_generation| = |image_g(active_by_scan_code) ∪ dom(pending_by_generation)|
+        # Every active or pending generation appears here, and every entry maps back
+        # to an active or pending entry in the parallel collections. Size is bounded
+        # by 2 × |scan_code_space| = O(polyphony), independent of song length.
+        # SCHEDULED is the implicit default for any generation_id < generation_count
+        # lacking an entry. Terminal states (RELEASED / DROPPED_* / CANCELLED) are
+        # folded into O(1) _terminal_counts the instant a generation reaches them
+        # (see _terminalize), so per-note state is never retained for the whole song.
+        # This is the difference between O(note_count) and O(polyphony) resident memory
+        # during playback — the former made RSS climb steadily and never drop for dense songs.
         self.status_by_generation: dict[int, GenerationStatus] = {}
         self._terminal_counts: dict[GenerationStatus, int] = {}
         self._generation_count: int = schedule.generation_count
@@ -227,6 +229,10 @@ class RuntimeDispatchCoordinator:
             nonterminal += 1
         terminal_total = sum(self._terminal_counts.values())
         implicit_scheduled = self._generation_count - terminal_total - nonterminal
+        assert implicit_scheduled >= 0, (
+            f"counter drift: terminal_total={terminal_total} + nonterminal={nonterminal} "
+            f"exceeds generation_count={self._generation_count}"
+        )
         if implicit_scheduled > 0:
             counts[GenerationStatus.SCHEDULED] = counts.get(GenerationStatus.SCHEDULED, 0) + implicit_scheduled
         return {status.value: counts.get(status, 0) for status in GENERATION_STATUSES}

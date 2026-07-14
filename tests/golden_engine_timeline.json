@@ -118,9 +118,13 @@
     }
   ],
   "generation_status_counts": {
-    "cancelled_generation_count": 1,
-    "dropped_conflict_count": 1,
-    "dropped_backend_count": 0,
-    "released_count": 8
+    "scheduled": 0,
+    "active": 0,
+    "release_pending": 0,
+    "released": 8,
+    "dropped_conflict": 1,
+    "dropped_backend": 0,
+    "dropped_expired": 0,
+    "cancelled": 1
   }
 }

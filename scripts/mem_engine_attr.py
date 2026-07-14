@@ -1,56 +1,24 @@
-"""Verify what engine attributes still hold memory after play() returns."""
+"""Verify coordinator internal dict sizes after play() completes.
+
+A direct-drive coordinator is used for the memory-bound assertion because
+``PlaybackEngine`` nulls ``_runtime_coordinator`` post-play (engine.py:814)
+and real-time playback of 2000+ notes would require wall-clock seconds.
+"""
 from __future__ import annotations
 
-import gc
 import sys
-import tracemalloc
-from pathlib import Path
 
-from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
-from sky_music.infrastructure.backend import (
-    BackendHealth,
-    InputSendResult,
-    ReleaseAllOutcome,
+from sky_music.orchestration.runtime_dispatch import (
+    RuntimeDispatchCoordinator,
+    compile_runtime_intents,
 )
-from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.orchestration.engine import PlaybackEngine
 
 
-class _TinyBackend:
-    def __init__(self) -> None:
-        self.active: set[int] = set()
-
-    def key_down(self, scan_codes):
-        self.active.update(scan_codes)
-        return InputSendResult(sent=scan_codes, skipped_duplicates=(), success=True)
-
-    def key_up(self, scan_codes):
-        self.active.difference_update(scan_codes)
-        return InputSendResult(sent=scan_codes, skipped_duplicates=(), success=True)
-
-    def release_all(self):
-        attempted = tuple(sorted(self.active))
-        self.active.clear()
-        return ReleaseAllOutcome(
-            attempted=attempted, released_successfully=True,
-            stuck_keys=(), verification_inconclusive=False,
-        )
-
-    def get_health(self):
-        return BackendHealth(
-            active_count=len(self.active), possibly_active_count=0,
-            failed_release_count=0, last_error=None,
-        )
-
-    def get_send_diagnostics(self):
-        return {}
-
-
-def _action(idx: int, kind: str, scan: int) -> KeyAction:
+def _action(at_us: int, kind: str, scan: int) -> KeyAction:
     return KeyAction(
-        kind=kind, scan_codes=(ScanCode(scan),),
-        at_us=Microseconds(idx * 20_000), reason="test",
+        kind=kind, scan_codes=(ScanCode(scan),),  # type: ignore[arg-type]
+        at_us=Microseconds(at_us), reason="test",
     )
 
 
@@ -74,52 +42,68 @@ def _deep_size(obj) -> int:
     return total
 
 
+def _drive(coord: RuntimeDispatchCoordinator) -> None:
+    """Mirror engine dispatch to completion — virtual clock, no real wait."""
+    now = 0
+    while not coord.is_finished():
+        deadline = coord.next_deadline_us()
+        if deadline is None:
+            break
+        now = max(now, deadline)
+        for pending in (coord.pop_due_pending(now),):
+            if pending:
+                sent = tuple(r.scan_code for r in pending)
+                coord.complete_releases(pending, sent, ())
+        for batch in coord.pop_due_authored(now):
+            if batch.kind == "up":
+                coord.request_releases(batch.intents)
+                newly = coord.pop_due_pending(now)
+                if newly:
+                    sent = tuple(r.scan_code for r in newly)
+                    coord.complete_releases(newly, sent, ())
+            else:
+                playable, _ = coord.split_down_intents(batch.intents)
+                if playable:
+                    sent = tuple(i.scan_code for i in playable)
+                    coord.activate_sent_downs(
+                        playable, sent,
+                        dispatch_started_us=now, dispatch_completed_us=now,
+                    )
+
+
 def main() -> None:
     scan_codes_pool = (21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
-    actions = []
-    for i in range(2000):
-        if i % 2 == 0:
-            sc = scan_codes_pool[i % len(scan_codes_pool)]
-            actions.append(_action(i, "down", sc))
-        else:
-            sc = scan_codes_pool[(i // 2) % len(scan_codes_pool)]
-            actions.append(_action(i, "up", sc))
+    actions: list[KeyAction] = []
+    for pair_idx in range(1000):
+        sc = scan_codes_pool[pair_idx % len(scan_codes_pool)]
+        actions.append(_action(pair_idx * 40_000, "down", sc))
+        actions.append(_action(pair_idx * 40_000 + 20_000, "up", sc))
 
-    engine = PlaybackEngine(
-        song=Song(name="m", notes=()),
-        actions=tuple(actions),
-        backend=_TinyBackend(),
-        require_focus=False,
-        sleep_policy=SleepPolicy(poll_s=0.001),
-        use_dispatch_thread=True,
-        enable_gc_pause=True,
+    schedule = compile_runtime_intents(tuple(actions))
+    coord = RuntimeDispatchCoordinator(schedule, min_hold_us=0)
+    _drive(coord)
+
+    print("Coordinator internals (post-completion):\n")
+    for attr in ("status_by_generation", "schedule", "active_by_scan_code",
+                 "pending_by_generation", "pending_scan_codes"):
+        val = getattr(coord, attr)
+        extra = f" len={len(val)}" if hasattr(val, "__len__") else ""
+        print(f"  {attr:<28}{extra}: {_deep_size(val) / 1024:>8.1f} KiB")
+
+    bound = 2 * len(scan_codes_pool)
+    live_entries = len(coord.status_by_generation)
+    print(f"\n  status_by_generation (live):  {live_entries}  (bound: <={bound})")
+    print(f"  _terminal_counts:             {dict(coord._terminal_counts)}")
+    print(f"  generation_count:             {coord._generation_count}")
+
+    assert live_entries <= bound, (
+        f"O(polyphony) bound violated: |S|={live_entries} > {bound}"
     )
-
-    caller_ref = engine
-    result = engine.play()
-    gc.collect()
-    print(f"play() -> {result!r}\n")
-
-    print("Per-attribute costs while caller keeps engine referenced:")
-    for attr in (
-        "_runtime_coordinator", "runtime_schedule", "_health_monitor",
-        "estimator", "telemetry", "backend", "_compat_loop",
-    ):
-        val = getattr(engine, attr)
-        sz = _deep_size(val)
-        print(f"  {attr:>22}: {sz / 1024:>8.1f} KiB  (type={type(val).__name__})")
-
-    if engine._runtime_coordinator is not None:
-        coord = engine._runtime_coordinator
-        print("\n  coordinator internals:")
-        for attr in ("status_by_generation", "schedule", "active_by_scan_code",
-                     "pending_by_generation", "pending_scan_codes"):
-            val = getattr(coord, attr)
-            sz = _deep_size(val)
-            extra = f" len={len(val)}" if hasattr(val, "__len__") else ""
-            print(f"    {attr:<28}{extra}: {sz / 1024:>8.1f} KiB")
-
-    print(f"\n  Total caller_referenced engine: {_deep_size(caller_ref) / 1024:.1f} KiB")
+    print("  [ok] O(polyphony) bound holds.")
+    assert sum(coord._terminal_counts.values()) + live_entries == coord._generation_count, (
+        "counter drift: terminal + live != generation_count"
+    )
+    print("  [ok] counter invariant holds.")
 
 
 if __name__ == "__main__":
