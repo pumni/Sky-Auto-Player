@@ -89,6 +89,9 @@ def test_focus_loss_shifts_timeline_without_dropping_later_down():
         sleep_policy=SleepPolicy(spin_threshold_us=-1),
         min_hold_us=10_000,
         focus_restore_grace_us=0,
+        # Asserts on engine.telemetry.records after play(); production hygiene clears
+        # records inside save(), so opt in to retention for the assertion window only.
+        retain_telemetry_records_after_save=True,
     )
 
     assert engine.play() == PLAYBACK_FINISHED
@@ -142,6 +145,9 @@ def test_stale_up_after_focus_cancel_does_not_release_fresh_generation():
         sleep_policy=SleepPolicy(spin_threshold_us=-1),
         min_hold_us=10_000,
         focus_restore_grace_us=0,
+        # Asserts on engine.telemetry.records after play(); production hygiene clears
+        # records inside save(), so opt in to retention for the assertion window only.
+        retain_telemetry_records_after_save=True,
     )
 
     assert engine.play() == PLAYBACK_FINISHED

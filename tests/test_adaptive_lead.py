@@ -226,6 +226,9 @@ def test_adaptive_lead_integration() -> None:
         sleep_policy=SleepPolicy(spin_threshold_us=-1),
         use_dispatch_thread=False,
         enable_adaptive_lead=True,
+        # Asserts on engine.telemetry.records after play(); production hygiene clears
+        # records inside save(), so opt in to retention for the assertion window only.
+        retain_telemetry_records_after_save=True,
     )
     
     # Run engine play

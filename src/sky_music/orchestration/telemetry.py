@@ -170,6 +170,8 @@ class TelemetryLogger:
         run_id: str | None = None,
         fps: int | None = None,
         min_hold_us: int = 0,
+        *,
+        retain_records_after_save: bool = False,
     ):
         self.song_name = song_name
         self.enabled = enabled
@@ -178,6 +180,16 @@ class TelemetryLogger:
         self.fps = fps
         self.min_hold_us = max(0, int(min_hold_us))
         self.records = []
+        # Summary computed by save()/get_summary() before records are dropped for hygiene.
+        # Keeps get_summary() callable for late callers (engine _log_timing_summary, CLI,
+        # tests) after save() clears the (often multi-MB) records list — otherwise they'd
+        # see None because the early-empty guard in get_summary was the only signal.
+        # Read-only contract: callers read keys, never mutate.
+        self._last_summary: dict | None = None
+        # Test-only hook: keeps ``records`` populated after save() so tests that assert
+        # on raw per-event fields after play() keep working without re-architecting onto
+        # the CSV/summary path. Production always leaves this False.
+        self._retain_records_after_save = bool(retain_records_after_save)
         self.log_filepath = None
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
@@ -333,11 +345,16 @@ class TelemetryLogger:
     def get_summary(self) -> dict | None:
         """Compute and return the stats dict in-memory (no file I/O).
 
-        Returns None if there are no records (e.g. telemetry disabled and
-        no events recorded).  Callers should guard against None.
+        Returns None when no summary is available (empty records AND no cached summary).
+
+        After save() clears records (post-play hygiene), late callers — engine's
+        _log_timing_summary, CLI report, tests — receive the previously-computed summary
+        via _last_summary, so they keep working without re-pinning the (often multi-MB)
+        per-record list in RSS. Read-only contract: callers read keys, never mutate.
         """
         if not self.records:
-            return None
+            # Records were already persisted (save()) or never recorded: serve the cache.
+            return self._last_summary
 
         # Materialize once — all later list comprehensions work from `rows`
         rows = [r._materialize() for r in self.records]
@@ -683,6 +700,9 @@ class TelemetryLogger:
             summary["background"] = {
                 "picker_cleanup": TelemetryLogger.last_picker_cleanup
             }
+        # Cache the freshly computed summary before save() clears records so post-clear
+        # callers (engine._log_timing_summary → get_summary()) read the cache instead of None.
+        self._last_summary = summary
         return summary
         
     def save(self) -> None:
@@ -735,6 +755,16 @@ class TelemetryLogger:
 
         except Exception as e:
             sys.stderr.write(f"[telemetry] failed to save metrics: {e}\n")
+            # On failure: keep records intact so a retry or debugger can inspect them.
+            return
+
+        # Reachable-memory hygiene: drop the per-event list once persisted to disk. get_summary()
+        # callers after this point read the cached _last_summary (computed inside the try above via
+        # get_summary() → _compute_summary()), so the records list is no longer needed in RSS.
+        # Skipped when retain_records_after_save=True (test-only hook) so tests asserting on raw
+        # engine.telemetry.records after play() keep working without moving onto CSV/summary.
+        if not self._retain_records_after_save:
+            self.records = []
 
 def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
     """Load and format a timing performance report from companion summary JSON telemetry files."""

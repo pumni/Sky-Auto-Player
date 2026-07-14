@@ -33,6 +33,9 @@ def _play_with_telemetry() -> PlaybackEngine:
         require_focus=False,
         sleep_policy=SleepPolicy(spin_threshold_us=500),
         use_dispatch_thread=True,
+        # Tests assert on engine.telemetry.records after play(); production hygiene clears
+        # records inside save(), so opt in to retention for the assertion window only.
+        retain_telemetry_records_after_save=True,
     )
     engine.play()
     return engine

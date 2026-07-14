@@ -464,6 +464,7 @@ class PlaybackEngine:
         enable_reprobe: bool = False,
         onset_bias_us: int = 0,
         lead_cache_path: Path | None = None,
+        retain_telemetry_records_after_save: bool = False,
     ):
         self.song = song
         self.actions = actions
@@ -526,6 +527,7 @@ class PlaybackEngine:
             tempo_scale=tempo_scale,
             fps=fps,
             min_hold_us=self.min_hold_us,
+            retain_records_after_save=retain_telemetry_records_after_save,
         )
         self.telemetry.record_runtime_options(
             {
@@ -866,14 +868,25 @@ class PlaybackEngine:
             self._runtime_coordinator = None
             self._compat_loop = None
             self.runtime_schedule = None
-            # Force-collect once here (unconditional, not gated on ``enable_gc_pause``) so the
-            # cyclic GC sweep that RealtimeProcessScope re-enabled on __exit__ actually frees the
-            # per-event garbage the dispatch thread generated during playback (ExecutionResult,
-            # batch tuples, dispatch bookkeeping lists, telemetry records). Without this hint the
-            # next generation-2 collection can be deferred multiple seconds, which is why Task
-            # Manager shows resident RSS refusing to drop after a song ends or after F9.
-            # Outside the RT timing window — playback is over — so a one-shot full collection is
-            # harmless and bounded by what dispatch just allocated.
+            # Drop the prebuilt INPUT-array cache so a session running many songs back-to-back
+            # doesn't accumulate up to ~8192 cached chord-shaped ctypes arrays. Safe to clear
+            # here because the dispatch thread has already joined (supervisor.run returned before
+            # this finally); the next play() rebuilds the cache from prewarm_input_arrays before
+            # the dispatch thread starts. _INPUT_CACHE (per-key structs) is intentionally kept
+            # by clear_array_cache. Best-effort; non-Windows/test platforms must not abort teardown.
+            with contextlib.suppress(Exception):
+                from sky_music.platform.win32 import inputs as _inputs_cleanup
+
+                _inputs_cleanup.clear_array_cache()
+            # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
+            # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
+            # the dispatch thread allocated during playback (ExecutionResult, batch tuples,
+            # dispatch bookkeeping lists) plus the runtime_schedule edges dropped above. Note this
+            # only reclaims cyclic/unreachable objects — the former big reachable holdout was
+            # telemetry.records (kept alive via self.telemetry), which is now cleared inside
+            # telemetry.save(). Windows Working Set and pymalloc arenas may still not release the
+            # freed pages back to the OS promptly (sticky WS / arena reuse), so Task Manager RSS
+            # can plateau even after this collection — that is platform behaviour, not an app leak.
             with contextlib.suppress(Exception):
                 gc.collect()
 

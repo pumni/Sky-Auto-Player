@@ -145,6 +145,9 @@ def test_dispatch_lead_time_triggering_earlier():
         clock=clock, sleeper=sleeper,
         sleep_policy=SleepPolicy(spin_threshold_us=-1),
         dispatch_lead_us=10000,  # 10ms lead time
+        # Asserts on engine.telemetry.records after play(); production hygiene clears
+        # records inside save(), so opt in to retention for the assertion window only.
+        retain_telemetry_records_after_save=True,
     )
 
     res = engine.play()

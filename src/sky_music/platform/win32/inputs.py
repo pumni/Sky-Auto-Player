@@ -504,6 +504,21 @@ def prewarm_input_arrays(shapes: Iterable[tuple[tuple[int, ...], bool]]) -> None
                 key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
                 _ARRAY_CACHE[cache_key] = (INPUT * len(scan_codes_tuple))(*key_inputs)
 
+
+def clear_array_cache() -> int:
+    """Drop prebuilt INPUT arrays from the process-global cache; return entries cleared.
+
+    Caller MUST ensure no dispatch thread is sending (PlaybackEngine.play() finally after
+    the supervisor has joined the dispatch thread) so there is no concurrent reader of
+    _ARRAY_CACHE. The per-key _INPUT_CACHE is intentionally retained — it is a tiny
+    fixed-size table (~15 scan codes × {down, up}) reused on the next prewarm, and
+    rebuilding INPUT structs is the bulk of per-event Python cost.
+    """
+    with _CACHE_LOCK:
+        n = len(_ARRAY_CACHE)
+        _ARRAY_CACHE.clear()
+    return n
+
 def _lookup_or_build_input_array(
     scan_codes_tuple: tuple[int, ...], flags: int
 ) -> ctypes.Array:
