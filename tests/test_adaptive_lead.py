@@ -375,6 +375,60 @@ def test_dispatch_completion_lands_on_schedule_with_warm_estimator() -> None:
     assert [c.completed_us for c in ups] == [i * 20_000 + 5_000 for i in range(1, 5)]
 
 
+class PolyphonyScaledBackend(TimedBackend):
+    """SendInput duration grows with chord size (per_key_us × n_keys).
+
+    Models the real cost: a bigger chord takes proportionally longer to inject, so without a
+    polyphony-aware lead a 4-key chord's onset lands ~4× later than a single note.
+    """
+
+    def __init__(self, clock: FakeClock, per_key_us: int) -> None:
+        super().__init__(clock, send_duration_us=0)
+        self.per_key_us = per_key_us
+
+    def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
+        self.send_duration_us = self.per_key_us * len(
+            [sc for sc in scan_codes if sc not in self.active]
+        )
+        return super().key_down(scan_codes)
+
+
+def test_chord_completion_lands_on_schedule_with_polyphony_scaled_send() -> None:
+    """Accuracy guarantee for chords: with a polyphony-scaled SendInput cost and a warm
+    per-bucket estimator, a multi-key chord's completion lands on its scheduled onset — NOT
+    (n_keys × per_key) late as it would with a scalar/no lead. This is the end-to-end property
+    that makes the game receive a chord's notes together instead of skewed. Locks the composite
+    of estimator buckets + coordinator per-batch lead + completion targeting against regression."""
+    per_key_us = 150
+    # Alternate single notes and 4-key chords, generously spaced so every note has room to lead.
+    actions: list[KeyAction] = []
+    t = 60_000  # start past t=0 so even the first note can be led (t=0 physically cannot)
+    for i in range(6):
+        scs = (ScanCode(1),) if i % 2 == 0 else (ScanCode(2), ScanCode(3), ScanCode(4), ScanCode(5))
+        actions.append(KeyAction(kind=ActionKind.DOWN, scan_codes=scs, at_us=Microseconds(t), reason="d"))
+        actions.append(KeyAction(kind=ActionKind.UP, scan_codes=scs, at_us=Microseconds(t + 30_000), reason="u"))
+        t += 60_000
+
+    clock = FakeClock()
+    backend = PolyphonyScaledBackend(clock, per_key_us=per_key_us)
+    engine = _floor_engine(tuple(actions), backend, clock, min_hold_us=0, enable_adaptive_lead=True)
+    # Warm the per-polyphony buckets to their steady-state send cost.
+    for _ in range(6):
+        engine.estimator.update(ActionKind.DOWN, per_key_us * 1, n_keys=1)
+        engine.estimator.update(ActionKind.DOWN, per_key_us * 4, n_keys=4)
+        engine.estimator.update(ActionKind.UP, per_key_us)
+
+    assert engine.play() == PLAYBACK_FINISHED
+
+    downs = [c for c in backend.calls if c.kind == "down"]
+    scheduled = [int(a.at_us) for a in actions if a.kind == "down"]
+    # Every onset (completion) lands exactly on schedule regardless of chord size — including the
+    # 4-key chords, which a scalar lead would leave 4×per_key late.
+    assert [c.completed_us for c in downs] == scheduled
+    # And the chords were genuinely 4-key (not silently split/dropped).
+    assert [len(c.scan_codes) for c in downs] == [1, 4, 1, 4, 1, 4]
+
+
 # ---------------------------------------------------------------------------
 # Polyphony-aware lead (chord fix) — estimator buckets, coordinator per-batch
 # lead, and DispatchLoop._down_lead_for_batch (onset-bias is onset-only).

@@ -824,15 +824,6 @@ class PlaybackEngine:
             # harmless and bounded by what dispatch just allocated.
             with contextlib.suppress(Exception):
                 gc.collect()
-            # gc.collect() frees the Python objects, but the pages they occupied stay resident
-            # in this process until the OS is asked to reclaim them — which is why RSS climbs
-            # during a dense song and refuses to drop after it ends or after F9. Now that the
-            # dispatch thread has joined and the per-song objects are gone, hand the freed pages
-            # back to the OS. Strictly outside the real-time window, single point covering every
-            # exit path (finish / skip / quit / error), and fully best-effort.
-            with contextlib.suppress(Exception):
-                from sky_music.platform.win32 import inputs as _inputs_trim
-                _inputs_trim.trim_working_set()
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (
