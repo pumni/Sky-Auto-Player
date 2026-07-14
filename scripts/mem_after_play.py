@@ -6,9 +6,7 @@ when the song is done / skipped. Helps us pinpoint where to free.
 from __future__ import annotations
 
 import gc
-import sys
 import tracemalloc
-from pathlib import Path
 
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode

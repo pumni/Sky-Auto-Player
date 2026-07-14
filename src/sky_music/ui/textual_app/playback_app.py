@@ -684,53 +684,6 @@ class PlaybackCard(Static):
         )
         return body
 
-BASE_CSS = """
-Screen {
-    align: center middle;
-}
-#playback-card {
-    width: 78;
-    height: auto;
-    padding: 1 2;
-    border: round #38506f;
-    background: #080e1c;
-}
-#song-name {
-    text-align: center;
-    text-style: bold;
-    margin-bottom: 1;
-}
-#progress-bar {
-    text-align: center;
-    margin-bottom: 1;
-}
-#time-info {
-    text-align: center;
-    margin-bottom: 1;
-}
-#status-info {
-    text-align: center;
-    text-style: bold;
-    margin-bottom: 1;
-}
-#warning-info {
-    text-align: center;
-    margin-bottom: 1;
-}
-#debug-panel {
-    align: center middle;
-    margin-top: 1;
-    margin-bottom: 1;
-    height: auto;
-}
-#debug-backend, #debug-lateness, #debug-timing {
-    text-align: center;
-}
-#hotkeys-info {
-    text-align: center;
-}
-"""
-
 def _theme_css(name: str, t: TextualThemeTokens) -> str:
     s = f"Screen.theme-{name}"
     return f"""
@@ -755,11 +708,12 @@ def _theme_css(name: str, t: TextualThemeTokens) -> str:
     }}
     """
 
-APP_CSS = BASE_CSS + "\n".join(
+APP_CSS = "\n".join(
     _theme_css(name, tokens) for name, tokens in TEXTUAL_THEME_TOKENS.items()
 )
 
 class PlaybackApp(App[str]):
+    CSS_PATH = "styles/base.tcss"
     CSS = APP_CSS
 
     def __init__(

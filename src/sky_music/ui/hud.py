@@ -14,6 +14,7 @@ from sky_music.config import resolve_game_fps
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.ui.picker_theme import ThemePreset, get_theme_preset
 from sky_music.ui.text_render import (
     clamp_terminal_width,
     truncate_cells,
@@ -35,20 +36,20 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}:{sec:02}"
 
 
-def _theme_styles(theme_tokens: dict[str, str]) -> dict[str, Style]:
+def _theme_styles(preset: ThemePreset, accent_override: str | None = None) -> dict[str, Style]:
+    """Build a Rich Style map from a typed *ThemePreset* design token object."""
+    accent = accent_override or preset.accent
     return {
-        "accent": Style.parse(theme_tokens["accent"]),
-        "foreground": Style.parse(theme_tokens["foreground"]),
-        "muted": Style.parse(theme_tokens["muted"]),
-        "success": Style.parse(theme_tokens["success"]),
-        "warning": Style.parse(theme_tokens["warning"]),
-        "danger": Style.parse(theme_tokens["danger"]),
-        "divider": Style.parse(theme_tokens["divider"]),
-        "key": Style.parse(theme_tokens["key"]),
-        "modal_title": Style.parse(theme_tokens["modal_title"]),
-        "header_lead": Style.parse(theme_tokens.get("header_lead", theme_tokens["accent"])),
+        "accent": Style.parse(accent),
+        "foreground": Style.parse(preset.foreground),
+        "muted": Style.parse(preset.muted),
+        "success": Style.parse(preset.success),
+        "warning": Style.parse(preset.warning),
+        "danger": Style.parse(preset.danger),
+        "divider": Style.parse(preset.divider),
+        "key": Style.parse(preset.key),
+        "modal_title": Style.parse(preset.modal_title),
     }
-
 
 class ProgressRenderer:
     def __init__(
@@ -67,28 +68,12 @@ class ProgressRenderer:
         self.theme_name = theme_name
         self.last_render_at: float = 0.0
 
-        from sky_music.ui.textual_app.theme_css import TEXTUAL_THEME_TOKENS
-
-        theme_tokens_raw = TEXTUAL_THEME_TOKENS.get(
-            theme_name.casefold(), TEXTUAL_THEME_TOKENS["aurora"]
+        preset = get_theme_preset(theme_name)
+        self._styles = _theme_styles(preset, accent_override=accent_hex)
+        # Use the first gradient stop for the progress bar; fall back to accent.
+        self._gradient = (
+            Style.parse(preset.gradient[0]) if preset.gradient else self._styles["accent"]
         )
-        tokens: dict[str, str] = {}
-        for key in (
-            "accent", "foreground", "muted", "success", "warning",
-            "danger", "divider", "key", "modal_title",
-        ):
-            val = getattr(theme_tokens_raw, key, None)
-            if val is not None:
-                tokens[key] = val
-
-        if accent_hex:
-            tokens["accent"] = accent_hex
-
-        self._styles = _theme_styles(tokens)
-        self._gradient = self._styles["accent"]
-        raw_gradient = getattr(theme_tokens_raw, "gradient", None)
-        if raw_gradient and isinstance(raw_gradient, tuple) and len(raw_gradient) > 0:
-            self._gradient = Style.parse(raw_gradient[0])
 
         self._console: Console | None = None
         self._live: Live | None = None

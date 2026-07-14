@@ -1,3 +1,4 @@
+import functools
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -221,13 +222,14 @@ def remove_accents(input_str: str) -> str:
     return res.replace('đ', 'd').replace('Đ', 'D')
 
 
-_normalization_cache: dict[str, tuple[str, list[int]]] = {}
-
-
+@functools.lru_cache(maxsize=2048)
 def normalized_index_map(text: str) -> tuple[str, list[int]]:
-    if text in _normalization_cache:
-        return _normalization_cache[text]
-    
+    """Return (normalized_text, index_map) for accent/case-insensitive matching.
+
+    Cached with :func:`functools.lru_cache` (LRU, max 2048 entries) so hot
+    query paths avoid repeated Unicode normalisation. The cache is thread-safe
+    and evicts least-recently-used entries automatically.
+    """
     normalized_chars = []
     index_map = []
     for original_index, char in enumerate(text):
@@ -235,13 +237,8 @@ def normalized_index_map(text: str) -> tuple[str, list[int]]:
         for normalized_char in normalized:
             normalized_chars.append(normalized_char)
             index_map.append(original_index)
-    
-    res = ("".join(normalized_chars), index_map)
-    # Keep cache size reasonable
-    if len(_normalization_cache) > 2000:
-        _normalization_cache.clear()
-    _normalization_cache[text] = res
-    return res
+
+    return "".join(normalized_chars), index_map
 
 
 def get_match_span(text: str, normalized_query: str) -> tuple[int, int] | None:

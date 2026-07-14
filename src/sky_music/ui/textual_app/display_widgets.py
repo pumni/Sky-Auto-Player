@@ -27,10 +27,12 @@ class GradientHeader(Static):
         self._version = version
         self._status = ""
         self._lead = 2
-        self._stops = ["#1fcdf5", "#5a8cff", "#aa6bf0"]
-        self._title_color = "#ffffff"
-        self._tagline_color = "#cbd5e1"
-        self._status_color = "#ffffff"
+        # Colors are intentionally empty until set_theme() is called by
+        # PickerScreen._apply_theme_class(). render() guards against this.
+        self._stops: list[str] = []
+        self._title_color = ""
+        self._tagline_color = ""
+        self._status_color = ""
         self._version_highlight = False
         self._version_highlight_color: str = ""
 
@@ -68,6 +70,9 @@ class GradientHeader(Static):
         self.refresh()
 
     def render(self) -> Text:
+        # Guard: theme not yet applied — return empty until set_theme() is called.
+        if not self._stops or not self._title_color:
+            return Text("")
         width = self.size.width or 60
         if width < 12:
             return Text("")

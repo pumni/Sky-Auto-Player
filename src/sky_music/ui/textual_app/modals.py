@@ -11,13 +11,14 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 
 from sky_music.ui.picker_theme import THEME_PRESETS, get_theme_preset
+from sky_music.ui.textual_app.components.command_palette import CommandPaletteList
+from sky_music.ui.textual_app.components.footers import ModalHintBar
 from sky_music.ui.textual_app.keymap import (
     COMMAND_MODAL_HINTS,
     INFO_MODAL_HINTS,
     CommandSpec,
     KeyHint,
 )
-from sky_music.ui.textual_app.widgets import CommandPaletteList, ModalHintBar
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,17 +293,6 @@ class UpdateModal(PickerModal[str | None]):
         )
 
     def on_modal_mounted(self) -> None:
-        from textual.css.query import NoMatches
-
-        try:
-            caution = self.query_one("#update-caution", Static)
-            caution.styles.color = "gray"
-            caution.styles.opacity = 0.7
-            caution.styles.text_style = "italic"
-            caution.styles.margin = (1, 0, 0, 0)
-        except NoMatches:
-            pass
-
         options = self.query_one("#modal-options", OptionList)
         options.highlighted = 1
         self.set_focus(options)

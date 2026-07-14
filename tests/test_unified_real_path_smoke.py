@@ -179,7 +179,12 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
         original_init(self, *args, **kwargs)
         # Monkeypatch close_all on the instantiated picker_scope
         def failing_close_all(*a: Any, **kw: Any) -> Any:
-            raise RuntimeError("Simulation of worker closing failure!")
+            from sky_music.infrastructure.background import (
+                BackgroundCleanupError,
+                ScopeCloseResult,
+            )
+            res = ScopeCloseResult(phase="picker", snapshots=(), errors=("mock error",))
+            raise BackgroundCleanupError("Simulation of worker closing failure!", result=res)
         self.picker_scope.close_all = failing_close_all
 
     monkeypatch.setattr(SkyPickerApp, "__init__", patched_init)
@@ -210,10 +215,13 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
             fps=60,
         )
 
-        # Triggers quiesce which fails, blocking engine creation
+        import traceback
+        print("EXECUTE CALLED!")
+        traceback.print_stack()
         app.execute_playback_plan(plan, picker_result)
         await pilot.pause()
 
+        print("IS INSTANTIATED:", engine_instantiated)
         # Engine must NOT be instantiated
         assert engine_instantiated is False
 
@@ -221,6 +229,10 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
         assert TelemetryLogger.last_picker_cleanup is not None
         assert TelemetryLogger.last_picker_cleanup.get("ok") is False
         assert "Simulation of worker closing failure!" in TelemetryLogger.last_picker_cleanup.get("error", "")
+
+        # Unpatch close_all so on_unmount doesn't fail
+        if hasattr(app.picker_scope, "close_all"):
+            del app.picker_scope.close_all
 
         await pilot.press("escape")
 

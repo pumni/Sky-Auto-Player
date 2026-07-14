@@ -100,13 +100,14 @@ BASE_CSS = """
     #songs { height: 1fr; padding: 0 2; }
     /* max-height prevents detail panel from eating too much vertical space */
     #detail { height: auto; min-height: 5; max-height: 9; margin: 1 0 0 0; padding: 0 2; overflow-y: auto; }
-    AppFooter { height: 1; margin: 1 0 0 0; }
+    AppFooter { dock: bottom; height: 1; margin: 1 0 0 0; }
     ModalHintBar { height: 1; margin-top: 1; content-align: center middle; }
     .datatable--cursor { text-style: bold; }
     /* Base modal layout - colours come from per-theme blocks */
     OptionModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     CommandModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     InfoModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
+    UpdateModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     /* Wider modal; percentage cap keeps it from overflowing narrow terminals */
     #modal { width: 86; max-width: 92%; height: auto; max-height: 84%; padding: 1 2; }
     #modal-content { height: auto; max-height: 24; background: transparent; overflow-y: auto; }
@@ -115,6 +116,68 @@ BASE_CSS = """
     #modal-options { height: auto; max-height: 24; background: transparent; overflow-y: auto; padding: 0 1; }
     #info { height: auto; max-height: 20; background: transparent; overflow-y: auto; }
     #modal-footer { height: 1; margin-top: 1; }
+    #update-info { height: auto; margin: 0 1 1 1; padding: 0 1; }
+    #update-spacer { height: 1; }
+    #update-caution { height: auto; margin: 1 0 0 0; padding: 0 1; }
+
+    #playback-card {
+        dock: bottom;
+        width: 100%;
+        padding: 0;
+        background: transparent;
+    }
+
+    PlaybackApp Screen {
+        align: center middle;
+    }
+
+    PlaybackApp #playback-card {
+        width: 78;
+        height: auto;
+        padding: 1 2;
+    }
+
+    #song-name {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #progress-bar {
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #time-info {
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #status-info {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #warning-info {
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #debug-panel {
+        align: center middle;
+        margin-top: 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+
+    #debug-backend, #debug-lateness, #debug-timing {
+        text-align: center;
+    }
+
+    #hotkeys-info {
+        text-align: center;
+    }
 """
 
 

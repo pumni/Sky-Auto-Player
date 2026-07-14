@@ -7,7 +7,9 @@ import sys
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
 from sky_music.infrastructure.backend import (
-    BackendHealth, InputSendResult, ReleaseAllOutcome,
+    BackendHealth,
+    InputSendResult,
+    ReleaseAllOutcome,
 )
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import PlaybackEngine
@@ -66,7 +68,7 @@ def main():
         enable_gc_pause=True,
     )
 
-    print(f"Engine build complete. totals:")
+    print("Engine build complete. totals:")
     print(f"  runtime_schedule  : {sys.getsizeof(engine.runtime_schedule)} bytes (slots see only this)")
     print(f"  runtime_coordinator: {engine._runtime_coordinator}")
     print(f"  compat_loop       : {engine._compat_loop}")
@@ -74,7 +76,7 @@ def main():
     result = engine.play()
     gc.collect()
     print(f"\nplay() -> {result!r}")
-    print(f"\nAfter play() and gc.collect():")
+    print("\nAfter play() and gc.collect():")
     print(f"  runtime_schedule   : {engine.runtime_schedule}")
     print(f"  _runtime_coordinator: {engine._runtime_coordinator}")
     print(f"  _compat_loop       : {engine._compat_loop}")

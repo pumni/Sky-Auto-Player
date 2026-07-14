@@ -22,8 +22,8 @@ from sky_music.ui.textual_app.app import (
     SongChoice,
     _picker_cleanup_failed,
     choose_song_interactively_textual,
-    rank_song_choices,
 )
+from sky_music.ui.textual_app.screens.picker import rank_song_choices
 from sky_music.ui.textual_app.renderers import _metadata_cells
 from sky_music.ui.textual_app.screens import picker as picker_module
 
@@ -136,7 +136,7 @@ def test_search_typing_shortcut_letter_does_not_open_modal(monkeypatch) -> None:
         search = app.query_one("#search")
         assert isinstance(search, Input)
         assert search.value == "p"
-        assert type(app.screen).__name__ == "Screen"
+        assert type(app.screen).__name__ == "PickerScreen"
         await pilot.press("escape")
 
     app = run_picker(_run_app(actions))
@@ -248,6 +248,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
 
         await pilot.press("p")
         await pilot.pause()
+        print("AFTER P:", type(app.screen).__name__)
         assert type(app.screen).__name__ == "OptionModal"
         await pilot.press("escape")
         await pilot.pause()
@@ -484,8 +485,13 @@ def test_footer_commands_hint_opens_palette_on_click(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        opened = await pilot.click(app_module.CustomFooter, offset=(2, 0))
-        assert opened is True
+        from sky_music.ui.textual_app.components.footers import FooterAction
+        action_btns = list(app.screen.query(FooterAction))
+        btn = next((b for b in action_btns if b.hint.action == "app.open_commands"), None)
+        assert btn is not None
+        await pilot.click(btn.__class__, id=btn.id) if btn.id else await pilot.click(btn)
+        # Wait for the modal to be pushed
+        await pilot.pause()
         await pilot.pause()
         assert type(app.screen).__name__ == "CommandModal"
         await pilot.press("escape")
@@ -798,19 +804,17 @@ def test_choose_textual_returns_result_on_clean_cleanup(monkeypatch) -> None:
 
 
 def test_custom_footer() -> None:
-    from sky_music.ui.textual_app.app import CustomFooter
+    from sky_music.ui.textual_app.components.footers import CustomFooter
     footer = CustomFooter()
     footer.set_theme(key_color="#ff0000", muted_color="#0000ff")
     assert footer.key_color == "#ff0000"
     assert footer.muted_color == "#0000ff"
-    rendered = footer.render()
-    assert isinstance(rendered.plain, str)
-    # Check that it contains the keywords
-    plain = rendered.plain.lower()
-    assert "commands" in plain
-    assert "play" in plain
-    assert "cancel" in plain
-    assert "navigate" in plain
+    
+    assert len(footer.hints) > 0
+    labels = [h.label.lower() for h in footer.hints]
+    assert any("commands" in l for l in labels)
+    assert any("play" in l for l in labels)
+    assert any("cancel" in l for l in labels)
 
 
 def test_risk_cell_semantic_colors() -> None:

@@ -16,9 +16,9 @@ UNKNOWN_FIELD = "-"
 PENDING_FIELD = "..."
 
 
-def _title_cell(title: str, normalized_query: str, match_style: str = "bold #fbbf24") -> Text:
+def _title_cell(title: str, normalized_query: str, match_style: str | None = None) -> Text:
     text = Text(title)
-    if not normalized_query:
+    if not normalized_query or match_style is None:
         return text
     span = get_match_span(title, normalized_query)
     if span is None:

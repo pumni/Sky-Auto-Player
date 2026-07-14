@@ -48,8 +48,10 @@ from sky_music.ui.picker_theme import (
     pad_text,
     remove_accents,
 )
+from sky_music.ui.textual_app.components.footers import CustomFooter
 from sky_music.ui.textual_app.display_widgets import DetailPanel, GradientHeader
 from sky_music.ui.textual_app.keymap import COMMANDS
+from sky_music.ui.textual_app.messages import PickerActionRequested
 from sky_music.ui.textual_app.modals import (
     CommandModal,
     InfoModal,
@@ -68,8 +70,7 @@ from sky_music.ui.textual_app.theme_css import (
     TEXTUAL_THEME_TOKENS,
     TextualThemeTokens,
 )
-from sky_music.ui.textual_app.widgets import CustomFooter
-from sky_music.ui.textual_app.workers import MetadataCoordinator
+from sky_music.ui.textual_app.workers import MetadataCoordinator, MetadataHandle
 
 if TYPE_CHECKING:
     from textual.widgets._data_table import RowKey
@@ -126,6 +127,7 @@ class PickerAppHost(Protocol):
     def on_picker_dry_run_changed(self, dry_run: bool) -> None: ...
     def on_picker_verbose_hud_changed(self, verbose_hud: bool) -> None: ...
     def on_picker_telemetry_enabled_changed(self, telemetry_enabled: bool) -> None: ...
+    def handle_playback_card_key(self, key: str) -> bool: ...
 
 FUZZY_SCORE_CUTOFF = 60.0
 
@@ -170,54 +172,7 @@ def rank_song_choices(
 class SongTable(DataTable[str]):
     """DataTable wrapper for song picker rows."""
 
-    BINDINGS = [
-        Binding("p", "open_profile", "Profile", priority=True, show=False),
-        Binding("t", "open_tempo", "Tempo", priority=True, show=False),
-        Binding("f", "open_fps", "FPS", priority=True, show=False),
-        Binding("y", "open_theme", "Theme", priority=True, show=False),
-        Binding("v", "toggle_preview", "Details", priority=True, show=False),
-        Binding("d", "toggle_dry_run", "Dry-run", priority=True, show=False),
-        Binding("h", "toggle_hud", "HUD", priority=True, show=False),
-        Binding("f3", "toggle_telemetry", "Telemetry", priority=True, show=False),
-        Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
-        Binding("u", "check_for_update", "Update", priority=True, show=False),
-    ]
 
-    def _run_action(self, name: str) -> None:
-        getattr(self.app, f"action_{name}")()
-
-    def action_open_commands(self) -> None:
-        self._run_action("open_commands")
-
-    def action_open_profile(self) -> None:
-        self._run_action("open_profile")
-
-    def action_open_tempo(self) -> None:
-        self._run_action("open_tempo")
-
-    def action_open_fps(self) -> None:
-        self._run_action("open_fps")
-
-    def action_open_theme(self) -> None:
-        self._run_action("open_theme")
-
-    def action_toggle_preview(self) -> None:
-        self._run_action("toggle_preview")
-
-    def action_toggle_dry_run(self) -> None:
-        self._run_action("toggle_dry_run")
-
-    def action_toggle_hud(self) -> None:
-        self._run_action("toggle_hud")
-
-    def action_toggle_telemetry(self) -> None:
-        self._run_action("toggle_telemetry")
-
-    def action_reload_songs(self) -> None:
-        self._run_action("reload_songs")
-
-    def action_check_for_update(self) -> None:
-        self._run_action("check_for_update")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,18 +200,28 @@ class SearchInput(Input):
                 pass
 
 
-class PickerScreen(Screen[None]):
-    """Song picker screen — search, filter, configure, and confirm playback."""
+class PickerScreen(Screen[SongPickerResult]):
+    """Main song picker UI that can be pushed to the screen stack."""
 
     CSS = APP_CSS
 
     AUTO_FOCUS = None  # PickerScreen handles focus in on_mount
 
     BINDINGS = [
-        ("q", "cancel", "Quit"),
-        ("escape", "cancel", "Cancel"),
-        ("enter", "confirm", "Play"),
-        ("/", "open_commands", "Commands"),
+        Binding("escape", "cancel", "Cancel", priority=True, show=False),
+        Binding("q", "cancel", "Quit", show=False),
+        Binding("enter", "confirm", "Play", show=False),
+        Binding("/", "open_commands", "Commands", show=False),
+        Binding("p", "open_profile", "Profile", priority=True, show=False),
+        Binding("t", "open_tempo", "Tempo", priority=True, show=False),
+        Binding("f", "open_fps", "FPS", priority=True, show=False),
+        Binding("y", "open_theme", "Theme", priority=True, show=False),
+        Binding("v", "toggle_preview", "Details", priority=True, show=False),
+        Binding("d", "toggle_dry_run", "Dry-run", priority=True, show=False),
+        Binding("h", "toggle_hud", "HUD", priority=True, show=False),
+        Binding("f3", "toggle_telemetry", "Telemetry", priority=True, show=False),
+        Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
+        Binding("u", "check_for_update", "Update", priority=True, show=False),
     ]
 
     search_query: reactive[str] = reactive("", init=False)  # type: ignore[override]
@@ -365,7 +330,7 @@ class PickerScreen(Screen[None]):
         self.filtered: list[SongChoice] = []
         self._marked_row_key: object | None = None
         self.picker_scope = BackgroundScope(phase="picker")
-        self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
+        self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
         self._search_timer = None
         self._quiesced = False
 
@@ -405,12 +370,32 @@ class PickerScreen(Screen[None]):
         self.add_class(self._theme_class)
         self.add_class(f"background-{self.background_mode}")
         t = self._theme_tokens
-        with contextlib.suppress(Exception):
-            self.app.query_one("#appbar", GradientHeader).set_theme(
+        try:
+            self.query_one("#appbar", GradientHeader).set_theme(
                 t.gradient, t.foreground, t.detail, t.foreground, lead=t.header_lead
             )
-        with contextlib.suppress(Exception):
-            self.app.query_one(CustomFooter).set_theme(t.key, t.muted)
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to apply header theme")
+        try:
+            self.query_one(CustomFooter).set_theme(t.key, t.muted)
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to apply footer theme")
+        try:
+            from sky_music.ui.textual_app.playback_app import PlaybackCard
+            self.query_one("#playback-card", PlaybackCard).styles.display = "none"
+        except Exception:
+            pass
+        
+        total = len(self.choices)
+        noun = "song" if total == 1 else "songs"
+        tagline = f"precision music player  ♪ {total} {noun}"
+        try:
+            self.query_one("#appbar", GradientHeader).set_tagline(tagline)
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to set header tagline")
 
     def compose(self) -> ComposeResult:
         with Container(id="root"):
@@ -430,6 +415,10 @@ class PickerScreen(Screen[None]):
             detail = DetailPanel(id="detail")
             detail.border_title = "Details"
             yield detail
+
+            from sky_music.ui.textual_app.playback_app import PlaybackCard
+            yield PlaybackCard(theme_name=self.active_theme, id="playback-card")
+
             yield CustomFooter()
 
     def on_mount(self) -> None:
@@ -453,12 +442,22 @@ class PickerScreen(Screen[None]):
             paths = get_song_choices(force_refresh=False)
             if not paths:
                 paths = [choice.path for choice in self.choices]
-        self.metadata.refresh(paths)  # type: ignore[attr-defined]
+        self.metadata.refresh(paths)
         self._update_header_tagline()
         self.call_after_refresh(self._apply_responsive_columns)
 
     def on_resize(self, _event: events.Resize) -> None:
         self.call_after_refresh(self._apply_responsive_columns)
+
+    def on_picker_action_requested(self, event: PickerActionRequested) -> None:
+        event.stop()
+        action = event.action
+        if action == "open_commands":
+            self.action_open_commands()
+        elif action == "confirm":
+            self.action_confirm()
+        elif action == "cancel":
+            self.action_cancel()
 
     def _apply_responsive_columns(self) -> None:
         try:
@@ -589,14 +588,12 @@ class PickerScreen(Screen[None]):
         self.search_query = event.value  # type: ignore[assignment]
         if "pytest" in sys.modules or "unittest" in sys.modules:
             if self._search_timer is not None:
-                with contextlib.suppress(Exception):
-                    self._search_timer.stop()
+                self._search_timer.stop()
                 self._search_timer = None
             self._perform_search()
         else:
             if self._search_timer is not None:
-                with contextlib.suppress(Exception):
-                    self._search_timer.stop()
+                self._search_timer.stop()
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
     def _perform_search(self) -> None:
@@ -607,6 +604,9 @@ class PickerScreen(Screen[None]):
         self._render_detail()
 
     def on_key(self, event: events.Key) -> None:
+        if cast(PickerAppHost, self.app).handle_playback_card_key(event.key):
+            event.stop()
+            return
         if event.key == "enter":
             event.stop()
             self.action_confirm()
@@ -649,11 +649,17 @@ class PickerScreen(Screen[None]):
         table = self.app.query_one("#songs", SongTable)
         t = self._theme_tokens
         if self._marked_row_key is not None:
-            with contextlib.suppress(Exception):
+            try:
                 table.update_cell(cast(RowKey, self._marked_row_key), "marker", t.song_icon)
+            except Exception:
+                from sky_music.platform.win32 import inputs
+                inputs.debug_log("[picker] failed to clear marker")
         if row_key is not None:
-            with contextlib.suppress(Exception):
+            try:
                 table.update_cell(cast(RowKey, row_key), "marker", t.pointer)
+            except Exception:
+                from sky_music.platform.win32 import inputs
+                inputs.debug_log("[picker] failed to set marker")
         self._marked_row_key = row_key
 
     def _sync_marker(self) -> None:
@@ -673,23 +679,32 @@ class PickerScreen(Screen[None]):
         total = len(self.choices)
         noun = "song" if total == 1 else "songs"
         tagline = f"precision music player  \u266a {total} {noun}"
-        with contextlib.suppress(Exception):
+        try:
             self.app.query_one("#appbar", GradientHeader).set_tagline(tagline)
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to update header tagline")
 
     def _render_status(self) -> None:
         fps_str = f"{self.fps}fps"
         parts = [self.profile_name, f"{self.tempo_scale:.2f}\u00d7", fps_str, self.active_theme]
         if self.dry_run:
             parts.append("dry-run")
-        if not self.verbose_hud:
-            parts.append("hud off")
+        if self.verbose_hud:
+            parts.append("hud on")
         if self.telemetry_enabled:
             parts.append("tele")
         chips = " \u2502 ".join(parts)
-        with contextlib.suppress(Exception):
+        try:
             self.app.query_one("#appbar", GradientHeader).set_status(chips)
-        with contextlib.suppress(Exception):
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to set status")
+        try:
             self.app.query_one(CustomFooter).refresh()
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to refresh footer")
         table = self.app.query_one("#songs", SongTable)
         table.border_subtitle = f"{len(self.filtered)}/{len(self.choices)}"
 
@@ -767,25 +782,37 @@ class PickerScreen(Screen[None]):
         return self.filtered[index]
 
     def _hide_detail_and_table(self) -> None:
-        # Disable (in addition to hiding) so the song table, search box, and
-        # footer cannot accept focus or fire key bindings while playback /
-        # countdown / risk cards are on screen. ``styles.display = "none"``
-        # alone hides the visuals but leaves the widgets interactive —
-        # ``disabled = True`` short-circuits Textual's focus and binding
-        # pipeline, which is the behaviour tests assert on and what users
-        # expect (typing during playback used to leak into the search box).
-        for selector in ("#detail", "#songs", "#search", CustomFooter):
-            with contextlib.suppress(Exception):
+        # Hide search and detail panel — they are not useful during playback
+        # and freeing their rows gives the song table more room above the card.
+        # CustomFooter is hidden because the PlaybackCard provides its own
+        # controls hint row.
+        for selector in ("#search", "#detail", CustomFooter):
+            try:
                 w = self.app.query_one(selector)
                 w.disabled = True
                 w.styles.display = "none"
+            except Exception:
+                from sky_music.platform.win32 import inputs
+                inputs.debug_log(f"[picker] failed to hide {selector}")
+        # Song table: keep VISIBLE so the user can see what is playing and
+        # what comes next, but disable interaction (focus + key bindings).
+        # The Screen.playback-active CSS class dims the table visually.
+        try:
+            songs = self.app.query_one("#songs")
+            songs.disabled = True
+        except Exception:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[picker] failed to disable song table")
 
     def _show_detail_and_table(self) -> None:
         for selector in ("#detail", "#songs", "#search", CustomFooter):
-            with contextlib.suppress(Exception):
+            try:
                 w = self.app.query_one(selector)
                 w.disabled = False
                 w.styles.display = "block"
+            except Exception:
+                from sky_music.platform.win32 import inputs
+                inputs.debug_log(f"[picker] failed to show {selector}")
         self._render_detail()
         self._focus_table()
 
@@ -796,8 +823,8 @@ class PickerScreen(Screen[None]):
     def rearm(self) -> None:
         self._quiesced = False
         self.picker_scope = BackgroundScope(phase="picker")
-        self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
-        self.metadata.refresh([choice.path for choice in self.choices])  # type: ignore[attr-defined]
+        self.metadata = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
+        self.metadata.refresh([choice.path for choice in self.choices])
         self._focus_table()
 
     def action_confirm(self, song_path: Path | None = None) -> None:
@@ -839,7 +866,12 @@ class PickerScreen(Screen[None]):
         cast(PickerAppHost, self.app).on_picker_confirm(picker_result)
 
     def action_cancel(self) -> None:
-        cast(PickerAppHost, self.app).on_picker_cancel()
+        from textual.widgets import Input
+        search = self.query_one("#search", Input)
+        if search.has_focus:
+            self._focus_table()
+        else:
+            cast(PickerAppHost, self.app).on_picker_cancel()
 
     def _replace_metadata_coordinator(self) -> None:
         self.picker_scope.retire(self.metadata)
@@ -850,11 +882,11 @@ class PickerScreen(Screen[None]):
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
         )
-        self.metadata = self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg))
+        self.metadata = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
         self._render_status()
         self._render_table()
         self._render_detail()
-        self.metadata.refresh([choice.path for choice in self.choices])  # type: ignore[attr-defined]
+        self.metadata.refresh([choice.path for choice in self.choices])
         self._focus_table()
 
     def _focus_table(self) -> None:
@@ -1124,7 +1156,7 @@ class PickerScreen(Screen[None]):
         self._update_header_tagline()
         self._render_table(reset_cursor=True)
         self._render_detail()
-        self.metadata.refresh(paths)  # type: ignore[attr-defined]
+        self.metadata.refresh(paths)
 
     def action_check_for_update(self) -> None:
         cast(PickerAppHost, self.app).on_picker_check_for_update()

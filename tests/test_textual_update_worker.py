@@ -389,16 +389,23 @@ def test_update_binding_present_on_song_table() -> None:
 
 def test_run_command_routes_update(monkeypatch: pytest.MonkeyPatch) -> None:
     """``_run_command("update")`` must invoke ``action_check_for_update`` on
-    the picker app — verified by replacing the action with a stub.
+    the picker screen — verified by replacing the action with a stub and
+    injecting a minimal picker stub into the app's ``_picker`` slot.
     """
+    from sky_music.ui.textual_app.screens import picker as picker_module
+
     called: list[bool] = []
 
-    def _fake_check(self: app_module.SkyPickerApp) -> None:
+    def _fake_check(self: picker_module.PickerScreen) -> None:
         called.append(True)
 
     monkeypatch.setattr(
-        app_module.SkyPickerApp, "action_check_for_update", _fake_check
+        picker_module.PickerScreen, "action_check_for_update", _fake_check
     )
     app = _make_app()
+    # Inject a bare PickerScreen so _find_picker_screen() returns it and the
+    # _run_command delegation reaches action_check_for_update.
+    stub = picker_module.PickerScreen.__new__(picker_module.PickerScreen)
+    app._picker = stub  # type: ignore[attr-defined]
     app._run_command("update")
     assert called == [True]
