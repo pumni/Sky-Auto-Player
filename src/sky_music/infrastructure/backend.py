@@ -21,6 +21,10 @@ class BackendHealth:
     min_same_key_up_gap_us: int | None = None
     impossible_same_key_repeats: int = 0
     send_while_unfocused: int = 0
+    # Cumulative note-on keys not injected and not retried (musical no-retry policy).
+    # Surfaced on the HUD when > 0 so partial-chord drops are visible mid-play.
+    keys_dropped: int = 0
+    chord_split_events: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,7 +401,9 @@ class WinSendInputBackend(_TrackedKeyState):
             last_error=self.last_error,
             min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
             impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
-            send_while_unfocused=diag.get("send_while_unfocused", 0)
+            send_while_unfocused=diag.get("send_while_unfocused", 0),
+            keys_dropped=int(diag.get("keys_dropped", 0)),
+            chord_split_events=int(diag.get("chord_split_events", 0)),
         )
 
     def get_send_diagnostics(self) -> dict[str, int]:
@@ -569,7 +575,9 @@ class DryRunBackend(_TrackedKeyState):
             last_error=self.last_error,
             min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
             impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
-            send_while_unfocused=diag.get("send_while_unfocused", 0)
+            send_while_unfocused=diag.get("send_while_unfocused", 0),
+            keys_dropped=int(diag.get("keys_dropped", 0)),
+            chord_split_events=int(diag.get("chord_split_events", 0)),
         )
 
     def _emit(

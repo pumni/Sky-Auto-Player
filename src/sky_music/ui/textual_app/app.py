@@ -239,7 +239,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_mount(self) -> None:
         self._check_post_update_flag()
+        self._set_version_indicator()
         self.check_for_updates_worker()
+
+    def _set_version_indicator(self) -> None:
+        """Show current version in the app bar header."""
+        try:
+            self.query_one("#appbar", GradientHeader).set_version(f"v{VERSION}")
+        except Exception:
+            pass
 
     # ── Test-compat delegates → PickerScreen ──────────────────────────
 

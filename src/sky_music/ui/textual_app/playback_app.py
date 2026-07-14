@@ -77,6 +77,8 @@ class DebugStats:
     active_keys: int
     stuck_keys: int
     backend_status: str
+    keys_dropped: int = 0
+    chord_split_events: int = 0
 
 
 class SnapshotRenderer:
@@ -184,10 +186,14 @@ class SnapshotRenderer:
         snap = self.snapshot
         active_keys = 0
         stuck_keys = 0
+        keys_dropped = 0
+        chord_splits = 0
         backend_status = "healthy"
         if snap is not None and snap.backend_health is not None:
             active_keys = snap.backend_health.active_count
             stuck_keys = snap.backend_health.failed_release_count
+            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
+            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
             if stuck_keys > 0:
                 backend_status = f"stuck:{stuck_keys}"
 
@@ -202,6 +208,8 @@ class SnapshotRenderer:
             active_keys=active_keys,
             stuck_keys=stuck_keys,
             backend_status=backend_status,
+            keys_dropped=keys_dropped,
+            chord_split_events=chord_splits,
         )
 
     def counters_snapshot(self) -> DebugStats:
@@ -209,10 +217,14 @@ class SnapshotRenderer:
         snap = self.snapshot
         active_keys = 0
         stuck_keys = 0
+        keys_dropped = 0
+        chord_splits = 0
         backend_status = "healthy"
         if snap is not None and snap.backend_health is not None:
             active_keys = snap.backend_health.active_count
             stuck_keys = snap.backend_health.failed_release_count
+            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
+            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
             if stuck_keys > 0:
                 backend_status = f"stuck:{stuck_keys}"
         return DebugStats(
@@ -226,6 +238,8 @@ class SnapshotRenderer:
             active_keys=active_keys,
             stuck_keys=stuck_keys,
             backend_status=backend_status,
+            keys_dropped=keys_dropped,
+            chord_split_events=chord_splits,
         )
 
     def finish(self, message: str = "") -> None:
@@ -643,11 +657,22 @@ class PlaybackCard(Static):
             stats = self.renderer.debug_stats()
         else:
             stats = self.renderer.counters_snapshot()
+        if stats.keys_dropped > 0:
+            body.append(
+                f"{red}Note-on drops: {stats.keys_dropped} key(s) not injected "
+                f"({stats.chord_split_events} chord split(s)) — incomplete chord, not late-retried.{_ANSI_RESET}"
+            )
         backend = (
             f"{red}stuck keys: {stats.stuck_keys}{_ANSI_RESET}"
             if stats.stuck_keys > 0
             else f"{green}healthy{_ANSI_RESET}"
         )
+        dropped_suffix = ""
+        if self.debug_mode or stats.keys_dropped > 0:
+            drop_color = red if stats.keys_dropped > 0 else gray
+            dropped_suffix = f"  ·  dropped: {drop_color}{stats.keys_dropped}{_ANSI_RESET}"
+            if self.debug_mode and stats.chord_split_events > 0:
+                dropped_suffix += f"  splits: {yellow}{stats.chord_split_events}{_ANSI_RESET}"
 
         if status == "waiting_for_focus":
             status_line = f"{yellow}Playback has not started yet. Bring Sky window to foreground.{_ANSI_RESET}"
@@ -657,10 +682,13 @@ class PlaybackCard(Static):
         elif self.debug_mode:
             status_line = (
                 f"backend {backend}  ·  late >2ms:{stats.late_2ms}  >5ms:{stats.late_5ms}  "
-                f">10ms:{stats.late_10ms}  ·  active keys: {stats.active_keys}"
+                f">10ms:{stats.late_10ms}  ·  active keys: {stats.active_keys}{dropped_suffix}"
             )
         else:
-            status_line = f"backend {backend}  ·  late >5ms: {stats.late_5ms}  ·  active keys: {stats.active_keys}"
+            status_line = (
+                f"backend {backend}  ·  late >5ms: {stats.late_5ms}  ·  "
+                f"active keys: {stats.active_keys}{dropped_suffix}"
+            )
 
         if self.debug_mode:
             max_ms = stats.max_lateness_us / 1000.0
@@ -981,6 +1009,16 @@ class PlaybackScreen(Screen[str]):
             warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
         if snap.input_path_degraded:
             warnings_to_show.append(f"[{t.warning}]Input path throttled (Filter Keys?) - playback may stutter[/]")
+        keys_dropped = 0
+        chord_splits = 0
+        if snap.backend_health is not None:
+            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
+            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
+        if keys_dropped > 0:
+            warnings_to_show.append(
+                f"[{t.danger}]Note-on drops: {keys_dropped} key(s) not injected "
+                f"({chord_splits} chord split(s)) — incomplete chord, not late-retried.[/]"
+            )
 
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
@@ -992,9 +1030,15 @@ class PlaybackScreen(Screen[str]):
         if self.debug_mode:
             stats = self.renderer.debug_stats()
             
-            # Line 1: backend {healthy|stuck:N} · active keys: N
+            # Line 1: backend {healthy|stuck:N} · active keys: N · dropped: N
             backend_color = t.danger if stats.stuck_keys > 0 else t.success
-            backend_str = f"backend [{backend_color}]{stats.backend_status}[/] · active keys: {stats.active_keys}"
+            drop_color = t.danger if stats.keys_dropped > 0 else t.muted
+            backend_str = (
+                f"backend [{backend_color}]{stats.backend_status}[/] · active keys: {stats.active_keys} · "
+                f"dropped: [{drop_color}]{stats.keys_dropped}[/]"
+            )
+            if stats.chord_split_events > 0:
+                backend_str += f" · splits: [{t.warning}]{stats.chord_split_events}[/]"
             self.query_one("#debug-backend", Static).update(backend_str)
             
             # Line 2: late >2ms:N >5ms:N >10ms:N · max {x}ms · p50 {x}ms · p95 {x}ms · jitter {x}ms

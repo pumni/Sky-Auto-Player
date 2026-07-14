@@ -255,9 +255,13 @@ class ProgressRenderer:
         # Backend status line
         active_keys = 0
         failed_releases = 0
+        keys_dropped = 0
+        chord_splits = 0
         if backend_health is not None:
             active_keys = backend_health.active_count
             failed_releases = backend_health.failed_release_count
+            keys_dropped = int(getattr(backend_health, "keys_dropped", 0) or 0)
+            chord_splits = int(getattr(backend_health, "chord_split_events", 0) or 0)
 
         if failed_releases > 0:
             backend_status_text = Text.assemble(
@@ -273,6 +277,19 @@ class ProgressRenderer:
             "paused": Text("Playback is paused and tracked keys were released.", style=styles["warning"]),
         }
 
+        # keys_dropped: note-on keys OS did not inject (no-retry policy). Show always in
+        # verbose; in compact mode only when > 0 so a healthy run stays uncluttered.
+        dropped_parts: list[str | tuple[str, Style]] = []
+        if self.verbose or keys_dropped > 0:
+            drop_style = (
+                Style.combine([styles["danger"], Style(bold=True)])
+                if keys_dropped > 0
+                else styles["muted"]
+            )
+            dropped_parts = ["  ·  dropped: ", (str(keys_dropped), drop_style)]
+            if self.verbose and chord_splits > 0:
+                dropped_parts.extend(["  splits: ", (str(chord_splits), styles["warning"])])
+
         if status in status_descriptions:
             status_line = status_descriptions[status]
         elif self.verbose:
@@ -282,12 +299,14 @@ class ProgressRenderer:
                 "  >5ms:", str(self.late_5ms),
                 "  >10ms:", str(self.late_10ms),
                 "  ·  active keys: ", str(active_keys),
+                *dropped_parts,
             )
         else:
             status_line = Text.assemble(
                 "backend ", backend_status_text,
                 "  ·  late >5ms: ", str(self.late_5ms),
                 "  ·  active keys: ", str(active_keys),
+                *dropped_parts,
             )
 
         # Controls line
@@ -316,6 +335,16 @@ class ProgressRenderer:
         if self.input_path_degraded:
             panel_content.append(
                 Text("Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.", style=styles["warning"])
+            )
+
+        # Partial note-on drops (SendInput sent < n; remainder not retried — musical policy).
+        if keys_dropped > 0:
+            panel_content.append(
+                Text(
+                    f"Note-on drops: {keys_dropped} key(s) not injected "
+                    f"({chord_splits} chord split(s)) — incomplete chord, not late-retried.",
+                    style=styles["danger"],
+                )
             )
 
         # Timing info (verbose)

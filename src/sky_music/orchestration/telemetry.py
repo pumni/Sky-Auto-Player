@@ -484,6 +484,8 @@ class TelemetryLogger:
         backend_info: dict = {"panic_release_failures": 0, "failed_release_keys_final": []}
         if self.backend_health is not None:
             backend_info["panic_release_failures"] = self.backend_health.failed_release_count
+            backend_info["keys_dropped"] = int(self.backend_health.keys_dropped)
+            backend_info["chord_split_events"] = int(self.backend_health.chord_split_events)
             
         if self.release_outcome is not None:
             backend_info["release_attempted"] = self.release_outcome.attempted
@@ -541,6 +543,7 @@ class TelemetryLogger:
             intended_down_count == sent_down_count
             and before_send_missing_down_count == 0
             and backend_skipped_down_count == 0
+            and int(getattr(self.backend_health, "keys_dropped", 0)) == 0
         )
         summary = {
             "run_id": self.run_id,
@@ -566,6 +569,8 @@ class TelemetryLogger:
                     "sent_up_count": sent_up_count,
                     "backend_skipped_down_count": backend_skipped_down_count,
                     "backend_skipped_up_count": backend_skipped_up_count,
+                    "keys_dropped": int(getattr(self.backend_health, "keys_dropped", 0)) if self.backend_health is not None else 0,
+                    "chord_split_events": int(getattr(self.backend_health, "chord_split_events", 0)) if self.backend_health is not None else 0,
                     "sender_clean": sender_clean,
                 },
                 "game_observed": {
@@ -806,6 +811,10 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             backend = data.get("backend", {})
             if backend.get("panic_release_failures", 0) > 0:
                 print(f"  [warning] Backend panic release failures count: {backend.get('panic_release_failures')}")
+            keys_dropped = int(backend.get("keys_dropped", 0))
+            chord_splits = int(backend.get("chord_split_events", 0))
+            if keys_dropped > 0:
+                print(f"  [warning] Note-on drops: {keys_dropped} key(s) not injected ({chord_splits} chord split(s))")
                 
             # Perform calibration recommendation if requested
             if recommend:
