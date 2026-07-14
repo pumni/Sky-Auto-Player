@@ -122,6 +122,31 @@ def test_send_latency_estimator_ema() -> None:
     assert estimator.get_lead_us(ActionKind.UP) == 0
 
 
+def test_send_latency_estimator_residual_prologue_bias() -> None:
+    """Systematic positive completion error is folded into down lead (not up)."""
+    estimator = SendLatencyEstimator(alpha=0.2, max_lead_us=2000)
+    for _ in range(5):
+        estimator.update(ActionKind.DOWN, 800)
+        estimator.update(ActionKind.UP, 400)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 800
+    assert estimator.get_lead_us(ActionKind.UP) == 400
+
+    # Cold residual: no bias until 5 samples
+    for _ in range(4):
+        estimator.update_completion_error(ActionKind.DOWN, 100)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 800
+
+    estimator.update_completion_error(ActionKind.DOWN, 100)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 900  # 800 send + 100 residual
+    # Ups ignore residual prologue bias
+    assert estimator.get_lead_us(ActionKind.UP) == 400
+
+    # Early residual must not shrink lead
+    for _ in range(20):
+        estimator.update_completion_error(ActionKind.DOWN, -200)
+    assert estimator.get_lead_us(ActionKind.DOWN) == 800
+
+
 def test_no_early_conflict_guard() -> None:
     # Test that down action batch is not popped early if there is a conflict (active or pending key release)
     actions = (

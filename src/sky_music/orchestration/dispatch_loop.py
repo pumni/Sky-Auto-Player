@@ -184,6 +184,7 @@ class DispatchHealthMonitor:
 class LeadEstimator(Protocol):
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int: ...
     def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None: ...
+    def update_completion_error(self, kind: ActionKind, error_us: int) -> None: ...
 
 
 class _NullEstimator:
@@ -201,6 +202,10 @@ class _NullEstimator:
 
     @staticmethod
     def update(kind: str, duration_us: int, n_keys: int = 1) -> None:  # noqa: ARG004
+        return
+
+    @staticmethod
+    def update_completion_error(kind: str, error_us: int) -> None:  # noqa: ARG004
         return
 
 
@@ -359,27 +364,34 @@ class DispatchLoop:
         send_end_us = state.get_elapsed_us(self.clock, send_end_raw)
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
-        self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
 
+        # Prefer pure SendInput completion for onset / hold anchoring. Bookkeeping after the
+        # syscall (health, focus, telemetry) must not push the "note landed" timestamp later
+        # than the OS inject moment — that is the true game-facing onset.
+        if send_result.send_completed_us is not None:
+            send_duration_pure_us = send_result.send_completed_us - send_start_raw
+            bookkeeping_us = send_end_raw - send_result.send_completed_us
+            completion_us = state.get_elapsed_us(self.clock, send_result.send_completed_us)
+        else:
+            send_duration_pure_us = send_duration_us
+            bookkeeping_us = 0
+            completion_us = send_end_us
+
+        pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
+        idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
+        self._last_send_completed_us = completion_us
+        visible_lateness_us = completion_us - action.at_us
+        dispatch_lateness_us = lateness_us + send_duration_pure_us
+
+        # Non-critical path: input-path health + unfocused diagnostics (never on the
+        # completion-timestamp critical section above).
+        self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
         if not self.health_monitor.focus_is_active():
             try:
                 from sky_music.platform.win32 import inputs
                 inputs.note_send_while_unfocused()
             except ImportError:
                 pass
-
-        if send_result.send_completed_us is not None:
-            send_duration_pure_us = send_result.send_completed_us - send_start_raw
-            bookkeeping_us = send_end_raw - send_result.send_completed_us
-        else:
-            send_duration_pure_us = send_duration_us
-            bookkeeping_us = 0
-
-        pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
-        idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
-        self._last_send_completed_us = send_end_us
-        visible_lateness_us = send_end_us - action.at_us
-        dispatch_lateness_us = lateness_us + send_duration_pure_us
 
         result = ExecutionResult(
             event_index=idx,
@@ -393,7 +405,7 @@ class DispatchLoop:
             is_late=lateness_us > 0,
             is_critically_late=lateness_us > 10_000,
             kind=action.kind,
-            dispatch_completed_us=send_end_us,
+            dispatch_completed_us=completion_us,
             deferred_by_us=deferred_by_us,
             visible_lateness_us=visible_lateness_us,
             sent_scan_codes=send_result.sent,
@@ -474,7 +486,13 @@ class DispatchLoop:
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
         )
-        self.estimator.update(ActionKind.DOWN, result.send_duration_us, n_keys=len(playable))
+        # Lead tracks pure SendInput duration (not post-syscall bookkeeping) so completions
+        # land on schedule rather than overshooting by the telemetry/health tail.
+        self.estimator.update(ActionKind.DOWN, result.send_duration_pure_us, n_keys=len(playable))
+        if lead_down > 0:
+            # Residual completion error after lead was applied — systematic prologue bias
+            # (spin overshoot + Python work before SendInput) folds into the next lead.
+            self.estimator.update_completion_error(ActionKind.DOWN, result.visible_lateness_us)
         self.coordinator.activate_sent_downs(
             playable,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -496,8 +514,9 @@ class DispatchLoop:
         # Fast path: single release is dominant in real songs. Avoids every set/list allocation.
         if len(releases) == 1:
             only = releases[0]
-            deferral = only.down_dispatch_started_us + self.min_hold_us - only.scheduled_release_us
-            deferred_by_us = max(0, deferral)
+            # Deferral is vs the completion-anchored floor (release_not_before), not the
+            # start-anchored estimate — matches when the coordinator actually holds the up.
+            deferred_by_us = max(0, only.release_not_before_us - only.scheduled_release_us)
             action = KeyAction(
                 kind=ActionKind.UP,
                 scan_codes=(only.scan_code,),  # type: ignore[arg-type]
@@ -513,7 +532,7 @@ class DispatchLoop:
                 applied_lead_us=lead_up,
                 deferred_by_us=deferred_by_us,
             )
-            self.estimator.update(ActionKind.UP, result.send_duration_us)
+            self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
             self.coordinator.complete_releases(
                 releases,
                 tuple(int(sc) for sc in result.sent_scan_codes),
@@ -543,7 +562,7 @@ class DispatchLoop:
                 best_key = key
             if release.scheduled_release_us < scheduled_us:
                 scheduled_us = release.scheduled_release_us
-            deferral = release.down_dispatch_started_us + self.min_hold_us - release.scheduled_release_us
+            deferral = release.release_not_before_us - release.scheduled_release_us
             if deferral > max_deferral:
                 max_deferral = deferral
             if release.source_action_index != first_source_idx or release.reason != first_reason:
@@ -571,7 +590,7 @@ class DispatchLoop:
             applied_lead_us=lead_up,
             deferred_by_us=deferred_by_us,
         )
-        self.estimator.update(ActionKind.UP, result.send_duration_us)
+        self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
         self.coordinator.complete_releases(
             releases,
             tuple(int(sc) for sc in result.sent_scan_codes),

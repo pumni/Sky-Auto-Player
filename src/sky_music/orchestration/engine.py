@@ -99,25 +99,33 @@ class SendLatencyEstimator:
 
     The first N samples of each bucket yield lead 0 (cold estimates are worse than nothing); the
     Nth sample seeds the EMA with the average of all warm-up samples.
+
+    Residual completion error (``update_completion_error``): after a lead is applied, any
+    remaining ``visible_lateness`` is systematic prologue (spin overshoot + Python work before
+    SendInput). An EMA of that residual is folded into ``get_lead_us`` (positive only, capped)
+    so the next onsets pull earlier by the observed bias rather than leaving a constant late
+    offset on every note.
     """
 
     _SEED_SAMPLES = 5
+    # Residual bias is a fine correction on top of pure-send lead — keep it small so a single
+    # OS hitch cannot drag the lead into the multi-millisecond range.
+    _MAX_RESIDUAL_US = 500
 
+    # State fields (natural sort for RUF023). Semantics:
+    # - down buckets by n_keys; total fallback; up scalar EMA
+    # - residual prologue EMA; RLS linear model with exponential forgetting
     __slots__ = (
         "_alpha",
-        # Down buckets: index by n_keys (0 unused, 1..MAX_POLY valid)
         "_count_down",
-        # Down total fallback (all samples regardless of bucket)
         "_count_down_total",
-        # Up scalar (unchanged — single EMA for all release durations)
+        "_count_residual",
         "_count_up",
         "_ema_down",
         "_ema_down_total",
+        "_ema_residual",
         "_ema_up",
         "_lin_count",
-        # Recursive-least-squares accumulators (exponential forgetting) for send ≈ a + b·N (x = n_keys).
-        # _lin_count is the raw integer sample count (warm-up guard); _lin_w is the decayed weight sum
-        # that plays the role of "n" in the weighted normal equations.
         "_lin_forget",
         "_lin_sx",
         "_lin_sxx",
@@ -127,8 +135,10 @@ class SendLatencyEstimator:
         "_max_lead_us",
         "_sum_down",
         "_sum_down_total",
+        "_sum_residual",
         "_sum_up",
         "_warm_down",
+        "_warm_residual",
         "max_poly",
     )
 
@@ -157,6 +167,10 @@ class SendLatencyEstimator:
         self._count_up: int = 0
         self._sum_up: int = 0
         self._ema_up: float = 0.0
+        self._count_residual: int = 0
+        self._sum_residual: int = 0
+        self._ema_residual: float = 0.0
+        self._warm_residual: bool = False
 
     def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None:
         if kind == "down":
@@ -210,6 +224,33 @@ class SendLatencyEstimator:
             else:
                 self._ema_up = self._alpha * duration_us + (1.0 - self._alpha) * self._ema_up
 
+    def update_completion_error(self, kind: ActionKind, error_us: int) -> None:
+        """Fold residual completion error into the prologue bias EMA (downs only).
+
+        ``error_us`` is ``visible_lateness_us`` after a lead was applied: positive means the
+        note still completed late (prologue residual), negative means early. Spikes are
+        hard-clamped so one OS hitch cannot dominate the bias.
+        """
+        if kind != "down":
+            return
+        sample = max(-self._MAX_RESIDUAL_US, min(self._MAX_RESIDUAL_US * 2, int(error_us)))
+        self._count_residual += 1
+        if self._warm_residual:
+            self._ema_residual = (
+                self._alpha * sample + (1.0 - self._alpha) * self._ema_residual
+            )
+        else:
+            self._sum_residual += sample
+            if self._count_residual >= self._SEED_SAMPLES:
+                self._ema_residual = self._sum_residual / self._count_residual
+                self._warm_residual = True
+
+    def _residual_bias_us(self) -> int:
+        """Positive residual only — never shrink lead because of early completions."""
+        if not self._warm_residual:
+            return 0
+        return max(0, min(self._MAX_RESIDUAL_US, round(self._ema_residual)))
+
     def _predict_linear(self, n: int) -> int | None:
         """Predict send duration for polyphony n via online least-squares (a + b·N).
 
@@ -228,26 +269,28 @@ class SendLatencyEstimator:
         return max(0, min(self._max_lead_us, round(intercept + slope * n)))
 
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
+        residual = self._residual_bias_us()
         if kind == "down":
             n = max(1, min(self.max_poly, n_keys))
             # Exact bucket usable (seeded or warm-started)?
             if self._warm_down[n]:
-                return max(0, min(self._max_lead_us, round(self._ema_down[n])))
+                return max(0, min(self._max_lead_us, round(self._ema_down[n]) + residual))
             # Linear extrapolation (best for an unseen/rare chord size)
             predicted = self._predict_linear(n)
             if predicted is not None:
-                return predicted
+                return max(0, min(self._max_lead_us, predicted + residual))
             # Nearest usable bucket ≤ n
             for b in range(n, 0, -1):
                 if self._warm_down[b]:
-                    return max(0, min(self._max_lead_us, round(self._ema_down[b])))
+                    return max(0, min(self._max_lead_us, round(self._ema_down[b]) + residual))
             # Total fallback
             if self._count_down_total >= self._SEED_SAMPLES:
-                return max(0, min(self._max_lead_us, round(self._ema_down_total)))
+                return max(0, min(self._max_lead_us, round(self._ema_down_total) + residual))
             return 0
         if kind == "up":
             if self._count_up < self._SEED_SAMPLES:
                 return 0
+            # Ups do not include residual prologue bias — residual is an onset (down) effect.
             return max(0, min(self._max_lead_us, round(self._ema_up)))
         return 0
 
@@ -274,6 +317,7 @@ class SendLatencyEstimator:
                 else None
             ),
             "ema_up": self._ema_up if self._count_up >= self._SEED_SAMPLES else None,
+            "ema_residual": self._ema_residual if self._warm_residual else None,
             "lin": (
                 {
                     "count": self._lin_count,
@@ -322,6 +366,14 @@ class SendLatencyEstimator:
             self._ema_up = float(up)
             if self._count_up < self._SEED_SAMPLES:
                 self._count_up = self._SEED_SAMPLES
+        residual = state.get("ema_residual")
+        if isinstance(residual, (int, float)):
+            val = float(residual)
+            if 0.0 <= val <= float(self._MAX_RESIDUAL_US) * 2.0:
+                self._ema_residual = val
+                self._warm_residual = True
+                if self._count_residual < self._SEED_SAMPLES:
+                    self._count_residual = self._SEED_SAMPLES
         lin = state.get("lin")
         if isinstance(lin, dict):
             try:

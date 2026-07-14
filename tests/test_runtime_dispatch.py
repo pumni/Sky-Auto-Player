@@ -249,8 +249,8 @@ def test_runtime_compiler_preserves_action_batches_and_timestamps():
 
 def test_release_guard_anchors_hold_to_down_dispatch_completion():
     # The game-observed floor is completion-to-completion. The authored up at min_hold is therefore
-    # held until down completion + min_hold, but it is still a normal sent release rather than a
-    # telemetry deferred_release because the authored hold was not below the start-anchored floor.
+    # held until down completion + min_hold. That wait is a true floor deferral
+    # (release_not_before - scheduled = send_duration), so telemetry reports deferred_release.
     backend, engine = play(
         (action(0, "down", 21), action(1_000, "up", 21)),
         min_hold_us=1_000,
@@ -270,7 +270,7 @@ def test_release_guard_anchors_hold_to_down_dispatch_completion():
     assert summary["confirmed_hold_lower_bound_us"]["min_us"] == 1_600
     assert summary["confirmed_hold_lower_bound_us"]["p50_us"] == 1_600
     assert summary["confirmed_hold_shortfall_count"] == 0
-    assert summary["deferred_release_count"] == 0
+    assert summary["deferred_release_count"] == 1
 
 
 def test_observed_hold_never_below_one_frame_under_asymmetric_send_latency():

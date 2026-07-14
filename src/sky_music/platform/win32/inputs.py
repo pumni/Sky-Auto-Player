@@ -469,6 +469,12 @@ def set_schedule_diagnostics(min_gap: int | None, impossible_repeats: int) -> No
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
+    # Unlocked hit: after prewarm the dispatch thread is the sole reader/writer of the
+    # INPUT cache during playback. Lock only on miss so the SendInput hot path avoids
+    # RLock acquire/release per note (~µs of avoidable jitter under free-threaded builds).
+    cached = _INPUT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     with _CACHE_LOCK:
         cached = _INPUT_CACHE.get(cache_key)
         if cached is None:
@@ -488,10 +494,16 @@ def prewarm_input_arrays(shapes: Iterable[tuple[tuple[int, ...], bool]]) -> None
                 key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
                 _ARRAY_CACHE[cache_key] = (INPUT * len(scan_codes_tuple))(*key_inputs)
 
-def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
-    n = len(scan_codes_tuple)
-
+def _lookup_or_build_input_array(
+    scan_codes_tuple: tuple[int, ...], flags: int
+) -> ctypes.Array:
+    """Return a cached INPUT array for this shape; build under lock only on miss."""
     cache_key = (scan_codes_tuple, flags)
+    # Unlocked hit — dominant path after prewarm_input_arrays at play start.
+    input_array = _ARRAY_CACHE.get(cache_key)
+    if input_array is not None:
+        return input_array
+    n = len(scan_codes_tuple)
     with _CACHE_LOCK:
         input_array = _ARRAY_CACHE.get(cache_key)
         if input_array is None:
@@ -500,6 +512,11 @@ def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) ->
             key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
             input_array = (INPUT * n)(*key_inputs)
             _ARRAY_CACHE[cache_key] = input_array
+    return input_array
+
+def _send_scan_code_batch_impl(scan_codes_tuple: tuple[int, ...], flags: int) -> None:
+    n = len(scan_codes_tuple)
+    input_array = _lookup_or_build_input_array(scan_codes_tuple, flags)
 
     sent = user32.SendInput(n, input_array, _INPUT_SIZE)
     if sent == n:
@@ -714,3 +731,59 @@ def set_thread_priority(thread_handle: int, priority: int) -> bool:
     if sys.platform != "win32":
         return False
     return bool(kernel32.SetThreadPriority(wintypes.HANDLE(thread_handle), priority))
+
+
+# ThreadPowerThrottling (Win10 1709+): disable EcoQoS / execution-speed throttling on the
+# dispatch thread so the OS does not park the core mid-spin under power-saving policies.
+# Soft hint only — never hard affinity (pinning one core can *increase* jitter if that core
+# is contended). See docs/rt-dispatch-architecture.md.
+ThreadPowerThrottling = 4
+THREAD_POWER_THROTTLING_CURRENT_VERSION = 1
+THREAD_POWER_THROTTLING_EXECUTION_SPEED = 0x1
+
+
+class THREAD_POWER_THROTTLING_STATE(ctypes.Structure):
+    _fields_ = [
+        ("Version", wintypes.ULONG),
+        ("ControlMask", wintypes.ULONG),
+        ("StateMask", wintypes.ULONG),
+    ]
+
+
+def disable_thread_power_throttling(thread_handle: int | None = None) -> bool:
+    """Disable execution-speed power throttling on a thread (defaults to current).
+
+    Returns True if the OS accepted the request. Best-effort: older Windows builds or
+    missing SetThreadInformation simply return False.
+    """
+    if sys.platform != "win32":
+        return False
+    set_info = getattr(kernel32, "SetThreadInformation", None)
+    if set_info is None:
+        return False
+    handle = thread_handle if thread_handle is not None else get_current_thread()
+    if not handle:
+        return False
+    state = THREAD_POWER_THROTTLING_STATE(
+        Version=THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask=THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask=0,  # 0 in StateMask with ControlMask bit set = disable throttling
+    )
+    try:
+        set_info.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        )
+        set_info.restype = wintypes.BOOL
+        return bool(
+            set_info(
+                wintypes.HANDLE(handle),
+                ThreadPowerThrottling,
+                ctypes.byref(state),
+                ctypes.sizeof(state),
+            )
+        )
+    except Exception:
+        return False

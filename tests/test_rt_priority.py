@@ -21,6 +21,7 @@ def mock_inputs():
         mocked.get_thread_priority.return_value = 0
         mocked.set_thread_priority.return_value = True
         mocked.av_set_mm_thread_characteristics.return_value = None
+        mocked.disable_thread_power_throttling.return_value = False
         yield mocked
 
 

@@ -33,21 +33,33 @@ class DispatchThreadPriorityScope:
         "_thread_handle",
         "mode",
         "outcome",
+        "power_throttling_disabled",
     )
 
     def __init__(self, mode: RtPriorityMode = "auto") -> None:
         self.mode: RtPriorityMode = mode
         self.outcome: RtPriorityOutcome | None = None
+        self.power_throttling_disabled: bool = False
         self._mmcss_handle: int | None = None
         self._thread_handle: int | None = None
         self._old_priority: int | None = None
 
+    def _try_disable_power_throttling(self) -> None:
+        """Best-effort EcoQoS opt-out so spin deadlines are not stretched by power saving."""
+        with contextlib.suppress(Exception):
+            self.power_throttling_disabled = bool(inputs.disable_thread_power_throttling())
+
     def __enter__(self) -> Self:
         if sys.platform != "win32" or self.mode == "off":
             self.outcome = RtPriorityOutcome(requested_mode=self.mode, acquired="off", detail="Disabled or non-win32 platform")
+            # Still try to disable power throttling even when priority boost is off — EcoQoS
+            # can stretch spin deadlines independently of thread priority class.
+            if sys.platform == "win32":
+                self._try_disable_power_throttling()
             return self
 
         errors = []
+        self._try_disable_power_throttling()
 
         # Ladder 1: MMCSS
         if self.mode in ("auto", "mmcss"):

@@ -345,11 +345,14 @@ class PlaybackSupervisor:
                             {
                                 **self.telemetry.runtime_options,
                                 "rt_priority_acquired": priority_scope.outcome.acquired,
+                                "power_throttling_disabled": priority_scope.power_throttling_disabled,
                             }
                         )
                         inputs.debug_log(
                             f"[rt_priority] Requested: {priority_scope.outcome.requested_mode}, "
-                            f"Acquired: {priority_scope.outcome.acquired}, Detail: {priority_scope.outcome.detail}"
+                            f"Acquired: {priority_scope.outcome.acquired}, "
+                            f"power_throttling_disabled={priority_scope.power_throttling_disabled}, "
+                            f"Detail: {priority_scope.outcome.detail}"
                         )
 
                     if self.enable_epoch_rebase:
