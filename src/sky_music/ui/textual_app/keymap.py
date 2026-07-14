@@ -50,6 +50,7 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec("telemetry", "F3", "Toggle Telemetry", "Enable/disable CSV logging", "Interface"),
     CommandSpec("reload", "Ctrl+R", "Reload Songs", "Refresh songs directory", "Library"),
     CommandSpec("theme", "y", "Change Theme", "Switch UI color scheme", "Interface"),
+    CommandSpec("update", "u", "Check for Updates", "Check for a newer Sky Player release", "System"),
     CommandSpec("help", "?", "Help", "Show available picker commands", "System"),
     CommandSpec("update", "u", "Check for Update", "Check GitHub for a newer release", "System"),
 ]

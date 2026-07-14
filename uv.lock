@@ -435,6 +435,7 @@ name = "sky-player"
 version = "2.3.3"
 source = { editable = "." }
 dependencies = [
+    { name = "packaging" },
     { name = "rapidfuzz" },
     { name = "textual" },
 ]
@@ -450,6 +451,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "packaging", specifier = ">=24.0" },
     { name = "rapidfuzz", specifier = ">=3.14.5" },
     { name = "textual", specifier = ">=8.2.7" },
 ]
