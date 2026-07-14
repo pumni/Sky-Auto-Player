@@ -63,6 +63,16 @@ class InputBackend(Protocol):
 
 
 class _TrackedKeyState(ABC):
+    """Key-state tracker with free-threaded-friendly hot paths.
+
+    Phase B (polyphony slope): the dominant cost under no-GIL was per-key Python work —
+    building intermediate lists/tuples on every chord and ``set.update`` /
+    ``difference_update`` on every send. The decide helpers below reuse the caller's
+    tuple whenever the batch is uniform (all free / all held / all already up), allocate
+    only on the rare mixed case, and ``key_down``/``key_up`` use scalar ``add``/``discard``
+    for the single-key path that carries melodic lines.
+    """
+
     __slots__ = ("active_keys", "failed_release_keys", "last_error", "possibly_active_keys")
 
     active_keys: set[int]
@@ -77,25 +87,74 @@ class _TrackedKeyState(ABC):
         self.last_error: str | None = None
 
     def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
-        if not self.active_keys:
-            return scan_codes, ()
+        """Return (to_send, duplicates). Reuses *scan_codes* when the batch is uniform."""
+        if not scan_codes:
+            return (), ()
         active = self.active_keys
-        to_send: list[int] = []
-        duplicates: list[int] = []
+        if not active:
+            return scan_codes, ()
+
+        n = len(scan_codes)
+        if n == 1:
+            # Melodic single-note path: zero list/tuple allocation.
+            if scan_codes[0] in active:
+                return (), scan_codes
+            return scan_codes, ()
+
+        # Multi-key: classify without allocating; only split when mixed (rare in real songs).
+        any_active = False
+        any_free = False
         for sc in scan_codes:
-            (duplicates if sc in active else to_send).append(sc)
-        return tuple(to_send), tuple(duplicates)
+            if sc in active:
+                any_active = True
+            else:
+                any_free = True
+            if any_active and any_free:
+                to_send: list[int] = []
+                duplicates: list[int] = []
+                for sc2 in scan_codes:
+                    (duplicates if sc2 in active else to_send).append(sc2)
+                return tuple(to_send), tuple(duplicates)
+        if any_active:
+            return (), scan_codes
+        return scan_codes, ()
 
     def _decide_up(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Return (to_release, already_released). Reuses *scan_codes* when uniform."""
+        if not scan_codes:
+            return (), ()
         active = self.active_keys
         possibly = self.possibly_active_keys
         if not active and not possibly:
             return (), scan_codes
-        to_release: list[int] = []
-        already_released: list[int] = []
+
+        n = len(scan_codes)
+        if n == 1:
+            sc = scan_codes[0]
+            if sc in active or sc in possibly:
+                return scan_codes, ()
+            return (), scan_codes
+
+        any_held = False
+        any_free = False
         for sc in scan_codes:
-            (to_release if (sc in active or sc in possibly) else already_released).append(sc)
-        return tuple(to_release), tuple(already_released)
+            if sc in active or sc in possibly:
+                any_held = True
+            else:
+                any_free = True
+            if any_held and any_free:
+                to_release: list[int] = []
+                already_released: list[int] = []
+                for sc2 in scan_codes:
+                    (
+                        to_release
+                        if (sc2 in active or sc2 in possibly)
+                        else already_released
+                    ).append(sc2)
+                return tuple(to_release), tuple(already_released)
+        if any_held:
+            return scan_codes, ()
+        return (), scan_codes
 
     def get_send_diagnostics(self) -> dict[str, int]:
         """Default: no partial-send instrumentation (overridden by the real SendInput backend)."""
@@ -129,15 +188,71 @@ class _TrackedKeyState(ABC):
         self.failed_release_keys.update(scan_codes)
         self.last_error = f"key_up error: {error}"
 
+    def _mark_down_pending(self, scan_codes: tuple[int, ...]) -> None:
+        if len(scan_codes) == 1:
+            self.possibly_active_keys.add(scan_codes[0])
+        else:
+            self.possibly_active_keys.update(scan_codes)
+
+    def _clear_down_pending(self, scan_codes: tuple[int, ...]) -> None:
+        if len(scan_codes) == 1:
+            self.possibly_active_keys.discard(scan_codes[0])
+        else:
+            self.possibly_active_keys.difference_update(scan_codes)
+
+    def _commit_down_sent(self, actually_sent: tuple[int, ...]) -> None:
+        if not actually_sent:
+            return
+        if len(actually_sent) == 1:
+            self.active_keys.add(actually_sent[0])
+        else:
+            self.active_keys.update(actually_sent)
+
+    def _commit_up_sent(self, actually_sent: tuple[int, ...]) -> None:
+        if not actually_sent:
+            return
+        if len(actually_sent) == 1:
+            sc = actually_sent[0]
+            self.active_keys.discard(sc)
+            self.possibly_active_keys.discard(sc)
+            self.failed_release_keys.discard(sc)
+        else:
+            self.active_keys.difference_update(actually_sent)
+            self.possibly_active_keys.difference_update(actually_sent)
+            self.failed_release_keys.difference_update(actually_sent)
+
     def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
         if not scan_codes:
             return InputSendResult(sent=(), skipped_duplicates=(), success=True)
+
+        # Single-key melodic path: skip decide helpers and multi-set bookkeeping entirely.
+        if len(scan_codes) == 1:
+            sc = scan_codes[0]
+            if sc in self.active_keys:
+                return InputSendResult(sent=(), skipped_duplicates=scan_codes, success=True)
+            self.possibly_active_keys.add(sc)
+            try:
+                actually_sent, send_completed_us = self._emit(scan_codes, key_up=False)
+            except Exception as error:
+                self._handle_down_error(scan_codes, error)
+                raise
+            if actually_sent:
+                self.active_keys.add(sc)
+            self.possibly_active_keys.discard(sc)
+            full = bool(actually_sent)
+            return InputSendResult(
+                sent=actually_sent,
+                skipped_duplicates=(),
+                success=full,
+                error=None if full else "partial note-on: 0/1",
+                send_completed_us=send_completed_us,
+            )
 
         to_send, duplicates = self._decide_down(scan_codes)
         if not to_send:
             return InputSendResult(sent=(), skipped_duplicates=duplicates, success=True)
 
-        self.possibly_active_keys.update(to_send)
+        self._mark_down_pending(to_send)
         try:
             actually_sent, send_completed_us = self._emit(to_send, key_up=False)
         except Exception as error:
@@ -146,8 +261,8 @@ class _TrackedKeyState(ABC):
 
         # Track only keys the OS actually injected. Unsent prefix-tail is dropped by the
         # musical no-retry policy — do not mark them active (would invent stuck state).
-        self.active_keys.update(actually_sent)
-        self.possibly_active_keys.difference_update(to_send)
+        self._commit_down_sent(actually_sent)
+        self._clear_down_pending(to_send)
         full = len(actually_sent) == len(to_send)
         return InputSendResult(
             sent=actually_sent,
@@ -161,6 +276,31 @@ class _TrackedKeyState(ABC):
         if not scan_codes:
             return InputSendResult(sent=(), skipped_duplicates=(), success=True)
 
+        if len(scan_codes) == 1:
+            sc = scan_codes[0]
+            if sc not in self.active_keys and sc not in self.possibly_active_keys:
+                return InputSendResult(sent=(), skipped_duplicates=scan_codes, success=True)
+            try:
+                actually_sent, send_completed_us = self._emit(scan_codes, key_up=True)
+            except Exception as error:
+                self._handle_up_error(scan_codes, error)
+                raise
+            if actually_sent:
+                self.active_keys.discard(sc)
+                self.possibly_active_keys.discard(sc)
+                self.failed_release_keys.discard(sc)
+            elif sc in self.active_keys or sc in self.possibly_active_keys:
+                self.failed_release_keys.add(sc)
+                self.last_error = "partial note-off: 0/1"
+            full = bool(actually_sent)
+            return InputSendResult(
+                sent=actually_sent,
+                skipped_duplicates=(),
+                success=full,
+                error=None if full else "partial note-off: 0/1",
+                send_completed_us=send_completed_us,
+            )
+
         to_release, already_released = self._decide_up(scan_codes)
         if not to_release:
             return InputSendResult(sent=(), skipped_duplicates=already_released, success=True)
@@ -171,9 +311,7 @@ class _TrackedKeyState(ABC):
             self._handle_up_error(to_release, error)
             raise
 
-        self.active_keys.difference_update(actually_sent)
-        self.possibly_active_keys.difference_update(actually_sent)
-        self.failed_release_keys.difference_update(actually_sent)
+        self._commit_up_sent(actually_sent)
         # If a safety-path emit still left keys out (should be rare), keep them failed
         # so release_all can reclaim them. Emitters return a prefix of to_release.
         if len(actually_sent) < len(to_release):
