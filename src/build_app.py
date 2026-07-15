@@ -1,9 +1,12 @@
 import argparse
+import hashlib
+import json
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -60,6 +63,7 @@ def windows_version_tuple(version: str) -> tuple[int, int, int, int]:
 def generate_version_info(version: str) -> None:
     v_tuple = windows_version_tuple(version)
     v_str = version
+    year = datetime.now(UTC).year
 
     content = f"""
 VSVersionInfo(
@@ -82,7 +86,7 @@ VSVersionInfo(
           StringStruct('FileDescription', 'Sky Music Player for Windows'),
           StringStruct('FileVersion', '{v_str}'),
           StringStruct('InternalName', '{APP_NAME}'),
-          StringStruct('LegalCopyright', 'Copyright (c) 2026'),
+          StringStruct('LegalCopyright', 'Copyright (c) {year}'),
           StringStruct('OriginalFilename', '{APP_NAME}.exe'),
           StringStruct('ProductName', 'Sky Player'),
           StringStruct('ProductVersion', '{v_str}')
@@ -134,6 +138,50 @@ def run_smoke_test(exe_path: Path) -> bool:
     print(result.stderr or result.stdout)
     return False
 
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_release_manifest(release_dir: Path, version: str, exe_name: str, git_head: str) -> None:
+    exclude = {"_smoke_test.log", exe_name, "MANIFEST.json"}
+    files = []
+    for p in sorted(release_dir.rglob("*")):
+        if p.is_file() and p.name not in exclude:
+            try:
+                rel = str(p.relative_to(release_dir)).replace("\\", "/")
+                files.append({
+                    "path": rel,
+                    "size": p.stat().st_size,
+                    "sha256": _hash_file(p),
+                })
+            except (OSError, ValueError):
+                pass
+
+    manifest = {
+        "app": APP_NAME,
+        "version": version,
+        "executable": exe_name,
+        "executable_sha256": _hash_file(release_dir / exe_name),
+        "interpreter": {
+            "implementation": sys.implementation.name,
+            "version": sys.version.split()[0],
+            "freethreaded": not sys._is_gil_enabled(),
+        },
+        "platform": sys.platform,
+        "git_head": git_head,
+        "build_time_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        "files": files,
+    }
+    out = release_dir / "MANIFEST.json"
+    out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"[+] Manifest: {release_dir.name}/{out.name}")
+
+
 def kill_hanging_selftest(release_dir: Path) -> None:
     """Attempt to force kill any lingering smoke test processes from our specific release dir."""
     if not release_dir.exists():
@@ -167,6 +215,18 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-test", action="store_true")
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Reuse PyInstaller analysis cache for inner-loop. "
+             "Never use for release builds.",
+    )
+    parser.add_argument(
+        "--manifest",
+        action="store_true",
+        help="Generate MANIFEST.json with SHA256 hashes for every "
+             "file in the release directory.",
+    )
     args = parser.parse_args()
 
     version = get_project_version()
@@ -178,21 +238,22 @@ def main() -> None:
     release_dir = DIST_DIR / f"{APP_NAME}-v{version}"
     kill_hanging_selftest(release_dir)
 
-    if BUILD_DIR.exists():
+    if not args.no_clean and BUILD_DIR.exists():
         try:
             shutil.rmtree(BUILD_DIR)
         except PermissionError as e:
             print(f"[!] Error cleaning BUILD_DIR: {e}. Attempting to continue...")
-            
-    if DIST_DIR.exists():
+
+    if not args.no_clean and DIST_DIR.exists():
         try:
             shutil.rmtree(DIST_DIR)
         except PermissionError as e:
             raise SystemExit(f"[!] Error cleaning DIST_DIR: {e}.\nFix: close any CMD/Explorer windows currently open in {DIST_DIR} and try again.") from e
 
     print("[+] Starting PyInstaller...")
+    clean_flag = [] if args.no_clean else ["--clean"]
     subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_FILE)],
+        [sys.executable, "-m", "PyInstaller", "--noconfirm", *clean_flag, str(SPEC_FILE)],
         check=True,
         cwd=str(PROJECT_ROOT),
     )
@@ -203,6 +264,8 @@ def main() -> None:
         raise RuntimeError(f"PyInstaller output missing: {raw_dist}")
 
     print(f"[+] Moving artifact to {release_dir.name}...")
+    if release_dir.exists():
+        shutil.rmtree(release_dir)
     shutil.move(str(raw_dist), str(release_dir))
 
     print("[+] Copying assets...")
@@ -220,6 +283,13 @@ def main() -> None:
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)
 
+    if args.manifest:
+        git_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True,
+            cwd=str(PROJECT_ROOT),
+        ).stdout.strip()
+        write_release_manifest(release_dir, version, f"{APP_NAME}.exe", git_head)
     print(f"[v] DONE: {release_dir.resolve()}")
 
 if __name__ == "__main__":

@@ -1,10 +1,18 @@
 # Keyboard Deliverability & Safety Plan
 
-> **Status:** Proposed (not yet implemented). Cross-references: [architecture.md](architecture.md) (input hardening),
-> [rt-dispatch-architecture.md](rt-dispatch-architecture.md) (dispatch loop, `command_event`, event waits),
-> [timing-principles.md](timing-principles.md) (same-key feasibility floor).
+> **ARCHIVED / PARTIALLY SUPERSEDED (2026-07).** For lifecycle abort, focus dual-release, note-on focus gate,
+> partial note-on policy, and timestamp fidelity work, use the active plan:
+> [../2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md](../2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md).
 >
-> **Governing rules:** [AGENTS.md](../AGENTS.md) is authoritative. This plan stays inside P0: **`SendInput` only** — no
+> Known conflicts with that plan / current code:
+> - §A1 “do not KEYUP on focus loss” → superseded by **dual-release** (KEYUP on loss + KEYUP on regain).
+> - §1.2 “partial remainder retried” for note-on → **incorrect** vs production: note-on does **not** late-retry.
+> - Watchdog (§B1) may already be implemented in `sky_music.watchdog` — verify code before re-doing.
+>
+> **Status (historical):** Proposed (not fully implemented as written). Cross-references: [architecture.md](../architecture.md),
+> [rt-dispatch-architecture.md](../rt-dispatch-architecture.md), [timing-principles.md](../timing-principles.md).
+>
+> **Governing rules:** [AGENTS.md](../../AGENTS.md) is authoritative. This plan stays inside P0: **`SendInput` only** — no
 > driver/HID/kernel injection, no memory reads, no game tampering. All work is sender-side and user-mode.
 
 ---

@@ -24,11 +24,11 @@ These files represent the current system state and contracts:
 ---
 
 ## 2. Active References & Experiments
-* [2026-07_ram-memory-hygiene-plan.md](2026-07_ram-memory-hygiene-plan.md) — Active plan: bound telemetry/picker RAM peaks, release post-play holdouts, fix free-threaded GC restore + Win32/ctypes cleanup. Surgical hygiene only — not scheduler/SendInput rewrite.
-* [keyboard-reliability-and-safety-plan.md](keyboard-reliability-and-safety-plan.md) — Proposed plan: harden keyboard signal delivery (focus-loss suspend/refocus-resync, partial-send instrumentation, frame-quantization ceiling surfacing), add a hard-kill stuck-key watchdog subprocess, and move control hotkeys to a suppressible `WH_KEYBOARD_LL` hook with `dwExtraInfo` self-tagging. Explicitly excludes mouse/camera, driver/HID, and elevation checks.
-* [core-dispatch-hygiene-and-tail-latency-plan.md](core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
-* [main-path-cleanup-and-build-quality-plan.md](main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
-* [2026-06_wasapi-loopback-measurement-plan.md](2026-06_wasapi-loopback-measurement-plan.md) — Active implementation plan for automated after-send measurement using WASAPI loopback.
+* [2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md](2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md) — **Primary active plan (2026-07):** unify SendInput abort lifecycle (focus dual-release, note-on focus gate), reaffirm scan-code / partial-send contracts, and production timestamp fidelity (completion-targeted lead). Supersedes archive keyboard plan focus strategy where it conflicts.
+* [archive/2026-07_ram-memory-hygiene-plan.md](archive/2026-07_ram-memory-hygiene-plan.md) — RAM/telemetry hygiene (surgical; not scheduler/SendInput rewrite).
+* [archive/core-dispatch-hygiene-and-tail-latency-plan.md](archive/core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
+* [archive/main-path-cleanup-and-build-quality-plan.md](archive/main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
+* [archive/2026-06_wasapi-loopback-measurement-plan.md](archive/2026-06_wasapi-loopback-measurement-plan.md) — After-send WASAPI loopback measurement (validation companion to Phase 6 of the SendInput lifecycle plan).
 * [rust-migration-plan.md](rust-migration-plan.md) — Proposed plan: migrate the real-time dispatch hot path (send/wait/runtime) from Python ctypes into a dedicated Rust dispatch worker via PyO3, keeping Python for orchestration/UI only.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).
@@ -38,6 +38,7 @@ These files represent the current system state and contracts:
 
 ## 3. Historical Archives (`docs/archive/`)
 These files contain completed refactor plans, historic audits, and legacy design documents. They are read-only and include warning stamps specifying discrepancies with the current codebase.
+* `keyboard-reliability-and-safety-plan.md` — Older deliverability/safety proposal; **focus KEYUP strategy and partial-send notes partially superseded** by `2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md` (§2.3 dual-release, G5 no late note-on retry). Watchdog/hotkey ideas may still be useful historical context.
 * `2026-06_rt-pipeline-extreme-optimization-plan.md` — Completed 7-phase RT pipeline optimization plan (adaptive lead, priority ladder, event waits, engine decomposition) with outcome stamps.
 * `2026-06_background-worker-lifecycle-refactor-brief.md` — Implementation brief for making picker background worker ownership, cancellation, and shutdown deterministic before playback.
 * `2026-06_background-worker-lifecycle-hardening-plan.md` — Hardening plan for explicit lifecycle state, cleanup failure policy, structured lifecycle evidence, and future worker drift guards.
