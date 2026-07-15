@@ -337,6 +337,17 @@ class PlaybackCard(Static):
         self._stop_timers()
         if not self._exited and self._mode == "playing":
             self._request_playback_command("quit")
+        # Defensive guard (M11): engine still reachable at unmount is unexpected.
+        # _safe_finish is idempotent; release song data so schedule is not pinned.
+        if self.engine is not None:
+            with contextlib.suppress(Exception):
+                self.log.warning(
+                    "[memory] engine alive at on_unmount — calling _safe_finish()"
+                )
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
+            with contextlib.suppress(Exception):
+                self._safe_finish("quit")
 
     def render(self) -> Text:
         return Text.from_ansi("\n".join(self._compose_lines()))
@@ -466,8 +477,13 @@ class PlaybackCard(Static):
             if self.engine is None:
                 raise RuntimeError("Playback engine is not configured")
             result = self.engine.play()
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.app.call_from_thread(self._safe_finish, result)
         except Exception:
+            if self.engine is not None:
+                with contextlib.suppress(Exception):
+                    self.engine.release_song_data()
             self.app.call_from_thread(self._safe_finish, "quit")
 
     def _safe_finish(self, result: str) -> None:
@@ -475,6 +491,9 @@ class PlaybackCard(Static):
             return
         self._exited = True
         self._stop_timers()
+        if self.engine is not None:
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
         self.engine = None
         self.command_bridge = None
         callback = self._playback_result_callback
@@ -836,13 +855,19 @@ class PlaybackApp(App[str]):
     def run_engine(self) -> None:
         try:
             result = self.engine.play()
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.call_from_thread(self._safe_exit, result)
         except Exception:
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.call_from_thread(self._safe_exit, "quit")
 
     def _safe_exit(self, result: str) -> None:
         if not self._exited:
             self._exited = True
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.exit(result)
 
     def _poll(self) -> None:
@@ -980,13 +1005,19 @@ class PlaybackScreen(Screen[str]):
     def run_engine(self) -> None:
         try:
             result = self.engine.play()
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.app.call_from_thread(self._safe_exit, result)
         except Exception:
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.app.call_from_thread(self._safe_exit, "quit")
 
     def _safe_exit(self, result: str) -> None:
         if not self._exited:
             self._exited = True
+            with contextlib.suppress(Exception):
+                self.engine.release_song_data()
             self.dismiss(result)
 
     def _poll(self) -> None:

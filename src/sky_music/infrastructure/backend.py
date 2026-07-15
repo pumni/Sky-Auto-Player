@@ -1,3 +1,4 @@
+import collections
 import contextlib
 import time
 from abc import ABC, abstractmethod
@@ -374,10 +375,18 @@ def _start_watchdog_once():
     _watchdog_thread = threading.Thread(target=heartbeat, daemon=True)
     _watchdog_thread.start()
 
-    def _cleanup():
-        if _watchdog_proc and _watchdog_proc.stdin:
+    def _cleanup() -> None:
+        global _watchdog_proc, _watchdog_thread
+        proc = _watchdog_proc
+        if proc is not None:
+            if proc.stdin:
+                with contextlib.suppress(Exception):
+                    proc.stdin.close()
             with contextlib.suppress(Exception):
-                _watchdog_proc.stdin.close()
+                proc.wait(timeout=2)
+        _watchdog_proc = None
+        _watchdog_thread = None
+
     atexit.register(_cleanup)
 
 
@@ -564,7 +573,10 @@ class DryRunBackend(_TrackedKeyState):
 
     def __init__(self):
         super().__init__()
-        self.history: list[tuple[str, tuple[int, ...]]] = []  # Records (action_type, scan_codes)
+        # Bound history so long dry-run / test sessions cannot grow without limit.
+        self.history: collections.deque[tuple[str, tuple[int, ...]]] = collections.deque(
+            maxlen=10_000
+        )
         
     def get_health(self) -> BackendHealth:
         diag = self.get_send_diagnostics()

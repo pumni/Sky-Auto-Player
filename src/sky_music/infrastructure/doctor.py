@@ -6,6 +6,16 @@ from typing import Any
 from sky_music.layouts import PHYSICAL_SCAN_CODES, SKY_15_KEY_PROFILE, VK_CODES
 from sky_music.platform.win32 import inputs
 
+# Lazy-cached winmm handle — WinDLL is not free to re-create every call.
+_winmm: ctypes.WinDLL | None = None
+
+
+def _get_winmm() -> ctypes.WinDLL:
+    global _winmm
+    if _winmm is None:
+        _winmm = ctypes.WinDLL("winmm", use_last_error=True)
+    return _winmm
+
 
 def is_admin() -> bool:
     """Checks if the current process is running with administrative privileges."""
@@ -47,9 +57,8 @@ def check_timer_resolution() -> dict:
     """Diagnoses high-precision multimedia timer subsystem settings on Windows."""
     status = {"ok": True, "msg": "Windows Multimedia high-precision timers are active (resolution: 1ms expected)."}
     
-    # We test loading winmm directly
     try:
-        winmm = ctypes.WinDLL("winmm", use_last_error=True)
+        winmm = _get_winmm()
         # Attempt to temporarily begin period to see if winmm functions cleanly
         res = winmm.timeBeginPeriod(1)
         if res == 0:

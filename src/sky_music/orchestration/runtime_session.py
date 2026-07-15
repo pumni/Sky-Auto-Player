@@ -54,6 +54,10 @@ class RuntimeSessionState:
         self.tempo_scale = session.tempo_scale
         self.timing_profile_name = session.display_profile_label()
 
+    def clear_session(self) -> None:
+        """Drop the last PlaybackSessionContext after playback ends (RAM hygiene)."""
+        self.session = None
+
 
 class _RuntimeStateProxy:
     """Thread-safe proxy for RuntimeSessionState.
@@ -91,6 +95,13 @@ class _RuntimeStateProxy:
         lock: threading.Lock = object.__getattribute__(self, '_lock')
         with lock:
             state.apply_session(session, cfg, spin_threshold_us=spin_threshold_us)
+
+    def clear_session(self) -> None:
+        """Drop the last PlaybackSessionContext after playback ends (RAM hygiene)."""
+        state = object.__getattribute__(self, '_state')
+        lock: threading.Lock = object.__getattribute__(self, '_lock')
+        with lock:
+            state.session = None
 
 
 if TYPE_CHECKING:

@@ -130,21 +130,30 @@ class RealtimeProcessScope:
 
         return self
 
+    def _restore(self) -> None:
+        """Re-enable GC and restore switch interval. Idempotent."""
+        if self._gc_was_enabled:
+            with contextlib.suppress(Exception):
+                gc.enable()
+            self._gc_was_enabled = False
+        if self._old_switch_interval is not None:
+            with contextlib.suppress(Exception):
+                sys.setswitchinterval(self._old_switch_interval)
+            self._old_switch_interval = None
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        # 1. Restore GC
-        if self._gc_was_enabled:
-            gc.enable()
-            self._gc_was_enabled = False
+        self._restore()
 
-        # 2. Restore GIL Switch-Interval
-        if self._old_switch_interval is not None:
-            sys.setswitchinterval(self._old_switch_interval)
-            self._old_switch_interval = None
+    def __del__(self) -> None:
+        # Best-effort fallback if __exit__ was never called (scope abandoned).
+        # __del__ must not raise under free-threaded finalization.
+        with contextlib.suppress(Exception):
+            self._restore()
 
 
 def create_realtime_sleeper(fallback: Sleeper) -> Sleeper:

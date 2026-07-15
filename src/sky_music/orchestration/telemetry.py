@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import itertools
 import json
@@ -6,9 +7,59 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from sky_music.infrastructure.backend import BackendHealth
+
+# Flush in-memory records to CSV after this many events (bounds peak RAM).
+_TELEMETRY_FLUSH_CHUNK = 10_000
+
+_CSV_FIELDS: list[str] = [
+    "song",
+    "event_index",
+    "dispatch_id",
+    "kind",
+    "scheduled_us",
+    "actual_us",
+    "dispatch_completed_us",
+    "evidence_scope",
+    "lateness_us",
+    "visible_lateness_us",
+    "send_duration_us",
+    "send_duration_pure_us",
+    "bookkeeping_us",
+    "dispatch_lateness_us",
+    "scan_codes",
+    "sent_scan_codes",
+    "skipped_scan_codes",
+    "generation_ids",
+    "runtime_outcome",
+    "deferred_by_us",
+    "pre_send_spin_us",
+    "idle_gap_us",
+    "reason",
+    "applied_lead_us",
+]
+
+_CSV_INT_FIELDS: frozenset[str] = frozenset(
+    {
+        "event_index",
+        "dispatch_id",
+        "scheduled_us",
+        "actual_us",
+        "dispatch_completed_us",
+        "lateness_us",
+        "visible_lateness_us",
+        "send_duration_us",
+        "send_duration_pure_us",
+        "bookkeeping_us",
+        "dispatch_lateness_us",
+        "deferred_by_us",
+        "pre_send_spin_us",
+        "idle_gap_us",
+        "applied_lead_us",
+    }
+)
 
 
 class TelemetryRecord:
@@ -179,7 +230,7 @@ class TelemetryLogger:
         self.tempo_scale = tempo_scale
         self.fps = fps
         self.min_hold_us = max(0, int(min_hold_us))
-        self.records = []
+        self.records: list[TelemetryRecord] = []
         # Summary computed by save()/get_summary() before records are dropped for hygiene.
         # Keeps get_summary() callable for late callers (engine _log_timing_summary, CLI,
         # tests) after save() clears the (often multi-MB) records list — otherwise they'd
@@ -190,7 +241,15 @@ class TelemetryLogger:
         # on raw per-event fields after play() keep working without re-architecting onto
         # the CSV/summary path. Production always leaves this False.
         self._retain_records_after_save = bool(retain_records_after_save)
-        self.log_filepath = None
+        self.log_filepath: Path | None = None
+        self._csv_file: TextIO | None = None
+        self._csv_writer: csv.DictWriter | None = None
+        # Count of events already written to the open CSV (for summary re-read path).
+        self._csv_events_written: int = 0
+        # Offset into self.records of the first not-yet-written entry (retain mode).
+        self._records_written_offset: int = 0
+        # True once a mid-play flush cleared the in-memory list (disk becomes authoritative).
+        self._cleared_mid_play: bool = False
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
         self.input_path_degraded: bool = False
@@ -202,7 +261,6 @@ class TelemetryLogger:
             "manual": [],
             "focus": [],
         }
-        
         # Unique run ID generation
         if run_id is None:
             self.run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
@@ -298,8 +356,85 @@ class TelemetryLogger:
                 dispatch_lateness_us,
             )
         )
+        if len(self.records) >= _TELEMETRY_FLUSH_CHUNK:
+            # Production: clear after flush to bound peak RAM. retain mode keeps records
+            # so test hooks that assert on raw events after play still work.
+            self._flush_records_to_csv(clear=not self._retain_records_after_save)
 
-        
+    def _ensure_csv_open(self) -> None:
+        """Lazily open the CSV at the current log_filepath (allows test path reassignment)."""
+        if self._csv_writer is not None or not self.enabled or self.log_filepath is None:
+            return
+        self.log_filepath.parent.mkdir(parents=True, exist_ok=True)
+        self._csv_file = self.log_filepath.open("w", newline="", encoding="utf-8")
+        self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=_CSV_FIELDS)
+        self._csv_writer.writeheader()
+
+    def _flush_records_to_csv(self, *, clear: bool = True) -> None:
+        """Write unwritten records to the open CSV; optionally clear the in-memory list."""
+        if not self.records or not self.enabled:
+            return
+        unwritten = self.records[self._records_written_offset :]
+        if not unwritten:
+            return
+        self._ensure_csv_open()
+        if self._csv_writer is None or self._csv_file is None:
+            return
+        with contextlib.suppress(Exception):
+            self._csv_writer.writerows(unwritten)
+            self._csv_file.flush()
+            self._csv_events_written += len(unwritten)
+            self._records_written_offset += len(unwritten)
+        if clear:
+            self.records = []
+            self._records_written_offset = 0
+            self._cleared_mid_play = True
+
+    def _close_csv(self) -> None:
+        if self._csv_file is not None:
+            with contextlib.suppress(Exception):
+                self._csv_file.close()
+        self._csv_file = None
+        self._csv_writer = None
+
+    def _read_csv_rows(self) -> list[dict[str, Any]]:
+        """Re-read the on-disk CSV (after flush) as typed dicts for summary computation."""
+        if self.log_filepath is None or not self.log_filepath.exists():
+            return []
+        if self._csv_file is not None:
+            with contextlib.suppress(Exception):
+                self._csv_file.flush()
+        rows: list[dict[str, Any]] = []
+        try:
+            with self.log_filepath.open(newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for raw in reader:
+                    row: dict[str, Any] = dict(raw)
+                    for field in _CSV_INT_FIELDS:
+                        if field in row and row[field] not in (None, ""):
+                            with contextlib.suppress(TypeError, ValueError):
+                                row[field] = int(row[field])
+                    rows.append(row)
+        except Exception:
+            return []
+        return rows
+
+    def _rows_for_summary(self) -> list[dict[str, Any]] | None:
+        """Build the full row list for get_summary (memory and/or re-read CSV)."""
+        # Complete in-memory set (never mid-cleared, or retain mode kept everything).
+        if self.records and not self._cleared_mid_play:
+            return [r._materialize() for r in self.records]
+        if self._csv_events_written > 0:
+            # Disk is authoritative after a mid-play clear; only append unwritten tail.
+            rows = self._read_csv_rows()
+            unwritten = self.records[self._records_written_offset :]
+            if unwritten:
+                rows.extend(r._materialize() for r in unwritten)
+            return rows if rows else None
+        if self.records:
+            return [r._materialize() for r in self.records]
+        return None
+
     def record_backend_health(self, health: BackendHealth) -> None:
         """Stores the backend health state at the end of playback."""
         self.backend_health = health
@@ -343,7 +478,7 @@ class TelemetryLogger:
         }
 
     def get_summary(self) -> dict | None:
-        """Compute and return the stats dict in-memory (no file I/O).
+        """Compute and return the stats dict in-memory (no file I/O beyond optional CSV re-read).
 
         Returns None when no summary is available (empty records AND no cached summary).
 
@@ -352,12 +487,10 @@ class TelemetryLogger:
         via _last_summary, so they keep working without re-pinning the (often multi-MB)
         per-record list in RSS. Read-only contract: callers read keys, never mutate.
         """
-        if not self.records:
+        rows = self._rows_for_summary()
+        if rows is None:
             # Records were already persisted (save()) or never recorded: serve the cache.
             return self._last_summary
-
-        # Materialize once — all later list comprehensions work from `rows`
-        rows = [r._materialize() for r in self.records]
 
         # dispatch_records: only records where SendInput was actually called
         # (sent_scan_codes is non-empty string). No-op release skips are excluded.
@@ -661,14 +794,16 @@ class TelemetryLogger:
                     default=0,
                 ),
             },
+            # Use `rows` (already materialized) — avoid a second walk of self.records
+            # that would double peak RSS at summary time.
             "deferred_release_count": sum(
-                1 for record in self.records if int(record.get("deferred_by_us", 0)) > 0
+                1 for r in rows if int(r.get("deferred_by_us", 0) or 0) > 0
             ),
             "release_deferral_us": _stats(
                 [
-                    int(record.get("deferred_by_us", 0))
-                    for record in self.records
-                    if int(record.get("deferred_by_us", 0)) > 0
+                    int(r.get("deferred_by_us", 0) or 0)
+                    for r in rows
+                    if int(r.get("deferred_by_us", 0) or 0) > 0
                 ]
             ),
             "down_timeline_drift_us": down_timeline_drift_us,
@@ -706,47 +841,21 @@ class TelemetryLogger:
         return summary
         
     def save(self) -> None:
-        if not self.enabled or not self.log_filepath or not self.records:
+        if not self.enabled or not self.log_filepath:
+            return
+        if not self.records and self._csv_events_written == 0:
             return
 
         try:
-            # 1. Save standard raw CSV records
-            fields = [
-                "song",
-                "event_index",
-                "dispatch_id",
-                "kind",
-                "scheduled_us",
-                "actual_us",
-                "dispatch_completed_us",
-                "evidence_scope",
-                "lateness_us",
-                "visible_lateness_us",
-                "send_duration_us",
-                "send_duration_pure_us",
-                "bookkeeping_us",
-                "dispatch_lateness_us",
-                "scan_codes",
-                "sent_scan_codes",
-                "skipped_scan_codes",
-                "generation_ids",
-                "runtime_outcome",
-                "deferred_by_us",
-                "pre_send_spin_us",
-                "idle_gap_us",
-                "reason",
-                "applied_lead_us",
-            ]
-            with self.log_filepath.open("w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fields)
-                writer.writeheader()
-                writer.writerows(self.records)
+            # 1. Flush any remaining in-memory records to the open CSV (or open fresh).
+            self._flush_records_to_csv(clear=False)
+            self._close_csv()
 
-            # 2. Reuse get_summary() — augment with timestamp for the persisted JSON
+            # 2. Compute summary from full history (memory and/or re-read CSV).
             summary = self.get_summary()
             if summary is None:
                 return
-            summary["timestamp"] = time.strftime('%Y-%m-%d %H:%M:%S')
+            summary["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
             # 3. Save companion summary JSON
             summary_path = self.log_filepath.with_suffix(".summary.json")
@@ -759,12 +868,17 @@ class TelemetryLogger:
             return
 
         # Reachable-memory hygiene: drop the per-event list once persisted to disk. get_summary()
-        # callers after this point read the cached _last_summary (computed inside the try above via
-        # get_summary() → _compute_summary()), so the records list is no longer needed in RSS.
+        # callers after this point read the cached _last_summary (computed inside the try above),
+        # so the records list is no longer needed in RSS.
         # Skipped when retain_records_after_save=True (test-only hook) so tests asserting on raw
         # engine.telemetry.records after play() keep working without moving onto CSV/summary.
         if not self._retain_records_after_save:
             self.records = []
+            self._records_written_offset = 0
+
+        # Clear process-lifetime attrs so stale data from this play does not pollute the next.
+        TelemetryLogger.last_picker_cleanup = None
+        TelemetryLogger.last_thread_census = None
 
 def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
     """Load and format a timing performance report from companion summary JSON telemetry files."""

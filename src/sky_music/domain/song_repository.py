@@ -17,7 +17,13 @@ class SongFileIdentity:
 
 
 class SongRepository:
-    """Small file-backed cache for parsed songs."""
+    """Small file-backed cache for parsed songs.
+
+    ``_identity_cache`` is keyed by ``(path, id(profile))``. Profile objects are
+    typically long-lived module singletons, so entries do not accumulate from
+    profile GC churn in production. Call ``clear()`` (also wired from
+    ``clear_metadata_cache``) after a library reload to drop stale identities.
+    """
 
     def __init__(self) -> None:
         self._cache: dict[SongFileIdentity, Song] = {}

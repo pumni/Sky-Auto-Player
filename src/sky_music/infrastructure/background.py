@@ -117,6 +117,10 @@ class BackgroundScope:
             errors=err_strs,
         )
 
+        # Drop closed resource refs so a long-lived scope does not pin executors/threads.
+        self._resources.clear()
+        self._retired_resources.clear()
+
         if errors:
             raise BackgroundCleanupError(
                 f"Cleanup failures in phase '{self._phase}': {err_strs}",

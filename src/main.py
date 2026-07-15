@@ -74,6 +74,9 @@ def init_debug_log() -> None:
 def debug_log(message: str) -> None:
     if not PLAYBACK_DEBUG:
         return
+    # Auto-flush so a long debug session cannot retain an unbounded buffer.
+    if len(DEBUG_LOG_BUFFER) >= 500:
+        flush_debug_log()
     now = time.perf_counter()
     rel = 0.0 if DEBUG_START_PERF is None else now - DEBUG_START_PERF
     DEBUG_LOG_BUFFER.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')} +{rel:.6f}s] {message}")

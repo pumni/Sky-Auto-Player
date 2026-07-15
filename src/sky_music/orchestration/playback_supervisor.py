@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 import time
@@ -460,8 +461,10 @@ class PlaybackSupervisor:
 
             dispatch_thread.join()
         finally:
-            if not dispatch_thread.is_alive() and command_event_handle is not None:
-                inputs.close_handle(command_event_handle)
+            # Always close: a stuck dispatcher after join timeout must not leak the event handle.
+            if command_event_handle is not None:
+                with contextlib.suppress(Exception):
+                    inputs.close_handle(command_event_handle)
                 command_event_handle = None
 
         last_snapshot_version = self._consume_progress_updates(

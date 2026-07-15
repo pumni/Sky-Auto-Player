@@ -607,6 +607,22 @@ class PlaybackEngine:
             self._runtime_coordinator.cancel_all()
         return outcome
 
+    def release_song_data(self) -> None:
+        """Drop per-song schedule data after play() has returned.
+
+        Call only when this engine will not be reused for a second play() on the
+        same song. The Textual app calls it after play() returns (after any
+        _log_timing_summary). After this call, ``self.actions == ()`` and
+        ``runtime_schedule is None``. A subsequent play() on an empty actions
+        tuple is a no-op timeline (safe empty iteration).
+        """
+        self.actions = ()
+        self.runtime_schedule = None
+        self._runtime_coordinator = None
+        self._compat_loop = None
+        from sky_music.orchestration.runtime_session import RUNTIME_STATE
+        RUNTIME_STATE.clear_session()
+
     def _log_timing_summary(self) -> None:
         from sky_music.platform.win32 import inputs
 

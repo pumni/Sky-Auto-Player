@@ -60,7 +60,8 @@ WM_QUIT = 0x0012
 class HotkeyHook:
     def __init__(self, controls: Any):
         self.controls = controls
-        self.event_queue: queue.Queue[str] = queue.Queue()
+        # Bound against keypress floods (DoS of RAM). Drop-on-full in _hook_proc.
+        self.event_queue: queue.Queue[str] = queue.Queue(maxsize=64)
         self._hook_id: Any = None
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
@@ -107,9 +108,12 @@ class HotkeyHook:
                     self._alt_down == binding.alt and 
                     self._shift_down == binding.shift
                 ):
-                    # Swallow it!
-                        self.event_queue.put(action)
-                        return 1
+                    # Swallow it; drop queue write on flood (never block the OS hook chain).
+                    try:
+                        self.event_queue.put_nowait(action)
+                    except queue.Full:
+                        pass
+                    return 1
 
         return user32.CallNextHookEx(self._hook_id, nCode, wParam, lParam)
 
@@ -119,6 +123,9 @@ class HotkeyHook:
         self._hook_id = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._hook_proc_ref, None, 0)
         
         if not self._hook_id:
+            # Hook never installed — safe to drop the ctypes wrapper immediately.
+            self._hook_id = None
+            self._hook_proc_ref = None
             return
 
         msg = wintypes.MSG()
@@ -127,6 +134,9 @@ class HotkeyHook:
             user32.DispatchMessageW(ctypes.byref(msg))
             
         user32.UnhookWindowsHookEx(self._hook_id)
+        # Null only after UnhookWindowsHookEx — the OS must not call through a freed wrapper.
+        self._hook_id = None
+        self._hook_proc_ref = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run_pump, daemon=True)
@@ -135,7 +145,9 @@ class HotkeyHook:
     def stop(self) -> None:
         if self._thread and self._thread.is_alive() and self._thread_id:
             user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=2.0)
+        # _hook_proc_ref / _hook_id are nulled inside _run_pump after UnhookWindowsHookEx.
+        self._thread = None
             
     def poll(self) -> str | None:
         try:

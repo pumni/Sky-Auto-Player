@@ -822,10 +822,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         try:
             if picker is not None:
                 picker.quiesce()
-            self.picker_scope.close_all(wait=True)
+            close_result = self.picker_scope.close_all(wait=True)
         except BackgroundCleanupError as e:
             try:
-                snaps = e.result.snapshots if e.result else self.picker_scope.snapshots()
+                snaps = e.result.snapshots if e.result else []
                 snapshots_list = [
                     {
                         "name": snap.name, "phase": snap.phase, "state": snap.state,
@@ -844,13 +844,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         # Record cleanup telemetry (mirrors on_unmount behavior)
         try:
+            snaps = close_result.snapshots if hasattr(close_result, 'snapshots') else []
             snapshots_list = [
                 {
                     "name": snap.name, "phase": snap.phase, "state": snap.state,
                     "closed": snap.closed, "pending_count": snap.pending_count,
                     "running_count": snap.running_count,
                 }
-                for snap in self.picker_scope.snapshots()
+                for snap in snaps
             ]
             TelemetryLogger.last_picker_cleanup = {"ok": True, "resources": snapshots_list}
         except Exception:
