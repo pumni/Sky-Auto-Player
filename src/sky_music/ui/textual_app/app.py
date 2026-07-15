@@ -2,15 +2,6 @@
 
 from __future__ import annotations
 
-try:
-    from sky_music._version import __version__ as VERSION
-except ImportError:
-    try:
-        import importlib.metadata
-        VERSION = importlib.metadata.version("sky-player")
-    except Exception:
-        VERSION = "0.0.0-dev"
-
 import contextlib
 import sys
 from dataclasses import replace
@@ -21,6 +12,7 @@ from textual import events, work
 from textual.app import App
 from textual.screen import Screen
 
+from sky_music import __version__ as VERSION
 from sky_music.config import (
     AppConfig,
     RtPriorityMode,
@@ -241,7 +233,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._check_post_update_flag()
         self._set_version_indicator()
         self._restore_pending_update_indicator()
-        self.check_for_updates_worker()
+        # Auto-check after a short quiet window so the launch is not
+        # immediately sent to the network — improves perceived responsiveness
+        # and avoids a network hit on metered connections the instant the
+        # picker is interactive. The 24h throttle in ``should_auto_check``
+        # still gates the actual fetch.
+        self.set_timer(3.0, self.check_for_updates_worker)
 
     def _set_version_indicator(self) -> None:
         """Show current version in the app bar header."""
@@ -501,34 +498,55 @@ class SkyPickerApp(App[SongPickerResult | None]):
         """Push the ``UpdateSettingsModal`` bound to the current config values.
 
         The modal calls the persistence callbacks in real time as toggles
-        happen, so changes survive a restart.
+        happen, so changes survive a restart. ``check_now`` dismisses the
+        modal and triggers an immediate forced check.
         """
         from sky_music.config import (
             persist_update_auto_apply,
             persist_update_auto_check,
+            persist_update_skip_version,
         )
         from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
         def _on_auto_check(value: bool) -> None:
             persist_update_auto_check(self.cfg, value)
+            if not value:
+                self.notify("Auto-update check disabled.", severity="information", timeout=4)
+            else:
+                self.notify("Auto-update check enabled.", severity="information", timeout=4)
 
         def _on_auto_apply(value: bool) -> None:
             persist_update_auto_apply(self.cfg, value)
             if value:
                 self.notify(
-                    "Auto-apply enabled — Sky Player will restart itself on the next check.",
+                    "Auto-apply enabled — newer releases will be downloaded and"
+                    " installed automatically on the next check.",
                     severity="warning",
                     timeout=6,
                 )
+            else:
+                self.notify("Auto-apply disabled — you'll be asked each time.", severity="information", timeout=4)
+
+        def _on_clear_skip() -> None:
+            persist_update_skip_version(self.cfg, "")
+            self.notify("Skip-version cleared.", severity="information", timeout=4)
+
+        def _on_settings_result(result: object) -> None:
+            if result == "check_now":
+                self.check_for_updates_worker(force=True)
 
         modal = UpdateSettingsModal(
             auto_check=self.cfg.update.auto_check,
             auto_apply=self.cfg.update.auto_apply,
             on_auto_check=_on_auto_check,
             on_auto_apply=_on_auto_apply,
+            skip_version=self.cfg.update.skip_version,
+            check_interval_s=self.cfg.update.check_interval_s,
+            last_check_ts=self.cfg.update.last_check_ts,
             theme_name=self.active_theme,
         )
-        self.push_screen(modal)
+        modal._on_clear_skip = _on_clear_skip
+        self.push_screen(modal, _on_settings_result)
 
     def on_picker_snapshot_calibration_state(self, choice: CalibrationChoice | None) -> None:
         self._calibration_snapshot: CalibrationChoice | None = choice
@@ -1134,11 +1152,18 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     @work(thread=True)
     def check_for_updates_worker(self, force: bool = False) -> None:
+        # ``--no-update`` (RUNTIME_STATE.update_disabled) suppresses the
+        # automatic launch check only; the manual ``force`` path from the
+        # ``u`` key still works so the user can check on demand.
+        import main as main_mod
         from sky_music.orchestration.update_service import (
             check_for_update,
             record_successful_check,
             should_auto_check,
         )
+        update_disabled = bool(getattr(main_mod.RUNTIME_STATE, "update_disabled", False))
+        if not force and update_disabled:
+            return
         if not force and not should_auto_check(self.cfg):
             return
 

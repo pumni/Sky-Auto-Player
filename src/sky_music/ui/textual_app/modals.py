@@ -440,17 +440,33 @@ class UpdateProgressModal(PickerModal[None]):
             self.dismiss(None)
 
 
-class UpdateSettingsModal(PickerModal[None]):
-    """Modal to toggle ``auto_check`` and ``auto_apply`` update settings.
+class UpdateSettingsModal(PickerModal[str | None]):
+    """Modal to view and toggle update settings.
 
-    Each row is an ``OptionList`` entry labeled with its current state; Enter
-    flips the setting via the persistence callbacks, refreshes the labels,
-    and keeps focus. Esc closes. No new globals or services are introduced —
-    the modal only calls ``persist_update_auto_check`` and
-    ``persist_update_auto_apply`` already exported by ``sky_music.config``.
+    Layout (top to bottom):
+
+      1. Header ``#update-settings-info``: a configurable summary of the
+         current check cadence (e.g. "Auto-check every 24h"), last check
+         timestamp, and the active skip-version marker if any.
+      2. ``OptionList`` rows for ``auto_check`` and ``auto_apply`` labelled
+         with ``[x]`` / ``[ ]`` so the user can see the live state at a
+         glance — flipping a row re-renders in place.
+      3. Rows for actions that don't have a toggle state: "Check for Update
+         now" (Enter dismisses with ``result="check_now"``) and, when a
+         skip-version is recorded, "Clear skip-version vX.Y.Z".
+      4. Footer-hint bar with the keyboard map (``enter`` toggles, ``c``
+         triggers an immediate check, ``esc`` closes, ``tab`` rows down).
+
+    All toggle changes are persisted immediately by the caller's callbacks;
+    ``check_now`` and ``clear_skip`` are returned via :meth:`Screen.dismiss`
+    and handled by the app's launch-check path — the modal itself never
+    touches the network or config writes.
     """
 
-    BINDINGS = [("escape", "close", "Close")]
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("c", "check_now", "Check now"),
+    ]
 
     def __init__(
         self,
@@ -459,6 +475,9 @@ class UpdateSettingsModal(PickerModal[None]):
         auto_apply: bool,
         on_auto_check: Any,
         on_auto_apply: Any,
+        skip_version: str = "",
+        check_interval_s: int = 86400,
+        last_check_ts: int = 0,
         theme_name: str = "aurora",
     ) -> None:
         PickerModal.__init__(
@@ -466,35 +485,96 @@ class UpdateSettingsModal(PickerModal[None]):
             "Update Settings",
             [
                 KeyHint("enter", "Toggle"),
+                KeyHint("c", "Check now"),
                 KeyHint("esc", "Close"),
             ],
             theme_name=theme_name,
         )
         self._auto_check = bool(auto_check)
         self._auto_apply = bool(auto_apply)
+        self._skip_version = (skip_version or "").strip()
+        self._check_interval_s = int(check_interval_s) if isinstance(check_interval_s, int) else 86400
+        self._last_check_ts = int(last_check_ts) if isinstance(last_check_ts, int) else 0
         self._on_auto_check = on_auto_check
         self._on_auto_apply = on_auto_apply
+        # Optional callback to clear the skip-version marker; set by the app
+        # when wiring the modal (see ``app._open_update_settings_modal``).
+        # Declared here so static analysis knows about the attribute.
+        self._on_clear_skip: Any = None
 
-    def _label_for(self, which: str) -> str:
+    # ── Labels ────────────────────────────────────────────────────────────────
+    def _format_interval(self) -> str:
+        secs = self._check_interval_s
+        if secs <= 0:
+            return "every launch"
+        if secs >= 86400 and secs % 86400 == 0:
+            days = secs // 86400
+            return f"every {days}d" if days > 1 else "every day"
+        if secs >= 3600 and secs % 3600 == 0:
+            hours = secs // 3600
+            return f"every {hours}h" if hours > 1 else "every hour"
+        return f"every {secs}s"
+
+    def _format_last_check(self) -> str:
+        if self._last_check_ts <= 0:
+            return "never"
+        # Render as local YYYY-MM-DD HH:MM — short and unambiguous.
+        import time
+
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(self._last_check_ts))
+
+    def _toggle_label(self, which: str) -> str:
         if which == "auto_check":
+            text = "Auto-check for updates"
             state = self._auto_check
-            text = "Auto-check updates on launch"
         else:
-            state = self._auto_apply
             text = "Auto-apply without asking"
-        mark = "[x]" if state else "[ ]"
+            state = self._auto_apply
+        mark = "[bold green][x][/]" if state else "[dim][ ][/]"
         return f"{mark}  {text}"
 
+    def _info_text(self) -> str:
+        cadence = self._format_interval() if self._auto_check else "off"
+        lines = [
+            f"[bold]Auto-check:[/]  {cadence}   [bold]Last check:[/]  {self._format_last_check()}",
+            "",
+            "[bold]ON[/]   = Sky Player will check GitHub for newer releases on launch.",
+            "[bold]Auto-apply[/] automatically downloads and installs those updates.\n"
+            "It is automatically deferred during playback and the previous install\n"
+            "is kept as a backup until the next successful launch.",
+        ]
+        if self._skip_version:
+            lines.append("")
+            lines.append(
+                f"[bold yellow]Skip-version:[/] v{self._skip_version}. Use the "
+                "row below to clear it so you get notified about the release again."
+            )
+        return "\n".join(lines)
+
+    def _action_labels(self) -> list[str]:
+        labels = ["Check for Update now  [dim green](c)[/]"]
+        if self._skip_version:
+            labels.append(f"Clear skip-version v{self._skip_version}")
+        return labels
+
+    def _is_action_row(self, idx: int) -> bool:
+        # The OptionList order is: [auto_check, auto_apply, *action_rows].
+        return idx >= 2
+
+    # ── Compose & lifecycle ─────────────────────────────────────────────────
     def compose_modal_content(self) -> ComposeResult:
-        yield Static(
-            "Auto-apply overwrites files in-place and restarts Sky Player.\n"
-            "It is automatically deferred during playback.",
-            id="update-settings-info",
-        )
+        yield Static(self._info_text(), id="update-settings-info", markup=True)
+        yield Static("", id="update-settings-spacer")
         yield OptionList(
-            self._label_for("auto_check"),
-            self._label_for("auto_apply"),
+            self._toggle_label("auto_check"),
+            self._toggle_label("auto_apply"),
+            *self._action_labels(),
             id="modal-options",
+        )
+        yield Static(
+            "[dim]Toggling a setting immediately persists to config.json.[/]",
+            id="update-settings-foot",
+            markup=True,
         )
 
     def on_modal_mounted(self) -> None:
@@ -502,6 +582,7 @@ class UpdateSettingsModal(PickerModal[None]):
         options.highlighted = 0
         self.set_focus(options)
 
+    # ── Input handlers ───────────────────────────────────────────────────────
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
             event.stop()
@@ -509,13 +590,22 @@ class UpdateSettingsModal(PickerModal[None]):
             return
         if event.key == "enter":
             event.stop()
-            self._toggle_current()
+            self._activate_current()
+            return
+        if event.key == "tab":
+            # Move highlight to the next row (wraps around) — friendlier than
+            # OptionList's default behaviour of moving focus out of the list.
+            event.stop()
+            options = self.query_one("#modal-options", OptionList)
+            n = len(options.options) if hasattr(options, "options") else 0
+            if n > 0:
+                options.highlighted = ((options.highlighted or 0) + 1) % n
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         event.stop()
-        self._toggle_current()
+        self._activate_current()
 
-    def _toggle_current(self) -> None:
+    def _activate_current(self) -> None:
         options = self.query_one("#modal-options", OptionList)
         idx = options.highlighted
         if idx is None:
@@ -526,14 +616,49 @@ class UpdateSettingsModal(PickerModal[None]):
         elif idx == 1:
             self._auto_apply = not self._auto_apply
             self._on_auto_apply(self._auto_apply)
-        # Re-render in place: clear and re-add the two rows, keeping highlight
-        # at the same index so the user can immediately toggle again.
+        elif idx == 2:
+            # "Check for Update now"
+            self.dismiss("check_now")
+            return
+        elif idx == 3 and self._skip_version:
+            # "Clear skip-version vX.Y.Z"
+            self._skip_version = ""
+            self._clear_skip_persist()
+            self._refresh_info_and_options(idx)
+            return
+        self._refresh_info_and_options(idx)
+
+    def _refresh_info_and_options(self, keep_idx: int) -> None:
+        options = self.query_one("#modal-options", OptionList)
+        with contextlib.suppress(Exception):
+            self.query_one("#update-settings-info", Static).update(self._info_text())
+        # Re-build the option list with the new state. We clear and re-add
+        # because OptionList does not support per-option label update, and we
+        # keep the highlight at the same index so the user can toggle again
+        # immediately. After rebuilding, the action rows count may change when
+        # the skip-version row disappears.
         options.clear_options()
+        actions = self._action_labels()
         options.add_options([
-            self._label_for("auto_check"),
-            self._label_for("auto_apply"),
+            self._toggle_label("auto_check"),
+            self._toggle_label("auto_apply"),
+            *actions,
         ])
-        options.highlighted = idx
+        # Keep the highlight inside the new list bounds.
+        n = 2 + len(actions)
+        options.highlighted = max(0, min(keep_idx, n - 1))
+
+    def _clear_skip_persist(self) -> None:
+        """Best-effort: hand off the clear through a callback when one was
+        registered. The caller wires this to ``persist_update_skip_version
+        (cfg, "")``.
+        """
+        cb = self._on_clear_skip
+        if cb is not None:
+            cb()
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+    def action_check_now(self) -> None:
+        self.dismiss("check_now")

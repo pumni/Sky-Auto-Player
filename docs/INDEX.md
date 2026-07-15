@@ -24,6 +24,7 @@ These files represent the current system state and contracts:
 ---
 
 ## 2. Active References & Experiments
+* [2026-07_ram-memory-hygiene-plan.md](2026-07_ram-memory-hygiene-plan.md) — Active plan: bound telemetry/picker RAM peaks, release post-play holdouts, fix free-threaded GC restore + Win32/ctypes cleanup. Surgical hygiene only — not scheduler/SendInput rewrite.
 * [keyboard-reliability-and-safety-plan.md](keyboard-reliability-and-safety-plan.md) — Proposed plan: harden keyboard signal delivery (focus-loss suspend/refocus-resync, partial-send instrumentation, frame-quantization ceiling surfacing), add a hard-kill stuck-key watchdog subprocess, and move control hotkeys to a suppressible `WH_KEYBOARD_LL` hook with `dwExtraInfo` self-tagging. Explicitly excludes mouse/camera, driver/HID, and elevation checks.
 * [core-dispatch-hygiene-and-tail-latency-plan.md](core-dispatch-hygiene-and-tail-latency-plan.md) — Proposed plan: clean up dispatch loops and Win32 backends, improve typing to Python 3.14 best practices, and run tail latency benchmarking under UI GIL contention.
 * [main-path-cleanup-and-build-quality-plan.md](main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).

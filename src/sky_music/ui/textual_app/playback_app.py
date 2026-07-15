@@ -796,21 +796,28 @@ class PlaybackApp(App[str]):
         not be prompted mid-song. The picker (next launch) presents the modal.
         """
         try:
+            # Honors --no-update consistently with the picker worker.
+            import main as main_mod
             from sky_music.orchestration.update_service import (
                 check_for_update,
                 record_successful_check,
                 should_auto_check,
             )
+            if getattr(main_mod.RUNTIME_STATE, "update_disabled", False):
+                return
             if not should_auto_check(cfg):
                 return
-            try:
-                from sky_music._version import __version__ as VERSION
-            except ImportError:
-                VERSION = "0.0.0-dev"
+            from sky_music import __version__ as VERSION
             result = check_for_update(cfg, current_version=VERSION)
             if result.error is None:
                 record_successful_check(cfg)
             if result.update is not None:
+                # Guard against the dev sentinel — never persist a pending
+                # marker based on a runtime that was never properly installed,
+                # which would otherwise flag every release as a newer update.
+                from sky_music.domain.update_checker import is_newer
+                if not is_newer(result.update.latest_version, VERSION):
+                    return
                 from sky_music.config import persist_pending_update_version
                 persist_pending_update_version(cfg, result.update.latest_version)
                 self.call_from_thread(

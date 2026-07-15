@@ -376,15 +376,18 @@ def test_command_registered_as_update() -> None:
     assert update_cmd.group == "System"
 
 
-def test_update_binding_present_on_song_table() -> None:
-    """Pressing ``u`` should dispatch ``check_for_update``; ensure binding
-    exists and maps to that action.
+def test_update_binding_present_on_picker_screen() -> None:
+    """Pressing ``u`` should dispatch ``check_for_update``; ensure the binding
+    exists on ``PickerScreen`` (the screen that owns the song picker bindings)
+    and maps to that action.
     """
     from textual.binding import Binding
 
-    bindings = app_module.SongTable.BINDINGS
+    from sky_music.ui.textual_app.screens.picker import PickerScreen
+
+    bindings = PickerScreen.BINDINGS
     update_bindings = [b for b in bindings if getattr(b, "action", None) == "check_for_update"]
-    assert update_bindings, "Binding for check_for_update missing on SongTable"
+    assert update_bindings, "Binding for check_for_update missing on PickerScreen"
     assert any(isinstance(b, Binding) and b.key == "u" for b in update_bindings)
 
 

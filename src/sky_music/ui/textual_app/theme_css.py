@@ -108,6 +108,7 @@ BASE_CSS = """
     CommandModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     InfoModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     UpdateModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
+    UpdateSettingsModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     /* Wider modal; percentage cap keeps it from overflowing narrow terminals */
     #modal { width: 86; max-width: 92%; height: auto; max-height: 84%; padding: 1 2; }
     #modal-content { height: auto; max-height: 24; background: transparent; overflow-y: auto; }
@@ -123,6 +124,16 @@ BASE_CSS = """
     #update-progress-bar { margin: 0 1 1 1; }
     #update-progress-status { height: 1; margin: 0 1 1 1; padding: 0 1; }
     #update-notes { height: auto; max-height: 14; margin: 0 1 1 1; padding: 0 1; overflow-y: auto; }
+    UpdateSettingsModal #update-settings-info {
+        height: auto; max-height: 12; margin: 0 1 1 1; padding: 0 1;
+    }
+    UpdateSettingsModal #update-settings-spacer { height: 1; }
+    UpdateSettingsModal #update-settings-foot {
+        height: auto; margin: 1 1 0 1; padding: 0 1;
+    }
+    UpdateSettingsModal #modal-options {
+        height: auto; max-height: 16; margin: 0 1 1 1; padding: 0 1;
+    }
 
     #playback-card {
         dock: bottom;

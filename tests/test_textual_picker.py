@@ -591,12 +591,20 @@ def test_reload_clears_metadata_and_refreshes_song_list(monkeypatch) -> None:
         SONGS,
         [Path("songs/Delta.json")],
     ]
-    calls = 0
+    # ``get_song_choices(force_refresh=True)`` is called from three sites in
+    # the production code: ``app._pre_load_choices`` (once before the picker
+    # screen is built), ``PickerScreen.on_mount`` (once to populate cache),
+    # and ``PickerScreen.action_reload_songs`` (once per user-triggered
+    # reload). The fake must return SONGS for the first two and Delta for the
+    # third — simulating the production cache so the post-reload assert sees
+    # the new list. Counting only ``force_refresh=True`` calls mirrors that.
+    refresh_calls = 0
 
     def fake_get_song_choices(force_refresh: bool = False) -> list[Path]:
-        nonlocal calls
-        calls += 1
-        return lists[1] if calls > 1 else lists[0]
+        nonlocal refresh_calls
+        if force_refresh:
+            refresh_calls += 1
+        return lists[1] if refresh_calls > 2 else lists[0]
 
     monkeypatch.setattr(app_module, "get_song_choices", fake_get_song_choices)
     monkeypatch.setattr(picker_module, "get_song_choices", fake_get_song_choices)
@@ -719,12 +727,13 @@ def test_double_click_row_selects_song(monkeypatch) -> None:
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
-        from textual.widgets import DataTable
-        
-        row_keys = list(table._data.keys())  # type: ignore[attr-defined]
-        event = DataTable.RowSelected(table, cursor_row=1, row_key=row_keys[1])  # type: ignore[arg-type]
-        app.post_message(event)
-        await pilot.pause()
+        app.set_focus(table)
+        # Move the cursor to row 1 and confirm via Enter — the production
+        # path the picker actually handles (posting a raw DataTable.RowSelected
+        # message bypasses the on_data_table_row_selected bubbling and never
+        # produces a return_value, which is what made the original test fail).
+        await pilot.press("down")
+        await pilot.press("enter")
 
     app = run_picker(_run_app(actions))
     assert app.return_value is not None

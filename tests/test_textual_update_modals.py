@@ -14,6 +14,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from textual.widgets import OptionList
 
 from sky_music.config import AppConfig
 from sky_music.ui.textual_app import app as app_module
@@ -149,11 +150,85 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
         # Highlight is on row 0 (auto_check) — press enter to toggle to False.
         await pilot.press("enter")
         assert auto_check_calls == [False]
-        # Move to row 1 and toggle auto_apply True.
+        # Move to row 1 (auto_apply) and toggle to True.
         await pilot.press("down")
         await pilot.press("enter")
         assert auto_apply_calls == [True]
         # Modal remains open until Esc.
+        await pilot.press("escape")
+
+    _run(_with_app(actions))
+
+
+def test_update_settings_modal_check_now_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing ``c`` dismisses the modal with ``"check_now"`` so the app
+    can launch an immediate forced update check from the settings modal.
+    """
+    from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    dismissed: list[Any] = []
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateSettingsModal(
+            auto_check=True,
+            auto_apply=False,
+            on_auto_check=lambda _v: None,
+            on_auto_apply=lambda _v: None,
+            theme_name="aurora",
+        )
+        # Capture the result the modal passes back to the app when dismissed.
+        original_dismiss = modal.dismiss
+
+        def _spy_dismiss(result: Any = None) -> Any:
+            dismissed.append(result)
+            return original_dismiss(result)
+
+        modal.dismiss = _spy_dismiss  # type: ignore[method-assign]
+        app.push_screen(modal)
+        await pilot.pause()
+        await pilot.press("c")
+        assert dismissed == ["check_now"]
+
+    _run(_with_app(actions))
+
+
+def test_update_settings_modal_clear_skip_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a skip-version is configured, the modal exposes a row that clears
+    it via the registered callback."""
+    from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    clear_calls: list[bool] = []
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateSettingsModal(
+            auto_check=True,
+            auto_apply=False,
+            on_auto_check=lambda _v: None,
+            on_auto_apply=lambda _v: None,
+            skip_version="2.4.0",
+            theme_name="aurora",
+        )
+        modal._on_clear_skip = lambda: clear_calls.append(True)  # type: ignore[attr-defined]
+        app.push_screen(modal)
+        await pilot.pause()
+        # Row order: [0]=auto_check, [1]=auto_apply, [2]=Check-now, [3]=Clear skip.
+        options = modal.query_one("#modal-options", OptionList)
+        assert options.option_count == 4
+        # Move to the "Clear skip-version" row and trigger it.
+        options.highlighted = 3
+        await pilot.pause()
+        await pilot.press("enter")
+        assert clear_calls == [True]
+        # The skip-version row should be gone after clear (action row count drops).
+        assert options.option_count == 3
         await pilot.press("escape")
 
     _run(_with_app(actions))
@@ -190,9 +265,10 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
         # The modal was seeded with the live cfg values.
         assert modal._auto_check is False
         assert modal._auto_apply is True
-        # Toggle auto_check path: the callbacks are wired to persist_* — just
-        # verify they don't raise when toggled from app context.
-        modal._toggle_current()
+        # Toggle auto_check via the renamed activator: persists + flips state.
+        options = modal.query_one("#modal-options", OptionList)
+        options.highlighted = 0
+        modal._activate_current()
         assert modal._auto_check is True  # flipped from False to True
 
     _run(_with_app(actions, cfg=cfg))

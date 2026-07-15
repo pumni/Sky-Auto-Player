@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 
+from sky_music import __version__
 from sky_music.cli.calibration_command import (
     apply_calibration_from_telemetry,
     run_auto_calibrate,
@@ -312,6 +313,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
     diag = parser.add_argument_group("Safety and diagnostics")
     diag.add_argument(
+        "--version",
+        action="version",
+        version=f"sky-player {__version__}",
+        help="print version and exit",
+    )
+    diag.add_argument(
         "--doctor",
         action="store_true",
         help="run full readiness check (Sky window, timers, layout, key conflicts)",
@@ -350,6 +357,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--compare-profiles",
         action="store_true",
         help="print a side-by-side timing comparison table of all profiles and exit",
+    )
+    diag.add_argument(
+        "--check-update",
+        action="store_true",
+        help="check GitHub for a newer release, print the result and exit (no TUI)",
+    )
+    diag.add_argument(
+        "--no-update",
+        action="store_true",
+        help="suppress the launch-time automatic update check for this session "
+        "(manual check via the 'u' key still works)",
     )
 
     # ── Telemetry ─────────────────────────────────────────────────────────────
@@ -605,6 +623,45 @@ def build_playback_controls(args: argparse.Namespace, use_ll_hook: bool = False)
 
 
 
+def _run_check_update_command(cfg: AppConfig) -> int:
+    """Headless ``--check-update`` — fetch latest release, print result, exit.
+
+    Returns 0 if the check completed (whether or not a newer release was
+    found) and 1 if the fetch itself failed (network error, rate limit,
+    malformed payload). The non-zero exit on failure makes the flag usable
+    in scripts that want to alert on a broken update channel.
+    """
+    from sky_music.orchestration.update_service import (
+        check_for_update,
+        record_successful_check,
+    )
+
+    print(f"Current version: v{__version__}")
+    result = check_for_update(cfg, current_version=__version__)
+    if result.error is not None:
+        print(f"Update check failed: {result.error}")
+        return 1
+    record_successful_check(cfg)
+    if result.update is None:
+        print("Sky Player is up to date.")
+        return 0
+    rel = result.update
+    print(f"Update available: v{rel.latest_version}")
+    if rel.published_at:
+        print(f"  published: {rel.published_at[:10]}")
+    if rel.html_url:
+        print(f"  release:   {rel.html_url}")
+    if rel.download_url:
+        print(f"  download:  {rel.download_url}")
+    if rel.sha256_url:
+        print(f"  sha256:    {rel.sha256_url}")
+    if rel.release_notes:
+        print()
+        print(rel.release_notes)
+    return 0
+
+
+
 def prompt_song_selection(
     profile: str = "balanced",
     tempo: float = 1.0,
@@ -703,6 +760,12 @@ def main() -> int:
 
     apply_config_defaults(args, user_cfg)
     configure_from_args(args, user_cfg)
+
+    if getattr(args, "no_update", False):
+        RUNTIME_STATE.update_disabled = True
+
+    if getattr(args, "check_update", False):
+        return _run_check_update_command(user_cfg)
     try:
         controls = build_playback_controls(args, user_cfg.use_ll_hook)
     except ValueError as exc:
