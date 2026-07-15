@@ -726,17 +726,17 @@ class PickerScreen(Screen[SongPickerResult]):
 
             row_cells = [
                 song_icon,
-                _title_cell(choice.path.stem, normalized_query, match_style).plain,
+                _title_cell(choice.path.stem, normalized_query, match_style),
                 duration,
             ]
             if self.show_notes:
                 row_cells.append(notes)
             if self.show_risk:
-                row_cells.append(_risk_cell(risk, muted, self._theme_tokens).plain)
+                row_cells.append(_risk_cell(risk, muted, self._theme_tokens))
             if self.show_suggested:
                 row_cells.append(suggested)
 
-            table.add_row(*row_cells, key=str(choice.path))
+            table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
 
         if self.filtered:
             table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
