@@ -117,9 +117,10 @@ BASE_CSS = """
     #songs { height: 1fr; padding: 0 2; }
     /* max-height prevents detail panel from eating too much vertical space */
     #detail { height: auto; min-height: 5; max-height: 9; margin: 1 0 0 0; padding: 0 2; overflow-y: auto; }
+    .datatable--cursor { text-style: bold; }
     AppFooter { dock: bottom; height: 1; margin: 1 0 0 0; }
     ModalHintBar { height: 1; margin-top: 1; content-align: center middle; }
-    .datatable--cursor { text-style: bold; }
+    #modal-footer { height: 1; margin-top: 1; }
     /* Base modal layout - colours come from per-theme blocks */
     OptionModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
     CommandModal { align: center middle; background: rgba(0, 0, 0, 0.6); }
@@ -133,7 +134,6 @@ BASE_CSS = """
     #command-filter { height: 3; margin: 0 1 1 1; padding: 0 1; }
     #modal-options { height: auto; max-height: 24; background: transparent; overflow-y: auto; padding: 0 1; }
     #info { height: auto; max-height: 20; background: transparent; overflow-y: auto; }
-    #modal-footer { height: 1; margin-top: 1; }
     #update-info { height: auto; margin: 0 1 1 1; padding: 0 1; }
     #update-spacer { height: 1; }
     #update-caution { height: auto; margin: 1 0 0 0; padding: 0 1; }

@@ -8,8 +8,6 @@ Screen { background: transparent; }
 #songs { height: 1fr; padding: 0 2; }
 /* max-height prevents detail panel from eating too much vertical space */
 #detail { height: auto; min-height: 5; max-height: 9; margin: 1 0 0 0; padding: 0 2; overflow-y: auto; }
-AppFooter { dock: bottom; height: 1; }
-ModalHintBar { height: 1; margin-top: 1; content-align: center middle; }
 .datatable--cursor { text-style: bold; }
 
 /* Base modal layout */
@@ -73,7 +71,6 @@ CommandModal CommandPaletteList {
     padding: 0 1;
 }
 
-#modal-footer { height: 1; margin-top: 1; }
 #update-info { height: auto; margin: 0 1 1 1; padding: 0 1; }
 #update-spacer { height: 1; }
 #update-caution { height: auto; margin: 1 0 0 0; padding: 0 1; }
@@ -129,8 +126,6 @@ UpdateSettingsModal #row-actions Button {
 
 Screen.playback-active #songs { opacity: 0.45; }
 Screen.playback-active #songs:focus { opacity: 0.45; }
-
-
 
 #playback-card {
     dock: bottom;

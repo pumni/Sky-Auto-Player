@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from rich.markup import escape
 from textual import events
@@ -22,7 +22,9 @@ class FooterAction(Static):
         self._update_label()
 
     def _update_label(self) -> None:
-        label = f" [bold {self.key_color}]{self.hint.key}[/] [{self.muted_color}]{self.hint.label}[/] "
+        key = escape(self.hint.key)
+        lbl = escape(self.hint.label)
+        label = f" [bold {self.key_color}]{key}[/] [{self.muted_color}]{lbl}[/] "
         self.update(label)
 
     def on_click(self, event: events.Click) -> None:
@@ -121,14 +123,14 @@ class ModalHintBar(Horizontal):
     def set_theme(self, key_color: str, muted_color: str) -> ModalHintBar:
         self.key_color = key_color
         self.muted_color = muted_color
-        # For simplicity, since ModalHintBar is not redrawn dynamically usually, 
-        # we can just recreate its content or update it directly
-        hints_statics = list(self.query(".modal-footer-hint"))
-        for hint, st in zip(self.hints, hints_statics, strict=False):
+        hint_statics = list(self.query(".modal-footer-hint").results(Static))
+        if len(hint_statics) != len(self.hints):
+            return self
+        for hint, st in zip(self.hints, hint_statics, strict=True):
             key_display = hint.key.lower()
             label_display = hint.label.lower()
             label = f"[bold {self.key_color}] {escape(key_display)} [/][{self.muted_color}] {escape(label_display)}[/]"
-            cast(Static, st).update(label)
+            st.update(label)
         for sep in self.query(".modal-footer-separator"):
             sep.styles.color = muted_color
         return self
