@@ -3,8 +3,8 @@ from __future__ import annotations
 import statistics
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
 from sky_music.infrastructure.backend import (
@@ -32,6 +32,26 @@ from sky_music.orchestration.runtime_dispatch import (
 
 class RuntimeSameKeyConflictError(RuntimeError):
     """Raised when confirmed runtime hold makes a strict same-key down infeasible."""
+
+
+class OutcomeResolver(Protocol):
+    """Protocol for a caller-supplied callback that labels a down dispatch's outcome AFTER
+    the SendInput returned, based on the structured ``InputSendResult.success`` /
+    ``sent`` prefix.
+
+    Phase 3 of the SendInput lifecycle plan uses this to tag note-on dispatches whose
+    SendInput landed a strict prefix as ``partial_note_on`` (distinct from the pre-send
+    drops ``dropped_conflict`` / ``dropped_expired`` / ``blocked_unfocused``). The
+    default ``runtime_outcome`` parameter of ``_execute_action`` is ``"sent"`` and the
+    resolver may return it unchanged.
+    """
+
+    def __call__(
+        self,
+        action: KeyAction,
+        send_result: object,
+        default_outcome: str,
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +153,13 @@ class DispatchHealthMonitor:
         self._focus_cache_at_us = -self._focus_cache_ttl_us - 1
 
     def focus_is_active(self) -> bool:
+        """Return True iff Sky is the foreground window.
+
+        Cached for ``self._focus_cache_ttl_us`` (2 ms default). The Phase 2 pre-down gate
+        does NOT call this — it uses the runtime ``FocusSignal`` (cached on ``run()`` entry)
+        so the dispatch thread's hot note-on path stays off the blocking GetForegroundWindow
+        under threading. This method is reserved for non-critical HUD/health paths.
+        """
         now_us = self.clock.now_us()
         if now_us - self._focus_cache_at_us >= self._focus_cache_ttl_us:
             self._focus_active_cache = self.focus_guard.is_active()
@@ -257,6 +284,12 @@ class DispatchLoop:
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
         self._last_send_completed_us = 0
+        # Phase 2 pre-down focus gate starts dormant — only after the first down dispatch
+        # has actually fired does the loop accept the gate's strict no-send-while-unfocused
+        # policy. Before that the polled focus-pause gate handles the pre-start unfocused
+        # window (publishing "waiting_for_focus" via the renderer) — see the long comment in
+        # ``_dispatch_down_batch``. Reset per ``run()`` invocation.
+        self._first_down_dispatched = False
 
         # Periodic reprobe state — track actual wake overshoot to adapt spin threshold under load
         self._overshoot_samples: deque[int] = deque(maxlen=200)
@@ -298,10 +331,54 @@ class DispatchLoop:
         stdev = statistics.pstdev(self._overshoot_samples)
         return max(700, min(3_000, int(mean + 3 * stdev) + 100))
 
-    def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
-        outcome = self.backend.release_all()
+    def _abort_input_safe(
+        self,
+        reason: str,
+        *,
+        full_instrument: bool = False,
+    ) -> ReleaseAllOutcome:
+        """Single unified input-abort helper for every interrupt path on the dispatch thread.
+
+        Order is release-first then cancel — so the backend tracking sets still know which
+        keys are held when ``release_all`` walks them, and ``coordinator.cancel_all`` then
+        terminalizes the now-released generations to ``CANCELLED`` (idempotent on re-entry).
+
+        ``reason`` is recorded into telemetry ``abort_counts_by_reason`` and propagates to the
+        summary JSON. Canonical reasons: ``"manual_pause" | "focus_lost" | "panic" | "quit" |
+        "finished" | "error"`` — callers MUST pass one. Unknown strings are still tallied
+        verbatim (the counter is diagnostic, not a closed enum), but passing a stable string
+        keeps summaries diffable across runs.
+
+        ``full_instrument=True`` additionally issues a full Sky-15 KEYUP (identical scan-code
+        set to the watchdog's ``panic_release_all``) on ``WinSendInputBackend`` sessions as a
+        belt-and-braces failsafe against silently stuck keys after an asymmetric disaster
+        (panic / process teardown). Test/DryRun backends inherit a default that degrades to
+        ``release_all`` (same outcome, no extra OS call) — so callers needing the failsafe
+        can request it unconditionally without per-backend type-switching. The watchdog
+        remains the last-resort hard-kill regardless of this flag.
+        """
+        if full_instrument:
+            backend = self.backend
+            full_instrument_fn = getattr(backend, "release_all_full_instrument", None)
+            if callable(full_instrument_fn):
+                # Real SendInput backend only: tracked-key release + a full Sky-15 KEYUP
+                # identical to watchdog.panic_release_all. Test/DryRun backends do not
+                # expose this helper and fall back to plain release_all below.
+                outcome = cast("ReleaseAllOutcome", full_instrument_fn())
+            else:
+                outcome = backend.release_all()
+        else:
+            outcome = self.backend.release_all()
         self.coordinator.cancel_all()
+        self.telemetry.record_abort(reason)
         return outcome
+
+    # Pre-Phase-1 callers (engine.py pre-dispatch focus wait) used this name; kept as an alias
+    # so the engine-side abort helper and any external integration continue to compile without
+    # a coordinated rename. New callers should call ``_abort_input_safe`` directly with a
+    # reason. Both names must stay pointer-equivalent until all in-tree callers migrate.
+    def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
+        return self._abort_input_safe("quit")
 
     @staticmethod
     def _intent_generation_ids(intents: tuple[RuntimeKeyIntent, ...]) -> tuple[int, ...]:
@@ -353,6 +430,7 @@ class DispatchLoop:
         runtime_outcome: str = "sent",
         applied_lead_us: int = 0,
         deferred_by_us: int = 0,
+        outcome_resolver: "OutcomeResolver | None" = None,
     ) -> ExecutionResult:
         send_start_raw = self.clock.now_us()
         send_start_us = state.get_elapsed_us(self.clock, send_start_raw)
@@ -413,6 +491,15 @@ class DispatchLoop:
             runtime_outcome=runtime_outcome,
             applied_lead_us=applied_lead_us,
         )
+        # Phase 3 outcome resolver: let the caller (e.g. _dispatch_down_batch) override
+        # the runtime_outcome label AFTER the send returned, based on send_result.success
+        # / sent-prefix. The record is frozen, so we use ``replace`` to construct a new one
+        # BEFORE ``telemetry.record`` consumes it — this keeps the dispatch_id / lead /
+        # completion timestamp intact alongside the relabelled outcome.
+        if outcome_resolver is not None:
+            resolved_outcome = outcome_resolver(action, send_result, runtime_outcome)
+            if resolved_outcome != runtime_outcome:
+                result = replace(result, runtime_outcome=resolved_outcome)
 
         dispatch_id = self._next_dispatch_id
         self._next_dispatch_id += 1
@@ -453,6 +540,41 @@ class DispatchLoop:
                 )
                 return None
 
+        # Phase 2 fresh focus recheck gate — close the check-vs-send race that the polled
+        # focus-pause gate still leaves open between deadline-wake and SendInput. We use the
+        # ``FocusSignal`` cached at ``run()`` entry (the same one the polled gate consults)
+        # rather than the health_monitor's raw ``focus_guard`` — under threaded dispatch the
+        # signal is a ``SharedFocusSignal`` updated by the control thread's periodic sample,
+        # so reading it does NOT block the dispatch thread's hot note-on path with a slow
+        # GetForegroundWindow. In direct mode the signal wraps ``focus_guard.is_active()``
+        # directly, which is what the plan §2.1 "force refresh" intention captures. The gate
+        # only fires after the first down batch has actually been dispatched (see the
+        # ``_first_down_dispatched`` flag) — before that the polled ``_process_wait_states``
+        # gate handles the pre-start unfocused window (publishing "waiting_for_focus" via
+        # the renderer, which existing tests rely on). Subsequent race-window slips mid-song
+        # are caught here: we DROP the down (mark every gen ``blocked_unfocused``), call
+        # ``_abort_input_safe`` to clear held keys, and let the polled gate take over the
+        # visible "focus_lost" status + pause anchor on the next iteration.
+        if (
+            self._first_down_dispatched
+            and self.health_monitor.require_focus
+            and self._runtime_focus_signal is not None
+            and not self._runtime_focus_signal.is_active()
+        ):
+            self._abort_input_safe("focus_lost")
+            self.coordinator.drop_expired_downs(batch.intents)
+            self._record_without_dispatch(
+                idx=batch.source_action_index,
+                kind="down",
+                scheduled_us=batch.scheduled_us,
+                scan_codes=tuple(intent.scan_code for intent in batch.intents),
+                generation_ids=self._intent_generation_ids(batch.intents),
+                reason=batch.reason,
+                runtime_outcome="blocked_unfocused",
+                state=state,
+            )
+            return None
+
         playable, conflicts = self.coordinator.split_down_intents(batch.intents)
         if conflicts:
             self._record_without_dispatch(
@@ -479,12 +601,36 @@ class DispatchLoop:
             at_us=Microseconds(batch.scheduled_us),
             reason=batch.reason,
         )
+
+        def _resolve_down_outcome(
+            action: KeyAction,
+            send_result: object,
+            default_outcome: str,
+        ) -> str:
+            # Phase 3 partial-send outcome hygiene: relabel note-on dispatches whose
+            # SendInput landed a strict prefix (or nothing) as ``partial_note_on``.
+            # G5 musical no-retry keeps us from finishing the remainder late; the
+            # coordinator promotes unsent gens to DROPPED_BACKEND in ``activate_sent_downs``.
+            # ``partial_note_on`` makes the sender-side atomicity break first-class in
+            # CSV/telemetry, distinct from pre-send drops.
+            sent = tuple(getattr(send_result, "sent", ()))
+            if not sent and len(action.scan_codes) > 0:
+                return "partial_note_on"
+            if (
+                default_outcome == "sent"
+                and action.scan_codes
+                and len(sent) < len(action.scan_codes)
+            ):
+                return "partial_note_on"
+            return default_outcome
+
         result = self._execute_action(
             batch.source_action_index,
             action,
             state,
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
+            outcome_resolver=_resolve_down_outcome,
         )
         # Lead tracks pure SendInput duration (not post-syscall bookkeeping) so completions
         # land on schedule rather than overshooting by the telemetry/health tail.
@@ -499,6 +645,12 @@ class DispatchLoop:
             dispatch_started_us=result.actual_us,
             dispatch_completed_us=result.dispatch_completed_us,
         )
+        # Phase 2 resume signal: this down batch reached the OS — the pre-down focus gate
+        # (if installed) is now armed for subsequent down batches. We deliberately set
+        # the flag on the FIRST *attempted* down send, not the first successful one, so a
+        # cold-start that loses focus between t=0 dispatch and the next dispatch still
+        # benefits from the gate. The flag is reset on each new run() invocation above.
+        self._first_down_dispatched = True
         return result
 
     def _dispatch_pending_releases(
@@ -640,7 +792,7 @@ class DispatchLoop:
                 force=True,
             )
         if command == "panic":
-            self._release_all_and_cancel_runtime()
+            self._abort_input_safe("panic", full_instrument=True)
             progress_sink.publish(
                 elapsed_us=state.get_elapsed_us(self.clock),
                 total_us=total_time_us,
@@ -651,7 +803,7 @@ class DispatchLoop:
             )
         if command == "pause":
             if state.manual_pause_started_us is None:
-                self._release_all_and_cancel_runtime()
+                self._abort_input_safe("manual_pause")
                 state.manual_pause_started_us = self.clock.now_us()
                 progress_sink.publish(
                     elapsed_us=state.get_elapsed_us(self.clock),
@@ -698,7 +850,12 @@ class DispatchLoop:
 
         if self.health_monitor.require_focus and not focus_signal.is_active():
             if state.focus_pause_started_us is None:
-                self.coordinator.cancel_all()
+                # Phase 1 dual-release: release the OS keyboard state NOW on focus loss
+                # (not only on regain). Without this, held scan codes remain injected
+                # into whatever window the user alt-tabbed into, and the game's logical
+                # hold may persist. A second idempotent KEYUP still fires on regain below
+                # to clear any game-side half-holds Sky may not have observed going up.
+                self._abort_input_safe("focus_lost")
                 state.focus_pause_started_us = self.clock.now_us()
             status_val = "waiting_for_focus" if not first_action_executed else "focus_lost"
             progress_sink.publish(
@@ -733,6 +890,10 @@ class DispatchLoop:
                 self.spin_threshold_us = new_threshold
 
             self.backend.release_all()
+            # Phase 1 dual-release: this is the SECOND KEYUP (idempotent). The first fired
+            # on focus LOSS above; this one clears game-side half-holds Sky sampled while it
+            # was still foreground and might not have observed going up. Generations were
+            # cancelled on loss, so no cancel_all here — release_all alone is enough.
 
             pause_duration_us = self.clock.now_us() - state.focus_pause_started_us
             state.update_pause_time(pause_duration_us)
@@ -963,6 +1124,12 @@ class DispatchLoop:
         last_runtime_poll_us = -1000
         last_render_time_us = 0
         first_action_executed = False
+        # Phase 2 pre-down gate: cache the runtime FocusSignal so ``_dispatch_down_batch``
+        # can re-check focus without going through the blocking ``focus_guard`` in threaded
+        # mode (where the supervisor owns the focus sample cadence via SharedFocusSignal).
+        self._runtime_focus_signal = focus_signal
+        # Per-run reset of the Phase 2 pre-down gate arming flag.
+        self._first_down_dispatched = False
 
         def observe_result(exec_result: ExecutionResult | None) -> None:
             if exec_result is None:
@@ -980,6 +1147,19 @@ class DispatchLoop:
                 first_action_executed = True
             observe_result(result)
 
+        final_abort_reason = "error"  # default for any exception path not explicitly classified
+        # Per-run reset of the Phase 2 pre-down gate arming flag — see ``_dispatch_down_batch``.
+        self._first_down_dispatched = False
+        # Phase 2 pre-down focus gate uses this runtime focus signal when available (set at
+        # ``run()`` entry from the threaded or direct supervisor). It tracks the same
+        # ``FocusSignal`` the polled focus-pause gate uses — in threaded mode this is a
+        # ``SharedFocusSignal`` (lock-protected bool updated by the control thread's
+        # periodic ``focus_guard.is_active()`` sample, ~20–50 ms cadence); in direct mode
+        # it is a ``DirectFocusSignal`` that calls ``focus_guard.is_active()`` on demand.
+        # Using the signal (instead of the health_monitor's raw focus_guard) keeps the
+        # dispatch thread's hot note-on path OFF the slow blocking focus sample under
+        # threading, where the supervisor already owns the sample cadence.
+        self._runtime_focus_signal: FocusSignal | None = None
         try:
             while not self.coordinator.is_finished():
                 # The per-batch down lead (_down_lead_for_batch) overrides the scalar dispatch_lead_us
@@ -1025,14 +1205,16 @@ class DispatchLoop:
             )
             progress_sink.finish(f"Finished playing {self.telemetry.song_name}")
 
+            final_abort_reason = "finished"
             return PLAYBACK_FINISHED
         except RuntimeSameKeyConflictError:
             progress_sink.finish(
                 f"Stopped: runtime same-key conflict in {self.telemetry.song_name}"
             )
+            final_abort_reason = "quit"
             return PLAYBACK_QUIT
         finally:
-            outcome = self._release_all_and_cancel_runtime()
+            outcome = self._abort_input_safe(final_abort_reason)
             self.telemetry.record_generation_status_counts(
                 self.coordinator.generation_status_counts()
             )

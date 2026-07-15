@@ -76,11 +76,13 @@ and a down batch is never popped before its authored time while its key is still
 
 ## 4. Profile Classes
 
-The project defines three built-in profiles in [config.py](../src/sky_music/config.py):
+The project defines three built-in profiles in [config.py](../src/sky_music/config.py)
+(`DEFAULT_TIMING_PROFILES`, mirrored here 2026-07 — see [the source](../src/sky_music/config.py)
+for the authoritative values):
 
 * **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0` (zero margin). It represents the absolute physical floor of the game.
-* **`balanced`:** The general default profile. Uses `min_hold_frames = 1.05`, adding a small buffer over the host frame boundary to prevent edge-case misses.
-* **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.1`. 
+* **`balanced`:** The general default profile. Uses `min_hold_frames = 1.02`, adding a small buffer over the host frame boundary to prevent edge-case misses.
+* **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.5` — a half-frame cushion that survives lost / late remote frames better than the 1.0–1.05 range that drifts under load. Earlier docs claimed `1.1`; that value was retired in favour of the more conservative `1.5` after remote-room stutter evidence.
 
 ### Online Audience Considerations
 At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94 ms at 144 FPS). If online listeners are running at 60 FPS, their clients sample at 16.67 ms intervals and will miss these brief events. Thus, when playing in online rooms, users should use `audience_safe` or calibrate their local FPS to match the audience (typically 60 FPS) to ensure remote registration.

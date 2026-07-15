@@ -1,12 +1,17 @@
 # SendInput Lifecycle Hygiene & Timestamp Fidelity Plan
 
-> **Status:** Proposed (not yet implemented). Date: 2026-07-15.
+> **Status:** Implemented (Phases 0–4 shipped in tree). Residual: Phase 5 doctor preflight
+> (Sky-foreground-before-start not yet shipped — §5.1) and final doc polish; Phase 6 WASAPI
+> validation optional and non-blocking (§6). See §2.4 “As-built status snapshot (2026-07-16)”
+> and §11 decision log (as-built rows) for divergences with intent. Date: 2026-07-16.
 >
 > **Cross-references (canonical contracts — do not contradict without updating them):**
 > - [AGENTS.md](../AGENTS.md) — P0: SendInput only; no game memory / injection / anti-cheat bypass
 > - [timing-principles.md](timing-principles.md) — completion-anchor, min_hold floor, adaptive lead
 > - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — DispatchLoop, lead, wait strategy
-> - [architecture.md](architecture.md) — layering; **note §3 claims focus-loss calls `release_all()` — code currently does not (this plan fixes both code and docs)**
+> - [architecture.md](architecture.md) — layering. §3 dual-release model is now in sync with
+>   the runtime (Phases 1–2 delivered); see architecture.md §3 footnote for the pre-Phase-1
+>   doc-debt acknowledgement.
 >
 > **Relation to prior plans:**
 > - Supersedes the *focus-release strategy* and *partial-send description* in
@@ -56,9 +61,14 @@ This plan is a staged hardening + small logic fix pass. It is **not** a schedule
 
 ---
 
-## 2. Current production reality (code truth, 2026-07)
+## 2. Production reality baseline (code truth, pre-Phase-1 — 2026-07-15)
 
-### 2.1 What is already best-practice (do not regress)
+> The subsections below describe the **baseline** as of the plan's authoring date (2026-07-15,
+> before any phase shipped). They are preserved unchanged as the historical gap analysis that
+> justified Phases 0–6. Phases 0–4 have since shipped — see §2.4 “As-built status snapshot”
+> for the current state and which baseline gaps are closed/residual.
+
+### 2.1 What was already best-practice (do not regress)
 
 | Area | Location | Verdict |
 |------|----------|---------|
@@ -71,18 +81,22 @@ This plan is a staged hardening + small logic fix pass. It is **not** a schedule
 | Watchdog full 15-key KEYUP | `watchdog.py` | ✅ Hard-kill failsafe (already present) |
 | Panic / end `release_all` | `dispatch_loop` finally | ✅ |
 
-### 2.2 Gaps this plan closes
+### 2.2 Baseline gaps this plan set out to close
 
-| ID | Gap | Evidence in code | Impact |
-|----|-----|------------------|--------|
-| **L1** | Focus-loss does **not** call `release_all` immediately; only `cancel_all` | `dispatch_loop.py` `_process_wait_states`: focus lost → `cancel_all()`; `release_all()` only on restore | System key state can stay down while user is in another app; coordinator/backend state diverge until restore; docs (`architecture.md`) claim the opposite |
-| **L2** | Abort paths are **asymmetric** | Manual pause / panic / finally: `release_all`+`cancel_all`; focus lost: cancel only | Harder to reason; easy to reintroduce stuck-key bugs |
-| **L3** | Focus check-vs-send race | `DispatchHealthMonitor` focus cache TTL 2 ms; supervisor poll 20–50 ms; no recheck immediately before `key_down` | Possible note-on after Sky lost focus → wrong consumer + game may miss note-off later |
-| **L4** | Partial note-on is correct inject-wise but soft on outcome labeling | Backend returns `success=False` / prefix; runtime may still look “sent” in coarse counters | Operators cannot tell chord was truncated |
-| **L5** | Architecture / keyboard plan drift | `architecture.md` §3; archived keyboard plan assumes “never KEYUP unfocused” and “partial remainder retried” | Implementers follow docs → wrong fix |
-| **T1** | Timestamp fidelity depends on adaptive lead ON + warm estimator | Cold 5 samples lead=0; first notes systematic late → floor defers releases | Early notes worse than mid-song; worse without lead cache |
-| **T2** | `visible_lateness≈0` is **sender** fidelity, not game sample phase | No phase lock with game frames (by design) | 1.0-frame `local_precise` still probabilistic miss |
-| **T3** | Unfocused send counter not driven from the real gate | `_SEND_WHILE_UNFOCUSED` comment says not incremented on hot path consistently with block | Weak diagnostics |
+> Status legend: ✅ closed by Phase 0–4 ship; 🟡 partially closed / divergence (see §11 as-built
+> decisions); ❌ residual (Phase 5 / 6). Each row's `Evidence` cell below is still the **baseline**
+> evidence cited when the plan was authored; the as-built status column tracks current code.
+
+| ID | Gap | Evidence in code (baseline) | Impact | As-built status (2026-07-16) |
+|----|-----|------------------|--------|------------------------------|
+| **L1** | Focus-loss does **not** call `release_all` immediately; only `cancel_all` | `dispatch_loop.py` `_process_wait_states`: focus lost → `cancel_all()`; `release_all()` only on restore | System key state can stay down while user is in another app; coordinator/backend state diverge until restore; docs (`architecture.md`) claim the opposite | ✅ Closed — `dispatch_loop.py:858,892`: focus-lost now `_abort_input_safe("focus_lost")` (release-first); regain issues a second `release_all()` before resume |
+| **L2** | Abort paths are **asymmetric** | Manual pause / panic / finally: `release_all`+`cancel_all`; focus lost: cancel only | Harder to reason; easy to reintroduce stuck-key bugs | ✅ Closed — single `_abort_input_safe` used by pause/panic/focus-lost/finally (`dispatch_loop.py:334,381,564,795,806,858,1217`) |
+| **L3** | Focus check-vs-send race | `DispatchHealthMonitor` focus cache TTL 2 ms; supervisor poll 20–50 ms; no recheck immediately before `key_down` | Possible note-on after Sky lost focus → wrong consumer + game may miss note-off later | 🟡 Closed with divergence — pre-down gate implemented via runtime `FocusSignal` + `_first_down_dispatched` arm (`dispatch_loop.py:559-573,1127-1162`), not `focus_is_active(force=True)` TTL=0. Race is vs last control-thread focus sample, not live OS foreground — see §11 as-built row 1 |
+| **L4** | Partial note-on is correct inject-wise but soft on outcome labeling | Backend returns `success=False` / prefix; runtime may still look “sent” in coarse counters | Operators cannot tell chord was truncated | ✅ Closed — runtime outcomes `partial_note_on` (`dispatch_loop.py:618,624`); summary `partial_note_on_count` (`telemetry.py:841`) |
+| **L5** | Architecture / keyboard plan drift | `architecture.md` §3; archived keyboard plan assumes “never KEYUP unfocused” and “partial remainder retried” | Implementers follow docs → wrong fix | ✅ Closed — `architecture.md:64,65,70-72` documents dual-release + acknowledges pre-Phase-1 doc debt; `INDEX.md:27,41` stamps archive keyboard plan as partially superseded; this plan's status line + §11 now match code |
+| **T1** | Timestamp fidelity depends on adaptive lead ON + warm estimator | Cold 5 samples lead=0; first notes systematic late → floor defers releases | Early notes worse than mid-song; worse without lead cache | ✅ Verified — lead cache path exercised by `tests/test_adaptive_lead.py` (round-trip / DryRun no-write / poison rejection); cold-start covered |
+| **T2** | `visible_lateness≈0` is **sender** fidelity, not game sample phase | No phase lock with game frames (by design) | 1.0-frame `local_precise` still probabilistic miss | ✅ Documented as design fact — no claim of game phase lock in this plan; Phase 6 WASAPI is optional validation only |
+| **T3** | Unfocused send counter not driven from the real gate | `_SEND_WHILE_UNFOCUSED` comment says not incremented on hot path consistently with block | Weak diagnostics | 🟡 Partially closed — `note_send_while_unfocused()` increments at `dispatch_loop.py:467-470` when `require_focus and not focus_is_active()`; after Phase 2 gate, musical downs while unfocused are rare. Counter is post-gate (downs that did execute), not strictly “attempted but blocked” — see §11 as-built row 4 |
 
 ### 2.3 Dual nature of “stuck keys” (design fact)
 
@@ -106,6 +120,30 @@ Focus REGAINED → KEYUP again (idempotent) while Sky is foreground
 ```
 
 This supersedes archive keyboard plan A1 step 2 (“do not release on loss”).
+
+### 2.4 As-built status snapshot (2026-07-16)
+
+> Read this section *together with* §11 (decision log — as-built rows). §2.1–§2.3 are preserved
+> as the pre-Phase-1 baseline; this subsection is the current truth.
+
+| Phase | Plan intent | As-built status | Anchor in tree |
+|-------|-------------|-----------------|----------------|
+| 0 | Counters + doc truth + A/B flags placeholder | Shipped (counters, summary keys). A/B flags `release_all_on_focus_*` **not** added — dual-release hard-wired, see §11 row 3. | `telemetry.py:269,841,452,836`; `dispatch_loop.py:467-470`; `inputs.note_send_while_unfocused()` |
+| 1 | `_abort_input_safe` + focus dual-release | Shipped. Release-first, then cancel; regain re-`release_all()` (no re-cancel). | `dispatch_loop.py:334-372,858-861,892-901`; tests `test_focus_input_lifecycle.py` |
+| 2 | Pre-down focus recheck gate | Shipped with divergence — uses `FocusSignal` cached at `run()` entry + `_first_down_dispatched` arming, not `focus_is_active(force=True)` TTL=0. Race vs last control-thread focus sample, not live `GetForegroundWindow`. | `dispatch_loop.py:559-573,1127-1162`; tests in `test_focus_input_lifecycle.py` |
+| 3 | Partial-send outcome hygiene | Shipped. `runtime_outcome ∈ {"partial_note_on"}` for strict-prefix note-on; no late retry (G5 honored). | `dispatch_loop.py:618,624`; `telemetry.py:841` (`partial_note_on_count`) |
+| 4 | Timestamp fidelity + cold-start | Shipped (audit + tests). Lead cache round-trip, DryRun no-write, poison rejection covered. | `tests/test_adaptive_lead.py` |
+| 5 | Doctor preflight + final doc sync | **Partial.** architecture.md + INDEX.md in sync; doctor `check_sky_window()` checks Sky **window found** but not **foreground before start** — §5.1 residual. | `doctor.py:27-54`; `architecture.md:64,65,70-72`; `INDEX.md:27,41` |
+| 6 | Optional WASAPI validation gate | Not shipped (optional / non-blocking, consistent with this plan). | — |
+
+**Residual work to fully close this plan:** (a) Phase 5 doctor `require_focus` foreground
+preflight (small, scoped PR — does **not** require re-opening Phases 0–4); (b) optional Phase 6
+WASAPI measurement; (c) keep §11 decision log accurate as further divergences appear.
+
+**Do not re-litigate closed gaps.** L1, L2, L4, L5, T1, T2, and the Phase 0 counters are closed.
+Implementers reading this plan should treat §2.2's "Evidence in code (baseline)" column as
+historical context only — fixing those exact symptoms in the current tree would regress the
+as-built contracts above.
 
 ---
 
@@ -394,12 +432,12 @@ In `DispatchLoop._dispatch_down_batch` (or `_execute_action` when `kind==down` a
 
 #### 5.1 Doctor / play-start checks (best-effort, non-blocking warn or hard fail flag)
 
-| Check | Action |
-|-------|--------|
-| Sky window found | Existing |
-| Sky foreground before start (if require_focus) | Warn / block start |
-| Optional: process integrity vs self (UIPI) | **Warn only** if easy; do not require admin elevation of player by default |
-| Physically held note keys | Existing doctor held-key warning |
+| Check | Action | As-built status (2026-07-16) |
+|-------|--------|------------------------------|
+| Sky window found | Existing | ✅ Shipped — `doctor.check_sky_window()` (`doctor.py:27-54`) finds HWND, resolves PID + process name, emits UIPI admin-integrity note. |
+| Sky foreground before start (if require_focus) | Warn / block start | ❌ **Not shipped** — current `check_sky_window` validates the window exists but does not probe foreground state. This is the principal residual PR of this plan; it does not gate any Phase 0–4 contract and can ship independently. Recommended impl: add a foreground probe (reuse `focus_guard.is_active()` or `user32.GetForegroundWindow() == sky_hwnd`) gated by `require_focus`, emit warn (non-blocking) by default. |
+| Optional: process integrity vs self (UIPI) | **Warn only** if easy; do not require admin elevation of player by default | ✅ Shipped — `is_admin()` warning at `doctor.py:43-51` (warn-only, does not mandate elevation). |
+| Physically held note keys | Existing doctor held-key warning | ✅ Shipped (existing doctor held-key check). |
 
 #### 5.2 Docs to update when phases complete
 
@@ -464,7 +502,13 @@ This phase does **not** block Phases 1–2 (safety).
 
 1. **Lifecycle:** Every of {manual pause, focus lost, panic, normal finish, exception finally} leaves backend tracking empty and no live ACTIVE/RELEASE_PENDING gens (except finished RELEASED counts).
 2. **Dual-release:** Focus lost issues KEYUP; focus regain issues KEYUP again before note-ons; proven by tests.
-3. **Gate:** No musical note-on while `require_focus` and Sky inactive (including race window).
+3. **Gate:** No musical note-on while `require_focus` and Sky inactive. As-built narrowing
+   (Phase 2 divergence, see §11 row 1): the pre-down gate consults the **runtime `FocusSignal`**
+   (in threaded mode, a `SharedFocusSignal` last sampled by the control thread), not a live
+   `GetForegroundWindow` call on the dispatch hot path. The race window is therefore vs the
+   *last control-thread focus sample*, not vs the OS foreground at the instant of `SendInput`.
+   This is the explicit success bar; making it tighter would require either a synchronous
+   foreground probe per down (rejected — hot-path cost) or Phase 6 measurement evidence.
 4. **SendInput policy:** Note-on partial still no late retry; note-off still completes; G1–G8 hold.
 5. **Timestamp:** Production path keeps adaptive lead + completion stamp; cold-start cache verified; no regression in adaptive lead A/B-class unit tests.
 6. **Docs:** `architecture.md` and this plan match code; INDEX points here; archive keyboard plan stamped superseded where needed.
@@ -489,17 +533,39 @@ This phase does **not** block Phases 1–2 (safety).
 
 ## 9. Implementation order (checklist)
 
-Use as PR sequence (Graphite/stack or sequential PRs):
+Use as PR sequence (Graphite/stack or sequential PRs). Ticks below reflect as-built status
+(2026-07-16); boxes left unchecked are residual work.
 
-- [ ] **PR0** — Phase 0 counters + architecture “current truth” note
-- [ ] **PR1** — Phase 1 `abort_input_safe` + focus dual-release + tests
-- [ ] **PR2** — Phase 2 pre-down focus force-refresh gate + tests
-- [ ] **PR3** — Phase 3 partial outcome / HUD / summary
-- [ ] **PR4** — Phase 4 lead-cache / cold-start audit + tests
-- [ ] **PR5** — Phase 5 doctor + final doc sync (timing-principles profile numbers if drifted)
-- [ ] **PR6** — Phase 6 optional WASAPI validation (non-blocking)
+- [x] **PR0** — Phase 0 counters + architecture “current truth” note.
+  *As-built:* counters shipped (`abort_counts_by_reason`, `note_send_while_unfocused`,
+  `partial_note_on_count`, summary keys). A/B flags `release_all_on_focus_*` **not** added —
+  superseded by hard-wired dual-release decision (§11 row 3). architecture.md now matches code
+  (no provisional "current truth" patch needed; §3 documents the shipped dual-release directly).
+- [x] **PR1** — Phase 1 `abort_input_safe` + focus dual-release + tests.
+  *As-built:* `_abort_input_safe` is the single abort entrypoint (`dispatch_loop.py:334-372`);
+  focus-lost calls it (`:858`); regain re-`release_all()` without re-`cancel_all()` (`:892`);
+  panic passes `full_instrument=True` (`:795`). Tests in `tests/test_focus_input_lifecycle.py`.
+- [x] **PR2** — Phase 2 pre-down focus force-refresh gate + tests.
+  *As-built with divergence (§11 row 1):* gate uses `_first_down_dispatched` arming + runtime
+  `FocusSignal` (`:559-573,1127-1162`) instead of `focus_is_active(force=True)` TTL=0. Blocked
+  downs are labelled `blocked_unfocused` (`:573`) and abort the active hold. Race scope is vs
+  the control-thread focus sample, not live OS foreground (see §7 criterion 3 narrowing).
+- [x] **PR3** — Phase 3 partial outcome / HUD / summary.
+  *As-built:* `partial_note_on` runtime outcome (`:618,624`); `partial_note_on_count` exposed in
+  summary (`telemetry.py:841`). G5 (no late retry) honored by the unchanged inject layer
+  (`inputs._send_scan_code_batch_impl`).
+- [x] **PR4** — Phase 4 lead-cache / cold-start audit + tests.
+  *As-built:* audit complete; `tests/test_adaptive_lead.py` covers cache round-trip, DryRun
+  no-write, and poison/corrupt rejection. No production-default change was required — required
+  knobs were already wired (adaptive lead ON, completion stamp immediately after `SendInput`).
+- [ ] **PR5** — Phase 5 doctor + final doc sync (timing-principles profile numbers if drifted).
+  *Partial:* architecture.md + INDEX.md already synced (§3 dual-release, INDEX "implemented"
+  note still says "Primary active" — minor polish). Doctor `require_focus` foreground preflight
+  (§5.1) **not yet shipped** — this is the principal residual PR.
+- [ ] **PR6** — Phase 6 optional WASAPI validation (non-blocking).
 
-Each PR: description links this plan phase ID; no drive-by refactors.
+Each PR: description links this plan phase ID; no drive-by refactors. As-built PRs may map to
+multiple commits; the boxes above track contract delivery, not strictly one-PR-per-box.
 
 ---
 
@@ -525,6 +591,19 @@ Each PR: description links this plan phase ID; no drive-by refactors.
 | Scheduler rewrite | **No** | Gaps are lifecycle + gate + defaults |
 | Timestamp goal | **Sender completion ≈ schedule** | Only controllable layer under SendInput-only |
 | Game 100% hear guarantee | **Not claimed** | Frame sample phase + remote net are outside control |
+
+### 11.1 As-built decisions (added 2026-07-16; supersede intent above where they diverge)
+
+These rows record divergences the shipped code took from the original plan text, with
+rationale. They are **not** plan amendments — they document what shipped and why. Future
+implementers must treat them as binding contracts unless reopened via a successor plan.
+
+| # | As-built decision | Choice shipped | Rationale | Anchor / location |
+|---|-------------------|-----------------|-----------|-------------------|
+| 1 | Phase 2 gate implementation | Runtime `FocusSignal` + `_first_down_dispatched` arming (not `focus_is_active(force=True)` TTL=0). Race window is vs last control-thread focus sample, not live `GetForegroundWindow`. | Avoids a synchronous foreground syscall on every dispatch down hot path; `SharedFocusSignal` is lock-protected and updated by the control thread's periodic poll. Tighter race scope than pre-Phase-2 without paying hot-path cost; success criterion #3 is met *under this narrow reading* (see §7 criterion 3 narrowing). To make it tighter would require Phase 6 measurement or per-down foreground probe (rejected). | `dispatch_loop.py:559-573,1127-1162` |
+| 2 | `full_instrument=True` scope | Limited to **panic** and process teardown (quit/finished/error via `_abort_input_safe(final_abort_reason)` — final release only; current code only passes `full_instrument=True` at `:795` for panic). **Not** used for `focus_lost` or manual pause, despite Phase 1 §3.1 suggesting "default true for focus_lost". | Tracked-set (backend `active ∪ possibly_active ∪ failed_release`) is the authoritative release set; full-15 KEYUP on every focus flip is extra OS traffic with no proven marginal benefit given tracked-set completeness. Watchdog (`watchdog.panic_release_all`) remains the last-resort failsafe. Reopen only if a real-world stuck-key case is traced to an untracked key under focus transition (none observed). | `dispatch_loop.py:795`; `watchdog.panic_release_all` |
+| 3 | A/B flags `release_all_on_focus_lost` / `release_all_on_focus_regain` | **Not shipped (wontfix).** Dual-release is hard-wired; no runtime flag toggles either half off. | The two releases serve orthogonal purposes (OS state clear on loss; game-side half-hold clear on regain). There is no product scenario where disabling one half is correct; an A/B knob would invite misconfiguration and add surface area to the runtime options struct for no real benefit. If a measured regression ever needs a kill switch, reintroduce a single `focus_dual_release_enabled` bool rather than two independent flags. | `dispatch_loop.py:858-901` (no flag, unconditional); `telemetry.runtime_options` |
+| 4 | `note_send_while_unfocused` semantics | Increments **post-send** on the dispatch path when `require_focus and not focus_is_active()` (`dispatch_loop.py:467-470`), i.e. counts downs that *did* execute `SendInput` while the polled focus signal was inactive. It does **not** increment for downs blocked by the Phase 2 pre-down gate (those are labeled `blocked_unfocused` in `runtime_outcome`). | After the Phase 2 gate, the post-gate scenario is rare (the gate catches first; `_first_down_dispatched` stays false until first focused down). The counter remains useful for the residual window between last control-thread sample and SendInput completion — see §11 row 1. The mismatch with the original §0.1 wording ("only when attempted without active focus") is intentional: counting would-be attempts that got blocked is already covered by `abort_counts_by_reason["focus_lost"]` and `blocked_unfocused` outcomes; the counter is reserved for the rarer post-gate leak. | `dispatch_loop.py:467-470,573` |
 
 ---
 

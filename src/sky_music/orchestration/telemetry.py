@@ -261,6 +261,12 @@ class TelemetryLogger:
             "manual": [],
             "focus": [],
         }
+        # Abort-reason telemetry (Phase 0 of the SendInput lifecycle plan). Pure additive
+        # instrumentation: counts how many times each interrupt path fires the unified abort
+        # helper. Reasons are stable strings ("manual_pause" | "focus_lost" | "panic" |
+        # "quit" | "finished" | "error"). Empty unless an abort happens, so tests that do not
+        # exercise aborts see an empty dict — never a key-noise baseline.
+        self.abort_counts_by_reason: dict[str, int] = {}
         # Unique run ID generation
         if run_id is None:
             self.run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
@@ -451,6 +457,17 @@ class TelemetryLogger:
         if not self.enabled:
             return
         self.pause_durations_us.setdefault(reason, []).append(max(0, int(duration_us)))
+
+    def record_abort(self, reason: str) -> None:
+        """Tally one invocation of the unified abort helper (`abort_input_safe`).
+
+        Safe to call from the dispatch thread (the abort caller) or from the engine
+        main-thread pre-dispatch wait path — only an int bump under the GIL-free build.
+        Unknown reasons are recorded verbatim so new callers do not require a schema
+        change; the canonical reasons live in `abort_input_safe` callers.
+        """
+        key = str(reason)
+        self.abort_counts_by_reason[key] = self.abort_counts_by_reason.get(key, 0) + 1
 
     def record_release_outcome(self, outcome) -> None:
         """Stores the final release_all outcome at the end of playback."""
@@ -815,6 +832,16 @@ class TelemetryLogger:
                 }
                 for reason, durations in self.pause_durations_us.items()
             },
+            # Phase 0 of SendInput lifecycle plan: per-reason abort tally.
+            "abort_counts_by_reason": dict(self.abort_counts_by_reason),
+            # Phase 3 partial-send outcome hygiene: count of note-on dispatches whose
+            # SendInput returned a strict prefix (or nothing) and so were truncated on
+            # the sender side. G5 keeps us from late-retrying the remainder; this count
+            # surfaces the sender-side atomicity breaks without a metrics server.
+            "partial_note_on_count": sum(
+                1 for r in rows
+                if r.get("kind") == "down" and r.get("runtime_outcome") == "partial_note_on"
+            ),
             "backend": backend_info,
             "input_path_degraded": self.input_path_degraded,
             "input_path_warn_us": self.input_path_warn_us,

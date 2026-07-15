@@ -1264,4 +1264,10 @@ def test_focus_loss_suspends_and_regain_releases():
     
     downs = [c for c in backend.calls if c.kind == "down"]
     assert [c.scan_codes for c in downs] == [(1,), (2,), (3,), (4,)]
-    assert backend.release_all_calls == [55_000, 110_000]
+    # Phase 1 dual-release contract (SendInput lifecycle plan §1.3):
+    #   1. KEYUP on focus LOSS   (at 15_000 — clears OS keyboard state immediately)
+    #   2. KEYUP on focus REGAIN  (at 55_000 — clears game-side half-holds while Sky is foreground)
+    #   3. KEYUP on finally      (at 110_000 — idempotent teardown; generations already cancelled)
+    # Pre-Phase-1 this asserted only [55_000, 110_000] because focus-loss did cancel_all without
+    # a release — the very L1/L2 gap the plan closed. Manual pause / panic share helper 1 + 3.
+    assert backend.release_all_calls == [15_000, 55_000, 110_000]

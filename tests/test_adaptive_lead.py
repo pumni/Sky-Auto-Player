@@ -752,3 +752,102 @@ def test_lead_cache_disabled_for_dry_run_backend(tmp_path) -> None:
         lead_cache_path=path,
     )
     assert dry._lead_cache_enabled is False
+
+
+# --- Phase 4 SendInput-lifecycle plan §4.2 cold-start regression tests ---
+
+
+def test_first_three_key_chord_lead_positive_after_linear_seed_from_singles() -> None:
+    """Phase 4 §4.2 cold-start hardening regression: an ``N=3`` chord authored BEFORE its
+    bucket has any samples gets a non-zero lead via warm-start from a singles bucket.
+
+    Pre-Phase-4 the cold-start gap (T1) let the first notes of a session fire with
+    ``lead=0`` because every per-polyphony bucket seeded to zero for its first
+    ``_SEED_SAMPLES=5`` updates. Phase 4 keeps the seed-zero behaviour for buckets
+    WITH samples, but warm-starts unseen buckets from the nearest seeded bucket below
+    (the linear backbone or the nearest lower-sized fallback) — so an N=3 chord's
+    cold-session lead is still positive after singles have been seeded.
+    """
+    seed_n = SendLatencyEstimator._SEED_SAMPLES
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
+    # Seed ONLY singles (N=1) so the linear backbone is degenerate (slope undefined).
+    # The estimator falls back to the nearest seeded bucket ≤ N=3 — i.e. the singles
+    # bucket's EMA — still > 0. This is the documented cold-start safeguard the plan row
+    # "First-chord polyphony" sets out.
+    for _ in range(seed_n):
+        est.update(ActionKind.DOWN, 250, n_keys=1)
+
+    # Cold N=3 chord with no bucket of its own yet.
+    lead_cold = est.get_lead_us(ActionKind.DOWN, 3)
+    assert lead_cold > 0, (
+        "Phase 4 cold-start: an N=3 chord after singles-only seed must lead>0 "
+        "(linear warm-start OR nearest-bucket fallback — both close the cold gap)"
+    )
+
+    # After the first real N=3 sample the bucket warm-starts — a subsequent N=4 query
+    # STILL extrapolates > 0.
+    est.update(ActionKind.DOWN, 900, n_keys=3)
+    lead_after_sample = est.get_lead_us(ActionKind.DOWN, 4)
+    assert lead_after_sample > 0, (
+        "Phase 4: N=4 estimation after seeding (1, 3) stays positive"
+    )
+
+
+def test_residual_prologue_bias_is_positive_only_and_capped_at_500us() -> None:
+    """Phase 4 §4.2 row "residual bias: keep positive-only cap 500us — document".
+
+    The estimator's residual prologue bias is intentionally positive-only: lead must NEVER
+    shrink because an early completion under-shot (that would compound latency). Negative
+    residuals would cancel future lead and cause systematic lateness. The cap bounds the
+    bias influence so a single slow first event cannot dominate lead.
+    """
+    seed_n = SendLatencyEstimator._SEED_SAMPLES
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
+    # Seed a bucket so the residual can take effect.
+    for _ in range(seed_n):
+        est.update(ActionKind.DOWN, 200, n_keys=1)
+
+    # Force an early completion: lead was 200, completion landed at -1000us early.
+    # The residual bias must NOT become -1000 (negative forbidden); it stays at 0.
+    est.update_completion_error(ActionKind.DOWN, -1_000)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 200, (
+        "negative residuals must not reduce lead (positive-only invariant)"
+    )
+
+    # Force a late completion: residual folds in (positive side) but is capped at 500us.
+    est.update_completion_error(ActionKind.DOWN, 1_500)
+    lead_after_late = est.get_lead_us(ActionKind.DOWN, 1)
+    assert lead_after_late >= 200, "residual folds in positive side (>= EMA)"
+    assert lead_after_late <= 200 + 500, "residual prologue bias capped at 500us"
+
+
+def test_lead_cache_warm_loaded_engine_immediately_uses_imported_lead(tmp_path) -> None:
+    """Phase 4 §4.1 verify production wiring — lead cache IMPORT path is correct.
+
+    The cache import is a warm-start: after ``import_state(loaded)``, the very first
+    ``get_lead_us`` for a cached polyphony bucket returns the imported value unchanged.
+    Guards the wiring ``_lead_cache_enabled => load_lead_cache => estimator.import_state``
+    against silent regressions in the engine boot sequence.
+    """
+    from json import dumps
+
+    from sky_music.orchestration.engine import load_lead_cache
+
+    cache = {
+        "version": 1,
+        "ema_down": {"1": 350.0, "3": 700.0},
+        "ema_up": 200.0,
+        "max_poly": 6,
+    }
+    path = tmp_path / "lead.json"
+    path.write_text(dumps(cache), encoding="utf-8")
+
+    loaded = load_lead_cache(path)
+    assert loaded is not None
+
+    est = SendLatencyEstimator()
+    est.import_state(loaded)
+    # Immediately after import the lead for cached N=1 is exactly 350.
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 350
+    # And N=3 lead is exactly 700 too (warm-started from the import).
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 700

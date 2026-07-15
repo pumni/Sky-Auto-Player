@@ -566,6 +566,29 @@ class WinSendInputBackend(_TrackedKeyState):
             verification_inconclusive=True
         )
 
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        """Panic-mode release: tracked-key ``release_all`` followed by a full Sky-15 KEYUP.
+
+        Why both: the tracked-key pass identifies the keys Sky thinks it holds (so the
+        ``ReleaseAllOutcome.attempted`` audit field stays honest), then the full-15 pass
+        is the same failsafe as ``watchdog.panic_release_all`` — clear OS keyboard state
+        for keys Sky does not believe it injected but might have stuck because of an
+        asymmetric disaster (process killed mid-chord, focus lost mid-press-queue, etc).
+
+        Idempotent: KEYUP for keys not pressed is a no-op at the OS keyboard-state layer.
+        The full-15 uses ``send_scan_code_batch`` (always completes the remainder, like
+        panic_release_all), not ``send_scan_code_batch_trusted`` — a panic-mode release must
+        try to land every key even if the first SendInput is partial.
+        """
+        outcome = self.release_all()
+        from sky_music.layouts import PHYSICAL_SCAN_CODES
+        try:
+            all_15 = tuple(PHYSICAL_SCAN_CODES.values())
+            self.inputs_module.send_scan_code_batch(all_15, key_up=True)
+        except Exception as e:
+            self.last_error = f"release_all_full_instrument full-15 failed: {e}"
+        return outcome
+
 
 class DryRunBackend(_TrackedKeyState):
     """Mock backend useful for timing analysis, safety state validation, and testing."""
