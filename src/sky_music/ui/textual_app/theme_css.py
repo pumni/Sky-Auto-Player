@@ -119,6 +119,10 @@ BASE_CSS = """
     #update-info { height: auto; margin: 0 1 1 1; padding: 0 1; }
     #update-spacer { height: 1; }
     #update-caution { height: auto; margin: 1 0 0 0; padding: 0 1; }
+    #update-progress-info { height: auto; margin: 0 1 1 1; padding: 0 1; }
+    #update-progress-bar { margin: 0 1 1 1; }
+    #update-progress-status { height: 1; margin: 0 1 1 1; padding: 0 1; }
+    #update-notes { height: auto; max-height: 14; margin: 0 1 1 1; padding: 0 1; overflow-y: auto; }
 
     #playback-card {
         dock: bottom;

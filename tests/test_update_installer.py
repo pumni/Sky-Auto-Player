@@ -28,6 +28,7 @@ from sky_music.infrastructure.update_installer import (
     download_zip,
     extract_zip,
     fetch_sha256_sidecar,
+    find_old_backups,
     parse_sha256_sidecar,
     stage_update,
     write_apply_batch,
@@ -390,3 +391,75 @@ def test_write_apply_batch_omits_start_when_exe_missing(tmp_path: Path) -> None:
     )
     text = batch_path.read_text(encoding="ascii")
     assert "start " not in text  # exe missing → no restart line
+
+
+# ── find_old_backups ──────────────────────────────────────────────────────────
+
+
+def test_find_old_backups_lists_old_guid_siblings(tmp_path: Path) -> None:
+    """A single ``<install>.old.<guid>`` directory should be discovered."""
+    install = tmp_path / "Sky-Player"
+    install.mkdir()
+    backup = tmp_path / "Sky-Player.old.abc123def456"
+    backup.mkdir()
+    # Noise that must NOT be reported.
+    (tmp_path / "Sky-Player.old").mkdir()           # no guid tail
+    (tmp_path / "Sky-Player.old.x").mkdir()         # tail < 4 chars
+    (tmp_path / "Sky-Player.zip").write_bytes(b"")  # not a directory
+    (tmp_path / "unrelated.old.deadbeef").mkdir()
+    result = find_old_backups(install)
+    assert result == [backup]
+
+
+def test_find_old_backups_sorted_by_mtime_descending(tmp_path: Path) -> None:
+    """Multiple backups → newest first so cleanup can abort on locked dir."""
+    import os
+    import time
+
+    install = tmp_path / "Sky-Player"
+    install.mkdir()
+    older = tmp_path / "Sky-Player.old.aaaa1111bbbb"
+    newer = tmp_path / "Sky-Player.old.cccc2222dddd"
+    older.mkdir()
+    # Force distinct mtimes — newer has a higher mtime.
+    os.utime(older, (1_000_000, 1_000_000))
+    time.sleep(0.01)
+    newer.mkdir()
+    result = find_old_backups(install)
+    assert result[0] == newer
+    assert result[1] == older
+
+
+def test_find_old_backups_empty_when_none(tmp_path: Path) -> None:
+    install = tmp_path / "Sky-Player"
+    install.mkdir()
+    assert find_old_backups(install) == []
+
+
+def test_find_old_backups_returns_empty_when_install_missing(tmp_path: Path) -> None:
+    install = tmp_path / "does-not-exist"
+    # Pre-create noise so we know it is not just an empty parent.
+    (tmp_path / "Sky-Player.old.1234abcd").mkdir()
+    assert find_old_backups(install) == []
+
+
+def test_find_old_backups_tolerates_unreadable_parent(tmp_path: Path) -> None:
+    """If listing the parent directory raises OSError, return [] rather than
+    propagating the failure — cleanup is best-effort.
+    """
+    install = tmp_path / "Sky-Player"
+    install.mkdir()
+
+    class _BrokenParent:
+        def iterdir(self) -> list[Path]:
+            raise OSError("denied")
+
+    class _StubInstall:
+        name = "Sky-Player"
+        exists = staticmethod(lambda: True)
+        parent = _BrokenParent()
+
+    # Boundary check: ``install_dir.parent == install_dir`` is False on the
+    # stub, so we reach the iterdir() call, which raises OSError, swallowed.
+    assert _StubInstall().parent != _StubInstall()
+    assert find_old_backups(_StubInstall()) == []  # type: ignore[arg-type]

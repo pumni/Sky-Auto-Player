@@ -234,3 +234,38 @@ def test_persist_update_auto_check(isolated_config: Path) -> None:
     clear_config_cache()
     reloaded = load_config(force_reload=True)
     assert reloaded.update.auto_check is False
+
+
+def test_persist_update_auto_apply_writes_true(isolated_config: Path) -> None:
+    """Toggling auto-apply=True must round-trip through config.json."""
+    from sky_music.config import (
+        clear_config_cache,
+        load_config,
+        persist_update_auto_apply,
+    )
+
+    clear_config_cache()
+    cfg = load_config(force_reload=True)
+    persist_update_auto_apply(cfg, True)
+    clear_config_cache()
+    reloaded = load_config(force_reload=True)
+    assert reloaded.update.auto_apply is True
+    # The other update settings must not be touched as a side effect.
+    assert reloaded.update.auto_check is True  # default
+
+
+def test_persist_update_auto_apply_writes_false_after_enable(isolated_config: Path) -> None:
+    """Toggling back to False must also persist."""
+    from sky_music.config import (
+        clear_config_cache,
+        load_config,
+        persist_update_auto_apply,
+    )
+
+    clear_config_cache()
+    cfg = load_config(force_reload=True)
+    persist_update_auto_apply(cfg, True)
+    persist_update_auto_apply(cfg, False)
+    clear_config_cache()
+    reloaded = load_config(force_reload=True)
+    assert reloaded.update.auto_apply is False

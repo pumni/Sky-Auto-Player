@@ -784,6 +784,46 @@ class PlaybackApp(App[str]):
 
         self.run_engine()
         self.set_interval(0.1, self._poll)
+        # Silent update check — never interrupts playback. Only persists a
+        # pending marker so the next picker launch surfaces the modal.
+        self._check_for_updates_silent(user_cfg)
+
+    @work(thread=True)
+    def _check_for_updates_silent(self, cfg: Any) -> None:
+        """Background check that records ``pending_update_version`` if newer.
+
+        No modal, no auto-apply — playback is short-lived and the user must
+        not be prompted mid-song. The picker (next launch) presents the modal.
+        """
+        try:
+            from sky_music.orchestration.update_service import (
+                check_for_update,
+                record_successful_check,
+                should_auto_check,
+            )
+            if not should_auto_check(cfg):
+                return
+            try:
+                from sky_music._version import __version__ as VERSION
+            except ImportError:
+                VERSION = "0.0.0-dev"
+            result = check_for_update(cfg, current_version=VERSION)
+            if result.error is None:
+                record_successful_check(cfg)
+            if result.update is not None:
+                from sky_music.config import persist_pending_update_version
+                persist_pending_update_version(cfg, result.update.latest_version)
+                self.call_from_thread(
+                    self.notify,
+                    f"Update v{result.update.latest_version} available — "
+                    "open the picker to install.",
+                    severity="information",
+                    timeout=6,
+                )
+        except Exception:
+            # Best-effort — never propagate update-check failures into the
+            # playback event loop.
+            return
 
     @work(thread=True, exclusive=True)
     def run_engine(self) -> None:

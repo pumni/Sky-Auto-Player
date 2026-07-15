@@ -497,6 +497,7 @@ def save_config(cfg: AppConfig) -> None:
     raw["allow_title_fallback"]         = cfg.allow_title_fallback
     raw["update"] = {
         "auto_check": cfg.update.auto_check,
+        "auto_apply": cfg.update.auto_apply,
         "skip_version": cfg.update.skip_version,
         "check_interval_s": cfg.update.check_interval_s,
         "last_check_ts": cfg.update.last_check_ts,
@@ -586,6 +587,11 @@ def persist_update_check_ts(cfg: AppConfig, ts: int) -> None:
 
 def persist_update_auto_check(cfg: AppConfig, auto: bool) -> None:
     cfg.update.auto_check = auto
+    save_config(cfg)
+
+
+def persist_update_auto_apply(cfg: AppConfig, auto: bool) -> None:
+    cfg.update.auto_apply = auto
     save_config(cfg)
 
 

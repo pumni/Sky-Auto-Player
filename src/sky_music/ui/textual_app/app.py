@@ -240,14 +240,42 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_mount(self) -> None:
         self._check_post_update_flag()
         self._set_version_indicator()
+        self._restore_pending_update_indicator()
         self.check_for_updates_worker()
 
     def _set_version_indicator(self) -> None:
         """Show current version in the app bar header."""
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#appbar", GradientHeader).set_version(f"v{VERSION}")
+
+    def _restore_pending_update_indicator(self) -> None:
+        """If a previous session left a pending update marker in config (user
+        dismissed the modal without skipping), re-apply the ``↑`` highlight
+        on the app bar so the user remembers an update is available.
+
+        Does NOT push the modal on cold start — the user themselves initiates
+        the apply via ``u`` (Check for Update) when they are ready.
+        """
+        pending = (self.cfg.update.pending_update_version or "").strip()
+        if not pending:
+            return
+        # Skip: the pending version may have been installed already (e.g. the
+        # user manually upgraded); compare against the running version to
+        # avoid a stale arrow. ``is_newer`` only treats strictly greater as
+        # newer, so equal or older pending → clear the marker.
+        from sky_music.domain.update_checker import is_newer
+        if not is_newer(pending, VERSION):
+            from sky_music.config import persist_pending_update_version
+            persist_pending_update_version(self.cfg, "")
+            return
+        self._update_available_version = pending
+        try:
+            self.query_one("#appbar", GradientHeader).set_version(
+                f"v{VERSION} \u2191", highlight=True, highlight_color=self._theme_tokens.accent
+            )
         except Exception:
-            pass
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log("[app] failed to restore pending update indicator")
 
     # ── Test-compat delegates → PickerScreen ──────────────────────────
 
@@ -465,6 +493,42 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_picker_check_for_update(self) -> None:
         self.check_for_updates_worker(force=True)
+
+    def on_picker_open_update_settings(self) -> None:
+        self._open_update_settings_modal()
+
+    def _open_update_settings_modal(self) -> None:
+        """Push the ``UpdateSettingsModal`` bound to the current config values.
+
+        The modal calls the persistence callbacks in real time as toggles
+        happen, so changes survive a restart.
+        """
+        from sky_music.config import (
+            persist_update_auto_apply,
+            persist_update_auto_check,
+        )
+        from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+        def _on_auto_check(value: bool) -> None:
+            persist_update_auto_check(self.cfg, value)
+
+        def _on_auto_apply(value: bool) -> None:
+            persist_update_auto_apply(self.cfg, value)
+            if value:
+                self.notify(
+                    "Auto-apply enabled — Sky Player will restart itself on the next check.",
+                    severity="warning",
+                    timeout=6,
+                )
+
+        modal = UpdateSettingsModal(
+            auto_check=self.cfg.update.auto_check,
+            auto_apply=self.cfg.update.auto_apply,
+            on_auto_check=_on_auto_check,
+            on_auto_apply=_on_auto_apply,
+            theme_name=self.active_theme,
+        )
+        self.push_screen(modal)
 
     def on_picker_snapshot_calibration_state(self, choice: CalibrationChoice | None) -> None:
         self._calibration_snapshot: CalibrationChoice | None = choice
@@ -1045,7 +1109,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
     # ── Update Service ────────────────────────────────────────────────
 
     def _check_post_update_flag(self) -> None:
+        import shutil
+
         from sky_music.infrastructure.update_installer import (
+            find_old_backups,
             install_dir_for_frozen,
             post_update_flag_path,
         )
@@ -1058,6 +1125,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
                     timeout=5,
                 )
                 flag.unlink()
+                # Sweep ``.old.{guid}`` backups left by past atomic swaps.
+                # Best-effort: ignore_errors so a single stale / locked dir
+                # does not block cleanup of the rest.
+                install_dir = install_dir_for_frozen()
+                for backup in find_old_backups(install_dir):
+                    shutil.rmtree(backup, ignore_errors=True)
 
     @work(thread=True)
     def check_for_updates_worker(self, force: bool = False) -> None:
@@ -1111,6 +1184,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
             inputs.debug_log("[app] failed to set update version indicator")
 
         if self.cfg.update.auto_apply:
+            if self.playback_mode != PlaybackMode.PICKER:
+                self.notify(
+                    f"Update v{result.update.latest_version} available — "
+                    "exit playback to apply on next restart.",
+                    severity="warning",
+                    timeout=6,
+                )
+                return
             self.notify(
                 f"Downloading v{result.update.latest_version}...",
                 severity="information",
@@ -1128,6 +1209,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         modal = UpdateModal(
             latest_version=result.update.latest_version,
             current_version=result.current_version,
+            release_notes=getattr(result.update, "release_notes", "") or "",
+            published_at=getattr(result.update, "published_at", "") or "",
             theme_name=self.active_theme,
         )
         self.push_screen(modal, lambda res: self._handle_update_response(res, result.update))
@@ -1160,37 +1243,77 @@ class SkyPickerApp(App[SongPickerResult | None]):
         webbrowser.open(url)
         self.notify(f"Download page opened in browser: {url}", timeout=8)
 
-    def _schedule_restart(self, staged: Any, _install_dir: Path | None) -> None:
+    def _apply_staged(self, staged: Any, install_dir: Path | None) -> None:
+        """Apply a staged update on the UI thread and relaunch.
+
+        ``apply_staged_update`` calls ``sys.exit(0)`` after launching the
+        detached apply batch, so any code after it is unreachable. Wrap the
+        call so install-side errors surface to the user as a notification
+        rather than a silent crash.
+        """
+        from sky_music.infrastructure.update_installer import UpdateInstallerError
         from sky_music.orchestration.update_service import apply_staged_update
-        install_path = apply_staged_update(staged)
-        from sky_music.orchestration.update_service import schedule_restart
-        schedule_restart(install_path)
+        try:
+            apply_staged_update(staged, install_dir=install_dir)
+        except UpdateInstallerError as exc:
+            self.notify(f"Update failed: {exc}", severity="error", timeout=6)
+        except Exception as exc:
+            from sky_music.platform.win32 import inputs
+            inputs.debug_log(f"[app] apply_staged_update raised: {exc!r}")
+            self.notify(f"Update failed: {exc}", severity="error", timeout=6)
 
     @work(thread=True, exclusive=True)
     def download_and_apply_update_worker(self, release: Any) -> None:
         from sky_music.orchestration.update_service import download_and_verify_update
+        from sky_music.ui.textual_app.modals import UpdateProgressModal
+
+        if self.playback_mode != PlaybackMode.PICKER:
+            self.call_from_thread(
+                self.notify,
+                "Update deferred — exit playback first, then re-run Check for Update.",
+                severity="warning",
+                timeout=6,
+            )
+            return
+
         install_dir: Path | None = None
         if getattr(sys, "frozen", False):
             from sky_music.infrastructure.update_installer import install_dir_for_frozen
             install_dir = install_dir_for_frozen()
 
+        latest_version = getattr(release, "latest_version", "?")
+        # Push the progress modal synchronously on the UI thread; the worker
+        # keeps a handle so the progress callback can update it via
+        # call_from_thread. Once pushed, the worker proceeds to download.
+        modal_holder: dict[str, UpdateProgressModal | None] = {"modal": None}
+
+        def _push_modal() -> None:
+            modal = UpdateProgressModal(
+                latest_version=latest_version,
+                current_version=VERSION,
+                theme_name=self.active_theme,
+            )
+            modal_holder["modal"] = modal
+            self.push_screen(modal)
+
+        self.call_from_thread(_push_modal)
+
         def _progress(downloaded: int, total: int | None) -> None:
-            if total:
-                pct = downloaded * 100 // total
-                self.call_from_thread(
-                    self.notify,
-                    f"Downloading update: {pct}% ({downloaded // 1024 // 1024} of {total // 1024 // 1024} MiB)",
-                    severity="information",
-                    timeout=2,
-                )
+            modal = modal_holder["modal"]
+            if modal is None:
+                return
+            self.call_from_thread(modal.update_progress, downloaded, total)
 
         outcome = download_and_verify_update(release, install_dir=install_dir, progress=_progress)
         if outcome.staged:
-            self.call_from_thread(self._schedule_restart, outcome.staged, install_dir)
+            self.call_from_thread(self._apply_staged, outcome.staged, install_dir)
         else:
-            self.call_from_thread(
-                self.notify, f"Update failed: {outcome.error}", severity="error", timeout=5
-            )
+            def _show_failure(modal: UpdateProgressModal | None, error: str) -> None:
+                if modal is not None:
+                    modal.set_status(error, severity="error")
+                else:
+                    self.notify(f"Update failed: {error}", severity="error", timeout=6)
+            self.call_from_thread(_show_failure, modal_holder["modal"], outcome.error or "unknown error")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────

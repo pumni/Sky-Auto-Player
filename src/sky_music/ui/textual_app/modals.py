@@ -8,7 +8,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Input, OptionList, ProgressBar, RichLog, Static
 
 from sky_music.ui.picker_theme import THEME_PRESETS, get_theme_preset
 from sky_music.ui.textual_app.components.command_palette import CommandPaletteList
@@ -249,7 +249,12 @@ class InfoModal(PickerModal[None]):
 
 
 class UpdateModal(PickerModal[str | None]):
-    """Modal to notify the user of an available update."""
+    """Modal to notify the user of an available update.
+
+    Surfaces release notes (rendered from Markdown via ``RichLog``) and the
+    publish timestamp so the user can decide skip vs download with context —
+    previously the modal only said "v{X} is available" with no further info.
+    """
 
     BINDINGS = [("escape", "remind", "Remind me later")]
 
@@ -258,6 +263,8 @@ class UpdateModal(PickerModal[str | None]):
         latest_version: str,
         current_version: str,
         *,
+        release_notes: str = "",
+        published_at: str = "",
         theme_name: str = "aurora",
     ) -> None:
         PickerModal.__init__(
@@ -271,6 +278,9 @@ class UpdateModal(PickerModal[str | None]):
         )
         self.latest_version = latest_version
         self.current_version = current_version
+        self.release_notes = (release_notes or "").strip()
+        # Keep YYYY-MM-DD part of "2025-11-02T..Z" — displayed alongside version.
+        self.published_at = (published_at or "").split("T", 1)[0]
         self.options = [
             PickerOption("github", "Download from GitHub"),
             PickerOption("download", "Download and auto-apply"),
@@ -279,12 +289,17 @@ class UpdateModal(PickerModal[str | None]):
         ]
 
     def compose_modal_content(self) -> ComposeResult:
-        yield Static(
-            f"You are currently running v{self.current_version}.\n"
-            f"v{self.latest_version} is available.\n",
-            id="update-info",
+        info_line = (
+            f"You are running v{self.current_version}.\n"
+            f"v{self.latest_version} is available."
         )
+        if self.published_at:
+            info_line += f"  Released {self.published_at}."
+        yield Static(info_line, id="update-info")
         yield Static("", id="update-spacer")
+        # The RichLog is populated in on_modal_mounted once the widget has a
+        # DOM so Markdown rendering can use a real compute context.
+        yield RichLog(id="update-notes", highlight=True, markup=True, wrap=True, auto_scroll=False)
         yield OptionList(*(o.label for o in self.options), id="modal-options")
         yield Static(
             "Auto-apply overwrites files in-place.\n"
@@ -293,6 +308,14 @@ class UpdateModal(PickerModal[str | None]):
         )
 
     def on_modal_mounted(self) -> None:
+        from rich.markdown import Markdown
+        notes = self.release_notes or "_(release notes unavailable)_"
+        try:
+            self.query_one("#update-notes", RichLog).write(Markdown(notes))
+        except Exception:
+            # Fallback: render the raw text — never let markdown failure break
+            # the modal.
+            self.query_one("#update-notes", RichLog).write(notes)
         options = self.query_one("#modal-options", OptionList)
         options.highlighted = 1
         self.set_focus(options)
@@ -319,3 +342,198 @@ class UpdateModal(PickerModal[str | None]):
 
     def action_remind(self) -> None:
         self.dismiss("remind")
+
+
+class UpdateProgressModal(PickerModal[None]):
+    """Modal that shows download/apply progress for an auto-update.
+
+    Replaces the previous notify-per-chunk spam — a single modal with one
+    ``ProgressBar`` and one label ``Static`` updated via
+    :meth:`update_progress` / :meth:`set_status`. There is NO cancel button on
+    purpose: a half-staged download interrupted mid-stream would leave the
+    staging dir in an unknown state. The user must wait for the worker to
+    finish (success → ``sys.exit(0)`` from ``apply_staged_update``; failure →
+    status label shows the error and Esc closes).
+    """
+
+    BINDINGS = [("escape", "close", "Close"), ("enter", "close", "Close")]
+
+    _OBSERVABLE_DOWNLOAD: int = 1024 * 1024  # only update label at >=1 MiB deltas
+
+    def __init__(
+        self,
+        latest_version: str,
+        current_version: str,
+        *,
+        total: int | None = None,
+        theme_name: str = "aurora",
+    ) -> None:
+        PickerModal.__init__(
+            self,
+            f"Updating to v{latest_version}",
+            [KeyHint("esc", "Close when done")],
+            theme_name=theme_name,
+        )
+        self.latest_version = latest_version
+        self.current_version = current_version
+        self._total = total
+        self._last_reported = -1
+        self._closed = False
+
+    def compose_modal_content(self) -> ComposeResult:
+        yield Static(
+            f"Updating from v{self.current_version} to v{self.latest_version}…",
+            id="update-progress-info",
+        )
+        yield ProgressBar(total=self._total, id="update-progress-bar")
+        yield Static("", id="update-progress-status")
+
+    def update_progress(self, downloaded: int, total: int | None) -> None:
+        """Advance the progress bar. Called from the worker via call_from_thread.
+
+        Throttles label updates to one per MiB to avoid swamping the
+        Textual message queue on slow links — the bar still advances on every
+        call.
+        """
+        bar = self.query_one("#update-progress-bar", ProgressBar)
+        if total is not None and self._total is None:
+            self._total = total
+            bar.update(total=total)
+        if total is not None and total > 0:
+            bar.progress = downloaded
+        else:
+            # Unknown length — nudge forward without a known ceiling.
+            bar.advance(1)
+        # Throttle label update to >=1 MiB deltas.
+        mb = downloaded // self._OBSERVABLE_DOWNLOAD
+        if mb == self._last_reported:
+            return
+        self._last_reported = mb
+        if total is not None and total > 0:
+            pct = downloaded * 100 // total
+            text = (
+                f"Downloading: {pct}%  "
+                f"({downloaded // 1024 // 1024} / {total // 1024 // 1024} MiB)"
+            )
+        else:
+            text = f"Downloading: {downloaded // 1024 // 1024} MiB"
+        self.query_one("#update-progress-status", Static).update(text)
+
+    def set_status(self, text: str, *, severity: str = "information") -> None:
+        """Replace the progress label with a final status line (done/failed)."""
+        prefix = {
+            "error": "[bold red]Error:[/] ",
+            "warning": "[bold yellow]Warning:[/] ",
+            "information": "",
+        }.get(severity, "")
+        self.query_one("#update-progress-status", Static).update(f"{prefix}{text}")
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in {"escape", "enter"} and not self._closed:
+            event.stop()
+            self._closed = True
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.dismiss(None)
+
+
+class UpdateSettingsModal(PickerModal[None]):
+    """Modal to toggle ``auto_check`` and ``auto_apply`` update settings.
+
+    Each row is an ``OptionList`` entry labeled with its current state; Enter
+    flips the setting via the persistence callbacks, refreshes the labels,
+    and keeps focus. Esc closes. No new globals or services are introduced —
+    the modal only calls ``persist_update_auto_check`` and
+    ``persist_update_auto_apply`` already exported by ``sky_music.config``.
+    """
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(
+        self,
+        *,
+        auto_check: bool,
+        auto_apply: bool,
+        on_auto_check: Any,
+        on_auto_apply: Any,
+        theme_name: str = "aurora",
+    ) -> None:
+        PickerModal.__init__(
+            self,
+            "Update Settings",
+            [
+                KeyHint("enter", "Toggle"),
+                KeyHint("esc", "Close"),
+            ],
+            theme_name=theme_name,
+        )
+        self._auto_check = bool(auto_check)
+        self._auto_apply = bool(auto_apply)
+        self._on_auto_check = on_auto_check
+        self._on_auto_apply = on_auto_apply
+
+    def _label_for(self, which: str) -> str:
+        if which == "auto_check":
+            state = self._auto_check
+            text = "Auto-check updates on launch"
+        else:
+            state = self._auto_apply
+            text = "Auto-apply without asking"
+        mark = "[x]" if state else "[ ]"
+        return f"{mark}  {text}"
+
+    def compose_modal_content(self) -> ComposeResult:
+        yield Static(
+            "Auto-apply overwrites files in-place and restarts Sky Player.\n"
+            "It is automatically deferred during playback.",
+            id="update-settings-info",
+        )
+        yield OptionList(
+            self._label_for("auto_check"),
+            self._label_for("auto_apply"),
+            id="modal-options",
+        )
+
+    def on_modal_mounted(self) -> None:
+        options = self.query_one("#modal-options", OptionList)
+        options.highlighted = 0
+        self.set_focus(options)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss(None)
+            return
+        if event.key == "enter":
+            event.stop()
+            self._toggle_current()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self._toggle_current()
+
+    def _toggle_current(self) -> None:
+        options = self.query_one("#modal-options", OptionList)
+        idx = options.highlighted
+        if idx is None:
+            return
+        if idx == 0:
+            self._auto_check = not self._auto_check
+            self._on_auto_check(self._auto_check)
+        elif idx == 1:
+            self._auto_apply = not self._auto_apply
+            self._on_auto_apply(self._auto_apply)
+        # Re-render in place: clear and re-add the two rows, keeping highlight
+        # at the same index so the user can immediately toggle again.
+        options.clear_options()
+        options.add_options([
+            self._label_for("auto_check"),
+            self._label_for("auto_apply"),
+        ])
+        options.highlighted = idx
+
+    def action_close(self) -> None:
+        self.dismiss(None)

@@ -119,6 +119,7 @@ class PickerAppHost(Protocol):
     def on_picker_confirm(self, result: SongPickerResult) -> None: ...
     def on_picker_cancel(self) -> None: ...
     def on_picker_check_for_update(self) -> None: ...
+    def on_picker_open_update_settings(self) -> None: ...
     def on_picker_snapshot_calibration_state(self, choice: CalibrationChoice | None) -> None: ...
     def on_picker_profile_changed(self, profile_name: str) -> None: ...
     def on_picker_tempo_changed(self, tempo_scale: float) -> None: ...
@@ -990,6 +991,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self.action_open_help()
         elif command == "update":
             self.action_check_for_update()
+        elif command == "update_settings":
+            self.action_open_update_settings()
 
     def action_toggle_preview(self) -> None:
         self.preview_visible = not self.preview_visible
@@ -1160,3 +1163,6 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def action_check_for_update(self) -> None:
         cast(PickerAppHost, self.app).on_picker_check_for_update()
+
+    def action_open_update_settings(self) -> None:
+        cast(PickerAppHost, self.app).on_picker_open_update_settings()

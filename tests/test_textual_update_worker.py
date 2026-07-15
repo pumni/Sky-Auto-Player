@@ -20,6 +20,7 @@ through ``isolated_config``).
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -409,3 +410,284 @@ def test_run_command_routes_update(monkeypatch: pytest.MonkeyPatch) -> None:
     app._picker = stub  # type: ignore[attr-defined]
     app._run_command("update")
     assert called == [True]
+
+
+# ── _apply_staged & download_and_apply_update_worker guards ─────────────────
+
+
+def test_apply_staged_catches_installer_error_and_notifies(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Installer-side error must surface as a user notify, not a crash."""
+    from sky_music.infrastructure.update_installer import UpdateInstallerError
+
+    app = _make_app()
+    ui = _install_ui_stubs(app)
+
+    def _raise(*args: Any, **kwargs: Any) -> None:
+        raise UpdateInstallerError("boom")
+
+    import sky_music.orchestration.update_service as svc
+    monkeypatch.setattr(svc, "apply_staged_update", _raise)
+
+    staged = object()  # opaque; _apply_staged forwards it
+    app._apply_staged(staged, install_dir=None)
+
+    # notify was called exactly once with severity=error and message contains boom
+    assert len(ui["notify"].calls) == 1
+    msg = str(ui["notify"].calls[0][0])
+    assert "boom" in msg
+    assert ui["notify"].kwargs[0].get("severity") == "error"
+
+
+def test_apply_staged_invokes_service_on_success(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: service is called with the staged object as documented."""
+    app = _make_app()
+    _install_ui_stubs(app)
+    captured: list[Any] = []
+
+    def _ok(staged: Any, *, install_dir: Any = None) -> None:
+        captured.append((staged, install_dir))
+
+    import sky_music.orchestration.update_service as svc
+    monkeypatch.setattr(svc, "apply_staged_update", _ok)
+
+    sentinel = object()
+    app._apply_staged(sentinel, install_dir=None)
+    assert captured == [(sentinel, None)]
+
+
+def test_download_worker_defers_when_in_playback(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ``playback_mode != PICKER``, the worker must NOT download —
+    user is asked to exit playback first.
+    """
+    app = _make_app()
+    ui = _install_ui_stubs(app)
+    app.playback_mode = app_module.PlaybackMode.PLAYING
+
+    downloaded: list[bool] = []
+
+    import sky_music.orchestration.update_service as svc
+    monkeypatch.setattr(
+        svc,
+        "download_and_verify_update",
+        lambda *a, **k: downloaded.append(True) or None,
+    )
+
+    release = UpdateInfo(
+        latest_version="2.3.2",
+        download_url="https://example.com/x.zip",
+        release_notes="", html_url="", published_at="",
+    )
+    bound = app.download_and_apply_update_worker
+    fn = getattr(bound, "__wrapped__", bound)
+    fn(app, release=release)
+
+    # download was NOT attempted
+    assert downloaded == []
+    # a warning notify was scheduled via call_from_thread
+    assert len(ui["call_from_thread"].calls) == 1
+    msg = str(ui["call_from_thread"].calls[0][1])
+    assert "exit playback" in msg.lower()
+    assert ui["call_from_thread"].kwargs[0].get("severity") == "warning"
+
+
+def test_download_worker_pushes_modal_and_forwards_progress(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In PICKER mode, the worker schedules a push of UpdateProgressModal via
+    ``call_from_thread`` and forwards progress callbacks to the modal.
+    """
+    import sky_music.orchestration.update_service as svc
+    from sky_music.infrastructure.update_installer import StagedUpdate
+    from sky_music.orchestration.update_service import DownloadOutcome
+    from sky_music.ui.textual_app.modals import UpdateProgressModal
+
+    app = _make_app()
+    app.playback_mode = app_module.PlaybackMode.PICKER
+
+    # Make call_from_thread actually run the synced callable so push_screen is
+    # exercised and the progress forwarding path runs end-to-end.
+    def _call_from_thread(fn: Any, *args: Any, **kwargs: Any) -> None:
+        with contextlib.suppress(Exception):
+            fn(*args, **kwargs)
+
+    app.call_from_thread = _call_from_thread  # type: ignore[method-assign]
+
+    push_calls: list[Any] = []
+    def _push_screen(modal: Any) -> None:
+        push_calls.append(modal)
+    app.push_screen = _push_screen  # type: ignore[method-assign]
+
+    progress_seen: list[tuple[int, int | None]] = []
+
+    def _fake_download(release: Any, *, install_dir: Any = None, progress=None):
+        if progress is not None:
+            progress(1024 * 1024, 10 * 1024 * 1024)
+            progress(5 * 1024 * 1024, 10 * 1024 * 1024)
+            progress_seen.append((5 * 1024 * 1024, 10 * 1024 * 1024))
+        return DownloadOutcome(
+            staged=StagedUpdate(staging_dir=Path("/tmp/x"), new_version="2.3.2"),
+            error=None,
+        )
+
+    monkeypatch.setattr(svc, "download_and_verify_update", _fake_download)
+
+    # Block apply_staged_update from sys.exit-ing the test process.
+    def _apply_noop(staged: Any, *, install_dir: Any = None) -> None:
+        return None
+
+    monkeypatch.setattr(svc, "apply_staged_update", _apply_noop)
+
+    release = UpdateInfo(
+        latest_version="2.3.2",
+        download_url="https://example.com/x.zip",
+        release_notes="", html_url="", published_at="",
+    )
+    bound = app.download_and_apply_update_worker
+    fn = getattr(bound, "__wrapped__", bound)
+    fn(app, release=release)
+
+    assert len(push_calls) == 1
+    modal = push_calls[0]
+    assert isinstance(modal, UpdateProgressModal)
+    assert modal.latest_version == "2.3.2"
+    assert progress_seen == [(5 * 1024 * 1024, 10 * 1024 * 1024)]
+
+
+def test_download_worker_failure_updates_modal_status(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sky_music.orchestration.update_service as svc
+    from sky_music.orchestration.update_service import DownloadOutcome
+
+    app = _make_app()
+    app.playback_mode = app_module.PlaybackMode.PICKER
+
+    def _call_from_thread(fn: Any, *args: Any, **kwargs: Any) -> None:
+        with contextlib.suppress(Exception):
+            fn(*args, **kwargs)
+
+    app.call_from_thread = _call_from_thread  # type: ignore[method-assign]
+
+    modal_seen: list[Any] = []
+    def _push_screen(modal: Any) -> None:
+        modal_seen.append(modal)
+    app.push_screen = _push_screen  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        svc,
+        "download_and_verify_update",
+        lambda *a, **k: DownloadOutcome(staged=None, error="checksum missing"),
+    )
+
+    release = UpdateInfo(
+        latest_version="2.3.2",
+        download_url="https://example.com/x.zip",
+        release_notes="", html_url="", published_at="",
+    )
+    fn = getattr(app.download_and_apply_update_worker, "__wrapped__", None) \
+        or app.download_and_apply_update_worker
+    fn(app, release=release)
+
+    # The failure path chose the modal-status route (modal was pushed) and
+    # did not call the previous `self.notify(...)` path. Because notify is
+    # stubbed by direct invocation through _call_from_thread, we assert the
+    # modal was pushed so the user can read the in-modal error message.
+    assert len(modal_seen) == 1
+
+
+# ── _restore_pending_update_indicator ─────────────────────────────────────────
+
+
+def test_restore_pending_indicator_skips_when_no_pending_marker(
+    isolated_config: Path,
+) -> None:
+    """No ``pending_update_version`` in config → no indicator restored, the
+    app bar stays at the plain ``v{VERSION}``.
+    """
+    app = _make_app()
+    set_version_calls: list[str] = []
+    # Build a tiny fake GradientHeader stub recordable as a Static-method-style
+    # so we capture what set_version was asked to render.
+
+    class _Header:
+        def set_version(self, *args: Any, **kw: Any) -> None:
+            set_version_calls.append(str(args[0]))
+
+    # _set_version_indicator + _restore_pending_update_indicator both funnel
+    # through self.query_one("#appbar", GradientHeader). Patch query_one.
+    def _query(selector: str, _type: Any = None) -> Any:
+        return _Header()
+    app.query_one = _query  # type: ignore[method-assign]
+
+    app._set_version_indicator()
+    app._restore_pending_update_indicator()
+
+    # Only the baseline v{VERSION} call should have run.
+    assert set_version_calls == [f"v{app_module.VERSION}"]
+
+
+def test_restore_pending_indicator_applies_arrow_for_newer_pending(
+    isolated_config: Path,
+) -> None:
+    """When config has a pending version strictly newer than the running one,
+    the indicator flips to ``v{VERSION} ↑`` with highlight.
+    """
+    cfg = AppConfig(update=UpdateSettings(pending_update_version="99.99.99"))
+    app = app_module.SkyPickerApp(initial_dry_run=True, cfg=cfg)
+
+    set_version_calls: list[dict[str, Any]] = []
+
+    class _Header:
+        def set_version(self, *args: Any, **kw: Any) -> None:
+            set_version_calls.append({"label": args[0], **kw})
+
+    def _query(selector: str, _type: Any = None) -> Any:
+        return _Header()
+    app.query_one = _query  # type: ignore[method-assign]
+
+    app._set_version_indicator()
+    app._restore_pending_update_indicator()
+
+    # Two calls total: baseline + highlighted arrow.
+    assert len(set_version_calls) == 2
+    baseline, arrow = set_version_calls
+    assert baseline["label"] == f"v{app_module.VERSION}"
+    assert arrow["label"] == f"v{app_module.VERSION} \u2191"
+    assert arrow.get("highlight") is True
+
+
+def test_restore_pending_indicator_clears_stale_pending(
+    isolated_config: Path,
+) -> None:
+    """If the stored pending version is no longer newer (e.g. user manually
+    upgraded past it), the marker is cleared from config and no arrow showed.
+    """
+    cfg = AppConfig(update=UpdateSettings(pending_update_version="0.0.1"))
+    app = app_module.SkyPickerApp(initial_dry_run=True, cfg=cfg)
+
+    set_version_calls: list[str] = []
+
+    class _Header:
+        def set_version(self, *args: Any, **kw: Any) -> None:
+            set_version_calls.append(str(args[0]))
+
+    def _query(selector: str, _type: Any = None) -> Any:
+        return _Header()
+    app.query_one = _query  # type: ignore[method-assign]
+
+    app._set_version_indicator()
+    app._restore_pending_update_indicator()
+
+    # Only baseline; pending marker was cleared (no second call, no arrow).
+    assert set_version_calls == [f"v{app_module.VERSION}"]
+    # And config now has empty pending_update_version.
+    from sky_music.config import load_config
+    clear_config_cache()
+    reloaded = load_config(force_reload=True)
+    assert reloaded.update.pending_update_version == ""

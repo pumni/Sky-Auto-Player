@@ -121,9 +121,14 @@ def test_enter_on_update_selects_it() -> None:
 
 def test_set_filter_with_match_keeps_only_matching_commands() -> None:
     widget = _make_widget()
-    widget.set_filter("update")
+    # The filter is a prefix/substring match — pick a token that selects only
+    # one command so the assertion below remains unambiguous. ``"update "`` is
+    # too tight (no command starts with that); the canonical test used
+    # ``"update"``, but now that ``update_settings`` also starts with that
+    # token, use the more specific second token of the lone target instead.
+    widget.set_filter("check for")
     ids = _option_ids(widget)
-    # Only the System header + the update command should remain.
+    # Only the System header + the matching command should remain.
     assert _command_option_id("update") in ids
     for cmd in COMMANDS:
         if cmd.id != "update":

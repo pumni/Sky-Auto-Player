@@ -300,8 +300,9 @@ def write_apply_batch(
       5. ``del "%~f0"`` — the batch deletes itself.
 
     The ``.old.{guid}`` backup is NOT removed by this script — it is cleaned up
-    on the next successful app launch by ``_check_post_update_flag``. This
-    leaves a manual rollback path if the new exe fails to start.
+    on the next successful app launch by the consumer of
+    :func:`find_old_backups` (e.g. ``_check_post_update_flag``). This leaves a
+    manual rollback path if the new exe fails to start.
     """
     exe_path = install_dir / "Sky-Player.exe"
     ps_script = (
@@ -386,3 +387,35 @@ def install_dir_for_frozen() -> Path:
 def post_update_flag_path(install_dir: Path) -> Path:
     """Path to a flag file consumed by the next launch's success toast."""
     return install_dir / ".sky-just-updated"
+
+
+def find_old_backups(install_dir: Path) -> list[Path]:
+    """Return sibling directories named ``<install_dir>.old.{guid}`` left by
+    past atomic swaps.
+
+    Pure / side-effect free: lists the filesystem but never mutates. The
+    caller (typically ``_check_post_update_flag`` on app boot) is responsible
+    for removing them once a launch with the new version succeeds.
+
+    Returns paths sorted by mtime descending so a single ``rmtree`` pass can
+    be aborted cleanly if any removal fails.
+    """
+    if install_dir.exists() is False or install_dir.parent == install_dir:
+        return []
+    prefix = f"{install_dir.name}.old."
+    matches: list[Path] = []
+    try:
+        for entry in install_dir.parent.iterdir():
+            if not entry.is_dir():
+                continue
+            name = entry.name
+            if not name.startswith(prefix):
+                continue
+            # The .old.suffix must be a non-empty hex-guid-like token.
+            tail = name[len(prefix):]
+            if tail and len(tail) >= 4:
+                matches.append(entry)
+    except OSError:
+        return []
+    matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return matches
