@@ -33,6 +33,7 @@ py-modules = ["main", "build_app"]
 dev = [
     "pyinstaller>=6.0.0",
     "pyright>=1.1.411",
+    "pytest>=8.4.2",
     "pytest-textual-snapshot>=1.1.0",
     "ruff>=0.15.20",
     "soundcard>=0.4.6",

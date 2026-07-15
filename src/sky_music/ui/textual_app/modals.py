@@ -6,11 +6,21 @@ from typing import Any, TypeVar
 
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, ProgressBar, RichLog, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Input,
+    OptionList,
+    ProgressBar,
+    RichLog,
+    Rule,
+    Static,
+)
 
-from sky_music.ui.picker_theme import THEME_PRESETS, get_theme_preset
+from sky_music.ui.picker_theme import THEME_PRESETS, ThemePreset, get_theme_preset
 from sky_music.ui.textual_app.components.command_palette import CommandPaletteList
 from sky_music.ui.textual_app.components.footers import ModalHintBar
 from sky_music.ui.textual_app.keymap import (
@@ -440,22 +450,33 @@ class UpdateProgressModal(PickerModal[None]):
             self.dismiss(None)
 
 
+class CheckBoxSquare(Checkbox):
+    """A ``Checkbox`` variant that renders as ``[✓]`` (green bold) /
+    ``[✓]`` (dimmed) instead of the default ``▐X▌`` block, giving a
+    traditional square-checkbox look.  The checkmark is always present;
+    checked/unchecked is distinguished by colour and boldness (``.-on``
+    CSS class) — consistent with Textual's own ``ToggleButton`` approach."""
+
+    BUTTON_LEFT = "["
+    BUTTON_INNER = "✓"
+    BUTTON_RIGHT = "]"
+
+
 class UpdateSettingsModal(PickerModal[str | None]):
-    """Modal to view and toggle update settings.
+    """Modal to view and toggle update settings using native Textual widgets.
 
     Layout (top to bottom):
 
-      1. Header ``#update-settings-info``: a configurable summary of the
-         current check cadence (e.g. "Auto-check every 24h"), last check
-         timestamp, and the active skip-version marker if any.
-      2. ``OptionList`` rows for ``auto_check`` and ``auto_apply`` labelled
-         with ``[x]`` / ``[ ]`` so the user can see the live state at a
-         glance — flipping a row re-renders in place.
-      3. Rows for actions that don't have a toggle state: "Check for Update
-         now" (Enter dismisses with ``result="check_now"``) and, when a
+      1. Header ``#update-settings-info``: cadence + last check summary.
+      2. Two ``CheckBoxSquare`` rows for ``auto_check`` and ``auto_apply``.
+         Each renders ``[✓]`` (checked) / ``[  ]`` (unchecked) and fires the
+         persistence callback on every toggle via ``Checkbox.Changed``.
+      3. A ``Rule.horizontal()`` separator between the toggles and the
+         action buttons.
+      4. ``Button`` widgets for "Check for Update now" and, when a
          skip-version is recorded, "Clear skip-version vX.Y.Z".
-      4. Footer-hint bar with the keyboard map (``enter`` toggles, ``c``
-         triggers an immediate check, ``esc`` closes, ``tab`` rows down).
+      5. Footer-hint bar with keyboard map (``space/enter`` toggles focused
+         checkbox, ``c`` triggers an immediate check, ``esc`` closes).
 
     All toggle changes are persisted immediately by the caller's callbacks;
     ``check_now`` and ``clear_skip`` are returned via :meth:`Screen.dismiss`
@@ -464,8 +485,8 @@ class UpdateSettingsModal(PickerModal[str | None]):
     """
 
     BINDINGS = [
-        ("escape", "close", "Close"),
-        ("c", "check_now", "Check now"),
+        Binding("escape", "close", "Close", priority=True, show=False),
+        Binding("c", "check_now", "Check now", priority=True, show=False),
     ]
 
     def __init__(
@@ -484,7 +505,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
             self,
             "Update Settings",
             [
-                KeyHint("enter", "Toggle"),
+                KeyHint("space", "Toggle"),
                 KeyHint("c", "Check now"),
                 KeyHint("esc", "Close"),
             ],
@@ -497,12 +518,12 @@ class UpdateSettingsModal(PickerModal[str | None]):
         self._last_check_ts = int(last_check_ts) if isinstance(last_check_ts, int) else 0
         self._on_auto_check = on_auto_check
         self._on_auto_apply = on_auto_apply
-        # Optional callback to clear the skip-version marker; set by the app
-        # when wiring the modal (see ``app._open_update_settings_modal``).
-        # Declared here so static analysis knows about the attribute.
+        # Hot color references so renderers pick up theme-aware hex strings.
+        self._theme: ThemePreset = get_theme_preset(theme_name)
+        # Optional callback to clear the skip-version marker; set by the app.
         self._on_clear_skip: Any = None
 
-    # ── Labels ────────────────────────────────────────────────────────────────
+    # ── Header text ─────────────────────────────────────────────────────────
     def _format_interval(self) -> str:
         secs = self._check_interval_s
         if secs <= 0:
@@ -518,141 +539,119 @@ class UpdateSettingsModal(PickerModal[str | None]):
     def _format_last_check(self) -> str:
         if self._last_check_ts <= 0:
             return "never"
-        # Render as local YYYY-MM-DD HH:MM — short and unambiguous.
         import time
 
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(self._last_check_ts))
 
-    def _toggle_label(self, which: str) -> str:
-        if which == "auto_check":
-            text = "Auto-check for updates"
-            state = self._auto_check
-        else:
-            text = "Auto-apply without asking"
-            state = self._auto_apply
-        mark = "[bold green][x][/]" if state else "[dim][ ][/]"
-        return f"{mark}  {text}"
-
     def _info_text(self) -> str:
-        cadence = self._format_interval() if self._auto_check else "off"
+        accent = self._theme.accent
+        muted = self._theme.muted
+        cadence = f"[{accent}]{self._format_interval()}[/]" if self._auto_check else f"[{muted}]off[/]"
+        last = self._format_last_check()
         lines = [
-            f"[bold]Auto-check:[/]  {cadence}   [bold]Last check:[/]  {self._format_last_check()}",
+            f"[bold {accent}]Auto-check:[/]  {cadence}   [bold {accent}]Last check:[/]  {last}",
             "",
-            "[bold]ON[/]   = Sky Player will check GitHub for newer releases on launch.",
-            "[bold]Auto-apply[/] automatically downloads and installs those updates.\n"
-            "It is automatically deferred during playback and the previous install\n"
-            "is kept as a backup until the next successful launch.",
+            "Toggle switches reflect and persist the live setting immediately.",
+            "",
+            "[bold]Auto-apply[/] downloads and installs newer releases without asking.\n"
+            "It is deferred during playback; the previous install is kept as a backup.",
         ]
         if self._skip_version:
             lines.append("")
             lines.append(
-                f"[bold yellow]Skip-version:[/] v{self._skip_version}. Use the "
-                "row below to clear it so you get notified about the release again."
+                f"[bold {self._theme.warning}]Skip-version:[/] v{self._skip_version}.\n"
+                "Use the button below to clear it so you get notified about this release again."
             )
         return "\n".join(lines)
 
-    def _action_labels(self) -> list[str]:
-        labels = ["Check for Update now  [dim green](c)[/]"]
-        if self._skip_version:
-            labels.append(f"Clear skip-version v{self._skip_version}")
-        return labels
-
-    def _is_action_row(self, idx: int) -> bool:
-        # The OptionList order is: [auto_check, auto_apply, *action_rows].
-        return idx >= 2
-
-    # ── Compose & lifecycle ─────────────────────────────────────────────────
+    # ── Compose ─────────────────────────────────────────────────────────────
     def compose_modal_content(self) -> ComposeResult:
+        muted = self._theme.muted
         yield Static(self._info_text(), id="update-settings-info", markup=True)
-        yield Static("", id="update-settings-spacer")
-        yield OptionList(
-            self._toggle_label("auto_check"),
-            self._toggle_label("auto_apply"),
-            *self._action_labels(),
-            id="modal-options",
-        )
+        yield Rule.horizontal(id="update-settings-divider")
+        # Two toggle rows using CheckBoxSquare — renders [✓] / [  ] with
+        # theme-aware success and muted colours.
+        with Horizontal(id="row-auto-check"):
+            yield CheckBoxSquare(value=self._auto_check, id="checkbox-auto-check", compact=True)
+            yield Static(
+                f"[bold]Auto-check for updates[/]\n"
+                f"[{muted}]Check GitHub in the background at the cadence above.[/]",
+                id="label-auto-check",
+                markup=True,
+            )
+        with Horizontal(id="row-auto-apply"):
+            yield CheckBoxSquare(value=self._auto_apply, id="checkbox-auto-apply", compact=True)
+            yield Static(
+                f"[bold]Auto-apply without asking[/]\n"
+                f"[{muted}]Download and install newer releases automatically.[/]",
+                id="label-auto-apply",
+                markup=True,
+            )
+        yield Rule.horizontal(id="update-settings-divider-2")
+        # Action buttons — using Textual Button.Pressed → on_button_pressed.
+        with Horizontal(id="row-actions"):
+            yield Button(
+                "Check for Update now",
+                id="btn-check-now",
+                variant="primary",
+            )
+            if self._skip_version:
+                yield Button(
+                    f"Clear skip-version v{self._skip_version}",
+                    id="btn-clear-skip",
+                    variant="warning",
+                )
         yield Static(
-            "[dim]Toggling a setting immediately persists to config.json.[/]",
+            f"[{muted}]Tip: Space or Enter toggles the focused checkbox.[/]",
             id="update-settings-foot",
             markup=True,
         )
 
     def on_modal_mounted(self) -> None:
-        options = self.query_one("#modal-options", OptionList)
-        options.highlighted = 0
-        self.set_focus(options)
+        # Focus the first checkbox — the user can immediately toggle it with
+        # space/enter, or tab down to the buttons.
+        cb = self.query_one("#checkbox-auto-check", CheckBoxSquare)
+        self.set_focus(cb)
 
-    # ── Input handlers ───────────────────────────────────────────────────────
-    def on_key(self, event: events.Key) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.dismiss(None)
-            return
-        if event.key == "enter":
-            event.stop()
-            self._activate_current()
-            return
-        if event.key == "tab":
-            # Move highlight to the next row (wraps around) — friendlier than
-            # OptionList's default behaviour of moving focus out of the list.
-            event.stop()
-            options = self.query_one("#modal-options", OptionList)
-            n = len(options.options) if hasattr(options, "options") else 0
-            if n > 0:
-                options.highlighted = ((options.highlighted or 0) + 1) % n
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+    # ── Checkbox handlers (Textual native) ─────────────────────────────────
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        # ``Checkbox.Changed`` bubbles up from the CheckBoxSquare widget to
+        # this modal, so we get the live new value on ``event.value``
+        # regardless of which toggle fired. The checkbox already updated its
+        # own reactive value; our job is only to persist via the
+        # caller-registered callback and refresh the cadence line in the info
+        # header.
         event.stop()
-        self._activate_current()
-
-    def _activate_current(self) -> None:
-        options = self.query_one("#modal-options", OptionList)
-        idx = options.highlighted
-        if idx is None:
-            return
-        if idx == 0:
-            self._auto_check = not self._auto_check
-            self._on_auto_check(self._auto_check)
-        elif idx == 1:
-            self._auto_apply = not self._auto_apply
-            self._on_auto_apply(self._auto_apply)
-        elif idx == 2:
-            # "Check for Update now"
-            self.dismiss("check_now")
-            return
-        elif idx == 3 and self._skip_version:
-            # "Clear skip-version vX.Y.Z"
-            self._skip_version = ""
-            self._clear_skip_persist()
-            self._refresh_info_and_options(idx)
-            return
-        self._refresh_info_and_options(idx)
-
-    def _refresh_info_and_options(self, keep_idx: int) -> None:
-        options = self.query_one("#modal-options", OptionList)
+        if event.checkbox.id == "checkbox-auto-check":
+            self._auto_check = event.value
+            self._on_auto_check(event.value)
+        elif event.checkbox.id == "checkbox-auto-apply":
+            self._auto_apply = event.value
+            self._on_auto_apply(event.value)
         with contextlib.suppress(Exception):
             self.query_one("#update-settings-info", Static).update(self._info_text())
-        # Re-build the option list with the new state. We clear and re-add
-        # because OptionList does not support per-option label update, and we
-        # keep the highlight at the same index so the user can toggle again
-        # immediately. After rebuilding, the action rows count may change when
-        # the skip-version row disappears.
-        options.clear_options()
-        actions = self._action_labels()
-        options.add_options([
-            self._toggle_label("auto_check"),
-            self._toggle_label("auto_apply"),
-            *actions,
-        ])
-        # Keep the highlight inside the new list bounds.
-        n = 2 + len(actions)
-        options.highlighted = max(0, min(keep_idx, n - 1))
+
+    # ── Button handlers (Textual native) ────────────────────────────────────
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "btn-check-now":
+            self.dismiss("check_now")
+        elif event.button.id == "btn-clear-skip":
+            # Persist + drop the local skip-version flag, then remove the
+            # button from the DOM so it cannot be pressed twice.
+            self._skip_version = ""
+            if self._on_clear_skip is not None:
+                self._on_clear_skip()
+            event.button.remove()
+            with contextlib.suppress(Exception):
+                self.query_one("#update-settings-info", Static).update(self._info_text())
+
+    # ── Modal-level key handling ─────────────────────────────────────────────
+    # (handled via priority BINDINGS)
 
     def _clear_skip_persist(self) -> None:
-        """Best-effort: hand off the clear through a callback when one was
-        registered. The caller wires this to ``persist_update_skip_version
-        (cfg, "")``.
-        """
+        # Kept for callers/tests that exercise the action directly. The button
+        # path goes through ``on_button_pressed`` instead.
         cb = self._on_clear_skip
         if cb is not None:
             cb()

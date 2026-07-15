@@ -88,18 +88,43 @@ UpdateSettingsModal #update-settings-info {
     margin: 0 1 1 1;
     padding: 0 1;
 }
-UpdateSettingsModal #update-settings-spacer { height: 1; }
+UpdateSettingsModal #update-settings-divider { height: 1; margin: 0 1 1 1; }
+UpdateSettingsModal #update-settings-divider-2 { height: 1; margin: 1 1 1 1; }
 UpdateSettingsModal #update-settings-foot {
     height: auto;
     margin: 1 1 0 1;
     padding: 0 1;
     color: $text-muted;
 }
-UpdateSettingsModal #modal-options {
+/* Toggle-row layout: switch left, label right, vertically centered. */
+UpdateSettingsModal #row-auto-check,
+UpdateSettingsModal #row-auto-apply {
     height: auto;
-    max-height: 16;
-    margin: 0 1 1 1;
     padding: 0 1;
+    align-horizontal: left;
+    align-vertical: top;
+}
+UpdateSettingsModal #row-auto-check Static,
+UpdateSettingsModal #row-auto-apply Static {
+    margin-left: 1;
+    width: 1fr;
+}
+UpdateSettingsModal #row-auto-check Checkbox,
+UpdateSettingsModal #row-auto-apply Checkbox {
+    width: 3;
+    height: auto;
+    margin: 0;
+    background: transparent;
+}
+/* Action buttons row — wrap so the optional clear-skip button sits next to
+   the check-now button on wider terminals, and wraps below on narrower ones. */
+UpdateSettingsModal #row-actions {
+    height: auto;
+    layout: horizontal;
+    padding: 0 1;
+}
+UpdateSettingsModal #row-actions Button {
+    margin: 0 1 0 0;
 }
 
 Screen.playback-active #songs { opacity: 0.45; }

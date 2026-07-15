@@ -365,30 +365,42 @@ def test_worker_force_mode_preserves_skip_version_behavior(
 def test_command_registered_as_update() -> None:
     """``/`` Commands modal must include a "Check for Update" entry whose
     id resolves to the ``update`` action handled in ``_run_command``.
+
+    The command is palette-only (no hotkey) — symmetric with
+    ``update_settings`` — so the picker footer stays uncluttered and the
+    command palette is the single discovery surface for update actions.
     """
     from sky_music.ui.textual_app.keymap import COMMANDS
 
     ids = {cmd.id for cmd in COMMANDS}
     assert "update" in ids
     update_cmd = next(cmd for cmd in COMMANDS if cmd.id == "update")
-    assert update_cmd.key.lower() == "u"
+    assert update_cmd.key == ""
     assert update_cmd.label == "Check for Update"
     assert update_cmd.group == "System"
 
 
-def test_update_binding_present_on_picker_screen() -> None:
-    """Pressing ``u`` should dispatch ``check_for_update``; ensure the binding
-    exists on ``PickerScreen`` (the screen that owns the song picker bindings)
-    and maps to that action.
-    """
-    from textual.binding import Binding
+def test_update_command_is_palette_only_no_hotkey() -> None:
+    """``Check for Update`` is palette-only: the ``CommandSpec.key`` is empty
+    so the command palette shows no hotkey column for it, and ``PickerScreen``
+    carries no ``u`` binding that would shadow the command palette route.
 
+    This matches ``Update Settings``, which has been palette-only all along —
+    the two update-related commands now present themselves symmetrically.
+    """
+    from sky_music.ui.textual_app.keymap import COMMANDS
     from sky_music.ui.textual_app.screens.picker import PickerScreen
 
-    bindings = PickerScreen.BINDINGS
-    update_bindings = [b for b in bindings if getattr(b, "action", None) == "check_for_update"]
-    assert update_bindings, "Binding for check_for_update missing on PickerScreen"
-    assert any(isinstance(b, Binding) and b.key == "u" for b in update_bindings)
+    update_cmd = next((c for c in COMMANDS if c.id == "update"), None)
+    assert update_cmd is not None, "update command must be in the palette"
+    assert update_cmd.key == "", f"update hotkey must be empty, got {update_cmd.key!r}"
+
+    # No PickerScreen binding should fire ``check_for_update`` from a key
+    # press — the path is palette → ``_run_command("update")`` only.
+    direct_bindings = [b for b in PickerScreen.BINDINGS if getattr(b, "action", None) == "check_for_update"]
+    assert direct_bindings == [], (
+        "PickerScreen must not bind check_for_update to a key — it's palette-only"
+    )
 
 
 def test_run_command_routes_update(monkeypatch: pytest.MonkeyPatch) -> None:

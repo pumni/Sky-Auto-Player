@@ -14,7 +14,6 @@ import asyncio
 from typing import Any
 
 import pytest
-from textual.widgets import OptionList
 
 from sky_music.config import AppConfig
 from sky_music.ui.textual_app import app as app_module
@@ -127,9 +126,11 @@ def test_update_progress_modal_mounts_without_total(monkeypatch: pytest.MonkeyPa
 
 
 def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Toggling a row in UpdateSettingsModal must call the corresponding
-    persistence callback and re-render the row with the new checkbox.
+    """Toggling a Checkbox in UpdateSettingsModal must call the corresponding
+    persistence callback.
     """
+    from textual.widgets import Checkbox
+
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
@@ -147,12 +148,22 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
         )
         app.push_screen(modal)
         await pilot.pause()
-        # Highlight is on row 0 (auto_check) — press enter to toggle to False.
-        await pilot.press("enter")
+        # auto_check Checkbox is focused by on_modal_mounted, value is True.
+        cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
+        assert cb_check.value is True
+        # Press Space to toggle.
+        await pilot.press("space")
+        await pilot.pause()
+        assert cb_check.value is False
         assert auto_check_calls == [False]
-        # Move to row 1 (auto_apply) and toggle to True.
-        await pilot.press("down")
-        await pilot.press("enter")
+        # Tab to auto_apply Checkbox (value is False).
+        await pilot.press("tab")
+        await pilot.pause()
+        cb_apply = modal.query_one("#checkbox-auto-apply", Checkbox)
+        assert cb_apply.value is False
+        await pilot.press("space")
+        await pilot.pause()
+        assert cb_apply.value is True
         assert auto_apply_calls == [True]
         # Modal remains open until Esc.
         await pilot.press("escape")
@@ -199,39 +210,51 @@ def test_update_settings_modal_check_now_shortcut(
 def test_update_settings_modal_clear_skip_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When a skip-version is configured, the modal exposes a row that clears
-    it via the registered callback."""
+    """When a skip-version is configured, the modal exposes a Button that clears
+    it via the registered callback.
+    """
+    from textual.widgets import Button
+
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
 
     clear_calls: list[bool] = []
 
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateSettingsModal(
-            auto_check=True,
-            auto_apply=False,
-            on_auto_check=lambda _v: None,
-            on_auto_apply=lambda _v: None,
-            skip_version="2.4.0",
-            theme_name="aurora",
-        )
-        modal._on_clear_skip = lambda: clear_calls.append(True)  # type: ignore[attr-defined]
-        app.push_screen(modal)
-        await pilot.pause()
-        # Row order: [0]=auto_check, [1]=auto_apply, [2]=Check-now, [3]=Clear skip.
-        options = modal.query_one("#modal-options", OptionList)
-        assert options.option_count == 4
-        # Move to the "Clear skip-version" row and trigger it.
-        options.highlighted = 3
-        await pilot.pause()
-        await pilot.press("enter")
-        assert clear_calls == [True]
-        # The skip-version row should be gone after clear (action row count drops).
-        assert options.option_count == 3
-        await pilot.press("escape")
+    async def _run_large() -> None:
+        app = app_module.SkyPickerApp(initial_dry_run=True)
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            modal = UpdateSettingsModal(
+                auto_check=True,
+                auto_apply=False,
+                on_auto_check=lambda _v: None,
+                on_auto_apply=lambda _v: None,
+                skip_version="2.4.0",
+                theme_name="aurora",
+            )
+            modal._on_clear_skip = lambda: clear_calls.append(True)  # type: ignore[attr-defined]
+            app.push_screen(modal)
+            await pilot.pause()
+            # The clear-skip Button is present in the action row.
+            btn = modal.query_one("#btn-clear-skip", Button)
+            assert btn is not None
+            # Navigate: checkbox-auto-check (focused) → tab → checkbox-auto-apply
+            # → tab → btn-check-now → tab → btn-clear-skip → Enter
+            await pilot.press("tab")
+            await pilot.pause()
+            await pilot.press("tab")
+            await pilot.pause()
+            await pilot.press("tab")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert clear_calls == [True]
+            # The button should be removed from the DOM after clearing.
+            assert len(modal.query("#btn-clear-skip")) == 0
+            await pilot.press("escape")
 
-    _run(_with_app(actions))
+    _run(_run_large())
 
 
 def test_open_update_settings_modal_pushes_screen_with_current_cfg(
@@ -240,6 +263,8 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
     """``on_picker_open_update_settings`` opens the settings modal configured
     from the live ``cfg.update`` values.
     """
+    from textual.widgets import Checkbox
+
     from sky_music.config import AppConfig, UpdateSettings
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
@@ -265,10 +290,44 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
         # The modal was seeded with the live cfg values.
         assert modal._auto_check is False
         assert modal._auto_apply is True
-        # Toggle auto_check via the renamed activator: persists + flips state.
-        options = modal.query_one("#modal-options", OptionList)
-        options.highlighted = 0
-        modal._activate_current()
-        assert modal._auto_check is True  # flipped from False to True
+        # Toggle auto_check via the focused Checkbox.
+        cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
+        assert cb_check.value is False
+        await pilot.press("space")
+        await pilot.pause()
+        assert cb_check.value is True  # flipped from False to True
+        assert modal._auto_check is True  # model state also flipped
 
     _run(_with_app(actions, cfg=cfg))
+
+
+def test_update_settings_modal_renders_divider_between_info_and_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The modal renders a ``Rule.horizontal()`` divider between the info
+    header and the toggle rows — this signals the visual break between
+    ``read me first`` (cadence, legend) and ``do something`` (toggle rows +
+    action rows).
+    """
+    from textual.widgets import Rule
+
+    from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateSettingsModal(
+            auto_check=True,
+            auto_apply=False,
+            on_auto_check=lambda _v: None,
+            on_auto_apply=lambda _v: None,
+            theme_name="aurora",
+        )
+        app.push_screen(modal)
+        await pilot.pause()
+        # The divider is now a native Rule widget.
+        divider = modal.query_one("#update-settings-divider", Rule)
+        assert divider is not None
+        await pilot.press("escape")
+
+    _run(_with_app(actions))

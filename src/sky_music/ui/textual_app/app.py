@@ -74,7 +74,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     CSS = APP_CSS
 
     BINDINGS = [
-        ("q", "cancel", "Quit"),
+        ("q", "quit", "Quit"),
         ("escape", "cancel", "Cancel"),
         ("enter", "confirm", "Play"),
         ("/", "open_commands", "Commands"),
@@ -629,21 +629,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def action_cancel(self) -> None:
         if self.playback_mode in (PlaybackMode.ERROR, PlaybackMode.RISK):
-            self.playback_mode = PlaybackMode.PICKER
-            picker = self._find_picker_screen()
-            if picker is not None:
-                picker._focus_table()
-            return
-        if self.playback_mode == PlaybackMode.COUNTDOWN and self._shutting_down_playback:
+            self._restore_picker_after_playback()
             return
         if self.playback_mode == PlaybackMode.COUNTDOWN:
-            self._shutting_down_playback = True
-            try:
-                self.query_one("#playback-card", PlaybackCard)._stop_timers()
-            except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log("[app] failed to stop countdown timers")
-            self.exit(None)
+            self._restore_picker_after_playback()
             return
         if self.playback_mode == PlaybackMode.PLAYING:
             self._shutting_down_playback = True
@@ -651,6 +640,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
             if bridge is not None:
                 bridge.request("quit")
                 return
+        if self.playback_mode == PlaybackMode.PICKER:
+            picker = self._find_picker_screen()
+            if picker is not None:
+                picker.action_cancel()
+            return
         self.exit(None)
 
     def action_confirm(self) -> None:

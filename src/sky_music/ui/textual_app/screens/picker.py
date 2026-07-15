@@ -129,6 +129,9 @@ class PickerAppHost(Protocol):
     def on_picker_verbose_hud_changed(self, verbose_hud: bool) -> None: ...
     def on_picker_telemetry_enabled_changed(self, telemetry_enabled: bool) -> None: ...
     def handle_playback_card_key(self, key: str) -> bool: ...
+    @property
+    def playback_mode(self) -> str: ...
+    def action_cancel(self) -> None: ...
 
 FUZZY_SCORE_CUTOFF = 60.0
 
@@ -222,7 +225,6 @@ class PickerScreen(Screen[SongPickerResult]):
         Binding("h", "toggle_hud", "HUD", priority=True, show=False),
         Binding("f3", "toggle_telemetry", "Telemetry", priority=True, show=False),
         Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
-        Binding("u", "check_for_update", "Update", priority=True, show=False),
     ]
 
     search_query: reactive[str] = reactive("", init=False)  # type: ignore[override]
@@ -868,11 +870,15 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def action_cancel(self) -> None:
         from textual.widgets import Input
+
+        from sky_music.ui.textual_app.app_state import PlaybackMode
         search = self.query_one("#search", Input)
         if search.has_focus:
             self._focus_table()
-        else:
-            cast(PickerAppHost, self.app).on_picker_cancel()
+            return
+        app = cast(PickerAppHost, self.app)
+        if app.playback_mode != PlaybackMode.PICKER:
+            app.action_cancel()
 
     def _replace_metadata_coordinator(self) -> None:
         self.picker_scope.retire(self.metadata)

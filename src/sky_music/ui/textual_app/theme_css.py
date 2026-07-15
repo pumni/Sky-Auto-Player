@@ -52,13 +52,30 @@ def _theme_css(name: str, t: TextualThemeTokens) -> str:
     }}
     OptionModal.theme-{name} #modal,
     CommandModal.theme-{name} #modal,
-    InfoModal.theme-{name} #modal {{
+    InfoModal.theme-{name} #modal,
+    UpdateSettingsModal.theme-{name} #modal {{
         background: {t.modal_background};
         border: round {t.border};
         border-title-color: {t.modal_title};
         border-title-style: bold;
         border-subtitle-color: {t.muted};
         border-subtitle-align: right;
+    }}
+    UpdateSettingsModal.theme-{name} #btn-check-now {{
+        background: {t.accent_dim};
+        color: {t.foreground};
+        border: tall {t.accent_dim};
+    }}
+    UpdateSettingsModal.theme-{name} #btn-check-now:hover {{
+        background: {t.cursor_background};
+    }}
+    UpdateSettingsModal.theme-{name} #btn-clear-skip {{
+        background: {t.warning};
+        color: {t.foreground};
+        border: tall {t.warning};
+    }}
+    UpdateSettingsModal.theme-{name} #btn-clear-skip:hover {{
+        background: {t.cursor_background};
     }}
     InfoModal.theme-{name} #info {{ color: {t.foreground}; }}
     OptionModal.theme-{name} #modal-info,
@@ -127,13 +144,25 @@ BASE_CSS = """
     UpdateSettingsModal #update-settings-info {
         height: auto; max-height: 12; margin: 0 1 1 1; padding: 0 1;
     }
-    UpdateSettingsModal #update-settings-spacer { height: 1; }
+    UpdateSettingsModal #update-settings-divider { height: 1; margin: 0 1 1 1; }
+    UpdateSettingsModal #update-settings-divider-2 { height: 1; margin: 1 1 1 1; }
     UpdateSettingsModal #update-settings-foot {
         height: auto; margin: 1 1 0 1; padding: 0 1;
     }
-    UpdateSettingsModal #modal-options {
-        height: auto; max-height: 16; margin: 0 1 1 1; padding: 0 1;
+    /* Toggle rows — switch left, label right, vertically centered. */
+    UpdateSettingsModal #row-auto-check,
+    UpdateSettingsModal #row-auto-apply {
+        height: auto; padding: 0 1;
+        align-horizontal: left; align-vertical: top;
     }
+    UpdateSettingsModal #row-auto-check Static,
+    UpdateSettingsModal #row-auto-apply Static {
+        margin-left: 1; width: 1fr;
+    }
+    UpdateSettingsModal #row-auto-check Checkbox, UpdateSettingsModal #row-auto-apply Checkbox { width: 3; height: auto; margin: 0; background: transparent; }
+    /* Action buttons row — horizontal layout, wrap on narrow terminals. */
+    UpdateSettingsModal #row-actions { height: auto; layout: horizontal; padding: 0 1; }
+    UpdateSettingsModal #row-actions Button { margin: 0 1 0 0; }
 
     #playback-card {
         dock: bottom;

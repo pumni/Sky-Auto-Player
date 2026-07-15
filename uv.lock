@@ -444,6 +444,7 @@ dependencies = [
 dev = [
     { name = "pyinstaller" },
     { name = "pyright" },
+    { name = "pytest" },
     { name = "pytest-textual-snapshot" },
     { name = "ruff" },
     { name = "soundcard" },
@@ -460,6 +461,7 @@ requires-dist = [
 dev = [
     { name = "pyinstaller", specifier = ">=6.0.0" },
     { name = "pyright", specifier = ">=1.1.411" },
+    { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-textual-snapshot", specifier = ">=1.1.0" },
     { name = "ruff", specifier = ">=0.15.20" },
     { name = "soundcard", specifier = ">=0.4.6" },
