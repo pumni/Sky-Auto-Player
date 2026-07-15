@@ -897,6 +897,11 @@ class PickerScreen(Screen[SongPickerResult]):
         self._focus_table()
 
     def _focus_table(self) -> None:
+        # Only call app.set_focus when this picker screen is still the
+        # active screen.  Otherwise app.set_focus routes to the *top*
+        # screen (e.g. a modal pushed after resume) and steals its focus.
+        if self is not self.app.screen:
+            return
         self.app.set_focus(self.app.query_one("#songs", SongTable))
 
     def action_open_profile(self) -> None:
@@ -962,9 +967,15 @@ class PickerScreen(Screen[SongPickerResult]):
         cast(PickerAppHost, self.app).on_picker_theme_changed(self.active_theme, self.background_mode)
 
     def action_open_commands(self) -> None:
+        # Defer so the command runs *after* CommandModal dismiss + pop_screen
+        # complete.  Otherwise push_screen inside _run_command races with
+        # dismiss's own pop_screen and the newly pushed screen is popped.
+        def _on_result(value: object | None) -> None:
+            self.call_after_refresh(self._run_command, value)
+
         self.app.push_screen(
             CommandModal("Commands", COMMANDS, theme_name=self.active_theme),
-            self._run_command,
+            _on_result,
         )
 
     def _run_command(self, value: object | None) -> None:
@@ -1171,4 +1182,49 @@ class PickerScreen(Screen[SongPickerResult]):
         cast(PickerAppHost, self.app).on_picker_check_for_update()
 
     def action_open_update_settings(self) -> None:
-        cast(PickerAppHost, self.app).on_picker_open_update_settings()
+        from sky_music.config import (
+            persist_update_auto_apply,
+            persist_update_auto_check,
+            persist_update_skip_version,
+        )
+        from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+        app = cast(PickerAppHost, self.app)
+
+        def _on_auto_check(value: bool) -> None:
+            persist_update_auto_check(self.cfg, value)
+            app.notify(
+                "Auto-update check enabled." if value else "Auto-update check disabled.",
+                severity="information",
+                timeout=4,
+            )
+
+        def _on_auto_apply(value: bool) -> None:
+            persist_update_auto_apply(self.cfg, value)
+            if value:
+                app.notify(
+                    "Auto-apply enabled — newer releases will be downloaded and"
+                    " installed automatically on the next check.",
+                    severity="warning",
+                    timeout=6,
+                )
+            else:
+                app.notify("Auto-apply disabled.", severity="information", timeout=4)
+
+        def _on_settings_result(result: object) -> None:
+            if result == "check_now":
+                app.check_for_updates_worker(force=True)
+
+        modal = UpdateSettingsModal(
+            auto_check=self.cfg.update.auto_check,
+            auto_apply=self.cfg.update.auto_apply,
+            on_auto_check=_on_auto_check,
+            on_auto_apply=_on_auto_apply,
+            skip_version=self.cfg.update.skip_version,
+            check_interval_s=self.cfg.update.check_interval_s,
+            last_check_ts=self.cfg.update.last_check_ts,
+            theme_name=self.active_theme,
+        )
+        modal._on_clear_skip = lambda: persist_update_skip_version(self.cfg, "")
+
+        self.app.push_screen(modal, _on_settings_result)

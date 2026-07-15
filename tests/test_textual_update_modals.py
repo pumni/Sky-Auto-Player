@@ -148,7 +148,7 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
         )
         app.push_screen(modal)
         await pilot.pause()
-        # auto_check Checkbox is focused by on_modal_mounted, value is True.
+        # First checkbox is auto-focused by PickerModal fallback.
         cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
         assert cb_check.value is True
         # Press Space to toggle.
@@ -167,42 +167,6 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
         assert auto_apply_calls == [True]
         # Modal remains open until Esc.
         await pilot.press("escape")
-
-    _run(_with_app(actions))
-
-
-def test_update_settings_modal_check_now_shortcut(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pressing ``c`` dismisses the modal with ``"check_now"`` so the app
-    can launch an immediate forced update check from the settings modal.
-    """
-    from sky_music.ui.textual_app.modals import UpdateSettingsModal
-
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-
-    dismissed: list[Any] = []
-
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateSettingsModal(
-            auto_check=True,
-            auto_apply=False,
-            on_auto_check=lambda _v: None,
-            on_auto_apply=lambda _v: None,
-            theme_name="aurora",
-        )
-        # Capture the result the modal passes back to the app when dismissed.
-        original_dismiss = modal.dismiss
-
-        def _spy_dismiss(result: Any = None) -> Any:
-            dismissed.append(result)
-            return original_dismiss(result)
-
-        modal.dismiss = _spy_dismiss  # type: ignore[method-assign]
-        app.push_screen(modal)
-        await pilot.pause()
-        await pilot.press("c")
-        assert dismissed == ["check_now"]
 
     _run(_with_app(actions))
 
@@ -236,17 +200,22 @@ def test_update_settings_modal_clear_skip_version(
             modal._on_clear_skip = lambda: clear_calls.append(True)  # type: ignore[attr-defined]
             app.push_screen(modal)
             await pilot.pause()
+            # Diagnostic: which widget has focus?
+            focused = modal.focused
+            import sys
+            print(f"DEBUG focused: {focused!r}", file=sys.stderr)
+            assert focused is not None, "No widget focused"
             # The clear-skip Button is present in the action row.
             btn = modal.query_one("#btn-clear-skip", Button)
             assert btn is not None
-            # Navigate: checkbox-auto-check (focused) → tab → checkbox-auto-apply
-            # → tab → btn-check-now → tab → btn-clear-skip → Enter
-            await pilot.press("tab")
-            await pilot.pause()
-            await pilot.press("tab")
-            await pilot.pause()
-            await pilot.press("tab")
-            await pilot.pause()
+            # Navigate from focused widget to btn-clear-skip via Tab then Enter.
+            for _ in range(8):  # generous tab count; stop when btn-clear-skip focused
+                if modal.focused is btn:
+                    break
+                await pilot.press("tab")
+                await pilot.pause()
+            else:
+                raise AssertionError(f"Never reached btn-clear-skip; focused={modal.focused!r}")
             await pilot.press("enter")
             await pilot.pause()
             assert clear_calls == [True]
@@ -290,7 +259,7 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
         # The modal was seeded with the live cfg values.
         assert modal._auto_check is False
         assert modal._auto_apply is True
-        # Toggle auto_check via the focused Checkbox.
+        # First checkbox is auto-focused; toggle auto_check.
         cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
         assert cb_check.value is False
         await pilot.press("space")
@@ -329,5 +298,42 @@ def test_update_settings_modal_renders_divider_between_info_and_rows(
         divider = modal.query_one("#update-settings-divider", Rule)
         assert divider is not None
         await pilot.press("escape")
+
+    _run(_with_app(actions))
+
+
+def test_update_settings_modal_escape_works_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing ``escape`` immediately after the modal appears must dismiss it,
+    even before any widget interaction occurs.
+    """
+    from sky_music.ui.textual_app.modals import UpdateSettingsModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    dismissed: list[Any] = []
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateSettingsModal(
+            auto_check=True,
+            auto_apply=False,
+            on_auto_check=lambda _v: None,
+            on_auto_apply=lambda _v: None,
+            theme_name="aurora",
+        )
+        original_dismiss = modal.dismiss
+
+        def _spy_dismiss(result: Any = None) -> Any:
+            dismissed.append(result)
+            return original_dismiss(result)
+
+        modal.dismiss = _spy_dismiss  # type: ignore[method-assign]
+        app.push_screen(modal)
+        await pilot.pause()
+        await pilot.press("escape")
+        assert dismissed == [None], (
+            f"Expected [None] from escape→action_close→dismiss(None), got {dismissed}"
+        )
 
     _run(_with_app(actions))

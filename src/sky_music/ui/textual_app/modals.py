@@ -41,7 +41,25 @@ T = TypeVar("T")
 
 
 class PickerModal(ModalScreen[T]):
-    """Base modal shell with title, content area, and shortcut footer."""
+    """Base modal shell with title, content area, and shortcut footer.
+
+    ``on_key`` catches keys that bubble up to the modal screen after
+    the focused widget and all intermediate widgets declined them.
+    Keys that appear in the modal's own ``BINDINGS`` or in any bound
+    widget's bindings are let through; everything else is stopped here
+    to prevent leaking input to the screen underneath the modal.
+    """
+
+    def on_key(self, event: events.Key) -> None:
+        # Let through keys that are handled by bindings anywhere in the
+        # modal (the binding system checks them at the App level after
+        # this event bubbles up).
+        binding_chain = self._binding_chain
+        for _node, bindings in binding_chain:
+            if event.key in bindings.key_to_bindings:
+                return  # let it bubble up to App._on_key → _check_bindings
+        # Any key not bound anywhere in the modal is stopped here.
+        event.stop()
 
     def __init__(self, title: str, hints: list[KeyHint], *, theme_name: str = "aurora") -> None:
         ModalScreen.__init__(self)
@@ -67,7 +85,19 @@ class PickerModal(ModalScreen[T]):
         theme = get_theme_preset(self.theme_name)
         with contextlib.suppress(Exception):
             self.query_one("#modal-footer", ModalHintBar).set_theme(theme.key, theme.muted)
+
+        # Claim keyboard focus for the modal so key events do not leak
+        # through to the screen underneath.  Set focus on the first
+        # focusable child; subclasses may override this via
+        # on_modal_mounted, but if they leave focus None the base
+        # class falls back to the first Button / Input / Checkbox.
         self.on_modal_mounted()
+
+        if self.focused is None:
+            for widget in self.query("*"):
+                if widget.focusable and widget.display:
+                    self.set_focus(widget)
+                    break
 
     def on_modal_mounted(self) -> None:
         """Override in subclasses to perform extra mount logic."""
@@ -485,8 +515,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
     """
 
     BINDINGS = [
-        Binding("escape", "close", "Close", priority=True, show=False),
-        Binding("c", "check_now", "Check now", priority=True, show=False),
+        Binding("escape", "close", "Close", show=False),
     ]
 
     def __init__(
@@ -506,7 +535,6 @@ class UpdateSettingsModal(PickerModal[str | None]):
             "Update Settings",
             [
                 KeyHint("space", "Toggle"),
-                KeyHint("c", "Check now"),
                 KeyHint("esc", "Close"),
             ],
             theme_name=theme_name,
@@ -608,10 +636,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
         )
 
     def on_modal_mounted(self) -> None:
-        # Focus the first checkbox — the user can immediately toggle it with
-        # space/enter, or tab down to the buttons.
-        cb = self.query_one("#checkbox-auto-check", CheckBoxSquare)
-        self.set_focus(cb)
+        pass
 
     # ── Checkbox handlers (Textual native) ─────────────────────────────────
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
@@ -647,7 +672,6 @@ class UpdateSettingsModal(PickerModal[str | None]):
                 self.query_one("#update-settings-info", Static).update(self._info_text())
 
     # ── Modal-level key handling ─────────────────────────────────────────────
-    # (handled via priority BINDINGS)
 
     def _clear_skip_persist(self) -> None:
         # Kept for callers/tests that exercise the action directly. The button
@@ -658,6 +682,3 @@ class UpdateSettingsModal(PickerModal[str | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
-
-    def action_check_now(self) -> None:
-        self.dismiss("check_now")

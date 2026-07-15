@@ -662,9 +662,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self.push_screen(CommandModal("Commands", COMMANDS, theme_name=self.active_theme), self._on_commands_result)
 
     def _on_commands_result(self, value: object | None) -> None:
+        if value is None:
+            return
         picker = self._find_picker_screen()
-        if picker is not None and value is not None:
-            picker._run_command(value)
+        if picker is not None:
+            self.call_after_refresh(picker._run_command, value)
 
     def action_open_profile(self) -> None:
         picker = self._find_picker_screen()
