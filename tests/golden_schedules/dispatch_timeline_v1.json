@@ -1,0 +1,211 @@
+{
+  "version": 1,
+  "schedules": {
+    "single_note_melody": {
+      "calls": [
+        {
+          "kind": "down",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 10000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 20000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            22
+          ],
+          "started_us": 30000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            22
+          ],
+          "started_us": 40000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            23
+          ],
+          "started_us": 50000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            23
+          ],
+          "started_us": 60000
+        }
+      ],
+      "generation_status_counts": {
+        "scheduled": 0,
+        "active": 0,
+        "release_pending": 0,
+        "released": 3,
+        "dropped_conflict": 0,
+        "dropped_backend": 0,
+        "dropped_expired": 0,
+        "cancelled": 0
+      }
+    },
+    "chords_same_key_repeats": {
+      "calls": [
+        {
+          "kind": "down",
+          "scan_codes": [
+            21,
+            22,
+            23
+          ],
+          "started_us": 10000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21,
+            22,
+            23
+          ],
+          "started_us": 25000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 40000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 50000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 55000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 70000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            22,
+            24
+          ],
+          "started_us": 80000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            22,
+            24
+          ],
+          "started_us": 95000
+        }
+      ],
+      "generation_status_counts": {
+        "scheduled": 0,
+        "active": 0,
+        "release_pending": 0,
+        "released": 7,
+        "dropped_conflict": 0,
+        "dropped_backend": 0,
+        "dropped_expired": 0,
+        "cancelled": 0
+      }
+    },
+    "chord_stagger_enabled": {
+      "calls": [
+        {
+          "kind": "down",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 10000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            22
+          ],
+          "started_us": 12000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            23
+          ],
+          "started_us": 14000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            24
+          ],
+          "started_us": 16000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21,
+            22,
+            23,
+            24
+          ],
+          "started_us": 40000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            21
+          ],
+          "started_us": 60000
+        },
+        {
+          "kind": "down",
+          "scan_codes": [
+            22
+          ],
+          "started_us": 62000
+        },
+        {
+          "kind": "up",
+          "scan_codes": [
+            21,
+            22
+          ],
+          "started_us": 80000
+        }
+      ],
+      "generation_status_counts": {
+        "scheduled": 0,
+        "active": 0,
+        "release_pending": 0,
+        "released": 6,
+        "dropped_conflict": 0,
+        "dropped_backend": 0,
+        "dropped_expired": 0,
+        "cancelled": 0
+      }
+    }
+  }
+}
