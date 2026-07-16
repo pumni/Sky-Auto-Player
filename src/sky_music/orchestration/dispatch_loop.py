@@ -200,18 +200,39 @@ class DispatchHealthMonitor:
         self._focus_cache_ttl_us = 2_000
         self._focus_active_cache = True
         self._focus_cache_at_us = -self._focus_cache_ttl_us - 1
+        # Optional runtime FocusSignal (SharedFocusSignal under threaded dispatch).
+        # Ownership: set once at DispatchLoop.run() entry; single-writer reference.
+        # When present, focus_is_active() reads it instead of any focus_guard syscall.
+        self._runtime_focus_signal: FocusSignal | None = None
+
+    def set_runtime_signal(self, focus_signal: FocusSignal | None) -> None:
+        """Wire the supervisor FocusSignal for cheap post-send focus diagnostics."""
+        self._runtime_focus_signal = focus_signal
 
     def focus_is_active(self) -> bool:
-        """Return True iff Sky is the foreground window.
+        """Return True iff Sky is treated as focused for post-send diagnostics.
 
-        Cached for ``self._focus_cache_ttl_us`` (2 ms default). The Phase 2 pre-down gate
-        does NOT call this — it uses the runtime ``FocusSignal`` (cached on ``run()`` entry)
-        so the dispatch thread's hot note-on path stays off the blocking GetForegroundWindow
-        under threading. This method is reserved for non-critical HUD/health paths.
+        Preference order (finding A4):
+        1. Runtime ``FocusSignal`` when set (threaded: SharedFocusSignal sampled by
+           the supervisor — zero syscalls on the dispatch thread).
+        2. Cheap HWND-only check via ``inputs.is_foreground_cached_hwnd()`` with a
+           2 ms TTL (direct mode / no signal).
+        3. Fall back to ``focus_guard.is_active()`` if the platform module is unavailable.
+
+        The Phase-2 pre-down gate does NOT use this method — it reads
+        ``DispatchLoop._runtime_focus_signal`` directly. Full process-name validation
+        remains on the supervisor / polled pause gate / pre-start wait only.
         """
+        if self._runtime_focus_signal is not None:
+            return self._runtime_focus_signal.is_active()
         now_us = self.clock.now_us()
         if now_us - self._focus_cache_at_us >= self._focus_cache_ttl_us:
-            self._focus_active_cache = self.focus_guard.is_active()
+            try:
+                from sky_music.platform.win32 import inputs as _inputs_focus
+
+                self._focus_active_cache = _inputs_focus.is_foreground_cached_hwnd()
+            except ImportError:
+                self._focus_active_cache = self.focus_guard.is_active()
             self._focus_cache_at_us = now_us
         return self._focus_active_cache
 
@@ -309,6 +330,7 @@ class DispatchLoop:
         enable_reprobe: bool = False,
         probe_callback: Callable[[Sleeper], int] | None = None,
         onset_bias_us: int = 0,
+        unfocused_send_hook: Callable[[], None] | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -329,6 +351,8 @@ class DispatchLoop:
         self.estimator: LeadEstimator = estimator if estimator is not None else _NullEstimator()
         self.enable_reprobe = enable_reprobe
         self.probe_callback = probe_callback
+        # Injected by engine → platform note_send_while_unfocused (no platform import here).
+        self.unfocused_send_hook = unfocused_send_hook
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -519,12 +543,8 @@ class DispatchLoop:
         # Non-critical path: input-path health + unfocused diagnostics (never on the
         # completion-timestamp critical section above).
         self.health_monitor.record_input_path_send_duration(send_duration_us, send_end_us)
-        if not self.health_monitor.focus_is_active():
-            try:
-                from sky_music.platform.win32 import inputs
-                inputs.note_send_while_unfocused()
-            except ImportError:
-                pass
+        if not self.health_monitor.focus_is_active() and self.unfocused_send_hook is not None:
+            self.unfocused_send_hook()
 
         result = ExecutionResult(
             event_index=idx,
@@ -911,6 +931,8 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
+            # Off hot path: soft-flush telemetry while idle-polling (finding A3).
+            self.telemetry.flush_if_large()
             self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
@@ -931,6 +953,8 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
             )
+            # Off hot path: soft-flush telemetry while idle-polling (finding A3).
+            self.telemetry.flush_if_large()
             self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
@@ -1193,6 +1217,9 @@ class DispatchLoop:
         # can re-check focus without going through the blocking ``focus_guard`` in threaded
         # mode (where the supervisor owns the focus sample cadence via SharedFocusSignal).
         self._runtime_focus_signal = focus_signal
+        # Same signal for post-send diagnostic focus checks (A4): threaded mode then
+        # never calls focus_guard / OpenProcess from the dispatch thread.
+        self.health_monitor.set_runtime_signal(focus_signal)
         # Per-run reset of the Phase 2 pre-down gate arming flag.
         self._first_down_dispatched = False
 

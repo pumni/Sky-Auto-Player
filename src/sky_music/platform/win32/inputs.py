@@ -765,6 +765,22 @@ def is_sky_active() -> bool:
     global sky
     return is_sky_window_valid() and user32.GetForegroundWindow() == sky
 
+
+def is_foreground_cached_hwnd() -> bool:
+    """Cheap foreground check: compare GetForegroundWindow to the cached Sky HWND.
+
+    No process-name revalidation (no OpenProcess / QueryFullProcessImageNameW).
+    The process behind a live HWND cannot change identity without destruction;
+    staleness is bounded by the polled focus gate and supervisor sampling, which
+    still use the full ``is_sky_active()`` / ``is_sky_window_valid()`` path at
+    20–50 ms cadence. Intended for the dispatch-thread diagnostic counter only
+    (finding A4) — not for pause/abort policy decisions.
+    """
+    global sky
+    if sky is None:
+        return False
+    return user32.GetForegroundWindow() == sky
+
 def is_virtual_key_down(key_code: int) -> bool:
     return bool(user32.GetAsyncKeyState(key_code) & 0x8000)
 

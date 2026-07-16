@@ -362,37 +362,62 @@ def _focus_cache_engine(guard, clock):
     )
 
 
-def test_focus_check_is_memoised_within_ttl():
-    """Repeated focus checks inside the TTL window hit the heavy is_active() only once."""
+def test_focus_check_is_memoised_within_ttl(monkeypatch):
+    """Repeated focus checks inside the TTL hit the cheap HWND path only once.
+
+    Phase 2 A4: post-send diagnostics use ``is_foreground_cached_hwnd`` (or a
+    runtime FocusSignal), not the full process-name ``focus_guard.is_active``.
+    """
     clock = FakeClock(start_us=1_000_000)
     guard = _CountingFocusGuard(active=True)
     engine = _focus_cache_engine(guard, clock)
+    hwnd_calls = {"n": 0}
 
-    # Many checks at the same instant -> exactly one real is_active() call.
+    def cheap_hwnd() -> bool:
+        hwnd_calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(
+        "sky_music.platform.win32.inputs.is_foreground_cached_hwnd",
+        cheap_hwnd,
+    )
+
     for _ in range(50):
         assert engine._focus_is_active() is True
-    assert guard.is_active_calls == 1
+    assert hwnd_calls["n"] == 1
+    assert guard.is_active_calls == 0
 
 
-def test_focus_check_refreshes_after_ttl():
-    """Once the TTL elapses, the next check re-queries the guard (so alt-tab is detected)."""
+def test_focus_check_refreshes_after_ttl(monkeypatch):
+    """Once the TTL elapses, the next check re-queries the cheap HWND path."""
     clock = FakeClock(start_us=1_000_000)
     guard = _CountingFocusGuard(active=True)
     engine = _focus_cache_engine(guard, clock)
+    active = {"v": True}
+    hwnd_calls = {"n": 0}
+
+    def cheap_hwnd() -> bool:
+        hwnd_calls["n"] += 1
+        return active["v"]
+
+    monkeypatch.setattr(
+        "sky_music.platform.win32.inputs.is_foreground_cached_hwnd",
+        cheap_hwnd,
+    )
 
     assert engine._focus_is_active() is True
-    assert guard.is_active_calls == 1
+    assert hwnd_calls["n"] == 1
 
-    # Within TTL: still cached.
-    clock.sleep_us(engine._focus_cache_ttl_us - 1)
+    mon = engine._health_monitor
+    clock.sleep_us(mon._focus_cache_ttl_us - 1)
     assert engine._focus_is_active() is True
-    assert guard.is_active_calls == 1
+    assert hwnd_calls["n"] == 1
 
-    # Past TTL: focus has been lost in the meantime -> re-queried and observed.
     clock.sleep_us(2)
-    guard.active = False
+    active["v"] = False
     assert engine._focus_is_active() is False
-    assert guard.is_active_calls == 2
+    assert hwnd_calls["n"] == 2
+    assert guard.is_active_calls == 0
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="win32 SendInput backend only")

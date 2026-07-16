@@ -1,12 +1,12 @@
 # Core Dispatch Refactor & Isolation Plan
 
-> **Status:** In progress — Phase 0–1 landed
+> **Status:** In progress — Phases 0–2 landed (stop here until next session starts Phase 3)
 > **Last updated:** 2026-07-16
 > **Baseline commit:** `64e0873` — all `file:line` references in this document are pinned to that commit. If lines have drifted, locate anchors by the quoted code/comment text, never by line number alone.
 > **Origin:** Deep review of the scheduling → dispatch → SendInput core (2026-07-16). Findings A1–A6 (confirmed defects), B (accuracy assessment), C (CPU floors), D (isolation gaps + Rust-plan inconsistencies).
 > **Audience:** AI coding agents executing the refactor phase by phase. Each phase is independently shippable and independently revertible.
 
-**Sections:** [§0 Scope & Non-Goals](#0-scope--non-goals) · [§1 Invariants](#1-invariants-must-survive-every-phase) · [§2 Execution Rules](#2-execution-rules-for-ai-agents) · [§3 Phase 0 Baseline](#3-phase-0--baseline--regression-harness-05-day) · [§4 Phase 1 Correctness](#4-phase-1--correctness-fixes-1-day) · [§5 Phase 2 Hot-Path Hygiene](#5-phase-2--hot-path-hygiene-1-day) · [§6 Phase 3 CPU Floors](#6-phase-3--cpu-floor-reductions-05-day) · [§7 Phase 4 Structural Isolation](#7-phase-4--structural-isolation-of-the-core-2-days) · [§8 Phase 5 Rust-Plan Alignment](#8-phase-5--rust-migration-plan-alignment-05-day) · [§9 Phase 6 Docs & Final Validation](#9-phase-6--docs--final-validation-05-day) · [§10 Risk Register](#10-risk-register) · [§11 Finding→Phase Traceability](#11-finding--phase-traceability)
+**Sections:** [§0 Scope & Non-Goals](#0-scope--non-goals) · [§1 Invariants](#1-invariants-must-survive-every-phase) · [§2 Execution Rules](#2-execution-rules-for-ai-agents) · [§3 Phase 0 Baseline](#3-phase-0--baseline--regression-harness-05-day) · [§4 Phase 1 Correctness](#4-phase-1--correctness-fixes-1-day) · [§5 Phase 2 Hot-Path Hygiene](#5-phase-2--hot-path-hygiene-1-day) · [§6 Phase 3 CPU Floors](#6-phase-3--cpu-floor-reductions-05-day) · [§7 Phase 4 Structural Isolation](#7-phase-4--structural-isolation-of-the-core-2-days) · [§8 Phase 5 Rust-Plan Alignment](#8-phase-5--rust-migration-plan-alignment-05-day) · [§9 Phase 6 Docs & Final Validation](#9-phase-6--docs--final-validation-05-day) · [§10 Risk Register](#10-risk-register) · [§11 Finding→Phase Traceability](#11-finding--phase-traceability) · [§12 Execution Progress](#12-execution-progress-as-built)
 
 ---
 
@@ -365,3 +365,31 @@ uv run --env-file .env python -m build_app
 | D5 `inputs.py` module-global contracts by convention | Structural | 4 | §7.5 |
 | D6 rust-migration-plan §8 emit retry contradicts I3 | High (future) | 5 | §8.1 |
 | D7 rust-migration-plan §10 drop-policy contradiction, §5 pause copy, focus duplication | Low (future) | 5 | §8.2–8.4 |
+
+---
+
+## 12. Execution Progress (as-built)
+
+> Agents: update this section when a phase lands. Do not start Phase N+1 until Phase N is marked **done** here.
+
+| Phase | Status | Branch (local) | Notes |
+|---|---|---|---|
+| **0** Baseline harness | **done** | `refactor/core-dispatch-phase-0-baseline` | Golden dispatch timeline + telemetry schema snapshot + perf baseline doc. No production code change. |
+| **1** Correctness | **done** | `refactor/core-dispatch-phase-1-correctness` | A1 focus signal overwrite fixed; A2 single-interval pause SM; A6a `WinSendInputBackend.set_clock`; A6b skip estimator on empty `sent`. Tests: `test_pause_state_machine.py`, `test_phase1_correctness.py`. |
+| **2** Hot-path hygiene | **done** | `refactor/core-dispatch-phase-2-hotpath` | A3 soft flush off `record()` → `flush_if_large` / `record_pause` / paused wait branches; hard cap `_TELEMETRY_MAX_BUFFER=200_000`. A4 cheap `is_foreground_cached_hwnd` + runtime `FocusSignal` on health monitor. A5.3 `unfocused_send_hook` removes hot-path platform import from `_execute_action`. Tests: `test_phase2_hotpath.py`; memory-hygiene + focus TTL tests updated for new contracts. |
+| **3** CPU floors | pending | — | Next up. |
+| **4** Structural isolation | pending | — | |
+| **5** Rust plan alignment | pending | — | docs only |
+| **6** Docs & final validation | pending | — | |
+
+### Phase 2 remaining platform imports in `dispatch_loop.py` (allowed until Phase 4)
+
+- `DispatchHealthMonitor.focus_is_active` — lazy import of `is_foreground_cached_hwnd` for **direct-mode** fallback when no runtime signal is set.
+- `run()` finally-block — diagnostic `debug_log` only (not hot path).
+
+### How to resume
+
+1. Checkout / create branch from tip of Phase 2 work.
+2. Start **Phase 3** (§6): symmetric reprobe + delete contaminated overshoot sample; fix `_ARRAY_CACHE` comment.
+3. Gate: `uv run ruff check . && uv run pyright && uv run pytest` (project may have pre-existing ruff/pyright noise outside touched files — keep new files clean).
+4. Golden timeline must stay byte-identical.

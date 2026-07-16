@@ -5,6 +5,7 @@ import gc
 import json
 import statistics
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from sky_music.config import RtPriorityMode
@@ -661,6 +662,12 @@ class PlaybackEngine:
                 return engine.probe_spin_threshold(s)
             return 700
 
+        unfocused_hook: Callable[[], None] | None = None
+        with contextlib.suppress(Exception):
+            from sky_music.platform.win32 import inputs as _inputs_unfocused
+
+            unfocused_hook = _inputs_unfocused.note_send_while_unfocused
+
         return DispatchLoop(
             coordinator=coordinator,
             clock=self.clock,
@@ -681,6 +688,7 @@ class PlaybackEngine:
             onset_bias_us=self.onset_bias_us,
             enable_reprobe=self.enable_reprobe,
             probe_callback=weak_probe,
+            unfocused_send_hook=unfocused_hook,
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
