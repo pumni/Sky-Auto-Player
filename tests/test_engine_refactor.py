@@ -130,8 +130,9 @@ class TestGetElapsedUs:
     def test_with_manual_pause(self):
         from sky_music.orchestration.engine import PlaybackState
         clock = self._FakeClock(start_us=20_000)
-        # elapsed = (20_000 - 0) - (20_000 - 15_000) = 15_000
-        state = PlaybackState(start_perf=0, manual_pause_started_us=15_000)
+        # Frozen at pause interval start: 15_000 - 0 = 15_000
+        state = PlaybackState(start_perf=0)
+        state.enter_pause("manual", 15_000)
         assert state.get_elapsed_us(clock) == 15_000
 
     def test_never_negative(self):
@@ -282,6 +283,7 @@ class TestWinBackendDuplicateDownProtection:
         backend.possibly_active_keys = set()
         backend.failed_release_keys = set()
         backend.last_error = None
+        backend._now_us = lambda: 0
 
         calls = []
         def mock_send(scan_codes, key_up=False):
@@ -336,6 +338,7 @@ def _make_contract_backend(kind: str):
     backend.possibly_active_keys = set()
     backend.failed_release_keys = set()
     backend.last_error = None
+    backend._now_us = lambda: 0
 
     def mock_send(scan_codes, key_up=False):
         return None

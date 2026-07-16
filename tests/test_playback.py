@@ -299,7 +299,8 @@ def test_focus_restore_grace_handles_skip_command():
         sleeper=sleeper,
         focus_restore_grace_us=50_000,
     )
-    state = PlaybackState(start_perf=0, focus_pause_started_us=0)
+    state = PlaybackState(start_perf=0)
+    state.enter_pause("focus", 0)
 
     waiting, command = engine._process_wait_states(state, True, 1.0)
 
@@ -325,15 +326,18 @@ def test_focus_restore_grace_handles_pause_command():
         sleeper=sleeper,
         focus_restore_grace_us=50_000,
     )
-    state = PlaybackState(start_perf=0, focus_pause_started_us=0)
+    state = PlaybackState(start_perf=0)
+    state.enter_pause("focus", 0)
 
     waiting, command = engine._process_wait_states(state, True, 1.0)
 
     assert waiting is True
     assert command is None
-    assert state.focus_pause_started_us is None
-    assert state.manual_pause_started_us is not None
-    assert state.pause_time_us > 0
+    # Focus reason cleared on regain; manual pause taken during grace keeps the
+    # single contiguous interval open (no double-count accumulate until fully unpaused).
+    assert not state.has_pause_reason("focus")
+    assert state.has_pause_reason("manual")
+    assert state.pause_interval_started_us is not None
 
 
 class _CountingFocusGuard:

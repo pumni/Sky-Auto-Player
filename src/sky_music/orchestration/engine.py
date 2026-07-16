@@ -10,7 +10,11 @@ from pathlib import Path
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
-from sky_music.infrastructure.backend import InputBackend, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    InputBackend,
+    ReleaseAllOutcome,
+    WinSendInputBackend,
+)
 from sky_music.infrastructure.focus import (
     FocusGuard,
     NoopFocusGuard,
@@ -547,6 +551,10 @@ class PlaybackEngine:
         self.clock = clock if clock is not None else PerfCounterClock()
         self.sleeper = sleeper if sleeper is not None else RealSleeper()
         self.sleep_policy = sleep_policy if sleep_policy is not None else SleepPolicy()
+        # Align WinSendInputBackend send_completed_us with the playback clock (A6a).
+        # isinstance — not getattr — so the contract stays explicit until Phase 4 ports.
+        if isinstance(self.backend, WinSendInputBackend):
+            self.backend.set_clock(self.clock)
 
         # Inject standard FocusGuard depending on requirements
         if focus_guard is None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import statistics
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
@@ -80,18 +80,68 @@ class ExecutionResult:
 
 @dataclass(slots=True)
 class PlaybackState:
-    """Manages the runtime state of the playback loop."""
+    """Manages the runtime state of the playback loop.
+
+    Pause accounting uses a single contiguous-interval owner so interleaved
+    focus-lost and manual-pause never double-count overlap into ``pause_time_us``
+    (finding A2). Ownership model: dispatch-thread single-writer; the supervisor
+    may read ``get_elapsed_us`` / ``is_paused`` for display only.
+
+    Telemetry attribution: when a contiguous pause interval closes, its full
+    duration is recorded under the *first* reason that opened it
+    (``pause_open_reason``). Overlap is not split across reasons.
+    """
     start_perf: int
     pause_time_us: int = 0
-    manual_pause_started_us: int | None = None
-    focus_pause_started_us: int | None = None
+    # Nonempty ⇒ paused. Subset of {"manual", "focus"}.
+    pause_reasons: set[str] = field(default_factory=set)
+    # Wall anchor of the CURRENT contiguous paused interval (set when first reason enters).
+    pause_interval_started_us: int | None = None
+    # First reason that opened the current interval (telemetry attribution).
+    pause_open_reason: str | None = None
     epoch_us: int = 0
 
     def __post_init__(self) -> None:
         self.epoch_us = self.start_perf + self.pause_time_us
 
     def is_paused(self) -> bool:
-        return self.manual_pause_started_us is not None or self.focus_pause_started_us is not None
+        return bool(self.pause_reasons)
+
+    def has_pause_reason(self, reason: str) -> bool:
+        return reason in self.pause_reasons
+
+    def enter_pause(self, reason: str, now_us: int) -> bool:
+        """Add a pause reason. Returns True if this opened a new contiguous interval."""
+        if reason in self.pause_reasons:
+            return False
+        was_empty = not self.pause_reasons
+        self.pause_reasons.add(reason)
+        if was_empty:
+            self.pause_interval_started_us = now_us
+            self.pause_open_reason = reason
+            return True
+        return False
+
+    def exit_pause(self, reason: str, now_us: int) -> tuple[int, str] | None:
+        """Remove a pause reason.
+
+        When the reason set becomes empty, accumulate ``now - pause_interval_started_us``
+        into ``pause_time_us`` exactly once and return ``(duration_us, attribution_reason)``
+        where attribution is the first reason that opened the interval. While other
+        reasons remain, returns None (interval still open; anchor unchanged).
+        """
+        if reason not in self.pause_reasons:
+            return None
+        self.pause_reasons.discard(reason)
+        if self.pause_reasons:
+            return None
+        assert self.pause_interval_started_us is not None
+        duration_us = now_us - self.pause_interval_started_us
+        attribution = self.pause_open_reason or reason
+        self.pause_interval_started_us = None
+        self.pause_open_reason = None
+        self.update_pause_time(duration_us)
+        return duration_us, attribution
 
     def update_pause_time(self, duration_us: int) -> None:
         self.pause_time_us += duration_us
@@ -105,16 +155,15 @@ class PlaybackState:
         return now_us - old_start_perf
 
     def get_elapsed_us(self, clock: Clock, now_us: int | None = None) -> int:
-        """Compute elapsed playback time in microseconds, accounting for pauses."""
+        """Compute elapsed playback time in microseconds, accounting for pauses.
+
+        While paused, elapsed is frozen at the interval start (never decreases with
+        wall time). While playing, ``now - epoch_us``.
+        """
         if now_us is None:
             now_us = clock.now_us()
-        if self.manual_pause_started_us is not None:
-            elapsed = self.manual_pause_started_us - self.epoch_us
-            if self.focus_pause_started_us is not None:
-                elapsed -= (now_us - self.focus_pause_started_us)
-            return max(0, elapsed)
-        if self.focus_pause_started_us is not None:
-            return max(0, self.focus_pause_started_us - self.epoch_us)
+        if self.pause_interval_started_us is not None:
+            return max(0, self.pause_interval_started_us - self.epoch_us)
         return max(0, now_us - self.epoch_us)
 
 if TYPE_CHECKING:
@@ -290,6 +339,12 @@ class DispatchLoop:
         # window (publishing "waiting_for_focus" via the renderer) — see the long comment in
         # ``_dispatch_down_batch``. Reset per ``run()`` invocation.
         self._first_down_dispatched = False
+        # Runtime FocusSignal for the Phase 2 pre-down gate. Ownership: set at ``run()``
+        # entry from the supervisor (SharedFocusSignal under threaded dispatch, DirectFocusSignal
+        # in direct mode); dispatch-thread single-writer for the reference; reads of
+        # ``is_active()`` may be cross-thread via the signal's own contract. Declared here
+        # (not mid-``run()``) so the annotated assignment never overwrites a live signal.
+        self._runtime_focus_signal: FocusSignal | None = None
 
         # Periodic reprobe state — track actual wake overshoot to adapt spin threshold under load
         self._overshoot_samples: deque[int] = deque(maxlen=200)
@@ -430,7 +485,7 @@ class DispatchLoop:
         runtime_outcome: str = "sent",
         applied_lead_us: int = 0,
         deferred_by_us: int = 0,
-        outcome_resolver: "OutcomeResolver | None" = None,
+        outcome_resolver: OutcomeResolver | None = None,
     ) -> ExecutionResult:
         send_start_raw = self.clock.now_us()
         send_start_us = state.get_elapsed_us(self.clock, send_start_raw)
@@ -634,11 +689,18 @@ class DispatchLoop:
         )
         # Lead tracks pure SendInput duration (not post-syscall bookkeeping) so completions
         # land on schedule rather than overshooting by the telemetry/health tail.
-        self.estimator.update(ActionKind.DOWN, result.send_duration_pure_us, n_keys=len(playable))
-        if lead_down > 0:
-            # Residual completion error after lead was applied — systematic prologue bias
-            # (spin overshoot + Python work before SendInput) folds into the next lead.
-            self.estimator.update_completion_error(ActionKind.DOWN, result.visible_lateness_us)
+        # Skip no-op sends (all keys already held → sent empty): zero-duration samples
+        # drag the down-lead EMA toward 0 (finding A6b).
+        if result.sent_scan_codes:
+            self.estimator.update(
+                ActionKind.DOWN, result.send_duration_pure_us, n_keys=len(playable)
+            )
+            if lead_down > 0:
+                # Residual completion error after lead was applied — systematic prologue bias
+                # (spin overshoot + Python work before SendInput) folds into the next lead.
+                self.estimator.update_completion_error(
+                    ActionKind.DOWN, result.visible_lateness_us
+                )
         self.coordinator.activate_sent_downs(
             playable,
             tuple(int(scan_code) for scan_code in result.sent_scan_codes),
@@ -684,7 +746,8 @@ class DispatchLoop:
                 applied_lead_us=lead_up,
                 deferred_by_us=deferred_by_us,
             )
-            self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
+            if result.sent_scan_codes:
+                self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
             self.coordinator.complete_releases(
                 releases,
                 tuple(int(sc) for sc in result.sent_scan_codes),
@@ -742,7 +805,8 @@ class DispatchLoop:
             applied_lead_us=lead_up,
             deferred_by_us=deferred_by_us,
         )
-        self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
+        if result.sent_scan_codes:
+            self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
         self.coordinator.complete_releases(
             releases,
             tuple(int(sc) for sc in result.sent_scan_codes),
@@ -802,9 +866,10 @@ class DispatchLoop:
                 force=True,
             )
         if command == "pause":
-            if state.manual_pause_started_us is None:
+            now_us = self.clock.now_us()
+            if not state.has_pause_reason("manual"):
                 self._abort_input_safe("manual_pause")
-                state.manual_pause_started_us = self.clock.now_us()
+                state.enter_pause("manual", now_us)
                 progress_sink.publish(
                     elapsed_us=state.get_elapsed_us(self.clock),
                     total_us=total_time_us,
@@ -814,14 +879,15 @@ class DispatchLoop:
                     force=True,
                 )
             else:
-                pause_duration_us = self.clock.now_us() - state.manual_pause_started_us
-                state.update_pause_time(pause_duration_us)
-                self.telemetry.record_pause("manual", pause_duration_us)
-                state.manual_pause_started_us = None
+                closed = state.exit_pause("manual", now_us)
+                if closed is not None:
+                    duration_us, attribution = closed
+                    self.telemetry.record_pause(attribution, duration_us)
+                status = "paused" if state.is_paused() else "playing"
                 progress_sink.publish(
                     elapsed_us=state.get_elapsed_us(self.clock),
                     total_us=total_time_us,
-                    status="playing",
+                    status=status,
                     health=self.health_monitor.get_backend_health_snapshot(force=True),
                     input_path_degraded=self.health_monitor.input_path_degraded,
                     force=True,
@@ -837,7 +903,7 @@ class DispatchLoop:
         focus_signal: FocusSignal,
         progress_sink: ProgressSink,
     ) -> tuple[bool, str | None]:
-        if state.manual_pause_started_us is not None:
+        if state.has_pause_reason("manual"):
             progress_sink.publish(
                 elapsed_us=state.get_elapsed_us(self.clock),
                 total_us=total_time_us,
@@ -849,14 +915,14 @@ class DispatchLoop:
             return True, None
 
         if self.health_monitor.require_focus and not focus_signal.is_active():
-            if state.focus_pause_started_us is None:
+            if not state.has_pause_reason("focus"):
                 # Phase 1 dual-release: release the OS keyboard state NOW on focus loss
                 # (not only on regain). Without this, held scan codes remain injected
                 # into whatever window the user alt-tabbed into, and the game's logical
                 # hold may persist. A second idempotent KEYUP still fires on regain below
                 # to clear any game-side half-holds Sky may not have observed going up.
                 self._abort_input_safe("focus_lost")
-                state.focus_pause_started_us = self.clock.now_us()
+                state.enter_pause("focus", self.clock.now_us())
             status_val = "waiting_for_focus" if not first_action_executed else "focus_lost"
             progress_sink.publish(
                 elapsed_us=state.get_elapsed_us(self.clock),
@@ -868,7 +934,7 @@ class DispatchLoop:
             self.sleeper.sleep(self.sleep_policy.poll_s)
             return True, None
 
-        if state.focus_pause_started_us is not None:
+        if state.has_pause_reason("focus"):
             grace_us = self.focus_restore_grace_us
             grace_start_us = self.clock.now_us()
             while self.clock.now_us() - grace_start_us < grace_us:
@@ -895,11 +961,11 @@ class DispatchLoop:
             # was still foreground and might not have observed going up. Generations were
             # cancelled on loss, so no cancel_all here — release_all alone is enough.
 
-            pause_duration_us = self.clock.now_us() - state.focus_pause_started_us
-            state.update_pause_time(pause_duration_us)
-            self.telemetry.record_pause("focus", pause_duration_us)
-            state.focus_pause_started_us = None
-            status = "paused" if state.manual_pause_started_us is not None else "playing"
+            closed = state.exit_pause("focus", self.clock.now_us())
+            if closed is not None:
+                duration_us, attribution = closed
+                self.telemetry.record_pause(attribution, duration_us)
+            status = "paused" if state.is_paused() else "playing"
             progress_sink.publish(
                 elapsed_us=state.get_elapsed_us(self.clock),
                 total_us=total_time_us,
@@ -908,7 +974,7 @@ class DispatchLoop:
                 input_path_degraded=self.health_monitor.input_path_degraded,
                 force=True,
             )
-            if state.manual_pause_started_us is not None:
+            if state.has_pause_reason("manual"):
                 return True, None
         return False, None
 
@@ -925,8 +991,7 @@ class DispatchLoop:
     ) -> str | None:
         while True:
             needs_service = (
-                state.manual_pause_started_us is not None
-                or state.focus_pause_started_us is not None
+                state.is_paused()
                 or (
                     check_focus_signal
                     and self.health_monitor.require_focus
@@ -1148,18 +1213,6 @@ class DispatchLoop:
             observe_result(result)
 
         final_abort_reason = "error"  # default for any exception path not explicitly classified
-        # Per-run reset of the Phase 2 pre-down gate arming flag — see ``_dispatch_down_batch``.
-        self._first_down_dispatched = False
-        # Phase 2 pre-down focus gate uses this runtime focus signal when available (set at
-        # ``run()`` entry from the threaded or direct supervisor). It tracks the same
-        # ``FocusSignal`` the polled focus-pause gate uses — in threaded mode this is a
-        # ``SharedFocusSignal`` (lock-protected bool updated by the control thread's
-        # periodic ``focus_guard.is_active()`` sample, ~20–50 ms cadence); in direct mode
-        # it is a ``DirectFocusSignal`` that calls ``focus_guard.is_active()`` on demand.
-        # Using the signal (instead of the health_monitor's raw focus_guard) keeps the
-        # dispatch thread's hot note-on path OFF the slow blocking focus sample under
-        # threading, where the supervisor already owns the sample cadence.
-        self._runtime_focus_signal: FocusSignal | None = None
         try:
             while not self.coordinator.is_finished():
                 # The per-batch down lead (_down_lead_for_batch) overrides the scalar dispatch_lead_us

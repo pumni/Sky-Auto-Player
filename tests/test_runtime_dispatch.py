@@ -1155,20 +1155,22 @@ def test_playback_state_epoch_based_continuity() -> None:
     # Steady running
     clock.time_us = 2000
     assert state.get_elapsed_us(clock) == 1000
-    
+
     # Pause
-    state.manual_pause_started_us = clock.time_us
+    state.enter_pause("manual", clock.time_us)
     clock.time_us = 3000
     assert state.get_elapsed_us(clock) == 1000
-    
-    # Resume after 1000 us of pause
-    pause_duration = clock.time_us - state.manual_pause_started_us
-    state.update_pause_time(pause_duration)
-    state.manual_pause_started_us = None
-    
+
+    # Resume after 1000 us of pause (single-interval owner accumulates once)
+    closed = state.exit_pause("manual", clock.time_us)
+    assert closed is not None
+    duration_us, attribution = closed
+    assert duration_us == 1000
+    assert attribution == "manual"
+
     assert state.pause_time_us == 1000
     assert state.epoch_us == 2000
-    
+
     # Resume running
     clock.time_us = 4000
     assert state.get_elapsed_us(clock) == 2000

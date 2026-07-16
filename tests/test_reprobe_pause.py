@@ -57,16 +57,17 @@ def test_reprobe_pause_duration_absorption() -> None:
         focus_restore_grace_us=50_000,
         enable_reprobe=False,
     )
-    state_a = PlaybackState(start_perf=0, focus_pause_started_us=10_000)
-    
+    state_a = PlaybackState(start_perf=0)
+    state_a.enter_pause("focus", 10_000)
+
     waiting_a, cmd_a = engine_a._process_wait_states(state_a, first_action_executed=True, total_time_us=1.0)
     assert waiting_a is False
     assert cmd_a is None
-    assert state_a.focus_pause_started_us is None
+    assert not state_a.has_pause_reason("focus")
     # Clock advanced by grace period (50ms) -> 110_000
     # Pause duration = 110_000 - 10_000 = 100_000
     assert state_a.pause_time_us == 100_000
-    
+
     # Scenario B: Playback with reprobe enabled
     # The reprobe takes 10 sleeps of 2ms (20ms total)
     clock_b = FakeClock(start_us=60_000)
@@ -83,12 +84,13 @@ def test_reprobe_pause_duration_absorption() -> None:
         focus_restore_grace_us=50_000,
         enable_reprobe=True,
     )
-    state_b = PlaybackState(start_perf=0, focus_pause_started_us=10_000)
-    
+    state_b = PlaybackState(start_perf=0)
+    state_b.enter_pause("focus", 10_000)
+
     waiting_b, cmd_b = engine_b._process_wait_states(state_b, first_action_executed=True, total_time_us=1.0)
     assert waiting_b is False
     assert cmd_b is None
-    assert state_b.focus_pause_started_us is None
+    assert not state_b.has_pause_reason("focus")
     # Clock advanced by grace period (50ms) + reprobe (20ms) -> 130_000
     # Pause duration = 130_000 - 10_000 = 120_000
     assert state_b.pause_time_us == 120_000

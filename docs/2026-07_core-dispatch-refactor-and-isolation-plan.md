@@ -1,6 +1,6 @@
 # Core Dispatch Refactor & Isolation Plan
 
-> **Status:** In progress — Phase 0 baseline landed
+> **Status:** In progress — Phase 0–1 landed
 > **Last updated:** 2026-07-16
 > **Baseline commit:** `64e0873` — all `file:line` references in this document are pinned to that commit. If lines have drifted, locate anchors by the quoted code/comment text, never by line number alone.
 > **Origin:** Deep review of the scheduling → dispatch → SendInput core (2026-07-16). Findings A1–A6 (confirmed defects), B (accuracy assessment), C (CPU floors), D (isolation gaps + Rust-plan inconsistencies).
