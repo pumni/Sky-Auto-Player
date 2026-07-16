@@ -76,6 +76,9 @@ class ThreadRecordingBackend:
     def release_all_full_instrument(self) -> ReleaseAllOutcome:
         return self.release_all()
 
+    def set_clock(self, clock: object) -> None:
+        return None
+
     def get_health(self) -> BackendHealth:
         self._record("get_health", ())
         return BackendHealth(
