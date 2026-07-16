@@ -12,7 +12,7 @@ Layout:
 - ``state`` — ``PlaybackState`` (single-interval pause machine + cross-thread display snapshot).
 - ``ports`` — the typed Protocols (``InputBackend``, ``Clock``, ``WaitStrategy``,
   ``CommandSource``, ``FocusSignal``, ``FocusController``, ``ProgressSink``,
-  ``LeadEstimator``, ``SpinThresholdProber``) and ``PlaybackCommand``.
+  ``LeadEstimator``) and ``PlaybackCommand``.
 """
 
 from sky_music.orchestration.core.coordinator import RuntimeDispatchCoordinator

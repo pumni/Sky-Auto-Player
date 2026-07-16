@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import statistics
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -242,11 +241,10 @@ class DispatchLoop:
         enable_event_wait: bool = False,
         dispatch_lead_us: int = 0,
         estimator: LeadEstimator | None = None,
-        enable_reprobe: bool = False,
-        probe_callback: Callable[[Sleeper], int] | None = None,
         onset_bias_us: int = 0,
         unfocused_send_hook: Callable[[], None] | None = None,
         diagnostics_log: Callable[[str], None] | None = None,
+        cheap_foreground_probe: Callable[[], bool] | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -265,13 +263,17 @@ class DispatchLoop:
         self.enable_event_wait = enable_event_wait
         self.dispatch_lead_us = dispatch_lead_us
         self.estimator: LeadEstimator = estimator if estimator is not None else _NullEstimator()
-        self.enable_reprobe = enable_reprobe
-        self.probe_callback = probe_callback
         # Injected by engine → platform note_send_while_unfocused (no platform import here).
         self.unfocused_send_hook = unfocused_send_hook
         # Injected by engine → platform debug_log for teardown send-diagnostics (no platform
         # import here). ``None`` (test/DryRun) silences the diagnostic line. Phase 4 §7.6.
         self.diagnostics_log = diagnostics_log
+        # Injected by engine → platform ``is_foreground_cached_hwnd`` (cheap HWND-only
+        # foreground compare, no OpenProcess). Consulted by the Phase-2 pre-down gate as a
+        # fresh recheck that closes the SharedFocusSignal sampling race (see
+        # ``_dispatch_down_batch``). ``None`` (test/DryRun / no platform) → gate relies on
+        # the runtime FocusSignal alone, preserving the pre-fix behaviour. Phase 4 §7.6 boundary.
+        self.cheap_foreground_probe = cheap_foreground_probe
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -288,11 +290,6 @@ class DispatchLoop:
         # ``is_active()`` may be cross-thread via the signal's own contract. Declared here
         # (not mid-``run()``) so the annotated assignment never overwrites a live signal.
         self._runtime_focus_signal: FocusSignal | None = None
-
-        # Periodic reprobe state — track actual wake overshoot to adapt spin threshold under load
-        self._overshoot_samples: deque[int] = deque(maxlen=200)
-        self._last_reprobe_us: int = 0
-        self._reprobe_interval_us: int = 5_000_000  # 5 seconds of elapsed playback time
 
     def _current_lead_up(self) -> int:
         if self.dispatch_lead_us > 0:
@@ -316,75 +313,6 @@ class DispatchLoop:
         if self.dispatch_lead_us > 0:
             return self.dispatch_lead_us + self.onset_bias_us
         return self.estimator.get_lead_us(ActionKind.DOWN, len(batch.intents)) + self.onset_bias_us
-
-    def _record_overshoot(self, elapsed_us: int, target_elapsed_us: int) -> None:
-        overshoot_us = elapsed_us - target_elapsed_us
-        if overshoot_us > 0:
-            self._overshoot_samples.append(overshoot_us)
-
-    def _recompute_spin_threshold_from_overshoot(self) -> int:
-        if len(self._overshoot_samples) < 10:
-            return self.spin_threshold_us
-        mean = statistics.fmean(self._overshoot_samples)
-        stdev = statistics.pstdev(self._overshoot_samples)
-        return max(700, min(3_000, int(mean + 3 * stdev) + 100))
-
-    def _maybe_apply_reprobe_threshold(self, now_us: int) -> int | None:
-        """Periodically recompute and APPLY the spin threshold from overshoot samples.
-
-        Phase 3 §6.1.2 — symmetric apply.
-
-        The periodic re-probe (every ``_reprobe_interval_us`` of playback) recomputes
-        the spin threshold from the rolling 200-sample overshoot window. Pre-Phase-3
-        the apply was gated on ``new_threshold > self.spin_threshold_us`` — a
-        ratchet-up-only path that locked the threshold at the peak of a transient
-        load spike for the rest of the song, raising CPU forever.
-
-        Post-fix the apply is unconditional (both directions) and the new value is
-        appended to telemetry ``runtime_options["reprobe_applied_thresholds"]`` for
-        observability. The clamp ``[700, 3000]`` is already enforced by
-        ``_recompute_spin_threshold_from_overshoot`` so we trust its floor.
-
-        Returns the applied threshold (int) when a reprobe ran this call, or None
-        when reprobe is disabled, the interval has not elapsed, or there are fewer
-        than 10 samples to compute from.
-
-        Ownership: dispatch-thread single-writer for ``spin_threshold_us`` and the
-        ``reprobe_applied_thresholds`` telemetry trail. ``record_runtime_options``
-        does a single ``dict`` reassignment which under free-threading is one
-        atomic reference swap.
-        """
-        if not self.enable_reprobe:
-            return None
-        if now_us - self._last_reprobe_us < self._reprobe_interval_us:
-            return None
-        # No-op when the window is under the statistical floor (<10 samples): keep
-        # the threshold untouched and skip telemetry noise. ``_recompute`` would
-        # return the current value verbatim and a symmetric apply would re-record
-        # the same value into the trail every interval — gate it here.
-        if len(self._overshoot_samples) < 10:
-            self._last_reprobe_us = now_us
-            return None
-        new_threshold = self._recompute_spin_threshold_from_overshoot()
-        self.spin_threshold_us = new_threshold
-        self._last_reprobe_us = now_us
-        # Append to the telemetry trail; cap the trail to avoid unbounded growth on
-        # pathological multi-hour sessions (one append per ~5 s of playback).
-        _MAX_TRAIL = 4_096
-        existing = self.telemetry.runtime_options.get("reprobe_applied_thresholds")
-        trail: list[int]
-        if isinstance(existing, list):
-            trail = existing[-(_MAX_TRAIL - 1):] if len(existing) >= _MAX_TRAIL else list(existing)
-        else:
-            trail = []
-        trail.append(new_threshold)
-        self.telemetry.record_runtime_options(
-            {
-                **self.telemetry.runtime_options,
-                "reprobe_applied_thresholds": trail,
-            }
-        )
-        return new_threshold
 
     def _abort_input_safe(
         self,
@@ -605,7 +533,21 @@ class DispatchLoop:
             self._first_down_dispatched
             and self.health_monitor.require_focus
             and self._runtime_focus_signal is not None
-            and not self._runtime_focus_signal.is_active()
+            and (
+                not self._runtime_focus_signal.is_active()
+                # Fresh HWND-only recheck (§2.1): the SharedFocusSignal is sampled by the
+                # supervisor only every focus_poll_s (20–50 ms), so on alt-tab it can lag and
+                # still read active while a *newer* window already owns the foreground —
+                # a window into which the down below would inject. ``GetForegroundWindow() ==
+                # sky`` (no OpenProcess) is a ~sub-µs shared-state read, so this closes the
+                # race on the hot note-on path with no process lookup. Short-circuits: the
+                # syscall runs only when the (cheap) signal says active. ``None`` probe
+                # (tests / no platform) leaves the gate exactly as it was.
+                or (
+                    self.cheap_foreground_probe is not None
+                    and not self.cheap_foreground_probe()
+                )
+            )
         ):
             self._abort_input_safe("focus_lost")
             self.coordinator.drop_expired_downs(batch.intents)
@@ -948,10 +890,6 @@ class DispatchLoop:
                 if early_cmd in (PlaybackCommand.PAUSE, PlaybackCommand.PANIC):
                     break
 
-            if self.enable_reprobe and self.probe_callback is not None and self.sleeper is not None:
-                new_threshold = self.probe_callback(self.sleeper)
-                self.spin_threshold_us = new_threshold
-
             self.backend.release_all()
             # Phase 1 dual-release: this is the SECOND KEYUP (idempotent). The first fired
             # on focus LOSS above; this one clears game-side half-holds Sky sampled while it
@@ -1058,12 +996,6 @@ class DispatchLoop:
             elapsed_us = state.get_elapsed_us(self.clock)
             if elapsed_us >= target_elapsed_us:
                 self._wait_spin_start_us = elapsed_us
-                # Phase 3 §6.1.1: do NOT feed `_record_overshoot` on this branch.
-                # When the loop is already past its deadline the apparent overshoot
-                # measures the PREVIOUS drain's duration, not a timer-wake error —
-                # a contaminated sample that dragged the recomputed threshold toward
-                # the 3 000 us cap. The only legitimate overshoot sample is the one
-                # measured after `spin_until_us` below.
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
 
             remaining_us = target_elapsed_us - elapsed_us
@@ -1071,9 +1003,6 @@ class DispatchLoop:
             if remaining_us <= self.spin_threshold_us:
                 self._wait_spin_start_us = elapsed_us
                 self.wait_strategy.spin_until_us(target_system_us, self.clock)
-                if self.enable_reprobe:
-                    after_elapsed = state.get_elapsed_us(self.clock)
-                    self._record_overshoot(after_elapsed, target_elapsed_us)
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
 
             service_result = self._service_control_state(
@@ -1245,8 +1174,6 @@ class DispatchLoop:
 
                 now_us = state.get_elapsed_us(self.clock)
                 self._drain_due(now_us, state, lead_up, observe=_observe)
-
-                self._maybe_apply_reprobe_threshold(now_us)
 
             progress_sink.publish(
                 elapsed_us=total_time_us,

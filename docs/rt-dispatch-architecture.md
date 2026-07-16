@@ -44,7 +44,7 @@ and `orchestration/runtime_dispatch.py` remain as thin re-export shims for backw
 - `core/state.py` — `PlaybackState`.
 - `core/ports.py` — the typed Protocols the core depends on: `InputBackend`, `Clock`, `Sleeper`,
   `WaitStrategy`, `CommandSource`, `FocusSignal`, `FocusController`, `ProgressSink`,
-  `LeadEstimator`, `SpinThresholdProber`, plus the `PlaybackCommand` StrEnum.
+  `LeadEstimator`, plus the `PlaybackCommand` StrEnum.
 
 **Boundary rule (enforced by `tests/test_core_boundary.py`):** no module under `core/` imports
 `sky_music.platform.*`, `sky_music.ui.*`, `sky_music.infrastructure.focus`, or
@@ -66,11 +66,16 @@ tear).
 | Caller | Check | Cadence |
 |---|---|---|
 | Supervisor periodic sample; polled pause gate; `run()`-entry; `engine.play()` pre-start wait | **Full** `FocusGuard.is_active()` — `GetForegroundWindow` + `GetWindowThreadProcessId` + `OpenProcess` + process-name validation | 20–50 ms (human-facing) |
-| `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) — zero syscalls on the dispatch thread | per down batch |
+| `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) **plus**, in threaded mode, a fresh injected cheap HWND-only recheck (`is_foreground_cached_hwnd`: `GetForegroundWindow()==sky`, no `OpenProcess`) | per down batch |
 | `DispatchHealthMonitor.focus_is_active` (post-send diagnostic) | runtime `FocusSignal` if set, else injected cheap HWND-only probe (`is_foreground_cached_hwnd`) — no process lookup | 2 ms TTL |
 
 The dispatch thread never issues the full process-name check; a live HWND cannot change the process
 behind it, so the cheap compare is safe and staleness is bounded by the full checks' 20–50 ms cadence.
+The pre-down gate's fresh HWND recheck (wired only in threaded mode, where the `SharedFocusSignal`
+is 20–50 ms stale) closes the alt-tab race in which a down would inject into the window the user just
+switched to; it short-circuits so the one `GetForegroundWindow` call runs only when the cheap signal
+already says active. In direct mode the gate's `DirectFocusSignal` already wraps the authoritative
+`FocusGuard.is_active()` fresh on every down, so no extra probe is wired.
 
 ## 3. Timing semantics
 

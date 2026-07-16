@@ -365,7 +365,11 @@ def test_threaded_supervisor_rebases_epoch_as_last_pre_run_step() -> None:
     assert telemetry.runtime_options["epoch_rebase_us"] == 1_500
 
 
-def test_threaded_dispatch_isolates_onsets_from_slow_ui_and_focus() -> None:
+def test_threaded_dispatch_isolates_onsets_from_slow_ui_and_focus(monkeypatch) -> None:
+    # Sky is foreground (focus_guard is active); model the platform foreground state the
+    # threaded pre-down gate now consults via ``is_foreground_cached_hwnd`` (§2.1). Without
+    # this the mock DLL leaves the ``sky`` HWND global None → the probe blocks every down.
+    monkeypatch.setattr(inputs, "is_foreground_cached_hwnd", lambda: True)
     backend = ThreadRecordingBackend()
     engine = PlaybackEngine(
         song=Song(name="threaded-ui-isolation", notes=()),
@@ -530,7 +534,10 @@ def test_threaded_dispatch_tolerates_short_cpu_bound_render_work() -> None:
     )
 
 
-def test_threaded_dispatch_tolerates_short_cpu_bound_focus_checks() -> None:
+def test_threaded_dispatch_tolerates_short_cpu_bound_focus_checks(monkeypatch) -> None:
+    # Sky is foreground (focus_guard is active); model the platform foreground state the
+    # threaded pre-down gate now consults via ``is_foreground_cached_hwnd`` (§2.1).
+    monkeypatch.setattr(inputs, "is_foreground_cached_hwnd", lambda: True)
     backend = ThreadRecordingBackend()
     engine = PlaybackEngine(
         song=Song(name="threaded-cpu-focus", notes=()),

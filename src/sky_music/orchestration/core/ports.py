@@ -181,18 +181,3 @@ class LeadEstimator(Protocol):
     def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None: ...
 
     def update_completion_error(self, kind: ActionKind, error_us: int) -> None: ...
-
-
-class SpinThresholdProber(Protocol):
-    """Port replacing the engine-side ``probe_callback`` weakref (§7.4).
-
-    The loop holds a reference to a prober and calls it during reprobe
-    to measure the machine's sleeper wake error; the loop applies the
-    returned value itself. The engine-side implementation is a thin
-    wrapper that forwards to ``PlaybackEngine._measure_spin_threshold``
-    and records reprobe_* telemetry — it does not mutate the loop.
-    """
-
-    def __call__(self, sleeper: Sleeper) -> int:
-        """Return the recommended ``spin_threshold_us`` for this machine right now."""
-        ...

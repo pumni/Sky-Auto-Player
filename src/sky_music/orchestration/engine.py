@@ -466,7 +466,6 @@ class PlaybackEngine:
         enable_event_wait: bool = False,
         enable_epoch_rebase: bool = False,
         wait_strategy: WaitStrategy | None = None,
-        enable_reprobe: bool = False,
         onset_bias_us: int = 0,
         lead_cache_path: Path | None = None,
         retain_telemetry_records_after_save: bool = False,
@@ -514,7 +513,6 @@ class PlaybackEngine:
         self.onset_bias_us = max(0, int(onset_bias_us))
         self.enable_event_wait = bool(enable_event_wait)
         self.enable_epoch_rebase = bool(enable_epoch_rebase)
-        self.enable_reprobe = bool(enable_reprobe)
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
         self._wait_strategy: WaitStrategy = (
             wait_strategy
@@ -666,22 +664,29 @@ class PlaybackEngine:
         coordinator: RuntimeDispatchCoordinator,
         sleeper: Sleeper,
     ) -> DispatchLoop:
-        import weakref
-        
-        engine_ref = weakref.ref(self)
-        def weak_probe(s: Sleeper) -> int:
-            engine = engine_ref()
-            if engine is not None:
-                return engine.probe_spin_threshold(s)
-            return 700
-
         unfocused_hook: Callable[[], None] | None = None
         diagnostics_log: Callable[[str], None] | None = None
+        # Cheap HWND-only foreground probe for the Phase-2 pre-down gate (§2.1). ONLY wired in
+        # threaded mode: the gate reads a ``SharedFocusSignal`` sampled by the supervisor every
+        # 20–50 ms there, so a fresh ``GetForegroundWindow()==sky`` recheck closes the alt-tab
+        # race. In direct mode the gate's ``DirectFocusSignal`` already wraps
+        # ``focus_guard.is_active()`` (the full, authoritative, fresh check every down), so the
+        # probe would be redundant — and, against the mock DLL in tests where ``sky`` is None,
+        # would spuriously block every down. Late-binding closure so tests monkeypatching
+        # ``inputs.is_foreground_cached_hwnd`` after construction still take effect.
+        cheap_foreground_probe: Callable[[], bool] | None = None
         with contextlib.suppress(Exception):
             from sky_music.platform.win32 import inputs as _inputs_unfocused
 
             unfocused_hook = _inputs_unfocused.note_send_while_unfocused
             diagnostics_log = _inputs_unfocused.debug_log
+
+            if self._should_use_dispatch_thread():
+
+                def _probe_foreground_hwnd() -> bool:
+                    return _inputs_unfocused.is_foreground_cached_hwnd()
+
+                cheap_foreground_probe = _probe_foreground_hwnd
 
         return DispatchLoop(
             coordinator=coordinator,
@@ -701,13 +706,19 @@ class PlaybackEngine:
             dispatch_lead_us=self.dispatch_lead_us,
             estimator=self.estimator if self.enable_adaptive_lead else None,
             onset_bias_us=self.onset_bias_us,
-            enable_reprobe=self.enable_reprobe,
-            probe_callback=weak_probe,
             unfocused_send_hook=unfocused_hook,
             diagnostics_log=diagnostics_log,
+            cheap_foreground_probe=cheap_foreground_probe,
         )
 
-    def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:
+    def _probe_timer_wake_error(self, sleeper: Sleeper) -> int:
+        """Measure this machine's sleeper wake error and derive the effective spin threshold.
+
+        Runs strictly BEFORE the playback perf anchor (start_perf) is captured, like gc.collect():
+        nothing may delay the dispatch start after the anchor or the first onsets compress. This is
+        the single, one-shot adaptive-spin probe (``enable_adaptive_spin``); the former mid-play
+        re-probe was removed as dead code (never wired into production).
+        """
         wake_errors: list[int] = []
         for _ in range(10):
             t0 = self.clock.now_us()
@@ -723,43 +734,15 @@ class PlaybackEngine:
         threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
         self.effective_spin_threshold_us = threshold
 
-        if prefix == "reprobe":
-            self.telemetry.record_runtime_options(
-                {
-                    **self.telemetry.runtime_options,
-                    "reprobe_wake_errors_us": wake_errors,
-                    "reprobe_effective_spin_threshold_us": threshold,
-                    "reprobe_trigger": "focus_restore",
-                }
-            )
-        else:
-            self.telemetry.record_runtime_options(
-                {
-                    **self.telemetry.runtime_options,
-                    "probe_wake_errors_us": wake_errors,
-                    "effective_spin_threshold_us": threshold,
-                    "enable_adaptive_spin": True,
-                }
-            )
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "probe_wake_errors_us": wake_errors,
+                "effective_spin_threshold_us": threshold,
+                "enable_adaptive_spin": True,
+            }
+        )
         return threshold
-
-    def probe_spin_threshold(self, sleeper: Sleeper) -> int:
-        """Measure this machine's sleeper wake error and derive the effective spin threshold.
-
-        Called mid-play (after focus restore). Records reprobe_* telemetry keys so the
-        initial probe_* keys from _probe_timer_wake_error remain intact for comparison.
-        """
-        return self._measure_spin_threshold(sleeper, prefix="reprobe")
-
-    def _probe_timer_wake_error(self, sleeper: Sleeper) -> None:
-        """Measure this machine's sleeper wake error and derive the effective spin threshold.
-
-        Runs strictly BEFORE the playback perf anchor (start_perf) is captured, like gc.collect():
-        nothing may delay the dispatch start after the anchor or the first onsets compress.
-        Uses the original probe_* telemetry keys (not reprobe_*) so tests can distinguish
-        initial probing from mid-play re-probing.
-        """
-        self._measure_spin_threshold(sleeper, prefix="probe")
 
     def play(self) -> str:
         # Reset partial-send diagnostics before any sending so the per-run counts (read in the

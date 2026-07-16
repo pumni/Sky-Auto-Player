@@ -246,6 +246,66 @@ def test_runtime_focus_signal_used_by_pre_down_gate() -> None:
     assert signal.is_active_calls >= 1
 
 
+def test_pre_down_gate_uses_fresh_foreground_probe_when_signal_is_stale() -> None:
+    """§2.1: a fresh HWND probe must gate the down even while the signal reads active.
+
+    The supervisor's SharedFocusSignal is sampled only every focus_poll_s (20–50 ms),
+    so on alt-tab it can still read *active* for up to a poll cadence — during which
+    every down batch would inject into whatever window is now foreground. A cheap
+    GetForegroundWindow==sky compare on the dispatch thread (no OpenProcess) closes
+    that race so a down never leaks into the window the user just switched to.
+    """
+    clock = FakeClock(25_000)
+    backend = TimedBackend(clock)
+    actions = (
+        _action(0, "down", 21),
+        _action(25_000, "down", 22),
+        _action(40_000, "up", 21),
+    )
+    loop = _build_loop(clock=clock, backend=backend, actions=actions)
+    # Signal is (stale) active, but the fresh foreground probe says NOT on Sky.
+    stale_active = ActiveFocusSignal()
+    loop._runtime_focus_signal = stale_active
+    loop.cheap_foreground_probe = lambda: False
+    loop._first_down_dispatched = True
+
+    batch = loop.coordinator.schedule.batches[1]  # second down
+    state = PlaybackState(start_perf=0)
+    result = loop._dispatch_down_batch(batch, state, lead_down=0, now_us=25_000)
+
+    assert result is None, "down must be gated when the fresh probe says not-foreground"
+    assert not any(c[0] == "down" and c[1] == (22,) for c in backend.calls), (
+        "scan code 22 must never reach the backend when foreground is not Sky"
+    )
+    assert any(
+        getattr(r, "runtime_outcome", None) == "blocked_unfocused"
+        for r in loop.telemetry.records
+    ), "stale-signal leak must be recorded as blocked_unfocused"
+
+
+def test_pre_down_gate_proceeds_when_probe_confirms_foreground() -> None:
+    """Guard against over-blocking: active signal + probe True must still dispatch."""
+    clock = FakeClock()
+    backend = TimedBackend(clock)
+    actions = (
+        _action(0, "down", 21),
+        _action(20_000, "up", 21),
+        _action(30_000, "down", 22),
+        _action(50_000, "up", 22),
+    )
+    loop = _build_loop(clock=clock, backend=backend, actions=actions)
+    loop._runtime_focus_signal = ActiveFocusSignal()
+    loop.cheap_foreground_probe = lambda: True
+    loop._first_down_dispatched = True
+
+    batch = loop.coordinator.schedule.batches[2]  # second down
+    state = PlaybackState(start_perf=0)
+    clock.time_us = 30_000
+    result = loop._dispatch_down_batch(batch, state, lead_down=0, now_us=30_000)
+    assert result is not None
+    assert any(c[0] == "down" and c[1] == (22,) for c in backend.calls)
+
+
 def test_run_wires_runtime_focus_signal_not_none() -> None:
     """run() must keep the FocusSignal assigned (regression for the merge overwrite)."""
     clock = FakeClock()
