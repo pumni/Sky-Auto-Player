@@ -36,9 +36,14 @@ class SyntheticLatencyBackend(_TrackedKeyState):
             last_error=self.last_error
         )
 
-    def _emit(self, scan_codes: tuple[int, ...], *, key_up: bool) -> int | None:
+    def _emit(
+        self, scan_codes: tuple[int, ...], *, key_up: bool
+    ) -> tuple[tuple[int, ...], int | None]:
+        # Contract: _emit returns (actually_sent, send_completed_us) where actually_sent is the
+        # TUPLE of scan codes that landed (backend.py unpacks and stores it as InputSendResult.sent).
+        # send_completed_us is on the injected clock's axis (A6a). Synthetic backend sends every key.
         self.history.append(("up" if key_up else "down", tuple(sorted(scan_codes))))
-        
+
         # Simulating telemetry distribution: p50 ≈ 477µs, p99 ≈ 953µs, max ≈ 1695µs
         r = random.random()
         if r < 0.50:
@@ -55,7 +60,7 @@ class SyntheticLatencyBackend(_TrackedKeyState):
         while self.clock.now_us() - t0 < duration_us:
             pass
 
-        return self.clock.now_us()
+        return scan_codes, self.clock.now_us()
 
     def release_all(self) -> ReleaseAllOutcome:
         to_release = self.active_keys | self.possibly_active_keys | self.failed_release_keys

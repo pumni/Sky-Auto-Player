@@ -14,12 +14,13 @@ The game registers a key press iff the key is observed held for **at least 1 gam
 
 ```
 PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle only
- ├─ compile_runtime_intents → RuntimeSchedule        per-key generations (runtime_dispatch.py)
+ ├─ compile_runtime_intents → RuntimeSchedule        per-key generations (core/coordinator.py)
  ├─ SendLatencyEstimator                             per-kind EMA of SendInput durations
  ├─ wake-error probe (pre start_perf)                derives effective spin threshold
  ├─ RealtimeProcessScope (infrastructure/realtime)   gc.collect→gc.disable + setswitchinterval(1ms)
- ├─ DispatchLoop (orchestration/dispatch_loop.py)    wait → drain → execute; RT thread only
- │   ├─ RuntimeDispatchCoordinator                   active/pending state machine, floors, guards
+ ├─ DispatchLoop (orchestration/core/loop.py)        wait → drain → execute; RT thread only
+ │   ├─ RuntimeDispatchCoordinator (core/coordinator.py)  active/pending state machine, floors, guards
+ │   ├─ PlaybackState (core/state.py)                single-interval pause SM + display snapshot
  │   ├─ HybridWaitStrategy (infrastructure/wait_strategy.py)
  │   ├─ DispatchHealthMonitor                        focus cache, backend-health cache, input-path p95
  │   └─ InputBackend → send_scan_code_batch_trusted  cached INPUT arrays → user32.SendInput
@@ -31,6 +32,45 @@ PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle o
 Threading contract: the dispatch thread owns the backend and all timing; the supervisor (control)
 thread owns controls/focus/rendering and must never call into the backend
 (`test_threaded_dispatch_keeps_all_backend_calls_on_dispatch_thread`).
+
+### 2.1 The `orchestration/core/` package (the isolated dispatch seam)
+
+The real-time core lives in `orchestration/core/` — a platform-free package that is the exact
+seam the future Rust worker (`rust-migration-plan.md`) replaces. `orchestration/dispatch_loop.py`
+and `orchestration/runtime_dispatch.py` remain as thin re-export shims for backward compatibility.
+
+- `core/loop.py` — `DispatchLoop` + `DispatchHealthMonitor`.
+- `core/coordinator.py` — `RuntimeDispatchCoordinator` (schedule → batches, generation tracking).
+- `core/state.py` — `PlaybackState`.
+- `core/ports.py` — the typed Protocols the core depends on: `InputBackend`, `Clock`, `Sleeper`,
+  `WaitStrategy`, `CommandSource`, `FocusSignal`, `FocusController`, `ProgressSink`,
+  `LeadEstimator`, `SpinThresholdProber`, plus the `PlaybackCommand` StrEnum.
+
+**Boundary rule (enforced by `tests/test_core_boundary.py`):** no module under `core/` imports
+`sky_music.platform.*`, `sky_music.ui.*`, `sky_music.infrastructure.focus`, or
+`sky_music.orchestration.engine`. Platform access is injected as ports/hooks: the engine wires a
+cheap foreground-HWND probe (`cheap_focus_probe`), a diagnostics `debug_log` hook
+(`diagnostics_log`), and the unfocused-send counter (`unfocused_send_hook`) at loop construction.
+
+**Pause state machine (`PlaybackState`).** One contiguous-interval owner: a `pause_reasons` set
+(`{"manual","focus"}`) + one anchor (`pause_interval_started_us`). Entering pause from an empty set
+captures the anchor; a second concurrent reason does not move it; only the last exiting reason
+accumulates the interval into `pause_time_us` exactly once, attributed to the first reason that
+opened it. This replaced the old dual-anchor model that double-counted overlap and made elapsed run
+backwards. Cross-thread display reads go through `elapsed_snapshot_us()` — a single atomically
+reassigned `(epoch_us, pause_anchor, paused)` tuple (single-writer dispatch thread; readers never
+tear).
+
+### 2.2 Focus-check ownership (who calls what, at what cadence)
+
+| Caller | Check | Cadence |
+|---|---|---|
+| Supervisor periodic sample; polled pause gate; `run()`-entry; `engine.play()` pre-start wait | **Full** `FocusGuard.is_active()` — `GetForegroundWindow` + `GetWindowThreadProcessId` + `OpenProcess` + process-name validation | 20–50 ms (human-facing) |
+| `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) — zero syscalls on the dispatch thread | per down batch |
+| `DispatchHealthMonitor.focus_is_active` (post-send diagnostic) | runtime `FocusSignal` if set, else injected cheap HWND-only probe (`is_foreground_cached_hwnd`) — no process lookup | 2 ms TTL |
+
+The dispatch thread never issues the full process-name check; a live HWND cannot change the process
+behind it, so the cheap compare is safe and staleness is bounded by the full checks' 20–50 ms cadence.
 
 ## 3. Timing semantics
 

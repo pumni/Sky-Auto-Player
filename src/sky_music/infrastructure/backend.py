@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import collections
 import contextlib
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from sky_music.infrastructure.timing import Clock
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +70,20 @@ class InputBackend(Protocol):
 
     def get_send_diagnostics(self) -> dict[str, int]:
         """Returns partial-send counters since the last reset (chord-atomicity diagnostics)."""
+        ...
+
+    def set_clock(self, clock: Clock) -> None:
+        """Optional clock injection so send_completed_us shares the timeline clock."""
+        ...
+
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        """Panic-mode release: tracked-key ``release_all`` then a full Sky-15 KEYUP.
+
+        Default for the protocol is a no-op fallback (just ``release_all``); the real
+        ``WinSendInputBackend`` overrides this with the full-instrument belt-and-braces
+        failsafe. Phase 4 §7.2 promotes this method onto the contract so the dispatch
+        core stops probing the backend with ``getattr``.
+        """
         ...
 
 
@@ -174,6 +194,20 @@ class _TrackedKeyState(ABC):
             "impossible_same_key_repeats": 0,
         }
 
+    def set_clock(self, clock: Clock) -> None:  # noqa: ARG002
+        """Default no-op; WinSendInputBackend uses the injected clock for send_completed_us."""
+        return
+
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        """Protocol default: degrade to ``release_all``.
+
+        Phase 4 §7.2: The ``_TrackedKeyState`` hierarchy provides this so test/DryRun
+        backends do not need to override; ``WinSendInputBackend`` overrides with the
+        real full-15 KEYUP. Contract is on the ``InputBackend`` Protocol now, so the
+        dispatch core calls this method directly (no ``getattr`` probe).
+        """
+        return self.release_all()
+
     @abstractmethod
     def _emit(
         self, scan_codes: tuple[int, ...], *, key_up: bool
@@ -184,6 +218,11 @@ class _TrackedKeyState(ABC):
         injected. Note-on may be a strict prefix (musical no-retry policy); note-off
         should normally return the full tuple after remainder completion.
         """
+        ...
+
+    @abstractmethod
+    def release_all(self) -> ReleaseAllOutcome:
+        """Safely releases all currently held keys. Concrete impl per backend."""
         ...
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:  # noqa: ARG002
@@ -392,15 +431,21 @@ def _start_watchdog_once():
 
 class WinSendInputBackend(_TrackedKeyState):
     """Windows-specific SendInput backend wrapper with safety tracking and panic release."""
-    __slots__ = ("inputs_module",)
+    __slots__ = ("_now_us", "inputs_module")
 
     def __init__(self):
         super().__init__()
         # Dynamically import inputs to avoid cross-import problems
         from sky_music.platform.win32 import inputs
         self.inputs_module = inputs
+        # Default wall clock; PlaybackEngine.set_clock replaces with the injected timeline.
+        self._now_us: Callable[[], int] = lambda: time.perf_counter_ns() // 1000
         _start_watchdog_once()
-        
+
+    def set_clock(self, clock: Clock) -> None:
+        """Align send_completed_us with the playback timeline clock (finding A6a)."""
+        self._now_us = clock.now_us
+
     def get_health(self) -> BackendHealth:
         diag = self.inputs_module.get_send_diagnostics()
         return BackendHealth(
@@ -422,7 +467,7 @@ class WinSendInputBackend(_TrackedKeyState):
         self, scan_codes: tuple[int, ...], *, key_up: bool
     ) -> tuple[tuple[int, ...], int | None]:
         landed = self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)
-        completed_us = time.perf_counter_ns() // 1000
+        completed_us = self._now_us()
         # Mocks/legacy callables may return None; treat as full success.
         if landed is None:
             return scan_codes, completed_us

@@ -223,6 +223,7 @@ class TestTelemetryFlushChunk:
         return logger
 
     def test_flush_chunk_clears_records(self, tmp_path: Path) -> None:
+        """Soft flush is off the hot path: record() retains; flush_if_large clears."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
 
         logger = self._make_logger(tmp_path, "flush_test")
@@ -230,6 +231,9 @@ class TestTelemetryFlushChunk:
         for _ in range(_TELEMETRY_FLUSH_CHUNK + 1):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
 
+        # Phase 2 A3: soft chunk no longer flushes inside record().
+        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
+        assert logger.flush_if_large() is True
         assert len(logger.records) <= 1
 
     def test_retain_mode_preserves_records_past_flush(self, tmp_path: Path) -> None:
@@ -239,10 +243,12 @@ class TestTelemetryFlushChunk:
 
         for _ in range(_TELEMETRY_FLUSH_CHUNK + 5):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
+        logger.flush_if_large()
 
         assert len(logger.records) > 0
 
     def test_csv_written_incrementally(self, tmp_path: Path) -> None:
+        """flush_if_large (pause/wait path) writes the soft chunk to CSV."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
 
         csv_path = tmp_path / "incr_test.csv"
@@ -251,6 +257,8 @@ class TestTelemetryFlushChunk:
         for _ in range(_TELEMETRY_FLUSH_CHUNK):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
         logger.record(1, "up", 1000, 1000, 0, 0, (), "test")
+        # Soft flush is explicit (off hot path), not automatic in record().
+        logger.flush_if_large()
 
         assert csv_path.exists()
         data = csv_path.read_text(encoding="utf-8")

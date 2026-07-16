@@ -5,12 +5,17 @@ import gc
 import json
 import statistics
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
-from sky_music.infrastructure.backend import InputBackend, ReleaseAllOutcome
+from sky_music.infrastructure.backend import (
+    InputBackend,
+    ReleaseAllOutcome,
+    WinSendInputBackend,
+)
 from sky_music.infrastructure.focus import (
     FocusGuard,
     NoopFocusGuard,
@@ -547,6 +552,10 @@ class PlaybackEngine:
         self.clock = clock if clock is not None else PerfCounterClock()
         self.sleeper = sleeper if sleeper is not None else RealSleeper()
         self.sleep_policy = sleep_policy if sleep_policy is not None else SleepPolicy()
+        # Align WinSendInputBackend send_completed_us with the playback clock (A6a).
+        # isinstance — not getattr — so the contract stays explicit until Phase 4 ports.
+        if isinstance(self.backend, WinSendInputBackend):
+            self.backend.set_clock(self.clock)
 
         # Inject standard FocusGuard depending on requirements
         if focus_guard is None:
@@ -558,12 +567,25 @@ class PlaybackEngine:
             self.focus_guard = focus_guard
 
         self._runtime_coordinator: RuntimeDispatchCoordinator | None = None
+        # Inject the cheap HWND-only foreground probe so the dispatch core stays platform-free
+        # (Phase 4 §7.6). None → DispatchHealthMonitor degrades to focus_guard.is_active().
+        # The closure looks the function up on the module at CALL time (late binding) so tests
+        # monkeypatching ``inputs.is_foreground_cached_hwnd`` after construction still take effect.
+        cheap_focus_probe: Callable[[], bool] | None = None
+        with contextlib.suppress(Exception):
+            from sky_music.platform.win32 import inputs as _inputs_focus
+
+            def _probe_foreground() -> bool:
+                return _inputs_focus.is_foreground_cached_hwnd()
+
+            cheap_focus_probe = _probe_foreground
         self._health_monitor = DispatchHealthMonitor(
             backend=self.backend,
             clock=self.clock,
             focus_guard=self.focus_guard,
             require_focus=self.require_focus,
             input_path_warn_us=self.input_path_warn_us,
+            cheap_focus_probe=cheap_focus_probe,
         )
         # Compatibility shim for legacy engine-level tests (_execute_action/_process_wait_states):
         # one cached loop so dispatch ids keep incrementing across calls. Lazily built.
@@ -653,6 +675,14 @@ class PlaybackEngine:
                 return engine.probe_spin_threshold(s)
             return 700
 
+        unfocused_hook: Callable[[], None] | None = None
+        diagnostics_log: Callable[[str], None] | None = None
+        with contextlib.suppress(Exception):
+            from sky_music.platform.win32 import inputs as _inputs_unfocused
+
+            unfocused_hook = _inputs_unfocused.note_send_while_unfocused
+            diagnostics_log = _inputs_unfocused.debug_log
+
         return DispatchLoop(
             coordinator=coordinator,
             clock=self.clock,
@@ -673,6 +703,8 @@ class PlaybackEngine:
             onset_bias_us=self.onset_bias_us,
             enable_reprobe=self.enable_reprobe,
             probe_callback=weak_probe,
+            unfocused_send_hook=unfocused_hook,
+            diagnostics_log=diagnostics_log,
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:

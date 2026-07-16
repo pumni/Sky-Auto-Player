@@ -11,8 +11,13 @@ from typing import Any, TextIO
 
 from sky_music.infrastructure.backend import BackendHealth
 
-# Flush in-memory records to CSV after this many events (bounds peak RAM).
+# Soft threshold for flush_if_large() — called only off the hot path (paused/wait
+# branches, record_pause, save). Not from record() mid-SendInput (finding A3).
 _TELEMETRY_FLUSH_CHUNK = 10_000
+# Pathological hard cap: if a song never pauses and never hits flush_if_large,
+# record() flushes synchronously once buffer reaches this size rather than
+# unbounded RSS. Mirrors the RAM-hygiene plan: accept one stall over OOM.
+_TELEMETRY_MAX_BUFFER = 200_000
 
 _CSV_FIELDS: list[str] = [
     "song",
@@ -362,10 +367,21 @@ class TelemetryLogger:
                 dispatch_lateness_us,
             )
         )
-        if len(self.records) >= _TELEMETRY_FLUSH_CHUNK:
-            # Production: clear after flush to bound peak RAM. retain mode keeps records
-            # so test hooks that assert on raw events after play still work.
+        # Hot path: no mid-play flush at the soft chunk (A3). Only the hard cap
+        # may flush synchronously here — pathological >100k-event songs with zero pauses.
+        if len(self.records) >= _TELEMETRY_MAX_BUFFER:
             self._flush_records_to_csv(clear=not self._retain_records_after_save)
+
+    def flush_if_large(self) -> bool:
+        """Flush to CSV when the in-memory buffer reaches the soft chunk size.
+
+        Call only from off-hot-path sites: paused/wait branches, ``record_pause``,
+        and ``save()`` (which always flushes). Returns True if a flush ran.
+        """
+        if not self.enabled or len(self.records) < _TELEMETRY_FLUSH_CHUNK:
+            return False
+        self._flush_records_to_csv(clear=not self._retain_records_after_save)
+        return True
 
     def _ensure_csv_open(self) -> None:
         """Lazily open the CSV at the current log_filepath (allows test path reassignment)."""
@@ -457,6 +473,8 @@ class TelemetryLogger:
         if not self.enabled:
             return
         self.pause_durations_us.setdefault(reason, []).append(max(0, int(duration_us)))
+        # Playback is paused: safe to flush the soft buffer off the RT send path.
+        self.flush_if_large()
 
     def record_abort(self, reason: str) -> None:
         """Tally one invocation of the unified abort helper (`abort_input_safe`).

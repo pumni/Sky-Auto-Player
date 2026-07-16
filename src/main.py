@@ -494,11 +494,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.apply_session(session, cfg, spin_threshold_us=spin_override)
 
     if args.sky_process_names:
-        inputs.EXPECTED_PROCESS_NAMES = {
-            name.strip()
-            for name in args.sky_process_names.split(",")
-            if name.strip()
-        }
+        inputs.set_expected_process_names(args.sky_process_names.split(","))
 
     inputs.ALLOW_TITLE_FALLBACK = bool(args.allow_title_fallback)
     if args.theme is not None:
