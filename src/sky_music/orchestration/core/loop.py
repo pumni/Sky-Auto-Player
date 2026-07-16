@@ -351,13 +351,6 @@ class DispatchLoop:
         self.telemetry.record_abort(reason)
         return outcome
 
-    # Pre-Phase-1 callers (engine.py pre-dispatch focus wait) used this name; kept as an alias
-    # so the engine-side abort helper and any external integration continue to compile without
-    # a coordinated rename. New callers should call ``_abort_input_safe`` directly with a
-    # reason. Both names must stay pointer-equivalent until all in-tree callers migrate.
-    def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
-        return self._abort_input_safe("quit")
-
     @staticmethod
     def _intent_generation_ids(intents: tuple[RuntimeKeyIntent, ...]) -> tuple[int, ...]:
         return tuple(
