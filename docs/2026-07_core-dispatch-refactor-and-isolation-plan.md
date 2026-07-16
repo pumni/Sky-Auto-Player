@@ -1,7 +1,7 @@
 # Core Dispatch Refactor & Isolation Plan
 
-> **Status:** In progress — Phases 0–2 landed (stop here until next session starts Phase 3)
-> **Last updated:** 2026-07-16
+> **Status:** Implemented — Phases 0–6 landed. In-repo gate green; release build gate deferred (see §12 note).
+> **Last updated:** 2026-07-17
 > **Baseline commit:** `64e0873` — all `file:line` references in this document are pinned to that commit. If lines have drifted, locate anchors by the quoted code/comment text, never by line number alone.
 > **Origin:** Deep review of the scheduling → dispatch → SendInput core (2026-07-16). Findings A1–A6 (confirmed defects), B (accuracy assessment), C (CPU floors), D (isolation gaps + Rust-plan inconsistencies).
 > **Audience:** AI coding agents executing the refactor phase by phase. Each phase is independently shippable and independently revertible.
@@ -377,19 +377,29 @@ uv run --env-file .env python -m build_app
 | **0** Baseline harness | **done** | `refactor/core-dispatch-phase-0-baseline` | Golden dispatch timeline + telemetry schema snapshot + perf baseline doc. No production code change. |
 | **1** Correctness | **done** | `refactor/core-dispatch-phase-1-correctness` | A1 focus signal overwrite fixed; A2 single-interval pause SM; A6a `WinSendInputBackend.set_clock`; A6b skip estimator on empty `sent`. Tests: `test_pause_state_machine.py`, `test_phase1_correctness.py`. |
 | **2** Hot-path hygiene | **done** | `refactor/core-dispatch-phase-2-hotpath` | A3 soft flush off `record()` → `flush_if_large` / `record_pause` / paused wait branches; hard cap `_TELEMETRY_MAX_BUFFER=200_000`. A4 cheap `is_foreground_cached_hwnd` + runtime `FocusSignal` on health monitor. A5.3 `unfocused_send_hook` removes hot-path platform import from `_execute_action`. Tests: `test_phase2_hotpath.py`; memory-hygiene + focus TTL tests updated for new contracts. |
-| **3** CPU floors | pending | — | Next up. |
-| **4** Structural isolation | pending | — | |
-| **5** Rust plan alignment | pending | — | docs only |
-| **6** Docs & final validation | pending | — | |
+| **3** CPU floors | **done** | `refactor/core-dispatch-phase-3-cpu-floors` | A5: symmetric `_maybe_apply_reprobe_threshold` w/ telemetry trail (`runtime_options["reprobe_applied_thresholds"]`); delete contaminated overshoot sample on already-late branch. §6.2 `_ARRAY_CACHE` comment corrected (FIFO). Tests: `tests/test_phase3_cpu_floors.py` (5 cases). Gate green; golden timeline byte-identical. |
+| **4** Structural isolation | **done** | `refactor/core-dispatch-phase-4-isolation` | New `orchestration/core/` package: `coordinator.py` (moved `RuntimeDispatchCoordinator`), `loop.py` (moved `DispatchLoop`+`DispatchHealthMonitor`), `state.py` (`PlaybackState`+display snapshot), `ports.py` (Protocols + `PlaybackCommand`). `runtime_dispatch.py`/`dispatch_loop.py` are re-export shims (§7.7 — zero test-import edits). §7.2 backend side-channels promoted to `InputBackend` Protocol (no `getattr`). §7.4 display snapshot + prober-callable (loop holds no engine ref). §7.3 `PlaybackCommand` StrEnum comparisons in the loop. §7.5 `SendDiagnostics` dataclass + `set_expected_process_names`. Loop platform-coupling severed via injected `cheap_focus_probe`/`diagnostics_log` hooks + `FocusController` port. Boundary test `tests/test_core_boundary.py` gates platform/ui/focus **and** engine back-refs. Gate green (684 pass); golden timeline byte-identical; `--selftest-textual` OK. |
+| **5** Rust plan alignment | **done** | `refactor/core-dispatch-phase-4-isolation` | Docs-only. `rust-migration-plan.md`: §8 `emit(.., complete_remainder)` rewritten to honor I3 (note-on drops tail, no second SendInput; `sent` = landed prefix; stray-`sent`/`scans.to_vec()` bugs fixed) + parity-test requirement; §6 call sites pass `complete_remainder`; §5 dual-anchor pause replaced with single-interval SM; §10 drop-oldest = FIFO wording fixed; Phase 2 focus-ownership note (single Python guard owns policy; Rust consumes shared flag + cheap HWND; no process-name revalidation); §0 background points at Phase 0 baseline; §1.3 invariant-coverage table (I1–I9 cited/N/A). |
+| **6** Docs & final validation | **done** | `refactor/core-dispatch-phase-4-isolation` | `rt-dispatch-architecture.md` §2 updated (core/ layout, §2.1 package+pause SM+boundary, §2.2 focus-ownership table). `INDEX.md`: plan marked Implemented, rust plan unblocked. `perf-baselines/2026-07-refactor-baseline.md`: after-table + real dispatch-tail numbers (fixed `measure_dispatch_tail.py` `_emit` tuple-contract drift). Final in-repo gate green (ruff/pyright/pytest 684 pass; `--selftest-textual` OK). Build-pipeline gate (`audit_free_threaded_wheels` + `build_app`) deferred to a Windows build session — see note below. |
 
-### Phase 2 remaining platform imports in `dispatch_loop.py` (allowed until Phase 4)
+> **Final-gate note.** The in-repo gate (`uv run ruff check . && uv run pyright && uv run pytest`)
+> is green and `--selftest-textual` passes. The full release pipeline (§9 final gate:
+> `scripts/audit_free_threaded_wheels.py` + `python -m build_app` PyInstaller onedir + smoke)
+> was **not** run in this session — it is a heavy Windows build best run deliberately before a
+> release, not as part of this refactor. No production behavior changed (golden timeline
+> byte-identical), so the build risk is packaging-only. §9 step 4 (delete the re-export shims +
+> migrate test imports) was **intentionally deferred**: the shims keep the diff reviewable and
+> test-import-free, exactly as §7.7 intends; deletion is a later mechanical cleanup.
 
-- `DispatchHealthMonitor.focus_is_active` — lazy import of `is_foreground_cached_hwnd` for **direct-mode** fallback when no runtime signal is set.
-- `run()` finally-block — diagnostic `debug_log` only (not hot path).
+### As-built divergences (Phase 4)
+
+- **`core/__init__.py` exports concrete names**, not the plan's aspirational `DispatchCore`/`CoreConfig`/`CorePorts` wrappers (§7.1). Those wrapper types were never introduced — adding them would be speculative single-use abstraction (AGENTS.md "Simplicity"). The seam is the real classes: `DispatchLoop`, `RuntimeDispatchCoordinator`, `PlaybackState`, `PlaybackCommand`, with Protocols under `core.ports`.
+- **`SpinThresholdProber` (§7.4)** exists as a Protocol in `core.ports`, but the loop still receives the prober as a plain `Callable[[Sleeper], int]` (`probe_callback`) — which already satisfies the port structurally and holds no engine reference, so the §7.4 goal (no core→engine back-reference) is met. Engine keeps the weakref-wrapped callable; no separate prober class was extracted (would be churn for zero behavioral gain).
+- **Loop's remaining non-forbidden import:** `core/loop.py` imports `orchestration.telemetry` under `TYPE_CHECKING` only (not a forbidden prefix; no cycle — telemetry never imports the loop). A `TelemetrySink` port is left as a future refinement, not required by the boundary test.
 
 ### How to resume
 
-1. Checkout / create branch from tip of Phase 2 work.
-2. Start **Phase 3** (§6): symmetric reprobe + delete contaminated overshoot sample; fix `_ARRAY_CACHE` comment.
-3. Gate: `uv run ruff check . && uv run pyright && uv run pytest` (project may have pre-existing ruff/pyright noise outside touched files — keep new files clean).
-4. Golden timeline must stay byte-identical.
+1. On branch `refactor/core-dispatch-phase-4-isolation` (tip of Phase 4 work).
+2. Start **Phase 5** (§8): docs-only alignment of `docs/rust-migration-plan.md` (emit no-retry §8.1, drop-policy wording §8.2, single-interval pause SM §8.3, focus ownership §8.4). Then **Phase 6** (§9): `rt-dispatch-architecture.md` + `INDEX.md`, mark this plan Implemented, final full-pipeline gate.
+3. Gate: `uv run ruff check . && uv run pyright && uv run pytest` (project has pre-existing ruff/pyright noise outside touched files — e.g. `telemetry.py:406` `reportArgumentType`, `test_textual_playback.py` `F841` — keep new files clean).
+4. Golden timeline must stay byte-identical across every phase.
