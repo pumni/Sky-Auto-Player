@@ -421,9 +421,14 @@ class DispatchLoop:
         send_duration_us = send_end_us - send_start_us
         lateness_us = send_start_us - action.at_us
 
-        # Prefer pure SendInput completion for onset / hold anchoring. Bookkeeping after the
-        # syscall (health, focus, telemetry) must not push the "note landed" timestamp later
-        # than the OS inject moment — that is the true game-facing onset.
+        # Anchor onset / hold to the SendInput RETURN (pure completion), not the post-syscall
+        # bookkeeping tail: health/focus/telemetry after the call must not push the "note landed"
+        # timestamp later than the OS inject moment. NOTE: SendInput-return is a sender-side
+        # PROXY, not the game-perceived onset — the call only enqueues to the Raw Input Thread;
+        # actual delivery + the game's per-frame poll happen later by an unmeasured, variable
+        # delta. Every telemetry metric derived from this is injection-relative (the summary is
+        # explicit: game_observed.available=false until audio/onset evidence is attached — see
+        # tests/measure_stutter*.py). Do not treat this timestamp as ground-truth game onset.
         if send_result.send_completed_us is not None:
             send_duration_pure_us = send_result.send_completed_us - send_start_raw
             bookkeeping_us = send_end_raw - send_result.send_completed_us

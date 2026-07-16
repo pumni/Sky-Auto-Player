@@ -316,15 +316,28 @@ class PlaybackSupervisor:
 
         def dispatch_target() -> None:
             try:
-                if not getattr(dispatch_loop.sleeper, "is_high_resolution", False):
+                sleeper_is_high_res = getattr(dispatch_loop.sleeper, "is_high_resolution", False)
+                if not sleeper_is_high_res:
                     inputs.debug_log("[realtime] high-resolution waitable timer disabled")
+                # The 1 ms timer-resolution guard is now a FALLBACK-ONLY safety net. When the
+                # dispatch sleeper is the high-resolution waitable timer
+                # (CREATE_WAITABLE_TIMER_HIGH_RESOLUTION), it wakes with sub-millisecond accuracy
+                # WITHOUT a global timeBeginPeriod(1) — measured on Win11/py3.14t: wake p99 ≈
+                # 0.57 ms period-OFF vs 0.57 ms period-ON, absorbed by the ~0.8 ms spin guard. So
+                # the process-wide 1 ms period (retired from main.py) buys no accuracy there and
+                # only raises the system-wide timer-interrupt rate (power). We install the guard
+                # only on the fallback path (old Windows / high-res timer unavailable), where the
+                # RealSleeper (time.sleep) may still be coarse and needs the 1 ms floor.
+                use_timer_guard = self.enable_timer_guard and not sleeper_is_high_res
                 timer_scope = (
                     inputs.high_resolution_timer_scope()
-                    if self.enable_timer_guard
+                    if use_timer_guard
                     else nullcontext()
                 )
                 if not self.enable_timer_guard:
                     inputs.debug_log("[realtime] timer guard disabled")
+                elif not use_timer_guard:
+                    inputs.debug_log("[realtime] timer guard skipped (high-res sleeper needs no 1ms period)")
 
                 from sky_music.infrastructure.rt_priority import (
                     DispatchThreadPriorityScope,

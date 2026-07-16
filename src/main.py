@@ -44,10 +44,6 @@ from sky_music.orchestration.runtime_session import (
 
 # Imports from specialised modules
 from sky_music.platform.win32 import inputs
-from sky_music.platform.win32.inputs import (
-    disable_high_precision_timers,
-    enable_high_precision_timers,
-)
 from sky_music.ui.hud import PLAYBACK_QUIT, PLAYBACK_SKIPPED, clear_terminal
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import (
@@ -811,8 +807,14 @@ def main() -> int:
         return 1
 
     try:
-        enable_high_precision_timers()
-
+        # No process-wide timeBeginPeriod(1): the dispatch path uses the high-resolution
+        # waitable timer (CREATE_WAITABLE_TIMER_HIGH_RESOLUTION), which does not need the global
+        # 1 ms period — measured on Win11/py3.14t: high-res timer wake p99 ≈ 0.57 ms with the
+        # period OFF vs 0.57 ms ON, and modern CPython's time.sleep is itself high-resolution.
+        # Holding a global 1 ms period for the whole interactive session only raised the
+        # system-wide timer-interrupt rate (laptop power) for no accuracy gain. The dispatch
+        # thread still installs a scoped guard as a fallback ONLY when the high-res sleeper is
+        # unavailable (old Windows) — see PlaybackSupervisor._run_threaded.
         if args.song is not None:
             selected_song = resolve_song_selection(args.song, song_choices)
             if selected_song is None:
@@ -947,8 +949,6 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped by user.")
         return 130
-    finally:
-        disable_high_precision_timers()
 
 def write_crash_log(exc: BaseException) -> None:
     import time
