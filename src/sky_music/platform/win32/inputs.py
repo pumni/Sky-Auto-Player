@@ -407,6 +407,9 @@ _INPUT_SIZE = ctypes.sizeof(INPUT)
 # cached entries are never mutated and the partial-send retry in send_input_batch still operates on
 # the copied array.
 _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
+# Bounded FIFO (the `.get()` hit path does NOT call `move_to_end`, so this is NOT
+# LRU). Sufficient because the cache is cleared per song via `clear_array_cache()`
+# and real songs stay far below the 8 192 capacity — see core dispatch plan §6.2.
 _ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDict()
 _ARRAY_CACHE_MAX = 8192
 _CACHE_LOCK = threading.RLock()

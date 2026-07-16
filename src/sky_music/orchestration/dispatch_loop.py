@@ -410,6 +410,63 @@ class DispatchLoop:
         stdev = statistics.pstdev(self._overshoot_samples)
         return max(700, min(3_000, int(mean + 3 * stdev) + 100))
 
+    def _maybe_apply_reprobe_threshold(self, now_us: int) -> int | None:
+        """Periodically recompute and APPLY the spin threshold from overshoot samples.
+
+        Phase 3 §6.1.2 — symmetric apply.
+
+        The periodic re-probe (every ``_reprobe_interval_us`` of playback) recomputes
+        the spin threshold from the rolling 200-sample overshoot window. Pre-Phase-3
+        the apply was gated on ``new_threshold > self.spin_threshold_us`` — a
+        ratchet-up-only path that locked the threshold at the peak of a transient
+        load spike for the rest of the song, raising CPU forever.
+
+        Post-fix the apply is unconditional (both directions) and the new value is
+        appended to telemetry ``runtime_options["reprobe_applied_thresholds"]`` for
+        observability. The clamp ``[700, 3000]`` is already enforced by
+        ``_recompute_spin_threshold_from_overshoot`` so we trust its floor.
+
+        Returns the applied threshold (int) when a reprobe ran this call, or None
+        when reprobe is disabled, the interval has not elapsed, or there are fewer
+        than 10 samples to compute from.
+
+        Ownership: dispatch-thread single-writer for ``spin_threshold_us`` and the
+        ``reprobe_applied_thresholds`` telemetry trail. ``record_runtime_options``
+        does a single ``dict`` reassignment which under free-threading is one
+        atomic reference swap.
+        """
+        if not self.enable_reprobe:
+            return None
+        if now_us - self._last_reprobe_us < self._reprobe_interval_us:
+            return None
+        # No-op when the window is under the statistical floor (<10 samples): keep
+        # the threshold untouched and skip telemetry noise. ``_recompute`` would
+        # return the current value verbatim and a symmetric apply would re-record
+        # the same value into the trail every interval — gate it here.
+        if len(self._overshoot_samples) < 10:
+            self._last_reprobe_us = now_us
+            return None
+        new_threshold = self._recompute_spin_threshold_from_overshoot()
+        self.spin_threshold_us = new_threshold
+        self._last_reprobe_us = now_us
+        # Append to the telemetry trail; cap the trail to avoid unbounded growth on
+        # pathological multi-hour sessions (one append per ~5 s of playback).
+        _MAX_TRAIL = 4_096
+        existing = self.telemetry.runtime_options.get("reprobe_applied_thresholds")
+        trail: list[int]
+        if isinstance(existing, list):
+            trail = existing[-(_MAX_TRAIL - 1):] if len(existing) >= _MAX_TRAIL else list(existing)
+        else:
+            trail = []
+        trail.append(new_threshold)
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "reprobe_applied_thresholds": trail,
+            }
+        )
+        return new_threshold
+
     def _abort_input_safe(
         self,
         reason: str,
@@ -1085,8 +1142,12 @@ class DispatchLoop:
             elapsed_us = state.get_elapsed_us(self.clock)
             if elapsed_us >= target_elapsed_us:
                 self._wait_spin_start_us = elapsed_us
-                if self.enable_reprobe:
-                    self._record_overshoot(elapsed_us, target_elapsed_us)
+                # Phase 3 §6.1.1: do NOT feed `_record_overshoot` on this branch.
+                # When the loop is already past its deadline the apparent overshoot
+                # measures the PREVIOUS drain's duration, not a timer-wake error —
+                # a contaminated sample that dragged the recomputed threshold toward
+                # the 3 000 us cap. The only legitimate overshoot sample is the one
+                # measured after `spin_until_us` below.
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
 
             remaining_us = target_elapsed_us - elapsed_us
@@ -1269,11 +1330,7 @@ class DispatchLoop:
                 now_us = state.get_elapsed_us(self.clock)
                 self._drain_due(now_us, state, lead_up, observe=_observe)
 
-                if self.enable_reprobe and now_us - self._last_reprobe_us >= self._reprobe_interval_us:
-                    new_threshold = self._recompute_spin_threshold_from_overshoot()
-                    if new_threshold > self.spin_threshold_us:
-                        self.spin_threshold_us = new_threshold
-                    self._last_reprobe_us = now_us
+                self._maybe_apply_reprobe_threshold(now_us)
 
             progress_sink.publish(
                 elapsed_us=total_time_us,
