@@ -84,6 +84,9 @@ class TimedBackend:
             verification_inconclusive=False,
         )
 
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        return self.release_all()
+
     def get_health(self) -> BackendHealth:
         return BackendHealth(
             active_count=len(self.active),

@@ -567,12 +567,25 @@ class PlaybackEngine:
             self.focus_guard = focus_guard
 
         self._runtime_coordinator: RuntimeDispatchCoordinator | None = None
+        # Inject the cheap HWND-only foreground probe so the dispatch core stays platform-free
+        # (Phase 4 §7.6). None → DispatchHealthMonitor degrades to focus_guard.is_active().
+        # The closure looks the function up on the module at CALL time (late binding) so tests
+        # monkeypatching ``inputs.is_foreground_cached_hwnd`` after construction still take effect.
+        cheap_focus_probe: Callable[[], bool] | None = None
+        with contextlib.suppress(Exception):
+            from sky_music.platform.win32 import inputs as _inputs_focus
+
+            def _probe_foreground() -> bool:
+                return _inputs_focus.is_foreground_cached_hwnd()
+
+            cheap_focus_probe = _probe_foreground
         self._health_monitor = DispatchHealthMonitor(
             backend=self.backend,
             clock=self.clock,
             focus_guard=self.focus_guard,
             require_focus=self.require_focus,
             input_path_warn_us=self.input_path_warn_us,
+            cheap_focus_probe=cheap_focus_probe,
         )
         # Compatibility shim for legacy engine-level tests (_execute_action/_process_wait_states):
         # one cached loop so dispatch ids keep incrementing across calls. Lazily built.
@@ -663,10 +676,12 @@ class PlaybackEngine:
             return 700
 
         unfocused_hook: Callable[[], None] | None = None
+        diagnostics_log: Callable[[str], None] | None = None
         with contextlib.suppress(Exception):
             from sky_music.platform.win32 import inputs as _inputs_unfocused
 
             unfocused_hook = _inputs_unfocused.note_send_while_unfocused
+            diagnostics_log = _inputs_unfocused.debug_log
 
         return DispatchLoop(
             coordinator=coordinator,
@@ -689,6 +704,7 @@ class PlaybackEngine:
             enable_reprobe=self.enable_reprobe,
             probe_callback=weak_probe,
             unfocused_send_hook=unfocused_hook,
+            diagnostics_log=diagnostics_log,
         )
 
     def _measure_spin_threshold(self, sleeper: Sleeper, *, prefix: str) -> int:

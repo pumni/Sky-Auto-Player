@@ -124,6 +124,9 @@ class TimedBackend:
             verification_inconclusive=False,
         )
 
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        return self.release_all()
+
     def get_health(self) -> BackendHealth:
         return BackendHealth(
             active_count=len(self.active),
@@ -276,9 +279,15 @@ def test_run_wires_runtime_focus_signal_not_none() -> None:
         progress_sink=_NullProgress(),  # type: ignore[arg-type]
         total_time_us=20_000,
     )
-    # After run completes, the last assigned signal must still be the one we passed
-    # (not clobbered to None mid-entry). During dispatch, is_active was consulted.
-    assert loop._runtime_focus_signal is signal or signal.is_active_calls >= 1
+    # After run completes, the last assigned signal must STILL be the exact one we
+    # passed — the A1 merge bug clobbered it to None after assignment, so a strict
+    # identity check is the real regression guard. A disjunction with
+    # ``signal.is_active_calls >= 1`` would silently pass even with the bug back,
+    # because the health monitor holds the same signal object via a separate
+    # attribute (set at run() entry) and bumps that counter through the A4 path.
+    assert loop._runtime_focus_signal is signal
+    # And it was actually consulted during dispatch (gate/diagnostics live).
+    assert signal.is_active_calls >= 1
 
 
 # --- A6a: clock injection ---------------------------------------------------

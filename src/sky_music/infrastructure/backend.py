@@ -76,6 +76,16 @@ class InputBackend(Protocol):
         """Optional clock injection so send_completed_us shares the timeline clock."""
         ...
 
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        """Panic-mode release: tracked-key ``release_all`` then a full Sky-15 KEYUP.
+
+        Default for the protocol is a no-op fallback (just ``release_all``); the real
+        ``WinSendInputBackend`` overrides this with the full-instrument belt-and-braces
+        failsafe. Phase 4 §7.2 promotes this method onto the contract so the dispatch
+        core stops probing the backend with ``getattr``.
+        """
+        ...
+
 
 class _TrackedKeyState(ABC):
     """Key-state tracker with free-threaded-friendly hot paths.
@@ -188,6 +198,16 @@ class _TrackedKeyState(ABC):
         """Default no-op; WinSendInputBackend uses the injected clock for send_completed_us."""
         return
 
+    def release_all_full_instrument(self) -> ReleaseAllOutcome:
+        """Protocol default: degrade to ``release_all``.
+
+        Phase 4 §7.2: The ``_TrackedKeyState`` hierarchy provides this so test/DryRun
+        backends do not need to override; ``WinSendInputBackend`` overrides with the
+        real full-15 KEYUP. Contract is on the ``InputBackend`` Protocol now, so the
+        dispatch core calls this method directly (no ``getattr`` probe).
+        """
+        return self.release_all()
+
     @abstractmethod
     def _emit(
         self, scan_codes: tuple[int, ...], *, key_up: bool
@@ -198,6 +218,11 @@ class _TrackedKeyState(ABC):
         injected. Note-on may be a strict prefix (musical no-retry policy); note-off
         should normally return the full tuple after remainder completion.
         """
+        ...
+
+    @abstractmethod
+    def release_all(self) -> ReleaseAllOutcome:
+        """Safely releases all currently held keys. Concrete impl per backend."""
         ...
 
     def _handle_down_error(self, scan_codes: tuple[int, ...], error: Exception) -> None:  # noqa: ARG002

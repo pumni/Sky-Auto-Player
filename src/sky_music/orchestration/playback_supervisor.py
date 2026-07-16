@@ -7,7 +7,7 @@ import time
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from sky_music.config import RtPriorityMode
 from sky_music.infrastructure.backend import BackendHealth
@@ -20,36 +20,27 @@ if TYPE_CHECKING:
     from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
     from sky_music.orchestration.telemetry import TelemetryLogger
 
-# Standard playback outcome constants
-PLAYBACK_FINISHED = "finished"
-PLAYBACK_SKIPPED = "skipped"
-PLAYBACK_QUIT = "quit"
-
-
-class CommandSource(Protocol):
-    def poll(self) -> str | None: ...
-
-
-class FocusSignal(Protocol):
-    def is_active(self) -> bool: ...
-
-
-class ProgressSink(Protocol):
-    def publish(
-        self,
-        *,
-        elapsed_us: int,
-        total_us: int,
-        status: str,
-        lateness_us: int | None = None,
-        health: BackendHealth | None = None,
-        input_path_degraded: bool = False,
-        force: bool = False,
-    ) -> None: ...
-
-    def finish(self, message: str) -> None: ...
-
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None: ...
+# Protocol re-exports — single source of truth lives in ``core.ports`` so the
+# core boundary test can verify the seam. Tests still import these names
+# from orchestration.playback_supervisor; the symbols are kept alive here.
+from sky_music.orchestration.core.ports import (
+    PLAYBACK_FINISHED as PLAYBACK_FINISHED,
+)
+from sky_music.orchestration.core.ports import (
+    PLAYBACK_QUIT as PLAYBACK_QUIT,
+)
+from sky_music.orchestration.core.ports import (
+    PLAYBACK_SKIPPED as PLAYBACK_SKIPPED,
+)
+from sky_music.orchestration.core.ports import (
+    CommandSource as CommandSource,
+)
+from sky_music.orchestration.core.ports import (
+    FocusSignal as FocusSignal,
+)
+from sky_music.orchestration.core.ports import (
+    ProgressSink as ProgressSink,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,7 +407,7 @@ class PlaybackSupervisor:
                         last_active_state = active
                         focus_signal.set_active(active)
                         progress_sink.publish(
-                            elapsed_us=state.get_elapsed_us(self.clock),
+                            elapsed_us=state.elapsed_snapshot_us(self.clock)[0],
                             total_us=total_time_us,
                             status="refocus",
                             health=None,
@@ -439,13 +430,18 @@ class PlaybackSupervisor:
                 # In event mode the dispatch loop sleeps whole inter-note gaps without iterating,
                 # so the periodic "playing" progress is published here instead. Pause/focus states
                 # are published by the loop itself (it is awake and polling in those states).
+                # Phase 4 §7.4: cross-thread read uses the atomic snapshot rather than the live
+                # pause fields, so concurrent dispatch-thread pause transitions cannot tear the
+                # display read (an in-progress pause-window change just looks like the latest
+                # contiguous interval — acceptable for display-only progress).
                 if command_event_handle is not None and now_s >= next_progress_publish_s:
-                    if not state.is_paused():
+                    _display_elapsed_us, _is_paused = state.elapsed_snapshot_us(self.clock)
+                    if not _is_paused:
                         # health=None on purpose: backend state is dispatch-thread-owned and must
                         # not be read from the control thread (see
                         # test_threaded_dispatch_keeps_all_backend_calls_on_dispatch_thread).
                         progress_sink.publish(
-                            elapsed_us=state.get_elapsed_us(self.clock),
+                            elapsed_us=_display_elapsed_us,
                             total_us=total_time_us,
                             status="playing",
                             health=None,

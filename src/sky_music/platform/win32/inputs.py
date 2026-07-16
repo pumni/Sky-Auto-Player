@@ -5,6 +5,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -183,6 +184,18 @@ from sky_music.config import DEFAULT_SKY_PROCESS_NAMES  # noqa: E402
 
 EXPECTED_PROCESS_NAMES: set[str] = set(DEFAULT_SKY_PROCESS_NAMES)
 ALLOW_TITLE_FALLBACK: bool = False
+
+
+def set_expected_process_names(names: Iterable[str]) -> None:
+    """Replace the accepted Sky process-name allowlist (Phase 4 §7.5 containment).
+
+    The single explicit write path for ``EXPECTED_PROCESS_NAMES`` — main.py routes CLI
+    ``--sky-process-names`` through here instead of assigning the module global directly,
+    so the mutation contract is one grep-able seam. Empty/blank entries are dropped. Called
+    at startup on the main thread before the dispatch thread reads the set.
+    """
+    global EXPECTED_PROCESS_NAMES
+    EXPECTED_PROCESS_NAMES = {name.strip() for name in names if name.strip()}
 PLAYBACK_DEBUG: bool = False
 REJECTED_WINDOW_WARNINGS: set[int] = set()
 _REJECTED_WINDOW_WARNINGS_MAX = 256
@@ -387,8 +400,7 @@ def send_input_batch(inputs: list[INPUT]) -> None:
             retries_without_progress = 0
             continue
         retries_without_progress += 1
-        global _ZERO_PROGRESS_RETRIES
-        _ZERO_PROGRESS_RETRIES += 1
+        _DIAG.zero_progress_retries += 1
         if retries_without_progress >= 3:
             err_code = ctypes.get_last_error()
             raise OSError(
@@ -430,55 +442,73 @@ _CACHE_LOCK = threading.RLock()
 # Best-effort diagnostics: the dispatch thread is the sole writer during normal playback.
 # get_send_diagnostics() should only be called while the dispatch thread is guaranteed not to be
 # writing — i.e. inside the dispatch loop itself or after the thread has joined.
-_PARTIAL_SEND_EVENTS: int = 0        # SendInput calls that returned sent < requested (any n)
-_CHORD_SPLIT_EVENTS: int = 0         # n > 1 and 0 < sent < n — a chord literally split mid-way
-_SEND_KEYS_DEFERRED: int = 0         # keys not in the first atomic SendInput (split or drop)
-_SEND_KEYS_DROPPED: int = 0          # keys intentionally NOT retried (musical note-on path)
-_SEND_KEYS_RETRIED: int = 0          # keys completed on a follow-up SendInput (note-off / safety)
-_ZERO_PROGRESS_RETRIES: int = 0      # SendInput calls that injected nothing (sent == 0)
-_SEND_WHILE_UNFOCUSED: int = 0       # Note: No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor focus cache (TTL 2ms)
-_MIN_SAME_KEY_UP_GAP_US: int | None = None
-_IMPOSSIBLE_SAME_KEY_REPEATS: int = 0
+@dataclass(slots=True)
+class SendDiagnostics:
+    """Module-owned send diagnostics counters (Phase 4 §7.5 containment).
+
+    Single-writer contract: during playback the dispatch thread is the SOLE mutator
+    (invariant I5). Attribute ``+=`` on this instance replaces the former scattered
+    ``global`` int block — same ownership, no behavior change, one documented owner.
+    ``snapshot()`` should only be read while the dispatch thread is guaranteed not to be
+    writing (inside the loop or after the thread has joined).
+    """
+
+    partial_send_events: int = 0     # SendInput calls that returned sent < requested (any n)
+    chord_split_events: int = 0      # n > 1 and 0 < sent < n — a chord literally split mid-way
+    keys_deferred: int = 0           # keys not in the first atomic SendInput (split or drop)
+    keys_dropped: int = 0            # keys intentionally NOT retried (musical note-on path)
+    keys_retried: int = 0            # keys completed on a follow-up SendInput (note-off / safety)
+    zero_progress_retries: int = 0   # SendInput calls that injected nothing (sent == 0)
+    # No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor
+    # focus cache (TTL 2 ms). Kept in the schema for summary-key stability (I9).
+    send_while_unfocused: int = 0
+    min_same_key_up_gap_us: int | None = None
+    impossible_same_key_repeats: int = 0
+
+    def reset(self) -> None:
+        self.partial_send_events = 0
+        self.chord_split_events = 0
+        self.keys_deferred = 0
+        self.keys_dropped = 0
+        self.keys_retried = 0
+        self.zero_progress_retries = 0
+        self.send_while_unfocused = 0
+        self.min_same_key_up_gap_us = None
+        self.impossible_same_key_repeats = 0
+
+    def snapshot(self) -> dict[str, int]:
+        res = {
+            "partial_send_events": self.partial_send_events,
+            "chord_split_events": self.chord_split_events,
+            "keys_deferred": self.keys_deferred,
+            "keys_dropped": self.keys_dropped,
+            "keys_retried": self.keys_retried,
+            "zero_progress_retries": self.zero_progress_retries,
+            "send_while_unfocused": self.send_while_unfocused,
+            "impossible_same_key_repeats": self.impossible_same_key_repeats,
+        }
+        if self.min_same_key_up_gap_us is not None:
+            res["min_same_key_up_gap_us"] = self.min_same_key_up_gap_us
+        return res
+
+
+# Single module-owned instance; the dispatch thread is the sole writer during playback.
+_DIAG = SendDiagnostics()
 
 
 def reset_send_diagnostics() -> None:
-    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED, _SEND_KEYS_DROPPED
-    global _SEND_KEYS_RETRIED, _ZERO_PROGRESS_RETRIES, _SEND_WHILE_UNFOCUSED
-    global _MIN_SAME_KEY_UP_GAP_US, _IMPOSSIBLE_SAME_KEY_REPEATS
-    _PARTIAL_SEND_EVENTS = 0
-    _CHORD_SPLIT_EVENTS = 0
-    _SEND_KEYS_DEFERRED = 0
-    _SEND_KEYS_DROPPED = 0
-    _SEND_KEYS_RETRIED = 0
-    _ZERO_PROGRESS_RETRIES = 0
-    _SEND_WHILE_UNFOCUSED = 0
-    _MIN_SAME_KEY_UP_GAP_US = None
-    _IMPOSSIBLE_SAME_KEY_REPEATS = 0
+    _DIAG.reset()
 
 def note_send_while_unfocused() -> None:
-    global _SEND_WHILE_UNFOCUSED
-    _SEND_WHILE_UNFOCUSED += 1
+    _DIAG.send_while_unfocused += 1
 
 
 def get_send_diagnostics() -> dict[str, int]:
-    res = {
-        "partial_send_events": _PARTIAL_SEND_EVENTS,
-        "chord_split_events": _CHORD_SPLIT_EVENTS,
-        "keys_deferred": _SEND_KEYS_DEFERRED,
-        "keys_dropped": _SEND_KEYS_DROPPED,
-        "keys_retried": _SEND_KEYS_RETRIED,
-        "zero_progress_retries": _ZERO_PROGRESS_RETRIES,
-        "send_while_unfocused": _SEND_WHILE_UNFOCUSED,
-        "impossible_same_key_repeats": _IMPOSSIBLE_SAME_KEY_REPEATS,
-    }
-    if _MIN_SAME_KEY_UP_GAP_US is not None:
-        res["min_same_key_up_gap_us"] = _MIN_SAME_KEY_UP_GAP_US
-    return res
+    return _DIAG.snapshot()
 
 def set_schedule_diagnostics(min_gap: int | None, impossible_repeats: int) -> None:
-    global _MIN_SAME_KEY_UP_GAP_US, _IMPOSSIBLE_SAME_KEY_REPEATS
-    _MIN_SAME_KEY_UP_GAP_US = min_gap
-    _IMPOSSIBLE_SAME_KEY_REPEATS = impossible_repeats
+    _DIAG.min_same_key_up_gap_us = min_gap
+    _DIAG.impossible_same_key_repeats = impossible_repeats
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
     cache_key = (scan_code, flags)
@@ -567,18 +597,16 @@ def _send_scan_code_batch_impl(
         return n
 
     # Partial (or zero) send: first call did not deliver the whole batch atomically.
-    global _PARTIAL_SEND_EVENTS, _CHORD_SPLIT_EVENTS, _SEND_KEYS_DEFERRED
-    global _SEND_KEYS_DROPPED, _SEND_KEYS_RETRIED
     missed = n - sent
-    _PARTIAL_SEND_EVENTS += 1
-    _SEND_KEYS_DEFERRED += missed
+    _DIAG.partial_send_events += 1
+    _DIAG.keys_deferred += missed
     is_up = bool(flags & KEYEVENTF_KEYUP)
     if n > 1 and sent > 0:
-        _CHORD_SPLIT_EVENTS += 1
+        _DIAG.chord_split_events += 1
 
     if not complete_remainder:
         # Musical path: stop. Unsent keys are dropped (not retried late).
-        _SEND_KEYS_DROPPED += missed
+        _DIAG.keys_dropped += missed
         if n > 1 and sent > 0:
             debug_log(
                 f"[input] CHORD SPLIT (no retry): only {sent}/{n} keys injected atomically "
@@ -593,7 +621,7 @@ def _send_scan_code_batch_impl(
         return sent
 
     # Safety path (releases): complete remainder — split release beats a stuck key.
-    _SEND_KEYS_RETRIED += missed
+    _DIAG.keys_retried += missed
     if n > 1 and sent > 0:
         debug_log(
             f"[input] CHORD SPLIT (release complete): only {sent}/{n} keys injected atomically "
