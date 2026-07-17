@@ -22,8 +22,8 @@ class Win32SkyFocusGuard:
     """Windows-specific implementation using the custom inputs user32 wrapper."""
     def is_active(self) -> bool:
         from sky_music.platform.win32 import inputs
-        return bool(inputs.is_sky_active())
+        return inputs.is_sky_active()
         
     def focus(self) -> bool:
         from sky_music.platform.win32 import inputs
-        return bool(inputs.focusWindow())
+        return inputs.focusWindow()

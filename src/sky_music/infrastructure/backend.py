@@ -456,8 +456,8 @@ class WinSendInputBackend(_TrackedKeyState):
             min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
             impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
             send_while_unfocused=diag.get("send_while_unfocused", 0),
-            keys_dropped=int(diag.get("keys_dropped", 0)),
-            chord_split_events=int(diag.get("chord_split_events", 0)),
+            keys_dropped=diag.get("keys_dropped", 0),
+            chord_split_events=diag.get("chord_split_events", 0),
         )
 
     def get_send_diagnostics(self) -> dict[str, int]:
@@ -471,7 +471,7 @@ class WinSendInputBackend(_TrackedKeyState):
         # Mocks/legacy callables may return None; treat as full success.
         if landed is None:
             return scan_codes, completed_us
-        sent_n = max(0, min(int(landed), len(scan_codes)))
+        sent_n = max(0, min(landed, len(scan_codes)))
         if sent_n >= len(scan_codes):
             return scan_codes, completed_us
         if sent_n <= 0:
@@ -656,8 +656,8 @@ class DryRunBackend(_TrackedKeyState):
             min_same_key_up_gap_us=diag.get("min_same_key_up_gap_us"),
             impossible_same_key_repeats=diag.get("impossible_same_key_repeats", 0),
             send_while_unfocused=diag.get("send_while_unfocused", 0),
-            keys_dropped=int(diag.get("keys_dropped", 0)),
-            chord_split_events=int(diag.get("chord_split_events", 0)),
+            keys_dropped=diag.get("keys_dropped", 0),
+            chord_split_events=diag.get("chord_split_events", 0),
         )
 
     def _emit(

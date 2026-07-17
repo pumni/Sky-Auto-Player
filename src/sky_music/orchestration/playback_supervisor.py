@@ -252,6 +252,9 @@ class PlaybackSupervisor:
         self.enable_timer_guard = enable_timer_guard
         self.enable_event_wait = enable_event_wait
         self.enable_epoch_rebase = enable_epoch_rebase
+        # Set by _run_threaded when enable_epoch_rebase is True; read by the post-run
+        # telemetry flush. Initialized to None so pyright can track it as int | None.
+        self._epoch_rebase_us: int | None = None
 
     def run(
         self,
@@ -304,6 +307,7 @@ class PlaybackSupervisor:
         focus_signal = SharedFocusSignal(True)
         progress_sink = SnapshotProgressSink()
         dispatch_result = DispatchThreadResult()
+        self._epoch_rebase_us = None  # reset per-run; set below iff enable_epoch_rebase
 
         # The supervisor owns the command event and creates it BEFORE the dispatch thread starts,
         # so a command enqueued during thread startup can never lose its wake-up signal (in event
@@ -485,7 +489,7 @@ class PlaybackSupervisor:
                     inputs.close_handle(command_event_handle)
                 command_event_handle = None
 
-            if hasattr(self, "_epoch_rebase_us"):
+            if self._epoch_rebase_us is not None:
                 self.telemetry.record_runtime_options(
                     {
                         **self.telemetry.runtime_options,

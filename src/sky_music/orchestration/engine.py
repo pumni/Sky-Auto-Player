@@ -239,7 +239,7 @@ class SendLatencyEstimator:
         """
         if kind != "down":
             return
-        sample = max(-self._MAX_RESIDUAL_US, min(self._MAX_RESIDUAL_US * 2, int(error_us)))
+        sample = max(-self._MAX_RESIDUAL_US, min(self._MAX_RESIDUAL_US * 2, error_us))
         self._count_residual += 1
         if self._warm_residual:
             self._ema_residual = (
@@ -477,21 +477,21 @@ class PlaybackEngine:
         self.total_time_us = max((int(action.at_us) for action in actions), default=0)
         self.backend = backend
         self.focus_restore_grace_us = focus_restore_grace_us
-        self.min_hold_us = max(0, int(min_hold_us))
+        self.min_hold_us = max(0, min_hold_us)
         self.same_key_conflict_policy = same_key_conflict_policy
         self.late_pulse_drop_threshold_us = (
             None
             if late_pulse_drop_threshold_us is None
-            else max(0, int(late_pulse_drop_threshold_us))
+            else max(0, late_pulse_drop_threshold_us)
         )
         self.use_dispatch_thread = use_dispatch_thread
-        self.input_path_warn_us = max(0, int(input_path_warn_us))
-        self.enable_timer_guard = bool(enable_timer_guard)
-        self.enable_waitable_timer = bool(enable_waitable_timer)
-        self.enable_gc_pause = bool(enable_gc_pause)
-        self.enable_switch_interval_tuning = bool(enable_switch_interval_tuning)
-        self.enable_adaptive_lead = bool(enable_adaptive_lead)
-        self.enable_adaptive_spin = bool(enable_adaptive_spin)
+        self.input_path_warn_us = max(0, input_path_warn_us)
+        self.enable_timer_guard = enable_timer_guard
+        self.enable_waitable_timer = enable_waitable_timer
+        self.enable_gc_pause = enable_gc_pause
+        self.enable_switch_interval_tuning = enable_switch_interval_tuning
+        self.enable_adaptive_lead = enable_adaptive_lead
+        self.enable_adaptive_spin = enable_adaptive_spin
         max_chord = max(
             (
                 len(batch.intents)
@@ -510,10 +510,10 @@ class PlaybackEngine:
             if cached is not None:
                 self.estimator.import_state(cached)
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
-        self.dispatch_lead_us = max(0, int(dispatch_lead_us))
-        self.onset_bias_us = max(0, int(onset_bias_us))
-        self.enable_event_wait = bool(enable_event_wait)
-        self.enable_epoch_rebase = bool(enable_epoch_rebase)
+        self.dispatch_lead_us = max(0, dispatch_lead_us)
+        self.onset_bias_us = max(0, onset_bias_us)
+        self.enable_event_wait = enable_event_wait
+        self.enable_epoch_rebase = enable_epoch_rebase
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
         self._wait_strategy: WaitStrategy = (
             wait_strategy

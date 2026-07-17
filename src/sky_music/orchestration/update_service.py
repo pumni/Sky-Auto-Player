@@ -94,7 +94,7 @@ def should_auto_check(cfg: AppConfig, *, now_ts: int | None = None) -> bool:
     """
     if not cfg.update.auto_check:
         return False
-    now = current_unix_ts() if now_ts is None else int(now_ts)
+    now = current_unix_ts() if now_ts is None else now_ts
     # Gate 1 — long throttle on success.
     elapsed_ok = now - cfg.update.last_check_ts
     if elapsed_ok < 0 or elapsed_ok >= cfg.update.check_interval_s:
@@ -115,7 +115,7 @@ def retry_delay_for(cfg: AppConfig, *, now_ts: int | None = None) -> int:
     """
     if not cfg.update.last_error_ts:
         return 0
-    now = current_unix_ts() if now_ts is None else int(now_ts)
+    now = current_unix_ts() if now_ts is None else now_ts
     gap = now - cfg.update.last_error_ts
     if gap < 0 or gap >= _RETRY_INTERVAL_S:
         return 0
@@ -159,7 +159,7 @@ def record_successful_check(cfg: AppConfig, *, now_ts: int | None = None) -> Non
     only be called when the fetch itself did not raise / return an error
     result, regardless of whether a newer version was found.
     """
-    ts = current_unix_ts() if now_ts is None else int(now_ts)
+    ts = current_unix_ts() if now_ts is None else now_ts
     persist_update_check_ts(cfg, ts)
     if cfg.update.last_error_ts:
         persist_update_error_ts(cfg, 0)
@@ -172,7 +172,7 @@ def record_check_error(cfg: AppConfig, *, now_ts: int | None = None) -> None:
     Pure setter; does not touch ``last_check_ts`` (a failed fetch is not a
     successful check). Idempotent if called repeatedly with the same ts.
     """
-    ts = current_unix_ts() if now_ts is None else int(now_ts)
+    ts = current_unix_ts() if now_ts is None else now_ts
     persist_update_error_ts(cfg, ts)
 
 

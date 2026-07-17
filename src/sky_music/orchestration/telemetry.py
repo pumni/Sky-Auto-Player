@@ -234,7 +234,7 @@ class TelemetryLogger:
         self.profile_name = profile_name
         self.tempo_scale = tempo_scale
         self.fps = fps
-        self.min_hold_us = max(0, int(min_hold_us))
+        self.min_hold_us = max(0, min_hold_us)
         self.records: list[TelemetryRecord] = []
         # Summary computed by save()/get_summary() before records are dropped for hygiene.
         # Keeps get_summary() callable for late callers (engine _log_timing_summary, CLI,
@@ -245,7 +245,7 @@ class TelemetryLogger:
         # Test-only hook: keeps ``records`` populated after save() so tests that assert
         # on raw per-event fields after play() keep working without re-architecting onto
         # the CSV/summary path. Production always leaves this False.
-        self._retain_records_after_save = bool(retain_records_after_save)
+        self._retain_records_after_save = retain_records_after_save
         self.log_filepath: Path | None = None
         self._csv_file: TextIO | None = None
         self._csv_writer: csv.DictWriter | None = None
@@ -462,8 +462,8 @@ class TelemetryLogger:
         self.backend_health = health
 
     def record_input_path_health(self, *, degraded: bool, warn_us: int) -> None:
-        self.input_path_degraded = bool(degraded)
-        self.input_path_warn_us = max(0, int(warn_us))
+        self.input_path_degraded = degraded
+        self.input_path_warn_us = max(0, warn_us)
 
     def record_runtime_options(self, options: dict[str, object]) -> None:
         """Store runtime ablation/debug switches for the telemetry summary."""
@@ -472,7 +472,7 @@ class TelemetryLogger:
     def record_pause(self, reason: str, duration_us: int) -> None:
         if not self.enabled:
             return
-        self.pause_durations_us.setdefault(reason, []).append(max(0, int(duration_us)))
+        self.pause_durations_us.setdefault(reason, []).append(max(0, duration_us))
         # Playback is paused: safe to flush the soft buffer off the RT send path.
         self.flush_if_large()
 
@@ -484,7 +484,7 @@ class TelemetryLogger:
         Unknown reasons are recorded verbatim so new callers do not require a schema
         change; the canonical reasons live in `abort_input_safe` callers.
         """
-        key = str(reason)
+        key = reason
         self.abort_counts_by_reason[key] = self.abort_counts_by_reason.get(key, 0) + 1
 
     def record_release_outcome(self, outcome) -> None:
@@ -494,7 +494,7 @@ class TelemetryLogger:
     def record_generation_status_counts(self, counts: dict[str, int]) -> None:
         """Stores final runtime generation status counts for playback summary diagnostics."""
         self.generation_status_counts = {
-            str(status): max(0, int(count))
+            status: max(0, count)
             for status, count in counts.items()
         }
 
@@ -653,7 +653,7 @@ class TelemetryLogger:
                 "p95_us": _pct(values, 0.95),
                 "p99_us": _pct(values, 0.99),
                 "max_us": float(max(values)),
-                "avg_us": float(sum(values) / len(values)),
+                "avg_us": (sum(values) / len(values)),
             }
             if thresholds:
                 res.update({
@@ -669,8 +669,8 @@ class TelemetryLogger:
         backend_info: dict = {"panic_release_failures": 0, "failed_release_keys_final": []}
         if self.backend_health is not None:
             backend_info["panic_release_failures"] = self.backend_health.failed_release_count
-            backend_info["keys_dropped"] = int(self.backend_health.keys_dropped)
-            backend_info["chord_split_events"] = int(self.backend_health.chord_split_events)
+            backend_info["keys_dropped"] = self.backend_health.keys_dropped
+            backend_info["chord_split_events"] = self.backend_health.chord_split_events
             
         if self.release_outcome is not None:
             backend_info["release_attempted"] = self.release_outcome.attempted

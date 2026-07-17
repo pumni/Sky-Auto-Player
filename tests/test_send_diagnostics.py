@@ -136,7 +136,7 @@ def test_backend_partial_note_on_tracks_only_landed_keys(monkeypatch):
         calls.append(count)
         if len(calls) == 1:
             return 2  # first call lands 2 of 4
-        elif len(calls) == 2:
+        if len(calls) == 2:
             return 1  # retry lands 1 of 2
         return 0
 

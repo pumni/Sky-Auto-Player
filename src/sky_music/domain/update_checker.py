@@ -114,7 +114,7 @@ def is_prerelease(version: str) -> bool:
     v = parse_version(version)
     if v is None:
         return False
-    return bool(v.is_prerelease)
+    return v.is_prerelease
 
 
 def _strip_leading_v(tag: str) -> str:

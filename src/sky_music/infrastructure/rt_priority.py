@@ -47,7 +47,7 @@ class DispatchThreadPriorityScope:
     def _try_disable_power_throttling(self) -> None:
         """Best-effort EcoQoS opt-out so spin deadlines are not stretched by power saving."""
         with contextlib.suppress(Exception):
-            self.power_throttling_disabled = bool(inputs.disable_thread_power_throttling())
+            self.power_throttling_disabled = inputs.disable_thread_power_throttling()
 
     def __enter__(self) -> Self:
         if sys.platform != "win32" or self.mode == "off":

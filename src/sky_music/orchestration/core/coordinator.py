@@ -126,7 +126,7 @@ class RuntimeDispatchCoordinator:
 
     def __init__(self, schedule: RuntimeSchedule, min_hold_us: int) -> None:
         self.schedule = schedule
-        self.min_hold_us = max(0, int(min_hold_us))
+        self.min_hold_us = max(0, min_hold_us)
         self.cursor = 0
         self.active_by_scan_code: dict[int, ActiveKeyGeneration] = {}
         # Live status dict: bidirectional invariant —
