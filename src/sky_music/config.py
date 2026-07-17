@@ -108,7 +108,7 @@ DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.ex
 
 @dataclass
 class UpdateSettings:
-    auto_check: bool = False
+    auto_check: bool = True
     auto_apply: bool = False
     skip_version: str = ""
     check_interval_s: int = 86400
@@ -119,13 +119,6 @@ class UpdateSettings:
     # checks) so a one-off network blip does not lock the user out of update
     # notifications for a full day.
     last_error_ts: int = 0
-    # True once the user has explicitly chosen whether to enable automatic
-    # update checks (via the first-run dialog or by toggling the Settings
-    # checkbox). Until then, no automatic check fires even if auto_check was
-    # left at the legacy default ``True`` in an older config.json — modern
-    # best practice is opt-in for "phoning home" to GitHub on the user's
-    # behalf. Preserved across rounds so a returning install doesn't re-prompt.
-    update_choice_made: bool = False
     pending_update_version: str = ""
 
     @classmethod
@@ -151,26 +144,9 @@ class UpdateSettings:
         if not isinstance(skip, str):
             skip = ""
             
-        # Backward compat: pre-this-change installs stored auto_check=True at the
-        # dataclass default, but never set ``update_choice_made``. If the user
-        # previously had auto_check=True persisted, we treat that as an explicit
-        # choice (a returning install) by setting update_choice_made=True.
-        # For brand-new installs (no update block at all), the dataclass default
-        # (auto_check=False, update_choice_made=False) stands and the first-run
-        # dialog offers the choice.
-        auto_chk_raw = data.get("auto_check", None)
-        had_update_block = "auto_check" in data
-        if auto_chk_raw is None and not had_update_block:
-            auto_chk = False
-            choice_made = False
-        elif not isinstance(auto_chk_raw, bool):
-            auto_chk = False
-            choice_made = True
-        else:
-            auto_chk = auto_chk_raw
-            choice_made = data.get("update_choice_made", True if auto_chk_raw else False)
-            if not isinstance(choice_made, bool):
-                choice_made = bool(auto_chk_raw)
+        auto_chk = data.get("auto_check", True)
+        if not isinstance(auto_chk, bool):
+            auto_chk = True
 
         auto_app = data.get("auto_apply", False)
         if not isinstance(auto_app, bool):
@@ -187,7 +163,6 @@ class UpdateSettings:
             check_interval_s=interval,
             last_check_ts=last_check,
             last_error_ts=last_err,
-            update_choice_made=choice_made,
             pending_update_version=pending,
         )
 
@@ -535,7 +510,6 @@ def save_config(cfg: AppConfig) -> None:
         "check_interval_s": cfg.update.check_interval_s,
         "last_check_ts": cfg.update.last_check_ts,
         "last_error_ts": cfg.update.last_error_ts,
-        "update_choice_made": cfg.update.update_choice_made,
         "pending_update_version": cfg.update.pending_update_version,
     }
     raw["schema_version"]               = SCHEMA_VERSION
@@ -640,14 +614,4 @@ def persist_update_error_ts(cfg: AppConfig, ts: int) -> None:
     Pass ``ts=0`` to clear it (after a successful check).
     """
     cfg.update.last_error_ts = ts
-    save_config(cfg)
-
-def persist_update_choice_made(cfg: AppConfig, *, auto_check: bool) -> None:
-    """Atomically persist the user's first-run / Settings toggle decision.
-
-    Flips both ``update_choice_made=True`` and ``auto_check`` in a single
-    ``save_config`` write so the first-run dialog prompt never re-appears.
-    """
-    cfg.update.auto_check = auto_check
-    cfg.update.update_choice_made = True
     save_config(cfg)

@@ -132,6 +132,15 @@ class PickerAppHost(Protocol):
     @property
     def playback_mode(self) -> str: ...
     def action_cancel(self) -> None: ...
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: str = "information",
+        timeout: float = 3.0,
+    ) -> None: ...
+    def check_for_updates_worker(self, force: bool = False) -> None: ...
 
 FUZZY_SCORE_CUTOFF = 60.0
 
@@ -337,7 +346,7 @@ class PickerScreen(Screen[SongPickerResult]):
         self._search_timer = None
         self._quiesced = False
         self._row_meta_sig: dict[str, tuple[str, str, str, str]] = {}
-        self._detail_sig: tuple[str, ...] | None = None
+        self._detail_sig: tuple[object, ...] | None = None
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -608,9 +617,10 @@ class PickerScreen(Screen[SongPickerResult]):
                 return []
             y_min = table.scroll_y
             y_max = y_min + table.size.height
-            paths = []
-            for i in range(y_min, min(y_max, len(self.filtered))):
-                paths.append(self.filtered[i].path)
+            paths = [
+                self.filtered[i].path
+                for i in range(int(y_min), min(int(y_max), len(self.filtered)))
+            ]
             return paths
         except Exception:
             # fallback

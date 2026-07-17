@@ -125,6 +125,102 @@ def test_update_progress_modal_mounts_without_total(monkeypatch: pytest.MonkeyPa
     _run(_with_app(actions))
 
 
+def test_update_progress_modal_esc_blocked_while_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bug D guard: pressing Esc while ``allow_close`` is False must NOT dismiss
+    the modal — otherwise the user could close it mid-download, leaving the
+    worker running detached and crashing on the next progress callback when
+    the widget DOM is unmounted.
+    """
+    from sky_music.ui.textual_app.modals import UpdateProgressModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateProgressModal(
+            latest_version="2.3.2",
+            current_version="2.3.1",
+            theme_name="aurora",
+        )
+        assert modal.allow_close is False  # default — in-flight
+        blocked_calls: list[bool] = []
+        modal.on_blocked_close_attempt = lambda: blocked_calls.append(True)
+        app.push_screen(modal)
+        await pilot.pause()
+
+        # Attempts to close while in-flight must be swallowed + callback fired
+        # so the worker stays alive and the user gets a hint toast.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert blocked_calls == [True]
+        assert modal._closed is False
+        # Modal is still in the screen stack.
+        assert modal in app.screen_stack
+
+    _run(_with_app(actions))
+
+
+def test_update_progress_modal_esc_allowed_after_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the worker flips ``allow_close`` back to True (failure path),
+    Esc dismisses the modal as expected.
+    """
+    from sky_music.ui.textual_app.modals import UpdateProgressModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateProgressModal(
+            latest_version="2.3.2",
+            current_version="2.3.1",
+            theme_name="aurora",
+        )
+        app.push_screen(modal)
+        await pilot.pause()
+
+        # Simulate the worker reaching terminal failure: it flips allow_close.
+        modal.allow_close = True
+        await pilot.press("escape")
+        await pilot.pause()
+        assert modal._closed is True
+
+    _run(_with_app(actions))
+
+
+def test_update_progress_modal_callbacks_safe_after_dismiss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive guard: even if the modal was dismissed by some other path
+    (e.g. test harness, programmatic caller), ``update_progress`` and
+    ``set_status`` must no-op instead of raising ``NoMatches`` on the
+    unmounted widgets. Defends against the previous Bug D race.
+    """
+    from sky_music.ui.textual_app.modals import UpdateProgressModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateProgressModal(
+            latest_version="2.3.2",
+            current_version="2.3.1",
+            theme_name="aurora",
+        )
+        app.push_screen(modal)
+        await pilot.pause()
+        modal.allow_close = True
+        await pilot.press("escape")
+        await pilot.pause()
+        assert modal._closed is True
+
+        # Even after dismiss, callbacks must not raise.
+        modal.update_progress(5 * 1024, 10 * 1024)
+        modal.set_status("checksum mismatch", severity="error")
+
+    _run(_with_app(actions))
+
+
 def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch) -> None:
     """Toggling a Checkbox in UpdateSettingsModal must call the corresponding
     persistence callback.

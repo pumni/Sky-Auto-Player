@@ -316,7 +316,7 @@ def write_apply_batch(
         f"Rename-Item -LiteralPath $install -NewName ([IO.Path]::GetFileName($bak)) -ErrorAction Stop; "
         f"Rename-Item -LiteralPath $staging -NewName $install.Name -ErrorAction Stop; "
         f"if (-not (Test-Path $flag)) {{New-Item $flag -ItemType File > $null}}; "
-        f"Start-Process $exe"
+        f"Start-Process -FilePath $exe -WorkingDirectory $install"
     )
     batch_lines = [
         "@echo off",
@@ -363,7 +363,7 @@ def apply_update_and_restart(
     try:
         subprocess.Popen(
             ["cmd.exe", "/c", str(batch_path)],
-            cwd=str(install_dir),
+            cwd=str(batch_dir),
             creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )

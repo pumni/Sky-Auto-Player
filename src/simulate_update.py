@@ -18,6 +18,9 @@ already-up-to-date
     GitHub confirms the running version is the latest.
 skipped
     A newer version exists but is suppressed by skip_version in config.
+prerelease-suppressed
+    GitHub reports a ``v2.4.0rc1`` tag. The default stable-channel policy
+    must NOT surface it as an update (default ``include_prerelease=False``).
 error
     Simulates a network failure (timeout / DNS error).
 download-ok
@@ -26,6 +29,9 @@ download-bad-sha
     Download succeeds but the SHA-256 checksum does not match.
 throttled
     should_auto_check returns False because check_interval_s has not elapsed.
+retry-after-error
+    A failed check recently recorded last_error_ts. should_auto_check returns
+    True via the short-backoff gate (Bug F), within the 5-min retry window.
 all
     Runs every scenario in sequence and prints a PASS / FAIL summary table.
 """
@@ -403,6 +409,109 @@ def _run_throttled(m: dict[str, Any]) -> _ScenarioResult:
     return _ScenarioResult("throttled", ok, f"should_auto_check={result}")
 
 
+def _run_prerelease_suppressed(m: dict[str, Any]) -> _ScenarioResult:
+    """Scenario: a ``v2.4.0rc1`` tag is suppressed on the stable channel.
+
+    Asserts the Bug H fix: ``parse_release_payload`` with the default
+    ``include_prerelease=False`` reports the release as "no update" even when
+    the rc is strictly newer than the running version — so auto-check/auto-apply
+    never push a release candidate to stable users.
+    """
+    _section("Scenario: prerelease-suppressed -- rc tag hidden on stable channel")
+
+    parse_release_payload = m["parse_release_payload"]
+    payload = {
+        "tag_name": "v2.4.0rc1",
+        "html_url": "https://github.com/pumni/Sky-Player/releases/tag/v2.4.0rc1",
+        "published_at": "2026-07-16T07:00:00Z",
+        "body": "Release candidate",
+        "assets": [
+            {
+                "name": "Sky-Player-v2.4.0rc1.zip",
+                "browser_download_url": "https://example.com/x.zip",
+            },
+        ],
+    }
+    result = parse_release_payload(payload, current_version="2.3.4")
+    ok_hidden = result.update is None and result.error is None
+
+    # Sanity: opting in through include_prerelease must surface the rc.
+    result_opt = parse_release_payload(
+        payload, current_version="2.3.4", include_prerelease=True
+    )
+    ok_opt_in = result_opt.update is not None and result_opt.update.latest_version == "2.4.0rc1"
+
+    _result_line(
+        "include_prerelease=False → update is None",
+        f"update={result.update!r}",
+        ok=ok_hidden,
+    )
+    _result_line(
+        "include_prerelease=True  → update surfaced",
+        f"update={getattr(result_opt.update, 'latest_version', None)!r}",
+        ok=ok_opt_in,
+    )
+    return _ScenarioResult(
+        "prerelease-suppressed",
+        ok_hidden and ok_opt_in,
+        f"hidden={ok_hidden} opt_in={ok_opt_in}",
+    )
+
+
+def _run_retry_after_error(m: dict[str, Any]) -> _ScenarioResult:
+    """Scenario: a recent failed check opens the 5-min backoff retry gate.
+
+    Asserts the Bug F fix: ``should_auto_check`` returns True within minutes
+    of a failed fetch (short-backoff gate), even though the long
+    ``check_interval_s`` throttle on the last *successful* check would have
+    blocked for a full day.
+    """
+    _section("Scenario: retry-after-error -- short-backoff gate opens in 5min")
+
+    AppConfig         = m["AppConfig"]
+    UpdateSettings    = m["UpdateSettings"]
+    should_auto_check = m["should_auto_check"]
+
+    last_success = 1_718_200_000
+    last_err     = last_success + 100     # errored shortly after
+    now_ts       = last_err + 300          # +5 min from the failure
+
+    cfg_blocked = AppConfig(update=UpdateSettings(
+        auto_check=True,
+        check_interval_s=86_400,
+        last_check_ts=last_success,
+        last_error_ts=0,                    # no error → long throttle blocks
+    ))
+    cfg_error = AppConfig(update=UpdateSettings(
+        auto_check=True,
+        check_interval_s=86_400,
+        last_check_ts=last_success,
+        last_error_ts=last_err,             # recent failure → backoff gate opens
+    ))
+
+    blocked = should_auto_check(cfg_blocked, now_ts=now_ts)
+    allowed = should_auto_check(cfg_error, now_ts=now_ts)
+    within_window = should_auto_check(cfg_error, now_ts=last_err + 60)  # 60s < 300 → False
+
+    ok = blocked is False and allowed is True and within_window is False
+    _result_line(
+        "no error_ts → long-throttle blocks",
+        f"should_auto_check={blocked}",
+        ok=blocked is False,
+    )
+    _result_line(
+        "recent error_ts + 5min gap → backoff opens",
+        f"should_auto_check={allowed}",
+        ok=allowed is True,
+    )
+    _result_line(
+        "recent error_ts + 1min gap → still blocked",
+        f"should_auto_check={within_window}",
+        ok=within_window is False,
+    )
+    return _ScenarioResult("retry-after-error", ok, f"blocked={blocked} opened={allowed}")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -411,10 +520,12 @@ _ALL_SCENARIOS = [
     "available",
     "already-up-to-date",
     "skipped",
+    "prerelease-suppressed",
     "error",
     "download-ok",
     "download-bad-sha",
     "throttled",
+    "retry-after-error",
 ]
 
 
@@ -472,6 +583,8 @@ def main() -> int:
                 results.append(_run_already_up_to_date(m))
             elif sc == "skipped":
                 results.append(_run_skipped(m, new_version))
+            elif sc == "prerelease-suppressed":
+                results.append(_run_prerelease_suppressed(m))
             elif sc == "error":
                 results.append(_run_error(m))
             elif sc == "download-ok":
@@ -480,6 +593,8 @@ def main() -> int:
                 results.append(_run_download_bad_sha(m, new_version, tmp_dir))
             elif sc == "throttled":
                 results.append(_run_throttled(m))
+            elif sc == "retry-after-error":
+                results.append(_run_retry_after_error(m))
         except Exception as exc:
             results.append(_ScenarioResult(sc, False, f"Exception: {exc}"))
             print(_r(f"\n  [EXCEPTION in {sc}] {exc}"))

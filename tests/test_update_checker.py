@@ -128,6 +128,73 @@ def test_parse_release_payload_skip_version_suppresses() -> None:
     assert result.error is None
 
 
+# ── pre-release gating ────────────────────────────────────────────────────────
+
+
+def test_is_prerelease_detects_common_forms() -> None:
+    from sky_music.domain.update_checker import is_prerelease
+
+    assert is_prerelease("2.4.0rc1") is True
+    assert is_prerelease("2.4.0-rc1") is True
+    assert is_prerelease("2.4.0a1") is True
+    assert is_prerelease("2.4.0b2") is True
+    assert is_prerelease("2.4.0.dev0") is True
+    assert is_prerelease("2.4.0") is False  # stable
+    assert is_prerelease("2.4.0.post1") is False  # post is not pre
+    assert is_prerelease("garbage") is False  # unparseable → False (safe default)
+
+
+def test_parse_release_payload_prerelease_default_suppressed() -> None:
+    """Auto-/stable-channel default: rc tag newer than current → no update.
+
+    This is the key guard against accidentally auto-applying release
+    candidates to stable users via auto_check / auto_apply.
+    """
+    payload = _make_release("v2.5.0rc1")
+    result = parse_release_payload(payload, current_version="2.4.0")
+    assert result.error is None
+    assert result.update is None
+
+
+def test_parse_release_payload_prerelease_opt_in_surfaces() -> None:
+    """When the caller opts in via include_prerelease=True, rc tags surface."""
+    payload = _make_release("v2.5.0rc1")
+    result = parse_release_payload(payload, current_version="2.4.0", include_prerelease=True)
+    assert result.update is not None
+    assert result.update.latest_version == "2.5.0rc1"
+
+
+def test_parse_release_payload_stable_tag_unaffected_by_gating() -> None:
+    """Stable tags must not regress when include_prerelease is left False."""
+    payload = _make_release("v2.5.0")
+    result = parse_release_payload(payload, current_version="2.4.0")
+    assert result.update is not None
+    assert result.update.latest_version == "2.5.0"
+
+
+def test_fetch_latest_release_forward_include_prerelease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``fetch_latest_release`` must forward ``include_prerelease`` to
+    :func:`parse_release_payload` so callers can opt into pre-releases."""
+    payload = _make_release("v2.5.0rc1")
+    result = fetch_latest_release(
+        current_version="2.4.0",
+        opener=_stub_opener(payload),
+        include_prerelease=True,
+    )
+    assert result.update is not None
+    assert result.update.latest_version == "2.5.0rc1"
+
+    # Same payload, default include_prerelease=False → suppressed.
+    result2 = fetch_latest_release(
+        current_version="2.4.0",
+        opener=_stub_opener(payload),
+    )
+    assert result2.update is None
+    assert result2.error is None  # suppressed, not error: stable-channel no-op
+
+
 def test_parse_release_payload_older_tag_is_no_update() -> None:
     payload = _make_release("v2.2.0")
     result = parse_release_payload(payload, current_version="2.3.0")

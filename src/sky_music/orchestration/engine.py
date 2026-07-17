@@ -75,6 +75,7 @@ from sky_music.orchestration.playback_supervisor import (
 )
 from sky_music.orchestration.runtime_dispatch import (
     RuntimeDispatchCoordinator,
+    RuntimeSchedule,
     compile_runtime_intents,
 )
 from sky_music.orchestration.telemetry import TelemetryLogger
@@ -472,7 +473,7 @@ class PlaybackEngine:
     ):
         self.song = song
         self.actions = actions
-        self.runtime_schedule = compile_runtime_intents(actions)
+        self.runtime_schedule: RuntimeSchedule | None = compile_runtime_intents(actions)
         self.total_time_us = max((int(action.at_us) for action in actions), default=0)
         self.backend = backend
         self.focus_restore_grace_us = focus_restore_grace_us

@@ -80,6 +80,7 @@ def _install_worker_stubs(
         "should_auto_check": _CallRecorder(),
         "check_for_update": _CallRecorder(),
         "record_successful_check": _CallRecorder(),
+        "record_check_error": _CallRecorder(),
     }
 
     def _should_auto_check(cfg: AppConfig, *, now_ts: int | None = None) -> bool:
@@ -93,9 +94,13 @@ def _install_worker_stubs(
     def _record_successful_check(cfg: AppConfig, *, now_ts: int | None = None) -> None:
         rec["record_successful_check"](cfg, now_ts=now_ts)
 
+    def _record_check_error(cfg: AppConfig, *, now_ts: int | None = None) -> None:
+        rec["record_check_error"](cfg, now_ts=now_ts)
+
     monkeypatch.setattr(service_mod, "should_auto_check", _should_auto_check)
     monkeypatch.setattr(service_mod, "check_for_update", _check_for_update)
     monkeypatch.setattr(service_mod, "record_successful_check", _record_successful_check)
+    monkeypatch.setattr(service_mod, "record_check_error", _record_check_error)
     return rec
 
 
@@ -331,6 +336,38 @@ def test_worker_force_mode_error_does_not_record_check_ts(
     _run_worker(app, force=True)
 
     assert len(rec["record_successful_check"].calls) == 0
+    # Bug F: the worker must record the failed check so the backoff gate can
+    # schedule a short retry instead of waiting for the 24h success throttle.
+    assert len(rec["record_check_error"].calls) == 1
+
+
+def test_worker_auto_mode_error_records_error_ts_silently(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-check (force=False) failing must record ``last_error_ts`` so
+    retry scheduling kicks in, but must NOT surface a user-visible notify
+    (auto-check failing silently is fine — the manual ``u`` path surfaces
+    errors explicitly).
+    """
+    import sky_music.orchestration.update_service as svc
+
+    app = _make_app()
+    ui = _install_ui_stubs(app)
+    rec = _install_worker_stubs(
+        monkeypatch,
+        service_mod=svc,
+        should_auto=True,
+        result=_error_result("dns"),
+    )
+
+    _run_worker(app, force=False)
+
+    assert len(rec["record_check_error"].calls) == 1
+    assert len(rec["record_successful_check"].calls) == 0
+    # No notify on the silent auto path (only the manual force=True path
+    # surfaces an error toast).
+    assert len(ui["notify"].calls) == 0
+    assert len(ui["call_from_thread"].calls) == 0
 
 
 def test_worker_force_mode_preserves_skip_version_behavior(
@@ -534,7 +571,7 @@ def test_download_worker_pushes_modal_and_forwards_progress(
     app.call_from_thread = _call_from_thread  # type: ignore[method-assign]
 
     push_calls: list[Any] = []
-    def _push_screen(modal: Any) -> None:
+    def _push_screen(modal: Any, *_args: Any, **_kwargs: Any) -> None:
         push_calls.append(modal)
     app.push_screen = _push_screen  # type: ignore[method-assign]
 
@@ -590,7 +627,7 @@ def test_download_worker_failure_updates_modal_status(
     app.call_from_thread = _call_from_thread  # type: ignore[method-assign]
 
     modal_seen: list[Any] = []
-    def _push_screen(modal: Any) -> None:
+    def _push_screen(modal: Any, *_args: Any, **_kwargs: Any) -> None:
         modal_seen.append(modal)
     app.push_screen = _push_screen  # type: ignore[method-assign]
 

@@ -67,39 +67,32 @@ def current_unix_ts() -> int:
     return int(time.time())
 
 
-# Backoff ladder for retries after a failed fetch (network blip / rate limit).
-# Short and capped so a user on a flaky link still gets notified within an
-# hour, while never hammering the GitHub unauthenticated API endpoint
-# (rate-limited to 60 req/h per-IP). Replaces the previous behaviour where a
-# single failed check silently locked the user out of update notifications
-# until the long ``check_interval_s`` (24h default) elapses.
-_RETRY_INTERVALS_S: tuple[int, ...] = (300, 900, 3600)  # 5m, 15m, 1h
-_RETRY_FLOOR_S: int = 3600  # after the ladder, wait 1h between attempts
+# Short-static retry interval, applied independently of the long success
+# throttle ``check_interval_s``. Each time an auto-check fails the
+# ``last_error_ts`` is recorded, so this delay applies *per attempt*: a
+# failing link retries every 5 minutes instead of being locked out for a
+# full ``check_interval_s`` day. We do NOT use an accumulating ladder because
+# ``last_error_ts`` is rewritten on every failure, resetting the window — a
+# 5-minute constant is the modern Sparkle/Squirrel default.
+_RETRY_INTERVAL_S: int = 300  # 5 minutes
 
 
 def should_auto_check(cfg: AppConfig, *, now_ts: int | None = None) -> bool:
     """True iff automatic update check should fire right now.
 
-    Two gates, OR'd together, behind a global opt-in:
-
-    0. **Opt-in gate**: ``auto_check`` AND ``update_choice_made``. The app
-       never contacts GitHub on the user's behalf until they have either
-       accepted the first-run prompt or toggled the Settings checkbox — this
-       is the modern best-practice default (no silent "phoning home" on first
-       launch, GDPR/privacy aligned).
+    Two gates, OR'd together, behind the global ``auto_check`` toggle:
 
     1. **Long-throttle success gate**: at least ``check_interval_s`` since the
        last *successful* fetch (or never-fetched). Avoids hammering the
        GitHub unauthenticated API (60 req/h per-IP limit).
-    2. **Short-backoff error gate**: at least one rung on the
-       :data:`_RETRY_INTERVALS_S` ladder since the last *failed* fetch. Lets a
-       one-off network blip retry within minutes instead of locking the user
-       out for a full day.
+    2. **Short-backoff error gate**: at least :data:`_RETRY_INTERVAL_S`
+       seconds since the last *failed* fetch. Lets a one-off network blip
+       retry within minutes instead of locking the user out for a full day —
+       the previous behaviour (Bug F).
 
-    Both gates also respect the global ``auto_check`` toggle. Clock-skew
-    (negative elapsed) lets the check proceed on either gate.
+    Clock-skew (negative elapsed) lets the check proceed on either gate.
     """
-    if not cfg.update.auto_check or not cfg.update.update_choice_made:
+    if not cfg.update.auto_check:
         return False
     now = current_unix_ts() if now_ts is None else int(now_ts)
     # Gate 1 — long throttle on success.
@@ -109,17 +102,8 @@ def should_auto_check(cfg: AppConfig, *, now_ts: int | None = None) -> bool:
     # Gate 2 — short backoff on the most recent error.
     if cfg.update.last_error_ts:
         gap = now - cfg.update.last_error_ts
-        if gap < 0:
+        if gap < 0 or gap >= _RETRY_INTERVAL_S:
             return True
-        cap = _RETRY_INTERVALS_S[-1] if gap >= sum(_RETRY_INTERVALS_S) else _RETRY_FLOOR_S
-        idx = 0
-        cumulative = 0
-        while idx < len(_RETRY_INTERVALS_S):
-            cumulative += _RETRY_INTERVALS_S[idx]
-            if gap < cumulative:
-                return False
-            idx += 1
-        return gap >= cap
     return False
 
 
@@ -133,18 +117,9 @@ def retry_delay_for(cfg: AppConfig, *, now_ts: int | None = None) -> int:
         return 0
     now = current_unix_ts() if now_ts is None else int(now_ts)
     gap = now - cfg.update.last_error_ts
-    if gap < 0:
+    if gap < 0 or gap >= _RETRY_INTERVAL_S:
         return 0
-    cumulative = 0
-    for rung in _RETRY_INTERVALS_S:
-        cumulative += rung
-        if gap < cumulative:
-            return cumulative - gap
-    # Past the ladder — wait until the floor elapses since the last rung.
-    last_rung_total = sum(_RETRY_INTERVALS_S)
-    if gap < last_rung_total + _RETRY_FLOOR_S:
-        return last_rung_total + _RETRY_FLOOR_S - gap
-    return 0
+    return _RETRY_INTERVAL_S - gap
 
 
 def check_for_update(

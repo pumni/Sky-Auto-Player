@@ -119,6 +119,118 @@ def test_should_auto_check_clock_skew_allows_check(isolated_config: Path) -> Non
     assert should_auto_check(cfg, now_ts=1000) is True
 
 
+def test_should_auto_check_retry_gate_blocks_within_window(
+    isolated_config: Path,
+) -> None:
+    """Recent failed fetch + still within the 5-minute backoff window → blocked.
+
+    Establishes the fix for Bug F: a one-off network blip used to lock the
+    user out of update notifications until the long ``check_interval_s``
+    elapsed (24h default). The new short-backoff gate retries every 5 min.
+    """
+    cfg = AppConfig(
+        update=UpdateSettings(
+            auto_check=True,
+            check_interval_s=86400,
+            last_check_ts=0,
+            last_error_ts=1000,
+        ),
+    )
+    # gap=60 < 300 → no retry yet
+    assert should_auto_check(cfg, now_ts=1000 + 60) is False
+    # gap=299 < 300 → still blocked
+    assert should_auto_check(cfg, now_ts=1000 + 299) is False
+
+
+def test_should_auto_check_retry_gate_allows_at_window_boundary(
+    isolated_config: Path,
+) -> None:
+    """At gap == _RETRY_INTERVAL_S (5 min) the backoff gate opens."""
+    cfg = AppConfig(
+        update=UpdateSettings(
+            auto_check=True,
+            check_interval_s=86400,
+            last_check_ts=0,
+            last_error_ts=1000,
+        ),
+    )
+    # gap=300 == window edge → allowed
+    assert should_auto_check(cfg, now_ts=1000 + 300) is True
+    # gap=500 → past window → allowed
+    assert should_auto_check(cfg, now_ts=1000 + 500) is True
+
+
+def test_should_auto_check_disabled_overrides_retry_gate(isolated_config: Path) -> None:
+    """auto_check=False must short-circuit even when a backoff retry is due."""
+    cfg = AppConfig(
+        update=UpdateSettings(
+            auto_check=False,
+            last_error_ts=1000,
+        ),
+    )
+    assert should_auto_check(cfg, now_ts=1000 + 10_000) is False
+
+
+def test_should_auto_check_retry_gate_clock_skew_allows(isolated_config: Path) -> None:
+    """Negative gap (clock skew backwards) lets the retry gate fire."""
+    cfg = AppConfig(
+        update=UpdateSettings(
+            auto_check=True,
+            last_error_ts=2000,
+        ),
+    )
+    assert should_auto_check(cfg, now_ts=1000) is True
+
+
+def test_retry_delay_for_zero_when_no_error(isolated_config: Path) -> None:
+    from sky_music.orchestration.update_service import retry_delay_for
+
+    cfg = AppConfig()
+    assert retry_delay_for(cfg, now_ts=1000) == 0
+
+
+def test_retry_delay_for_returns_seconds_until_window_end(isolated_config: Path) -> None:
+    from sky_music.orchestration.update_service import retry_delay_for
+
+    cfg = AppConfig(
+        update=UpdateSettings(last_error_ts=1000, last_check_ts=0),
+    )
+    assert retry_delay_for(cfg, now_ts=1000 + 100) == 200  # 300 - 100
+    assert retry_delay_for(cfg, now_ts=1000 + 300) == 0  # right at boundary
+    assert retry_delay_for(cfg, now_ts=1000 + 500) == 0  # past boundary
+
+
+def test_record_check_error_persists_last_error_ts(isolated_config: Path) -> None:
+    from sky_music.config import load_config
+    from sky_music.orchestration.update_service import record_check_error
+
+    cfg = AppConfig()
+    record_check_error(cfg, now_ts=12345)
+
+    clear_config_cache()
+    reloaded = load_config(force_reload=True)
+    assert reloaded.update.last_error_ts == 12345
+
+
+def test_record_successful_check_clears_last_error_ts(isolated_config: Path) -> None:
+    """A successful check must reset last_error_ts so the backoff gate stops."""
+    from sky_music.config import load_config
+    from sky_music.orchestration.update_service import (
+        record_check_error,
+        record_successful_check,
+    )
+
+    cfg = AppConfig()
+    record_check_error(cfg, now_ts=1000)
+    assert cfg.update.last_error_ts == 1000
+
+    record_successful_check(cfg, now_ts=5000)
+    clear_config_cache()
+    reloaded = load_config(force_reload=True)
+    assert reloaded.update.last_error_ts == 0
+    assert reloaded.update.last_check_ts == 5000
+
+
 # ── check_for_update ──────────────────────────────────────────────────────────
 
 

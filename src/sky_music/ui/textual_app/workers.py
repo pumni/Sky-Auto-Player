@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
@@ -48,7 +48,6 @@ class MetadataApp(Protocol):
     def call_from_thread(self, callback: Any, *args: Any, **kwargs: Any) -> Any: ...
 
     def refresh_metadata_rows(self) -> None: ...
-    def get_metadata_priority_paths(self) -> list[Path]: ...
 
 
 class MetadataCoordinator:
@@ -66,13 +65,13 @@ class MetadataCoordinator:
         session: PlaybackSessionContext,
         cfg: AppConfig | None,
     ) -> None:
-        self._app = app
+        self._app: MetadataApp | None = app
         self._session = session
         self._cfg = cfg
         self._state = ResourceState.OPEN
         self._last_error: str | None = None
         self._latest_request_id = 0
-        
+
         # Dedicated sequential coordinator executor
         self._coord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sky-metadata-coord")
         self._coord_future: Future[None] | None = None
@@ -88,7 +87,7 @@ class MetadataCoordinator:
     def _should_stop(self, request_id: int | None = None) -> bool:
         if self._state is not ResourceState.OPEN:
             return True
-        return bool(request_id is not None and request_id != self._latest_request_id)
+        return request_id is not None and request_id != self._latest_request_id
 
     def refresh(self, paths: list[Path]) -> None:
         """Begin progressive background metadata warming, hydration, and analysis for all paths."""
@@ -162,7 +161,7 @@ class MetadataCoordinator:
     def _refresh_ui_from_thread(self, request_id: int | None = None) -> None:
         if self._should_stop(request_id):
             return
-        app = self._app
+        app: MetadataApp | None = self._app
         if app is None:  # already closed (MEM-1 null-guard)
             return
         loop = getattr(app, "_loop", None)
@@ -182,7 +181,7 @@ class MetadataCoordinator:
         try:
             get_priority = getattr(self._app, "get_metadata_priority_paths", None)
             if callable(get_priority):
-                priority_paths = get_priority()
+                priority_paths = cast(list[Path], get_priority())
         except Exception:
             pass
 

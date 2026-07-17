@@ -157,7 +157,7 @@ def _update_path_session_ram_cache(
 # ---------------------------------------------------------------------------
 
 def _metadata_to_payload(meta: SongUiMetadata) -> dict[str, Any]:
-    payload = asdict(meta)
+    payload: dict[str, Any] = asdict(meta)
     payload["path"] = str(meta.path)
     payload["warnings"] = list(meta.warnings)
     return payload

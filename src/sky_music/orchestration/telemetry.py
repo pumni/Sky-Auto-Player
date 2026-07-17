@@ -403,7 +403,7 @@ class TelemetryLogger:
         if self._csv_writer is None or self._csv_file is None:
             return
         with contextlib.suppress(Exception):
-            self._csv_writer.writerows(unwritten)
+            self._csv_writer.writerows(r._materialize() for r in unwritten)
             self._csv_file.flush()
             self._csv_events_written += len(unwritten)
             self._records_written_offset += len(unwritten)
@@ -596,13 +596,13 @@ class TelemetryLogger:
         observed_holds: list[int] = []
         active_downs: dict[int, tuple[int, int]] = {}
         for r in rows:
-            sent_codes = r.get("sent_scan_codes", r["scan_codes"])
+            sent_codes = str(r.get("sent_scan_codes") or r["scan_codes"])
             codes = [int(sc) for sc in sent_codes.split(";") if sc]
             if r["kind"] == "down":
                 for sc in codes:
                     active_downs[sc] = (
-                        r["actual_us"],
-                        r.get("dispatch_completed_us", r["actual_us"] + r["send_duration_us"]),
+                        int(r["actual_us"]),
+                        int(r.get("dispatch_completed_us") or (r["actual_us"] + r["send_duration_us"])),
                     )
             elif r["kind"] == "up":
                 for sc in codes:
@@ -610,19 +610,19 @@ class TelemetryLogger:
                         down_started_us, _down_completed_us = active_downs[sc]
                         hold_durations.append(r["actual_us"] - down_started_us)
                         observed_holds.append(
-                            r.get(
+                            int(r.get(
                                 "dispatch_completed_us",
                                 r["actual_us"] + r["send_duration_us"],
-                            )
+                            ) or 0)
                             - _down_completed_us
                         )
                         # Compatibility metric from down dispatch start through up dispatch start;
                         # observed_hold_us is the completion-to-completion visibility metric.
                         confirmed_hold_lower_bounds.append(
-                            r.get(
+                            int(r.get(
                                 "dispatch_completed_us",
                                 r["actual_us"] + r["send_duration_us"],
-                            )
+                            ) or 0)
                             - down_started_us
                         )
                         del active_downs[sc]
