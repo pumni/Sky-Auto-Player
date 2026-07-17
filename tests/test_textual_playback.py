@@ -672,7 +672,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
             table = app.query_one("#songs")
             search = app.query_one("#search")
             card = app.query_one("#playback-card")
-            songs_h_before = table.region.height
             await pilot.press("enter")
             await pilot.pause(0.2)
             assert app.playback_mode == "playing"
@@ -1987,3 +1986,104 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             await pilot.press("escape")
 
     asyncio.run(run_debug_on_test())
+
+def test_rerender_skips_when_signature_unchanged(monkeypatch) -> None:
+    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
+    card = PlaybackCard(theme_name="aurora")
+    card._mode = "playing"
+    
+    refresh_calls = 0
+    layout_calls = 0
+    
+    original_refresh = card.refresh
+    def mock_refresh(*args, layout=False, **kwargs):
+        nonlocal refresh_calls, layout_calls
+        refresh_calls += 1
+        if layout:
+            layout_calls += 1
+        original_refresh(*args, layout=layout, **kwargs)
+        
+    monkeypatch.setattr(card, "refresh", mock_refresh)
+    
+    snap = PlaybackSnapshot(current=1.00, total=5.0, song_name="Test")
+    card.renderer.snapshot = snap
+    card._poll()
+    
+    assert layout_calls == 1 # First time, line count changed from -1
+    
+    # Identical quantize
+    snap2 = PlaybackSnapshot(current=1.04, total=5.0, song_name="Test")
+    card.renderer.snapshot = snap2
+    card._poll()
+    
+    assert layout_calls == 1 # Shouldn't have called layout again
+    assert refresh_calls == 1 # Shouldn't have called refresh at all
+
+def test_rerender_layout_when_line_count_changes(monkeypatch) -> None:
+    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
+    card = PlaybackCard(theme_name="aurora", debug_mode=False)
+    card._mode = "playing"
+    
+    layout_calls = 0
+    original_refresh = card.refresh
+    def mock_refresh(*args, layout=False, **kwargs):
+        nonlocal layout_calls
+        if layout:
+            layout_calls += 1
+        original_refresh(*args, layout=layout, **kwargs)
+        
+    monkeypatch.setattr(card, "refresh", mock_refresh)
+    
+    snap = PlaybackSnapshot(current=1.0, total=5.0, song_name="Test")
+    card.renderer.snapshot = snap
+    card._poll()
+    assert layout_calls == 1
+    
+    card.toggle_debug()
+    assert layout_calls == 2 # Line count increased because of debug lines
+
+def test_progress_quantized_still_updates(monkeypatch) -> None:
+    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
+    card = PlaybackCard(theme_name="aurora")
+    card._mode = "playing"
+    
+    refresh_calls = 0
+    original_refresh = card.refresh
+    def mock_refresh(*args, layout=False, **kwargs):
+        nonlocal refresh_calls
+        refresh_calls += 1
+        original_refresh(*args, layout=layout, **kwargs)
+        
+    monkeypatch.setattr(card, "refresh", mock_refresh)
+    
+    snap = PlaybackSnapshot(current=1.00, total=5.0, song_name="Test")
+    card.renderer.snapshot = snap
+    card._poll()
+    initial_refresh = refresh_calls
+    
+    snap2 = PlaybackSnapshot(current=1.15, total=5.0, song_name="Test")
+    card.renderer.snapshot = snap2
+    card._poll()
+    
+    assert refresh_calls > initial_refresh # Updated because 1.15 > 1.00 bucket
+
+def test_debug_stats_throttled(monkeypatch) -> None:
+    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
+    card = PlaybackCard(theme_name="aurora", debug_mode=True)
+    card._mode = "playing"
+    snap = PlaybackSnapshot(current=1.0, total=5.0, song_name="Test")
+    card._snapshot = snap
+    
+    stats_calls = 0
+    original_debug_stats = card.renderer.debug_stats
+    def mock_debug_stats():
+        nonlocal stats_calls
+        stats_calls += 1
+        return original_debug_stats()
+        
+    monkeypatch.setattr(card.renderer, "debug_stats", mock_debug_stats)
+    
+    for _ in range(5):
+        card._playing_body(80)
+        
+    assert stats_calls == 1 # Only called once due to 0.5s throttle

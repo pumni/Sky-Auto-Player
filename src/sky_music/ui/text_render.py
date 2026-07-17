@@ -8,11 +8,13 @@ divergent width math across modules is exactly what caused card borders to drift
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from typing import Literal
 
 from rich.cells import cell_len as _pt_cwidth
+from rich.cells import chop_cells
 
 
 def hex_to_ansi(hex_color: str) -> str:
@@ -43,14 +45,7 @@ def cell_width(text: str) -> int:
     """Terminal cell width of ``text`` (not ``len``): wide glyphs count as 2."""
     if not text:
         return 0
-    if _pt_cwidth is not None:
-        return max(0, _pt_cwidth(text))
-    width = 0
-    for char in text:
-        if unicodedata.combining(char):
-            continue
-        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
-    return width
+    return max(0, _pt_cwidth(text))
 
 
 def truncate_cells(text: str, max_width: int) -> str:
@@ -62,16 +57,8 @@ def truncate_cells(text: str, max_width: int) -> str:
     if cell_width(text) <= max_width:
         return text
 
-    out: list[str] = []
-    used = 0
-    limit = max_width - 1
-    for char in text:
-        char_width = cell_width(char)
-        if used + char_width > limit:
-            break
-        out.append(char)
-        used += char_width
-    return "".join(out) + "…"
+    chopped = chop_cells(text, max_width - 1)
+    return chopped[0] + "…" if chopped else "…"
 
 
 def truncate_ansi_cells(text: str, max_width: int) -> str:
@@ -212,22 +199,15 @@ def ansi_gradient_box(
     Inside content stays with their individual colors. Uses textual.color.Color
     for character-by-character color blending along the top and bottom borders.
     """
-    from textual.color import Color
-
     width = max(8, width)
     inner_width = max(0, width - 4)
-    stops = [Color.parse(c) for c in gradient]
+    
+    grad_ansi = build_horizontal_gradient_ansi(gradient, width)
 
     def g_ansi(i: int) -> str:
-        if not stops:
+        if not grad_ansi:
             return ""
-        if len(stops) == 1:
-            return hex_to_ansi(stops[0].hex)
-        pos = (i / max(width - 1, 1)) * (len(stops) - 1)
-        k = int(pos)
-        if k >= len(stops) - 1:
-            return hex_to_ansi(stops[-1].hex)
-        return hex_to_ansi(stops[k].blend(stops[k + 1], pos - k).hex)
+        return grad_ansi[i]
 
     # 1. Top rule
     top_parts = []
@@ -269,3 +249,28 @@ def ansi_gradient_box(
         out.append(f"{left_border} {fitted} {right_border}")
     out.append(bot_line)
     return out
+
+
+@functools.lru_cache(maxsize=64)
+def build_horizontal_gradient_hex(stops: tuple[str, ...], width: int) -> tuple[str, ...]:
+    from textual.color import Color
+    if not stops:
+        return ()
+    c_stops = [Color.parse(c) for c in stops]
+    if len(c_stops) == 1:
+        return tuple(c_stops[0].hex for _ in range(width))
+    out = []
+    for i in range(width):
+        pos = (i / max(width - 1, 1)) * (len(c_stops) - 1)
+        k = int(pos)
+        if k >= len(c_stops) - 1:
+            out.append(c_stops[-1].hex)
+        else:
+            out.append(c_stops[k].blend(c_stops[k + 1], pos - k).hex)
+    return tuple(out)
+
+@functools.lru_cache(maxsize=64)
+def build_horizontal_gradient_ansi(stops: tuple[str, ...], width: int) -> tuple[str, ...]:
+    hex_tuple = build_horizontal_gradient_hex(stops, width)
+    return tuple(hex_to_ansi(h) for h in hex_tuple)
+

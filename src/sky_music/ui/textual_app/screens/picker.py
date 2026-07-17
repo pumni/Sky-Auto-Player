@@ -336,6 +336,8 @@ class PickerScreen(Screen[SongPickerResult]):
         self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
         self._search_timer = None
         self._quiesced = False
+        self._row_meta_sig: dict[str, tuple[str, str, str, str]] = {}
+        self._detail_sig: tuple[str, ...] | None = None
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -599,6 +601,21 @@ class PickerScreen(Screen[SongPickerResult]):
                 self._search_timer.stop()
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
+    def get_metadata_priority_paths(self) -> list[Path]:
+        try:
+            table = self.app.query_one("#songs", SongTable)
+            if not self.filtered:
+                return []
+            y_min = table.scroll_y
+            y_max = y_min + table.size.height
+            paths = []
+            for i in range(y_min, min(y_max, len(self.filtered))):
+                paths.append(self.filtered[i].path)
+            return paths
+        except Exception:
+            # fallback
+            return [c.path for c in self.filtered[:40]]
+
     def _perform_search(self) -> None:
         self._search_timer = None
         self.filtered = rank_song_choices(self.choices, self.search_query)
@@ -720,6 +737,7 @@ class PickerScreen(Screen[SongPickerResult]):
         song_icon = self._theme_tokens.song_icon
         table.clear()
         self._marked_row_key = None
+        self._row_meta_sig.clear()
         for choice in self.filtered:
             metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
             duration, notes, risk, suggested = _metadata_cells(metadata)
@@ -751,6 +769,10 @@ class PickerScreen(Screen[SongPickerResult]):
                 metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
                 if metadata is not None:
                     duration, notes, risk, suggested = _metadata_cells(metadata)
+                    sig = (duration, notes, risk, suggested)
+                    if self._row_meta_sig.get(row_key) == sig:
+                        continue
+                    self._row_meta_sig[row_key] = sig
                     table.update_cell(row_key, "time", duration)
                     if self.show_notes:
                         table.update_cell(row_key, "notes", notes)
@@ -766,15 +788,30 @@ class PickerScreen(Screen[SongPickerResult]):
         detail = self.app.query_one("#detail", DetailPanel)
         t = self._theme_tokens
         if not self.preview_visible:
-            detail.update(Text("Details hidden", style=t.muted))
+            sig = ("hidden",)
+            if self._detail_sig != sig:
+                self._detail_sig = sig
+                detail.update(Text("Details hidden", style=t.muted))
             return
 
         selected = self._selected_choice()
         if selected is None:
-            detail.update(build_empty_detail_text(t, bool(self.choices), self.search_query))
+            sig = ("empty", bool(self.choices), self.search_query)
+            if self._detail_sig != sig:
+                self._detail_sig = sig
+                detail.update(build_empty_detail_text(t, bool(self.choices), self.search_query))
             return
 
         metadata = peek_cached_song_ui_metadata(selected.path, self.session, self.cfg)
+        if metadata is not None:
+            sig = (str(selected.path), metadata.analyzed, getattr(metadata, "risk", ""), metadata.note_count)
+        else:
+            sig = (str(selected.path), False, "", 0)
+            
+        if self._detail_sig == sig:
+            return
+        self._detail_sig = sig
+        
         detail.update(build_detail_text(selected.path, metadata, t))
 
     def _selected_choice(self) -> SongChoice | None:

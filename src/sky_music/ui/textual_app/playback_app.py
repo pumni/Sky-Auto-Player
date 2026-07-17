@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import queue
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -313,6 +314,10 @@ class PlaybackCard(Static):
         self._exited = False
         self.engine: PlaybackEngine | None = None
         self.command_bridge: PlaybackCommandBridge | None = None
+        self._last_paint_sig: tuple[Any, ...] | None = None
+        self._last_line_count: int = -1
+        self._debug_stats_cache: DebugStats | None = None
+        self._debug_stats_mono: float = 0.0
 
     # ----- Textual hooks -----------------------------------------------------
     def on_mount(self) -> None:
@@ -378,22 +383,51 @@ class PlaybackCard(Static):
             )
         return lines
 
-    def _rerender(self) -> None:
+    def _paint_signature(self, snap: PlaybackSnapshot | None) -> tuple[Any, ...]:
+        if snap is None:
+            return (self._mode, self.debug_mode, self._countdown_remaining, self._risk_selected, self._error_title)
+        
+        current_q = int(snap.current * 10)
+        c = self.renderer.counters_snapshot()
+        stats_sig = (c.late_5ms, c.active_keys, c.stuck_keys, c.keys_dropped)
+            
+        return (
+            self._mode,
+            self.debug_mode,
+            snap.status,
+            current_q,
+            int(snap.total * 10),
+            snap.input_path_degraded,
+            stats_sig,
+            self._countdown_remaining,
+            self._risk_selected,
+        )
+
+    def _rerender(self, *, force: bool = False) -> None:
+        sig = self._paint_signature(self._snapshot)
+        if not force and sig == self._last_paint_sig:
+            return
+        self._last_paint_sig = sig
         lines = self._compose_lines()
-        self.styles.height = len(lines)
-        self.refresh(layout=True)
+        line_count = len(lines)
+        if line_count != self._last_line_count:
+            self._last_line_count = line_count
+            self.styles.height = line_count
+            self.refresh(layout=True)
+        else:
+            self.refresh()
 
     # ----- mode setters ------------------------------------------------------
     def show_idle(self, message: str) -> None:
         self._mode = "idle"
         self._idle_message = message
-        self._rerender()
+        self._rerender(force=True)
 
     def show_error(self, title: str, message: str) -> None:
         self._mode = "error"
         self._error_title = title
         self._error_message = message
-        self._rerender()
+        self._rerender(force=True)
         self.focus()
 
     def show_risk(
@@ -408,7 +442,7 @@ class PlaybackCard(Static):
         self._risk_recommendations = recommendations
         self._risk_options = options
         self._risk_selected = selected_index
-        self._rerender()
+        self._rerender(force=True)
         self.focus()
 
     def start_countdown(self, seconds: int, callback: Any) -> None:
@@ -417,7 +451,7 @@ class PlaybackCard(Static):
         self._mode = "countdown"
         self._countdown_remaining = seconds
         self._countdown_callback = callback
-        self._rerender()
+        self._rerender(force=True)
         self._timer = self.set_interval(1.0, self._tick_countdown)
         self.focus()
 
@@ -432,7 +466,7 @@ class PlaybackCard(Static):
             if callable(callback):
                 callback()
             return
-        self._rerender()
+        self._rerender(force=True)
 
     def start_playback(
         self,
@@ -466,7 +500,7 @@ class PlaybackCard(Static):
         self._exited = False
         self._mode = "playing"
         self._snapshot = None
-        self._rerender()
+        self._rerender(force=True)
         self.run_engine()
         self._poll_timer = self.set_interval(0.1, self._poll)
         self.focus()
@@ -533,7 +567,8 @@ class PlaybackCard(Static):
 
     def toggle_debug(self) -> None:
         self.debug_mode = not self.debug_mode
-        self._rerender()
+        self._last_paint_sig = None
+        self._rerender(force=True)
 
     # ----- rendering helpers -------------------------------------------------
     def _box_width(self) -> int:
@@ -673,7 +708,11 @@ class PlaybackCard(Static):
             )
 
         if self.debug_mode:
-            stats = self.renderer.debug_stats()
+            now = time.monotonic()
+            if self._debug_stats_cache is None or (now - self._debug_stats_mono) >= 0.5:
+                self._debug_stats_cache = self.renderer.debug_stats()
+                self._debug_stats_mono = now
+            stats = self._debug_stats_cache
         else:
             stats = self.renderer.counters_snapshot()
         if stats.keys_dropped > 0:

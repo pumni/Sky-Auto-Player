@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from rich.text import Text
-from textual.color import Color
 from textual.widgets import Static
 
 from sky_music.ui.text_render import cell_width, truncate_cells
@@ -76,16 +75,15 @@ class GradientHeader(Static):
         width = self.size.width or 60
         if width < 12:
             return Text("")
-        stops = [Color.parse(c) for c in self._stops]
+            
+        stops_tuple = tuple(self._stops)
+        from sky_music.ui.text_render import build_horizontal_gradient_hex
+        grad_hex = build_horizontal_gradient_hex(stops_tuple, width)
 
         def g(i: int) -> str:
-            if len(stops) == 1:
-                return stops[0].hex
-            pos = (i / max(width - 1, 1)) * (len(stops) - 1)
-            k = int(pos)
-            if k >= len(stops) - 1:
-                return stops[-1].hex
-            return stops[k].blend(stops[k + 1], pos - k).hex
+            if not grad_hex:
+                return ""
+            return grad_hex[i]
 
         top = Text()
         top.append("╭", style=g(0))

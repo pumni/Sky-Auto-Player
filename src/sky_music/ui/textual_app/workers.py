@@ -48,6 +48,7 @@ class MetadataApp(Protocol):
     def call_from_thread(self, callback: Any, *args: Any, **kwargs: Any) -> Any: ...
 
     def refresh_metadata_rows(self) -> None: ...
+    def get_metadata_priority_paths(self) -> list[Path]: ...
 
 
 class MetadataCoordinator:
@@ -172,6 +173,26 @@ class MetadataCoordinator:
     def _warm_and_process_all_paths(self, paths: list[Path], request_id: int) -> None:
         if self._should_stop(request_id):
             return
+
+        priority_paths: list[Path] = []
+        try:
+            get_priority = getattr(self._app, "get_metadata_priority_paths", None)
+            if callable(get_priority):
+                priority_paths = get_priority()
+        except Exception:
+            pass
+
+        ordered_paths = []
+        seen = set()
+        for p in priority_paths:
+            if p in paths and p not in seen:
+                ordered_paths.append(p)
+                seen.add(p)
+        for p in paths:
+            if p not in seen:
+                ordered_paths.append(p)
+                seen.add(p)
+        paths = ordered_paths
 
         # Step 1: Hydrate SQLite cache in small batches so shutdown/playback handoff can stop
         # promptly instead of waiting for one large library-wide cache operation.

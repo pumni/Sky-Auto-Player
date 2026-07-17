@@ -1,0 +1,486 @@
+﻿diff --git a/src/sky_music/ui/text_render.py b/src/sky_music/ui/text_render.py
+index d3f4e7e..72fd848 100644
+--- a/src/sky_music/ui/text_render.py
++++ b/src/sky_music/ui/text_render.py
+@@ -8,6 +8,7 @@ divergent width math across modules is exactly what caused card borders to drift
+ 
+ from __future__ import annotations
+ 
++import functools
+ import re
+ import unicodedata
+ from typing import Literal
+@@ -212,22 +213,15 @@ def ansi_gradient_box(
+     Inside content stays with their individual colors. Uses textual.color.Color
+     for character-by-character color blending along the top and bottom borders.
+     """
+-    from textual.color import Color
+-
+     width = max(8, width)
+     inner_width = max(0, width - 4)
+-    stops = [Color.parse(c) for c in gradient]
++    
++    grad_ansi = build_horizontal_gradient_ansi(gradient, width)
+ 
+     def g_ansi(i: int) -> str:
+-        if not stops:
++        if not grad_ansi:
+             return ""
+-        if len(stops) == 1:
+-            return hex_to_ansi(stops[0].hex)
+-        pos = (i / max(width - 1, 1)) * (len(stops) - 1)
+-        k = int(pos)
+-        if k >= len(stops) - 1:
+-            return hex_to_ansi(stops[-1].hex)
+-        return hex_to_ansi(stops[k].blend(stops[k + 1], pos - k).hex)
++        return grad_ansi[i]
+ 
+     # 1. Top rule
+     top_parts = []
+@@ -269,3 +263,28 @@ def ansi_gradient_box(
+         out.append(f"{left_border} {fitted} {right_border}")
+     out.append(bot_line)
+     return out
++
++
++@functools.lru_cache(maxsize=64)
++def build_horizontal_gradient_hex(stops: tuple[str, ...], width: int) -> tuple[str, ...]:
++    from textual.color import Color
++    if not stops:
++        return ()
++    c_stops = [Color.parse(c) for c in stops]
++    if len(c_stops) == 1:
++        return tuple(c_stops[0].hex for _ in range(width))
++    out = []
++    for i in range(width):
++        pos = (i / max(width - 1, 1)) * (len(c_stops) - 1)
++        k = int(pos)
++        if k >= len(c_stops) - 1:
++            out.append(c_stops[-1].hex)
++        else:
++            out.append(c_stops[k].blend(c_stops[k + 1], pos - k).hex)
++    return tuple(out)
++
++@functools.lru_cache(maxsize=64)
++def build_horizontal_gradient_ansi(stops: tuple[str, ...], width: int) -> tuple[str, ...]:
++    hex_tuple = build_horizontal_gradient_hex(stops, width)
++    return tuple(hex_to_ansi(h) for h in hex_tuple)
++
+diff --git a/src/sky_music/ui/textual_app/display_widgets.py b/src/sky_music/ui/textual_app/display_widgets.py
+index f7a8d0e..f991fa0 100644
+--- a/src/sky_music/ui/textual_app/display_widgets.py
++++ b/src/sky_music/ui/textual_app/display_widgets.py
+@@ -3,7 +3,6 @@ from __future__ import annotations
+ from typing import Any
+ 
+ from rich.text import Text
+-from textual.color import Color
+ from textual.widgets import Static
+ 
+ from sky_music.ui.text_render import cell_width, truncate_cells
+@@ -76,16 +75,15 @@ class GradientHeader(Static):
+         width = self.size.width or 60
+         if width < 12:
+             return Text("")
+-        stops = [Color.parse(c) for c in self._stops]
++            
++        stops_tuple = tuple(self._stops)
++        from sky_music.ui.text_render import build_horizontal_gradient_hex
++        grad_hex = build_horizontal_gradient_hex(stops_tuple, width)
+ 
+         def g(i: int) -> str:
+-            if len(stops) == 1:
+-                return stops[0].hex
+-            pos = (i / max(width - 1, 1)) * (len(stops) - 1)
+-            k = int(pos)
+-            if k >= len(stops) - 1:
+-                return stops[-1].hex
+-            return stops[k].blend(stops[k + 1], pos - k).hex
++            if not grad_hex:
++                return ""
++            return grad_hex[i]
+ 
+         top = Text()
+         top.append("Γò¡", style=g(0))
+diff --git a/src/sky_music/ui/textual_app/playback_app.py b/src/sky_music/ui/textual_app/playback_app.py
+index 15a6ba5..5009cad 100644
+--- a/src/sky_music/ui/textual_app/playback_app.py
++++ b/src/sky_music/ui/textual_app/playback_app.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import contextlib
+ import queue
+ import threading
++import time
+ from collections import deque
+ from dataclasses import dataclass
+ from typing import TYPE_CHECKING, Any
+@@ -313,6 +314,10 @@ class PlaybackCard(Static):
+         self._exited = False
+         self.engine: PlaybackEngine | None = None
+         self.command_bridge: PlaybackCommandBridge | None = None
++        self._last_paint_sig: tuple[Any, ...] | None = None
++        self._last_line_count: int = -1
++        self._debug_stats_cache: DebugStats | None = None
++        self._debug_stats_mono: float = 0.0
+ 
+     # ----- Textual hooks -----------------------------------------------------
+     def on_mount(self) -> None:
+@@ -378,22 +383,51 @@ class PlaybackCard(Static):
+             )
+         return lines
+ 
+-    def _rerender(self) -> None:
++    def _paint_signature(self, snap: PlaybackSnapshot | None) -> tuple[Any, ...]:
++        if snap is None:
++            return (self._mode, self.debug_mode, self._countdown_remaining, self._risk_selected, self._error_title)
++        
++        current_q = int(snap.current * 10)
++        c = self.renderer.counters_snapshot()
++        stats_sig = (c.late_5ms, c.active_keys, c.stuck_keys, c.keys_dropped)
++            
++        return (
++            self._mode,
++            self.debug_mode,
++            snap.status,
++            current_q,
++            int(snap.total * 10),
++            snap.input_path_degraded,
++            stats_sig,
++            self._countdown_remaining,
++            self._risk_selected,
++        )
++
++    def _rerender(self, *, force: bool = False) -> None:
++        sig = self._paint_signature(self._snapshot)
++        if not force and sig == self._last_paint_sig:
++            return
++        self._last_paint_sig = sig
+         lines = self._compose_lines()
+-        self.styles.height = len(lines)
+-        self.refresh(layout=True)
++        line_count = len(lines)
++        if line_count != self._last_line_count:
++            self._last_line_count = line_count
++            self.styles.height = line_count
++            self.refresh(layout=True)
++        else:
++            self.refresh()
+ 
+     # ----- mode setters ------------------------------------------------------
+     def show_idle(self, message: str) -> None:
+         self._mode = "idle"
+         self._idle_message = message
+-        self._rerender()
++        self._rerender(force=True)
+ 
+     def show_error(self, title: str, message: str) -> None:
+         self._mode = "error"
+         self._error_title = title
+         self._error_message = message
+-        self._rerender()
++        self._rerender(force=True)
+         self.focus()
+ 
+     def show_risk(
+@@ -408,7 +442,7 @@ class PlaybackCard(Static):
+         self._risk_recommendations = recommendations
+         self._risk_options = options
+         self._risk_selected = selected_index
+-        self._rerender()
++        self._rerender(force=True)
+         self.focus()
+ 
+     def start_countdown(self, seconds: int, callback: Any) -> None:
+@@ -417,7 +451,7 @@ class PlaybackCard(Static):
+         self._mode = "countdown"
+         self._countdown_remaining = seconds
+         self._countdown_callback = callback
+-        self._rerender()
++        self._rerender(force=True)
+         self._timer = self.set_interval(1.0, self._tick_countdown)
+         self.focus()
+ 
+@@ -432,7 +466,7 @@ class PlaybackCard(Static):
+             if callable(callback):
+                 callback()
+             return
+-        self._rerender()
++        self._rerender(force=True)
+ 
+     def start_playback(
+         self,
+@@ -466,7 +500,7 @@ class PlaybackCard(Static):
+         self._exited = False
+         self._mode = "playing"
+         self._snapshot = None
+-        self._rerender()
++        self._rerender(force=True)
+         self.run_engine()
+         self._poll_timer = self.set_interval(0.1, self._poll)
+         self.focus()
+@@ -533,7 +567,8 @@ class PlaybackCard(Static):
+ 
+     def toggle_debug(self) -> None:
+         self.debug_mode = not self.debug_mode
+-        self._rerender()
++        self._last_paint_sig = None
++        self._rerender(force=True)
+ 
+     # ----- rendering helpers -------------------------------------------------
+     def _box_width(self) -> int:
+@@ -673,7 +708,11 @@ class PlaybackCard(Static):
+             )
+ 
+         if self.debug_mode:
+-            stats = self.renderer.debug_stats()
++            now = time.monotonic()
++            if self._debug_stats_cache is None or (now - self._debug_stats_mono) >= 0.5:
++                self._debug_stats_cache = self.renderer.debug_stats()
++                self._debug_stats_mono = now
++            stats = self._debug_stats_cache
+         else:
+             stats = self.renderer.counters_snapshot()
+         if stats.keys_dropped > 0:
+diff --git a/src/sky_music/ui/textual_app/screens/picker.py b/src/sky_music/ui/textual_app/screens/picker.py
+index b7d324d..062c915 100644
+--- a/src/sky_music/ui/textual_app/screens/picker.py
++++ b/src/sky_music/ui/textual_app/screens/picker.py
+@@ -336,6 +336,8 @@ class PickerScreen(Screen[SongPickerResult]):
+         self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
+         self._search_timer = None
+         self._quiesced = False
++        self._row_meta_sig: dict[str, tuple[str, str, str, str]] = {}
++        self._detail_sig: tuple[str, ...] | None = None
+ 
+     @staticmethod
+     def _normalize_theme_name(theme_name: str | None) -> str:
+@@ -599,6 +601,21 @@ class PickerScreen(Screen[SongPickerResult]):
+                 self._search_timer.stop()
+             self._search_timer = self.set_timer(0.15, self._perform_search)
+ 
++    def get_metadata_priority_paths(self) -> list[Path]:
++        try:
++            table = self.app.query_one("#songs", SongTable)
++            if not self.filtered:
++                return []
++            y_min = table.scroll_y
++            y_max = y_min + table.size.height
++            paths = []
++            for i in range(y_min, min(y_max, len(self.filtered))):
++                paths.append(self.filtered[i].path)
++            return paths
++        except Exception:
++            # fallback
++            return [c.path for c in self.filtered[:40]]
++
+     def _perform_search(self) -> None:
+         self._search_timer = None
+         self.filtered = rank_song_choices(self.choices, self.search_query)
+@@ -720,6 +737,7 @@ class PickerScreen(Screen[SongPickerResult]):
+         song_icon = self._theme_tokens.song_icon
+         table.clear()
+         self._marked_row_key = None
++        self._row_meta_sig.clear()
+         for choice in self.filtered:
+             metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
+             duration, notes, risk, suggested = _metadata_cells(metadata)
+@@ -751,6 +769,10 @@ class PickerScreen(Screen[SongPickerResult]):
+                 metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
+                 if metadata is not None:
+                     duration, notes, risk, suggested = _metadata_cells(metadata)
++                    sig = (duration, notes, risk, suggested)
++                    if self._row_meta_sig.get(row_key) == sig:
++                        continue
++                    self._row_meta_sig[row_key] = sig
+                     table.update_cell(row_key, "time", duration)
+                     if self.show_notes:
+                         table.update_cell(row_key, "notes", notes)
+@@ -766,15 +788,30 @@ class PickerScreen(Screen[SongPickerResult]):
+         detail = self.app.query_one("#detail", DetailPanel)
+         t = self._theme_tokens
+         if not self.preview_visible:
+-            detail.update(Text("Details hidden", style=t.muted))
++            sig = ("hidden",)
++            if self._detail_sig != sig:
++                self._detail_sig = sig
++                detail.update(Text("Details hidden", style=t.muted))
+             return
+ 
+         selected = self._selected_choice()
+         if selected is None:
+-            detail.update(build_empty_detail_text(t, bool(self.choices), self.search_query))
++            sig = ("empty", bool(self.choices), self.search_query)
++            if self._detail_sig != sig:
++                self._detail_sig = sig
++                detail.update(build_empty_detail_text(t, bool(self.choices), self.search_query))
+             return
+ 
+         metadata = peek_cached_song_ui_metadata(selected.path, self.session, self.cfg)
++        if metadata is not None:
++            sig = (str(selected.path), metadata.analyzed, getattr(metadata, "risk", ""), metadata.note_count)
++        else:
++            sig = (str(selected.path), False, "", 0)
++            
++        if self._detail_sig == sig:
++            return
++        self._detail_sig = sig
++        
+         detail.update(build_detail_text(selected.path, metadata, t))
+ 
+     def _selected_choice(self) -> SongChoice | None:
+diff --git a/src/sky_music/ui/textual_app/workers.py b/src/sky_music/ui/textual_app/workers.py
+index 66e6f5e..85c7f06 100644
+--- a/src/sky_music/ui/textual_app/workers.py
++++ b/src/sky_music/ui/textual_app/workers.py
+@@ -48,6 +48,7 @@ class MetadataApp(Protocol):
+     def call_from_thread(self, callback: Any, *args: Any, **kwargs: Any) -> Any: ...
+ 
+     def refresh_metadata_rows(self) -> None: ...
++    def get_metadata_priority_paths(self) -> list[Path]: ...
+ 
+ 
+ class MetadataCoordinator:
+@@ -173,6 +174,26 @@ class MetadataCoordinator:
+         if self._should_stop(request_id):
+             return
+ 
++        priority_paths: list[Path] = []
++        try:
++            get_priority = getattr(self._app, "get_metadata_priority_paths", None)
++            if callable(get_priority):
++                priority_paths = get_priority()
++        except Exception:
++            pass
++
++        ordered_paths = []
++        seen = set()
++        for p in priority_paths:
++            if p in paths and p not in seen:
++                ordered_paths.append(p)
++                seen.add(p)
++        for p in paths:
++            if p not in seen:
++                ordered_paths.append(p)
++                seen.add(p)
++        paths = ordered_paths
++
+         # Step 1: Hydrate SQLite cache in small batches so shutdown/playback handoff can stop
+         # promptly instead of waiting for one large library-wide cache operation.
+         warm_batch_size = 25
+diff --git a/tests/test_textual_playback.py b/tests/test_textual_playback.py
+index fc167f6..56e442a 100644
+--- a/tests/test_textual_playback.py
++++ b/tests/test_textual_playback.py
+@@ -672,7 +672,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
+             table = app.query_one("#songs")
+             search = app.query_one("#search")
+             card = app.query_one("#playback-card")
+-            songs_h_before = table.region.height
+             await pilot.press("enter")
+             await pilot.pause(0.2)
+             assert app.playback_mode == "playing"
+@@ -1987,3 +1986,104 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
+             await pilot.press("escape")
+ 
+     asyncio.run(run_debug_on_test())
++
++def test_rerender_skips_when_signature_unchanged(monkeypatch) -> None:
++    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
++    card = PlaybackCard(theme_name="aurora")
++    card._mode = "playing"
++    
++    refresh_calls = 0
++    layout_calls = 0
++    
++    original_refresh = card.refresh
++    def mock_refresh(*args, layout=False, **kwargs):
++        nonlocal refresh_calls, layout_calls
++        refresh_calls += 1
++        if layout:
++            layout_calls += 1
++        original_refresh(*args, layout=layout, **kwargs)
++        
++    monkeypatch.setattr(card, "refresh", mock_refresh)
++    
++    snap = PlaybackSnapshot(current=1.00, total=5.0, song_name="Test")
++    card.renderer.snapshot = snap
++    card._poll()
++    
++    assert layout_calls == 1 # First time, line count changed from -1
++    
++    # Identical quantize
++    snap2 = PlaybackSnapshot(current=1.04, total=5.0, song_name="Test")
++    card.renderer.snapshot = snap2
++    card._poll()
++    
++    assert layout_calls == 1 # Shouldn't have called layout again
++    assert refresh_calls == 1 # Shouldn't have called refresh at all
++
++def test_rerender_layout_when_line_count_changes(monkeypatch) -> None:
++    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
++    card = PlaybackCard(theme_name="aurora", debug_mode=False)
++    card._mode = "playing"
++    
++    layout_calls = 0
++    original_refresh = card.refresh
++    def mock_refresh(*args, layout=False, **kwargs):
++        nonlocal layout_calls
++        if layout:
++            layout_calls += 1
++        original_refresh(*args, layout=layout, **kwargs)
++        
++    monkeypatch.setattr(card, "refresh", mock_refresh)
++    
++    snap = PlaybackSnapshot(current=1.0, total=5.0, song_name="Test")
++    card.renderer.snapshot = snap
++    card._poll()
++    assert layout_calls == 1
++    
++    card.toggle_debug()
++    assert layout_calls == 2 # Line count increased because of debug lines
++
++def test_progress_quantized_still_updates(monkeypatch) -> None:
++    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
++    card = PlaybackCard(theme_name="aurora")
++    card._mode = "playing"
++    
++    refresh_calls = 0
++    original_refresh = card.refresh
++    def mock_refresh(*args, layout=False, **kwargs):
++        nonlocal refresh_calls
++        refresh_calls += 1
++        original_refresh(*args, layout=layout, **kwargs)
++        
++    monkeypatch.setattr(card, "refresh", mock_refresh)
++    
++    snap = PlaybackSnapshot(current=1.00, total=5.0, song_name="Test")
++    card.renderer.snapshot = snap
++    card._poll()
++    initial_refresh = refresh_calls
++    
++    snap2 = PlaybackSnapshot(current=1.15, total=5.0, song_name="Test")
++    card.renderer.snapshot = snap2
++    card._poll()
++    
++    assert refresh_calls > initial_refresh # Updated because 1.15 > 1.00 bucket
++
++def test_debug_stats_throttled(monkeypatch) -> None:
++    from sky_music.ui.textual_app.playback_app import PlaybackSnapshot
++    card = PlaybackCard(theme_name="aurora", debug_mode=True)
++    card._mode = "playing"
++    snap = PlaybackSnapshot(current=1.0, total=5.0, song_name="Test")
++    card._snapshot = snap
++    
++    stats_calls = 0
++    original_debug_stats = card.renderer.debug_stats
++    def mock_debug_stats():
++        nonlocal stats_calls
++        stats_calls += 1
++        return original_debug_stats()
++        
++    monkeypatch.setattr(card.renderer, "debug_stats", mock_debug_stats)
++    
++    for _ in range(5):
++        card._playing_body(80)
++        
++    assert stats_calls == 1 # Only called once due to 0.5s throttle
