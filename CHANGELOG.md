@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`use_ll_hook` machinery** — opt-in global `WH_KEYBOARD_LL` hook
+  (`SetWindowsHookExW`), the dormant `src/sky_music/infrastructure/hotkey_hook.py`
+  module, the `AppConfig.use_ll_hook` field, the `PlaybackControls._hook`
+  slot, and the `use_ll_hook` reading in `main.build_playback_controls`.
+  The hotkey mechanism now relies exclusively on the focus-gated poll path
+  (`is_virtual_key_down`); this aligns the runtime with `AGENTS.md` P0.1
+  ("NO GAME TAMPERING — no hooks") and removes the only outstanding entry
+  from `.config/security_audit_baseline.json`.
+
 ### Security
 
 - **AGENTS.md P0 audit enforced in CI.** New `scripts/audit_security_mandates.py`

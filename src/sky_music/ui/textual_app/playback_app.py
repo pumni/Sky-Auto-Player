@@ -255,6 +255,17 @@ class SnapshotRenderer:
 _ANSI_RESET = "\033[0m"
 _ANSI_BOLD = "\033[1m"
 
+# Module-level constant — avoids re-creating this dict on every _playing_body() call (10 Hz).
+_STATUS_LABELS: dict[str, str] = {
+    "playing": "Playing",
+    "paused": "Paused",
+    "focus_lost": "Focus Lost",
+    "waiting_for_focus": "Waiting for Focus",
+    "refocus": "Refocusing",
+    "panic": "Panic Release",
+    "done": "Done",
+}
+
 
 class PlaybackCard(Static):
     """In-place playback surface rendered as the legacy gradient HUD box.
@@ -531,6 +542,7 @@ class PlaybackCard(Static):
         self.engine = None
         self.command_bridge = None
         callback = self._playback_result_callback
+        self._playback_result_callback = None  # MEM-5: release closure → allow GC of engine/plan
         if callable(callback):
             callback(result)
 
@@ -667,16 +679,7 @@ class PlaybackCard(Static):
         status = snap.status if snap else "playing"
         degraded = snap.input_path_degraded if snap else False
 
-        status_labels = {
-            "playing": "Playing",
-            "paused": "Paused",
-            "focus_lost": "Focus Lost",
-            "waiting_for_focus": "Waiting for Focus",
-            "refocus": "Refocusing",
-            "panic": "Panic Release",
-            "done": "Done",
-        }
-        header_label = status_labels.get(status, status.replace("_", " ").title())
+        header_label = _STATUS_LABELS.get(status, status.replace("_", " ").title())
 
         session_line = (
             f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  profile {accent}{self.profile_name}{_ANSI_RESET}"
@@ -858,6 +861,7 @@ class PlaybackApp(App[str]):
             import main as main_mod
             from sky_music.orchestration.update_service import (
                 check_for_update,
+                record_check_error,
                 record_successful_check,
                 should_auto_check,
             )
@@ -869,6 +873,11 @@ class PlaybackApp(App[str]):
             result = check_for_update(cfg, current_version=VERSION)
             if result.error is None:
                 record_successful_check(cfg)
+            else:
+                # Schedule a short-backoff retry via the new gate; playback
+                # never surfaces update errors to the user (silent path).
+                record_check_error(cfg)
+                return
             if result.update is not None:
                 # Guard against the dev sentinel — never persist a pending
                 # marker based on a runtime that was never properly installed,

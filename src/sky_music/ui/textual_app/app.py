@@ -1171,13 +1171,18 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 from sky_music.config import persist_pending_update_version
                 persist_pending_update_version(self.cfg, "")
                 self.call_from_thread(self._clear_pending_update_indicator)
-        elif force:
-            self.call_from_thread(
-                self.notify,
-                f"Update check failed: {result.error}",
-                severity="error",
-                timeout=6,
-            )
+        else:
+            from sky_music.orchestration.update_service import record_check_error
+            record_check_error(self.cfg)
+            if force:
+                # Manual check fails visibly: surface the error and let the
+                # short-backoff gate schedule an automatic retry later.
+                self.call_from_thread(
+                    self.notify,
+                    f"Update check failed: {result.error}",
+                    severity="error",
+                    timeout=6,
+                )
 
         if result.update is not None:
             self.call_from_thread(self._prompt_update, result)
@@ -1309,14 +1314,30 @@ class SkyPickerApp(App[SongPickerResult | None]):
         # call_from_thread. Once pushed, the worker proceeds to download.
         modal_holder: dict[str, UpdateProgressModal | None] = {"modal": None}
 
+        def _blocked_close_hint() -> None:
+            # User pressed Esc/Enter mid-download — explain why it's gated.
+            with contextlib.suppress(Exception):
+                self.notify(
+                    "Update in progress — please wait for it to finish.",
+                    severity="warning",
+                    timeout=3,
+                )
+
         def _push_modal() -> None:
             modal = UpdateProgressModal(
                 latest_version=latest_version,
                 current_version=VERSION,
                 theme_name=self.active_theme,
             )
+            modal.on_blocked_close_attempt = _blocked_close_hint
             modal_holder["modal"] = modal
-            self.push_screen(modal)
+            self.push_screen(modal, lambda _res: _on_modal_dismissed())
+
+        def _on_modal_dismissed() -> None:
+            # Drop the worker's reference so later callbacks are no-ops; the
+            # modal itself is also defensively guarded by ``_closed`` in
+            # ``update_progress`` / ``set_status``.
+            modal_holder["modal"] = None
 
         self.call_from_thread(_push_modal)
 
@@ -1332,6 +1353,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         else:
             def _show_failure(modal: UpdateProgressModal | None, error: str) -> None:
                 if modal is not None:
+                    # Re-arm close + show the failure reason; the user can now
+                    # dismiss with Esc/Enter. The success path exits the
+                    # process before ever reaching this branch.
+                    modal.allow_close = True
                     modal.set_status(error, severity="error")
                 else:
                     self.notify(f"Update failed: {error}", severity="error", timeout=6)

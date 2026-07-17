@@ -389,11 +389,23 @@ class UpdateProgressModal(PickerModal[None]):
 
     Replaces the previous notify-per-chunk spam — a single modal with one
     ``ProgressBar`` and one label ``Static`` updated via
-    :meth:`update_progress` / :meth:`set_status`. There is NO cancel button on
-    purpose: a half-staged download interrupted mid-stream would leave the
-    staging dir in an unknown state. The user must wait for the worker to
-    finish (success → ``sys.exit(0)`` from ``apply_staged_update``; failure →
-    status label shows the error and Esc closes).
+    :meth:`update_progress` / :meth:`set_status`.
+
+    Closing during an active update is gated by ``allow_close`` — the worker
+    disables Esc/Enter until it reaches a terminal state (success → the
+    process exits via ``sys.exit(0)`` from ``apply_staged_update``; failure →
+    the status label shows the error message and the worker flips
+    ``allow_close`` back on). This avoids the previous race where:
+
+      * the user pressed Esc mid-download,
+      * the modal was removed from the DOM,
+      * the progress callback then crashed on ``query_one`` because the widgets
+        were unmounted,
+      * and the worker kept downloading silently before exiting the app on
+        success.
+
+    Now the close attempt is swallowed while ``allow_close`` is False, and a
+    gentle hint toast is shown so the user understands why Esc is ignored.
     """
 
     BINDINGS = [("escape", "close", "Close"), ("enter", "close", "Close")]
@@ -419,6 +431,14 @@ class UpdateProgressModal(PickerModal[None]):
         self._total = total
         self._last_reported = -1
         self._closed = False
+        # ``allow_close`` is False while the download/apply is in flight; the
+        # worker flips it True on terminal status (error). The success path
+        # exits the process before any close can happen.
+        self.allow_close: bool = False
+        # Optional callable the modal invokes when the user attempts to close
+        # while ``allow_close`` is False — used by the worker to surface a
+        # "please wait" toast instead of silently dropping the keystroke.
+        self.on_blocked_close_attempt: Any = None
 
     def compose_modal_content(self) -> ComposeResult:
         yield Static(
@@ -434,50 +454,84 @@ class UpdateProgressModal(PickerModal[None]):
         Throttles label updates to one per MiB to avoid swamping the
         Textual message queue on slow links — the bar still advances on every
         call.
+
+        No-ops if the modal has been closed, so the worker may keep streaming
+        progress callbacks after dismiss without raising ``NoMatches`` on the
+        unmounted widgets. (Closing mid-flight is now gated by
+        :attr:`allow_close`, but tests / programmatic callers may dismiss the
+        screen other ways — this guard keeps the contract defensive.)
         """
-        bar = self.query_one("#update-progress-bar", ProgressBar)
-        if total is not None and self._total is None:
-            self._total = total
-            bar.update(total=total)
-        if total is not None and total > 0:
-            bar.progress = downloaded
-        else:
-            # Unknown length — nudge forward without a known ceiling.
-            bar.advance(1)
-        # Throttle label update to >=1 MiB deltas.
-        mb = downloaded // self._OBSERVABLE_DOWNLOAD
-        if mb == self._last_reported:
+        if self._closed:
             return
-        self._last_reported = mb
-        if total is not None and total > 0:
-            pct = downloaded * 100 // total
-            text = (
-                f"Downloading: {pct}%  "
-                f"({downloaded // 1024 // 1024} / {total // 1024 // 1024} MiB)"
-            )
-        else:
-            text = f"Downloading: {downloaded // 1024 // 1024} MiB"
-        self.query_one("#update-progress-status", Static).update(text)
+        with contextlib.suppress(Exception):
+            bar = self.query_one("#update-progress-bar", ProgressBar)
+            if total is not None and self._total is None:
+                self._total = total
+                bar.update(total=total)
+            if total is not None and total > 0:
+                bar.progress = downloaded
+            else:
+                # Unknown length — nudge forward without a known ceiling.
+                bar.advance(1)
+            # Throttle label update to >=1 MiB deltas.
+            mb = downloaded // self._OBSERVABLE_DOWNLOAD
+            if mb == self._last_reported:
+                return
+            self._last_reported = mb
+            if total is not None and total > 0:
+                pct = downloaded * 100 // total
+                text = (
+                    f"Downloading: {pct}%  "
+                    f"({downloaded // 1024 // 1024} / {total // 1024 // 1024} MiB)"
+                )
+            else:
+                text = f"Downloading: {downloaded // 1024 // 1024} MiB"
+            self.query_one("#update-progress-status", Static).update(text)
 
     def set_status(self, text: str, *, severity: str = "information") -> None:
-        """Replace the progress label with a final status line (done/failed)."""
+        """Replace the progress label with a final status line (done/failed).
+
+        Also clears :attr:`allow_close` to ``False`` so the guard logic below
+        does not double-flip it back; on a terminal status the worker flips
+        ``allow_close=True`` BEFORE calling ``set_status`` so Esc is honoured.
+        """
+        if self._closed:
+            return
         prefix = {
             "error": "[bold red]Error:[/] ",
             "warning": "[bold yellow]Warning:[/] ",
             "information": "",
         }.get(severity, "")
-        self.query_one("#update-progress-status", Static).update(f"{prefix}{text}")
+        with contextlib.suppress(Exception):
+            self.query_one("#update-progress-status", Static).update(f"{prefix}{text}")
 
     def on_key(self, event: events.Key) -> None:
-        if event.key in {"escape", "enter"} and not self._closed:
+        if event.key in {"escape", "enter"}:
+            if self._closed:
+                return
+            if not self.allow_close:
+                # Swallowed — the update is still in flight. Surface a hint to
+                # the app (toast) rather than letting the modal disappear and
+                # leave the worker running detached.
+                event.stop()
+                if callable(self.on_blocked_close_attempt):
+                    with contextlib.suppress(Exception):
+                        self.on_blocked_close_attempt()
+                return
             event.stop()
             self._closed = True
             self.dismiss(None)
 
     def action_close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self.dismiss(None)
+        if self._closed:
+            return
+        if not self.allow_close:
+            if callable(self.on_blocked_close_attempt):
+                with contextlib.suppress(Exception):
+                    self.on_blocked_close_attempt()
+            return
+        self._closed = True
+        self.dismiss(None)
 
 
 class CheckBoxSquare(Checkbox):

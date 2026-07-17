@@ -642,6 +642,12 @@ class PlaybackEngine:
         self._compat_loop = None
         from sky_music.orchestration.runtime_session import RUNTIME_STATE
         RUNTIME_STATE.clear_session()
+        # MEM-3: Release dry-run history deque (~1-2 MB, maxlen=10_000) after playback.
+        # No caller reads history after release_song_data(); history stays valid for the
+        # duration of play() so post-play assertions in tests still work.
+        from sky_music.infrastructure.backend import DryRunBackend
+        if isinstance(self.backend, DryRunBackend):
+            self.backend.history.clear()
 
     def _log_timing_summary(self) -> None:
         from sky_music.platform.win32 import inputs
@@ -874,6 +880,7 @@ class PlaybackEngine:
                 )
                 if result == PLAYBACK_FINISHED:
                     self._log_timing_summary()
+                    self.telemetry.release_summary()  # MEM-4: free ~100-500 KB summary dict
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded

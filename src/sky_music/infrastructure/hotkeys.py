@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Any
 
 from sky_music.layouts import SKY_15_KEY_MAP as key_maps
 from sky_music.layouts import VK_CODES
@@ -64,23 +63,7 @@ class PlaybackControls:
     refocus: HotkeyBinding
     panic: HotkeyBinding
     enabled: bool = True
-    use_ll_hook: bool = False
     _was_down: dict[str, bool] = field(default_factory=dict)
-    _hook: Any = field(default=None, init=False)
-
-    def __post_init__(self) -> None:
-        if self.use_ll_hook:
-            try:
-                from sky_music.infrastructure.hotkey_hook import HotkeyHook
-                self._hook = HotkeyHook(self)
-                self._hook.start()
-            except Exception:
-                self._hook = None
-
-    def stop_hook(self) -> None:
-        if self._hook:
-            self._hook.stop()
-            self._hook = None
 
     def hint(self) -> str:
         if not self.enabled:
@@ -96,13 +79,7 @@ class PlaybackControls:
     def poll(self) -> str | None:
         if not self.enabled:
             return None
-            
-        if self._hook is not None:
-            # The hook's own thread will push events into its queue
-            action = self._hook.poll()
-            if action is not None:
-                return action
-                
+
         for action, hotkey in (
             ("quit", self.quit),
             ("skip", self.skip),

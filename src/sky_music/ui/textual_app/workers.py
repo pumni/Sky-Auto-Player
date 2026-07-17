@@ -135,6 +135,7 @@ class MetadataCoordinator:
                 except TypeError:
                     self._coord_executor.shutdown(wait=wait)
                 self._state = ResourceState.CLOSED
+                self._app = None  # break strong ref → allow App GC after close (MEM-1)
             except Exception as exc:
                 self._state = ResourceState.FAILED
                 self._last_error = str(exc)
@@ -161,12 +162,15 @@ class MetadataCoordinator:
     def _refresh_ui_from_thread(self, request_id: int | None = None) -> None:
         if self._should_stop(request_id):
             return
-        loop = getattr(self._app, "_loop", None)
+        app = self._app
+        if app is None:  # already closed (MEM-1 null-guard)
+            return
+        loop = getattr(app, "_loop", None)
         if loop is not None and loop.is_closed():
             self._state = ResourceState.CLOSED
             return
         try:
-            self._app.call_from_thread(self._app.refresh_metadata_rows)
+            app.call_from_thread(app.refresh_metadata_rows)
         except RuntimeError:
             self._state = ResourceState.CLOSED
 

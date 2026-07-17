@@ -32,6 +32,7 @@ py-modules = ["main", "build_app", "simulate_update"]
 [dependency-groups]
 dev = [
     "pyinstaller>=6.0.0",
+    "pyrefly>=1.1.1",
     "pyright>=1.1.411",
     "pytest>=8.4.2",
     "pytest-textual-snapshot>=1.1.0",

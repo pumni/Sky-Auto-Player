@@ -579,7 +579,7 @@ def _run_textual_selftest() -> int:
     print("Textual selftest OK: rapidfuzz imported and SkyPickerApp mounted headlessly.")
     return 0
 
-def build_playback_controls(args: argparse.Namespace, use_ll_hook: bool = False) -> PlaybackControls:
+def build_playback_controls(args: argparse.Namespace) -> PlaybackControls:
     if args.disable_hotkeys:
         return PlaybackControls(
             pause=parse_hotkey(args.pause_key),
@@ -588,7 +588,6 @@ def build_playback_controls(args: argparse.Namespace, use_ll_hook: bool = False)
             refocus=parse_hotkey(args.refocus_key),
             panic=parse_hotkey(args.panic_key),
             enabled=False,
-            use_ll_hook=use_ll_hook,
         )
 
     controls = PlaybackControls(
@@ -597,7 +596,6 @@ def build_playback_controls(args: argparse.Namespace, use_ll_hook: bool = False)
         quit=parse_hotkey(args.quit_key),
         refocus=parse_hotkey(args.refocus_key),
         panic=parse_hotkey(args.panic_key),
-        use_ll_hook=use_ll_hook,
     )
 
     conflicting = [
@@ -762,7 +760,7 @@ def main() -> int:
     if getattr(args, "check_update", False):
         return _run_check_update_command(user_cfg)
     try:
-        controls = build_playback_controls(args, user_cfg.use_ll_hook)
+        controls = build_playback_controls(args)
     except ValueError as exc:
         parser.error(str(exc))
 

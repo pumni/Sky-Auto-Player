@@ -101,6 +101,22 @@ def is_newer(latest: str, current: str) -> bool:
     return latest_v > current_v
 
 
+def is_prerelease(version: str) -> bool:
+    """True iff ``version`` parses as a PEP 440 pre-release (rc/dev/a/b/post-dev).
+
+    ``packaging.version.Version.is_prerelease`` returns True for any version
+    that carries an ``a``/``b``/``rc``/``.dev`` segment. Used by
+    :func:`parse_release_payload` to suppress pre-release tags unless the
+    caller opts in via ``include_prerelease`` — auto-check/auto-apply default
+    to stable-channel behaviour, which is the modern best-practice default
+    (Squirrel/Sparkle/VS Code never surface pre-releases to stable users).
+    """
+    v = parse_version(version)
+    if v is None:
+        return False
+    return bool(v.is_prerelease)
+
+
 def _strip_leading_v(tag: str) -> str:
     """GitHub release tags typically look like ``v2.3.0``; strip the ``v``.
 
@@ -177,6 +193,7 @@ def parse_release_payload(
     current_version: str,
     skip_version: str | None = None,
     asset_predicate: AssetPredicate | None = None,
+    include_prerelease: bool = False,
 ) -> UpdateCheckResult:
     """Convert a GitHub Releases API dict into an ``UpdateCheckResult``.
 
@@ -184,6 +201,12 @@ def parse_release_payload(
 
     ``skip_version`` (if set and equal to the latest version) suppresses the
     update — this is how ``Skip this version`` from config is honored.
+
+    ``include_prerelease`` (default ``False``) gates pre-release tags. When
+    ``False``, a tag like ``v2.5.0rc1`` is reported as "no update" so
+    stable-channel users never get pushed a release candidate via
+    auto-check/auto-apply. Manual check (UI ``u`` command) may opt in by
+    passing ``True`` — the caller decides whether to surface pre-releases.
     """
     current = current_version or ""
     tag = payload.get("tag_name")
@@ -191,6 +214,11 @@ def parse_release_payload(
         return UpdateCheckResult(update=None, current_version=current, error="missing tag_name")
     latest = _strip_leading_v(tag)
     if not is_newer(latest, current):
+        return UpdateCheckResult(update=None, current_version=current)
+    if not include_prerelease and is_prerelease(latest):
+        # Stable-channel mode: do not surface pre-releases. We treat this as
+        # "no update" rather than an error so the caller's throttle logic
+        # still records a successful (no-op) check against the stable tag.
         return UpdateCheckResult(update=None, current_version=current)
     if skip_version is not None and skip_version == latest:
         return UpdateCheckResult(update=None, current_version=current)
@@ -232,6 +260,7 @@ def fetch_latest_release(
     timeout: float = FETCH_TIMEOUT_S,
     opener: _Opener | None = None,
     asset_predicate: AssetPredicate | None = None,
+    include_prerelease: bool = False,
 ) -> UpdateCheckResult:
     """Fetch ``releases/latest`` from GitHub and return an update check result.
 
@@ -239,6 +268,11 @@ def fetch_latest_release(
     are returned as an error result with ``update=None`` — they never raise.
     The caller decides whether to surface errors to the user; auto-check ignores
     them silently.
+
+    ``include_prerelease`` (default ``False``) is forwarded to
+    :func:`parse_release_payload` so the stable channel never surfaces rc/dev
+    tags unless the caller explicitly opts in (e.g. a future "show
+    pre-releases" opt-in in Update Settings).
     """
     url = f"{GITHUB_API}/{owner}/{repo}/releases/latest"
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
@@ -263,4 +297,5 @@ def fetch_latest_release(
         current_version=current_version,
         skip_version=skip_version,
         asset_predicate=asset_predicate,
+        include_prerelease=include_prerelease,
     )

@@ -885,6 +885,20 @@ class TelemetryLogger:
         self._last_summary = summary
         return summary
         
+    def release_summary(self) -> None:
+        """Free the cached summary dict after all callers have read it.
+
+        Called by the engine after ``_log_timing_summary()`` finishes, so the
+        post-play summary dict (~100–500 KB) does not pin RSS until the engine
+        object is GC'd.  Safe to call multiple times (idempotent).
+
+        Skipped in ``retain_records_after_save=True`` mode (test-only) so test
+        helpers that inspect ``telemetry`` after ``play()`` are not broken.
+        """
+        if self._retain_records_after_save:
+            return  # test mode — keep everything intact
+        self._last_summary = None  # MEM-4: allow GC of summary dict
+
     def save(self) -> None:
         if not self.enabled or not self.log_filepath:
             return

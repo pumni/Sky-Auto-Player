@@ -108,11 +108,24 @@ DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.ex
 
 @dataclass
 class UpdateSettings:
-    auto_check: bool = True
+    auto_check: bool = False
     auto_apply: bool = False
     skip_version: str = ""
     check_interval_s: int = 86400
     last_check_ts: int = 0
+    # Timestamp of the last *failed* fetch. Reset to 0 on the next successful
+    # check. Used by ``should_retry_after_error`` to do short backoff retries
+    # (independent of the long ``check_interval_s`` throttle for successful
+    # checks) so a one-off network blip does not lock the user out of update
+    # notifications for a full day.
+    last_error_ts: int = 0
+    # True once the user has explicitly chosen whether to enable automatic
+    # update checks (via the first-run dialog or by toggling the Settings
+    # checkbox). Until then, no automatic check fires even if auto_check was
+    # left at the legacy default ``True`` in an older config.json — modern
+    # best practice is opt-in for "phoning home" to GitHub on the user's
+    # behalf. Preserved across rounds so a returning install doesn't re-prompt.
+    update_choice_made: bool = False
     pending_update_version: str = ""
 
     @classmethod
@@ -130,13 +143,34 @@ class UpdateSettings:
         if not isinstance(last_check, int) or isinstance(last_check, bool):
             last_check = 0
 
+        last_err = data.get("last_error_ts", 0)
+        if not isinstance(last_err, int) or isinstance(last_err, bool):
+            last_err = 0
+
         skip = data.get("skip_version", "")
         if not isinstance(skip, str):
             skip = ""
             
-        auto_chk = data.get("auto_check", True)
-        if not isinstance(auto_chk, bool):
-            auto_chk = True
+        # Backward compat: pre-this-change installs stored auto_check=True at the
+        # dataclass default, but never set ``update_choice_made``. If the user
+        # previously had auto_check=True persisted, we treat that as an explicit
+        # choice (a returning install) by setting update_choice_made=True.
+        # For brand-new installs (no update block at all), the dataclass default
+        # (auto_check=False, update_choice_made=False) stands and the first-run
+        # dialog offers the choice.
+        auto_chk_raw = data.get("auto_check", None)
+        had_update_block = "auto_check" in data
+        if auto_chk_raw is None and not had_update_block:
+            auto_chk = False
+            choice_made = False
+        elif not isinstance(auto_chk_raw, bool):
+            auto_chk = False
+            choice_made = True
+        else:
+            auto_chk = auto_chk_raw
+            choice_made = data.get("update_choice_made", True if auto_chk_raw else False)
+            if not isinstance(choice_made, bool):
+                choice_made = bool(auto_chk_raw)
 
         auto_app = data.get("auto_apply", False)
         if not isinstance(auto_app, bool):
@@ -152,6 +186,8 @@ class UpdateSettings:
             skip_version=skip,
             check_interval_s=interval,
             last_check_ts=last_check,
+            last_error_ts=last_err,
+            update_choice_made=choice_made,
             pending_update_version=pending,
         )
 
@@ -179,7 +215,6 @@ class AppConfig:
     # --no-adaptive-lead / --no-adaptive-spin are the kill switches.
     enable_adaptive_lead:         bool          = True
     enable_adaptive_spin:         bool          = True
-    use_ll_hook:                  bool          = False
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
     frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
@@ -428,7 +463,6 @@ def _build_config_from_disk() -> AppConfig:
         rt_priority_mode             = cast(RtPriorityMode, str(raw.get("rt_priority_mode", AppConfig.rt_priority_mode))),
         enable_adaptive_lead         = bool(raw.get("enable_adaptive_lead", AppConfig.enable_adaptive_lead)),
         enable_adaptive_spin         = bool(raw.get("enable_adaptive_spin", AppConfig.enable_adaptive_spin)),
-        use_ll_hook                  = bool(raw.get("use_ll_hook", AppConfig.use_ll_hook)),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
@@ -475,7 +509,6 @@ def save_config(cfg: AppConfig) -> None:
     raw["rt_priority_mode"]             = cfg.rt_priority_mode
     raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
     raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
-    raw["use_ll_hook"]                  = cfg.use_ll_hook
     raw["hotkeys"] = {
         "pause":   cfg.hotkeys.pause,
         "skip":    cfg.hotkeys.skip,
@@ -501,6 +534,8 @@ def save_config(cfg: AppConfig) -> None:
         "skip_version": cfg.update.skip_version,
         "check_interval_s": cfg.update.check_interval_s,
         "last_check_ts": cfg.update.last_check_ts,
+        "last_error_ts": cfg.update.last_error_ts,
+        "update_choice_made": cfg.update.update_choice_made,
         "pending_update_version": cfg.update.pending_update_version,
     }
     raw["schema_version"]               = SCHEMA_VERSION
@@ -597,4 +632,22 @@ def persist_update_auto_apply(cfg: AppConfig, auto: bool) -> None:
 
 def persist_pending_update_version(cfg: AppConfig, version: str) -> None:
     cfg.update.pending_update_version = version
+    save_config(cfg)
+
+def persist_update_error_ts(cfg: AppConfig, ts: int) -> None:
+    """Persist ``last_error_ts`` so a short-backoff retry can be scheduled.
+
+    Pass ``ts=0`` to clear it (after a successful check).
+    """
+    cfg.update.last_error_ts = ts
+    save_config(cfg)
+
+def persist_update_choice_made(cfg: AppConfig, *, auto_check: bool) -> None:
+    """Atomically persist the user's first-run / Settings toggle decision.
+
+    Flips both ``update_choice_made=True`` and ``auto_check`` in a single
+    ``save_config`` write so the first-run dialog prompt never re-appears.
+    """
+    cfg.update.auto_check = auto_check
+    cfg.update.update_choice_made = True
     save_config(cfg)
