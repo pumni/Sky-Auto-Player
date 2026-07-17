@@ -23,9 +23,9 @@ from sky_music.ui.textual_app.app import (
     _picker_cleanup_failed,
     choose_song_interactively_textual,
 )
-from sky_music.ui.textual_app.screens.picker import rank_song_choices
 from sky_music.ui.textual_app.renderers import _metadata_cells
 from sky_music.ui.textual_app.screens import picker as picker_module
+from sky_music.ui.textual_app.screens.picker import rank_song_choices
 
 SONGS = [
     Path("songs/Alpha.json"),
@@ -946,4 +946,58 @@ def test_dispatch_lead_us_propagates_to_playback_engine(monkeypatch) -> None:
 
     app = run_picker(_run_app_with_lead_us(actions))
     assert app.return_value is None
+
+
+def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
+    FakeMetadataCoordinator.instances.clear()
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+
+    from sky_music.platform.win32 import inputs
+    monkeypatch.setattr(inputs, "get_sky_window", lambda: None)
+
+    import sky_music.platform.win32.calibration as calibration_module
+    harness_called = False
+
+    def dummy_harness():
+        nonlocal harness_called
+        harness_called = True
+        return {
+            "down_us": {"p50": 100, "p90": 200, "p99": 300},
+            "up_us": {"p50": 100, "p90": 200, "p99": 300},
+        }
+
+    monkeypatch.setattr(calibration_module, "calibrate_input_latency_harness", dummy_harness)
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        from sky_music.ui.textual_app.screens.picker import PickerScreen
+        picker = app.screen
+        assert isinstance(picker, PickerScreen)
+        
+        # Directly execute the command
+        picker._run_command("calibrate_latency")
+        await pilot.pause()
+
+        # The OptionModal (confirm dialog) should be pushed
+        assert type(app.screen).__name__ == "OptionModal"
+        
+        # Select the first option "yes"
+        await pilot.press("enter")
+        await pilot.pause(0.5)  # Wait for worker to run
+
+        # The harness should have been called and the InfoModal (success dialog) pushed
+        assert harness_called is True
+        assert type(app.screen).__name__ == "InfoModal"
+        
+        # Close InfoModal
+        await pilot.press("escape")
+        await pilot.pause()
+        
+        # Now close picker screen
+        await pilot.press("escape")
+        await pilot.pause()
+
+    app = run_picker(_run_app(actions))
+    assert app.return_value is None
+
 

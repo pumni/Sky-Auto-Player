@@ -1041,6 +1041,8 @@ class PickerScreen(Screen[SongPickerResult]):
             self.action_open_fps()
         elif command == "calibration":
             self.action_open_calibration()
+        elif command == "calibrate_latency":
+            self.action_calibrate_input_latency()
         elif command == "dry_run":
             self.action_toggle_dry_run()
         elif command == "hud":
@@ -1120,6 +1122,72 @@ class PickerScreen(Screen[SongPickerResult]):
                 theme_name=self.active_theme,
             )
         )
+
+    def action_calibrate_input_latency(self) -> None:
+        from sky_music.platform.win32 import inputs
+        if inputs.get_sky_window() is not None:
+            self.app.push_screen(
+                InfoModal(
+                    "Calibration Blocked",
+                    "Error: The game (Sky) is currently running.\n\nPlease close the game entirely before running input calibration.",
+                    theme_name=self.active_theme,
+                )
+            )
+            return
+
+        options = [
+            PickerOption("yes", "Start calibration"),
+            PickerOption("no", "Cancel"),
+        ]
+        text = (
+            "This will measure your precise hardware keyboard latency.\n\n"
+            "1. A separate Windows window will open.\n"
+            "2. Keep that window focused (click/tap it if needed).\n"
+            "3. The app will simulate 200 keypresses to measure latency.\n"
+            "4. Cache is saved to .cache/input_latency.json.\n\n"
+            "Would you like to proceed?"
+        )
+        
+        def _on_confirm(choice: object | None) -> None:
+            if choice == "yes":
+                self.run_worker(self._run_latency_calibration_worker, exclusive=True)
+
+        self.app.push_screen(
+            OptionModal(
+                "Input Latency Calibration",
+                options,
+                info_text=text,
+                theme_name=self.active_theme,
+            ),
+            _on_confirm
+        )
+
+    async def _run_latency_calibration_worker(self) -> None:
+        import asyncio
+
+        from sky_music.platform.win32.calibration import calibrate_input_latency_harness
+        
+        try:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, calibrate_input_latency_harness)
+            
+            self.app.push_screen(
+                InfoModal(
+                    "Calibration Complete",
+                    f"Sampled Down Latency (us): p50={res['down_us']['p50']}, p90={res['down_us']['p90']}, p99={res['down_us']['p99']}\n"
+                    f"Sampled Up Latency   (us): p50={res['up_us']['p50']}, p90={res['up_us']['p90']}, p99={res['up_us']['p99']}\n\n"
+                    "Calibration saved to .cache/input_latency.json successfully!",
+                    theme_name=self.active_theme,
+                )
+            )
+        except Exception as exc:
+            self.app.push_screen(
+                InfoModal(
+                    "Calibration Failed",
+                    f"Error running calibration:\n{exc}",
+                    theme_name=self.active_theme,
+                )
+            )
 
     def action_open_calibration(self) -> None:
         from sky_music.orchestration.calibration import (
