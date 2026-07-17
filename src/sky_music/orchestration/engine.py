@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import gc
-import json
 import threading
 from collections.abc import Callable
-from pathlib import Path
 
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song

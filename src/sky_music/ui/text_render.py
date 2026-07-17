@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import functools
 import re
-import unicodedata
 from typing import Literal
 
 from rich.cells import cell_len as _pt_cwidth

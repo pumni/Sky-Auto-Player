@@ -571,6 +571,7 @@ def test_down_lead_for_batch_scales_with_polyphony() -> None:
     for _ in range(5):
         engine.estimator.update(ActionKind.DOWN, 800, n_keys=4)
     loop = engine._compat_dispatch_loop()
+    assert engine.runtime_schedule is not None
     single = engine.runtime_schedule.batches[0]
     chord = engine.runtime_schedule.batches[1]
     assert loop._down_lead_for_batch(single) == 200
