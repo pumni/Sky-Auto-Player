@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  FORCE_COLOR: "1"
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  validate:
+    name: Sky Player — full altitude gate
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Pin uv cache to workspace volume
+        run: |
+          New-Item -ItemType File -Force -Path .env | Out-Null
+          Copy-Item -Force .env.example .env
+
+      - name: Sync deps
+        run: uv sync --frozen
+
+      - name: Runtime audit — free-threaded readiness
+        run: uv run --env-file .env python scripts/audit_free_threaded_wheels.py
+
+      - name: Lint — ruff
+        run: uv run ruff check .
+
+      - name: Types — pyright
+        run: uv run pyright
+
+      - name: Security — AGENTS.md P0 audit
+        run: uv run --env-file .env python scripts/audit_security_mandates.py
+
+      - name: Tests — unit (scheduler, parser, domain — no Windows required)
+        run: uv run pytest -m "not windows and not slow"

@@ -107,3 +107,21 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["ARG"]          # utility scripts — unused params are expected
 "tests/*" = ["ARG", "SIM115"]  # test fixtures: unused params, contextlib patterns
+
+[tool.pytest.ini_options]
+# Mirrors the altitude table in AGENTS.md. Markers let CI select narrow slices:
+# `pytest -m scheduler` for scheduler-only runs, `pytest -m "not slow"` for fast lanes.
+testpaths   = ["tests"]
+addopts     = "-ra --strict-markers"
+markers = [
+    "scheduler: pure-domain scheduling tests (no real Windows API)",
+    "windows:   requires Windows or SendInput — opt in on runners that support it",
+    "golden:    snapshot regressions against golden_schedules / golden_engine_timeline",
+    "slow:      wall-clock benchmarks — skip on fast lane",
+]
+norecursedirs = [
+    "golden_schedules",
+    "perf-baselines",
+    ".tmp",
+    ".claude",
+]

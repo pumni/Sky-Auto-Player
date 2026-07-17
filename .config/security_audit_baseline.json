@@ -1,0 +1,5 @@
+{
+  "$schema": "AGENTS.md P0 baseline — one entry per historical (path, line, rule) shock absorber while the underlying code is migrated.",
+  "comment": "Each entry must link to a tracking issue or plan doc. Strip an entry only after the offending code is gone or refactored to a permitted API.",
+  "exceptions": []
+}

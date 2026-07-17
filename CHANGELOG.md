@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **AGENTS.md P0 audit enforced in CI.** New `scripts/audit_security_mandates.py`
+  (AST scanner) runs on every push and PR alongside the existing
+  `audit_free_threaded_wheels.py` precheck. The audit forbids `ReadProcessMemory`,
+  `WriteProcessMemory`, `SetWindowsHookEx*`, `CreateRemoteThread`, `DebugActiveProcess`,
+  `NtQueryInformationProcess`, imports of `pymem`/`pyinject`/`win32api`, and `WinDLL("ntdll.dll")`,
+  while explicitly allowing only the `SendInput` family. Historical violations
+  are tracked in `.config/security_audit_baseline.json`.
+- **Public `SECURITY.md`** now restates the P0 mandates and the disclosure channel
+  (`security@pumni.dev`) for vulnerability-grade findings.
+
+### Added
+
+- **CI workflow** at `.github/workflows/ci.yml` executes the full altitude table
+  (`audit_free_threaded_wheels` → `ruff` → `pyright` → `audit_security_mandates`
+  → `pytest`) on `windows-latest` against the free-threaded interpreter.
+- **Pre-commit config** at `.pre-commit-config.yaml` mirrors the same gates
+  locally and adds `check-yaml` / `check-toml` / `check-json` / `eol` /
+  `trailing-whitespace` so formatting drift is caught before push.
+- **Pytest markers** (`scheduler`, `windows`, `golden`, `slow`) and
+  `norecursedirs` (`golden_schedules`, `perf-baselines`, `.tmp`, `.claude`)
+  declared via `[tool.pytest.ini_options]`.
+- **`.editorconfig`** pins UTF-8, LF, 4-space indent for Python and 2-space
+  for YAML/TOML/JSON; CRLF preserved on `*.bat`.
+- **`PULL_REQUEST_TEMPLATE.md`** + **issue templates** (`bug_report.md`,
+  `feature_request.md`, `security_p0.md`, `config.yml`) so every PR carries the
+  altitude-table checklist and every security finding follows the disclosure path.
+
 ## [2.3.4] - 2026-07-17
 
 ### Changed
