@@ -1139,12 +1139,12 @@ def test_send_scan_code_batch_cache_and_retry() -> None:
         assert len(called_inputs) == 1
         assert called_inputs[0].ki.wScan == 22
 
-    # 3. Musical note-on path: partial → drop remainder, no second SendInput
+    # 3. Musical note-on path: partial → exactly one same-frame retry, then drop remainder
     win32_inputs.reset_send_diagnostics()
-    with patch.object(win32_inputs.user32, "SendInput", return_value=1) as mock_send, \
+    with patch.object(win32_inputs.user32, "SendInput", side_effect=[1, 0]) as mock_send, \
          patch("sky_music.platform.win32.inputs.send_input_batch") as mock_send_batch:
         assert win32_inputs.send_scan_code_batch_trusted(chord, key_up=False) == 1
-        assert mock_send.call_count == 1
+        assert mock_send.call_count == 2
         assert mock_send_batch.call_count == 0
         diag = win32_inputs.get_send_diagnostics()
         assert diag["keys_dropped"] == 1

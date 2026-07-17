@@ -361,15 +361,16 @@ class PlaybackSupervisor:
                         )
 
                     if self.enable_epoch_rebase:
-                        # Keep this as the final pre-run statement; later work here is again
-                        # charged against t=0 notes.
-                        rebase_us = state.rebase_epoch(self.clock.now_us())
                         self.telemetry.record_runtime_options(
                             {
                                 **self.telemetry.runtime_options,
-                                "epoch_rebase_us": rebase_us,
+                                "epoch_rebase": True,
                             }
                         )
+                        # Keep this as the final pre-run statement; nothing after it may be
+                        # charged against t=0 notes.
+                        rebase_us = state.rebase_epoch(self.clock.now_us())
+                        self._epoch_rebase_us = rebase_us
 
                     dispatch_result.result = dispatch_loop.run(
                         state=state,
@@ -475,6 +476,14 @@ class PlaybackSupervisor:
                 with contextlib.suppress(Exception):
                     inputs.close_handle(command_event_handle)
                 command_event_handle = None
+
+            if hasattr(self, "_epoch_rebase_us"):
+                self.telemetry.record_runtime_options(
+                    {
+                        **self.telemetry.runtime_options,
+                        "epoch_rebase_us": self._epoch_rebase_us,
+                    }
+                )
 
         last_snapshot_version = self._consume_progress_updates(
             progress_sink,

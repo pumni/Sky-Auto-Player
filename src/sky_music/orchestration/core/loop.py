@@ -487,6 +487,29 @@ class DispatchLoop:
         )
         return result
 
+    @staticmethod
+    def _resolve_down_outcome(
+        action: KeyAction,
+        send_result: object,
+        default_outcome: str,
+    ) -> str:
+        # Phase 3 partial-send outcome hygiene: relabel note-on dispatches whose
+        # SendInput landed a strict prefix (or nothing) as ``partial_note_on``.
+        # G5 musical no-retry keeps us from finishing the remainder late; the
+        # coordinator promotes unsent gens to DROPPED_BACKEND in ``activate_sent_downs``.
+        # ``partial_note_on`` makes the sender-side atomicity break first-class in
+        # CSV/telemetry, distinct from pre-send drops.
+        sent = getattr(send_result, "sent", ())
+        if not sent and len(action.scan_codes) > 0:
+            return "partial_note_on"
+        if (
+            default_outcome == "sent"
+            and action.scan_codes
+            and len(sent) < len(action.scan_codes)
+        ):
+            return "partial_note_on"
+        return default_outcome
+
     def _dispatch_down_batch(
         self,
         batch: RuntimeActionBatch,
@@ -588,35 +611,13 @@ class DispatchLoop:
             reason=batch.reason,
         )
 
-        def _resolve_down_outcome(
-            action: KeyAction,
-            send_result: object,
-            default_outcome: str,
-        ) -> str:
-            # Phase 3 partial-send outcome hygiene: relabel note-on dispatches whose
-            # SendInput landed a strict prefix (or nothing) as ``partial_note_on``.
-            # G5 musical no-retry keeps us from finishing the remainder late; the
-            # coordinator promotes unsent gens to DROPPED_BACKEND in ``activate_sent_downs``.
-            # ``partial_note_on`` makes the sender-side atomicity break first-class in
-            # CSV/telemetry, distinct from pre-send drops.
-            sent = tuple(getattr(send_result, "sent", ()))
-            if not sent and len(action.scan_codes) > 0:
-                return "partial_note_on"
-            if (
-                default_outcome == "sent"
-                and action.scan_codes
-                and len(sent) < len(action.scan_codes)
-            ):
-                return "partial_note_on"
-            return default_outcome
-
         result = self._execute_action(
             batch.source_action_index,
             action,
             state,
             generation_ids=self._intent_generation_ids(playable),
             applied_lead_us=lead_down,
-            outcome_resolver=_resolve_down_outcome,
+            outcome_resolver=self._resolve_down_outcome,
         )
         # Lead tracks pure SendInput duration (not post-syscall bookkeeping) so completions
         # land on schedule rather than overshooting by the telemetry/health tail.
@@ -1015,6 +1016,11 @@ class DispatchLoop:
             if service_result:
                 return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed
 
+            # Event-mode spin happens inside wait_until_us; record the nominal spin start so
+            # pre_send_spin_us reflects the guard spin (the high-res sleeper wakes within the guard
+            # of target, so actual spin start is within tens of µs of this).
+            self._wait_spin_start_us = target_elapsed_us - self.spin_threshold_us
+            
             woken_by_event = self.wait_strategy.wait_until_us(
                 target_system_us=target_system_us,
                 clock=self.clock,
