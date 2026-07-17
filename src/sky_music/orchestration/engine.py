@@ -475,7 +475,11 @@ class PlaybackEngine:
         rt_priority_mode: RtPriorityMode = "auto",
         dispatch_lead_us: int = 0,
         enable_event_wait: bool = False,
-        enable_epoch_rebase: bool = False,
+        # Default True to match the production RuntimeState default: the supervisor rebases the
+        # playback anchor on the dispatch thread as the final pre-run statement, so thread-spawn
+        # and MMCSS-acquisition time (~165us p50 / ~1ms p99 measured) is not charged as lateness
+        # against t=0 notes. Direct (non-threaded) mode never rebases regardless of this flag.
+        enable_epoch_rebase: bool = True,
         wait_strategy: WaitStrategy | None = None,
         onset_bias_us: int = 0,
         spin_floor_us: int = 700,

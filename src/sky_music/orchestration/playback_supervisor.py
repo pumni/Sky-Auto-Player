@@ -237,7 +237,8 @@ class PlaybackSupervisor:
         rt_priority_mode: RtPriorityMode = "auto",
         enable_timer_guard: bool = True,
         enable_event_wait: bool = False,
-        enable_epoch_rebase: bool = False,
+        # Default True mirrors PlaybackEngine / RuntimeState; only _run_threaded ever rebases.
+        enable_epoch_rebase: bool = True,
     ) -> None:
         self.controls = controls
         self.focus_guard = focus_guard

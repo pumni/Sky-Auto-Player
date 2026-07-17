@@ -291,10 +291,12 @@ def test_playback_state_rebase_epoch_preserves_pause_offset() -> None:
     assert state.epoch_us == 2_750
 
 
-def test_threaded_epoch_rebase_defaults_off_in_engine_runtime_options() -> None:
+def test_threaded_epoch_rebase_defaults_on_in_engine_runtime_options() -> None:
+    # Constructor default aligns with the production RuntimeState default (True): a threaded
+    # run without an explicit flag rebases the anchor and records the measured delta.
     backend = ThreadRecordingBackend()
     engine = PlaybackEngine(
-        song=Song(name="threaded-rebase-default-off", notes=()),
+        song=Song(name="threaded-rebase-default-on", notes=()),
         actions=(action(0, "down", 21),),
         backend=backend,
         require_focus=False,
@@ -306,8 +308,9 @@ def test_threaded_epoch_rebase_defaults_off_in_engine_runtime_options() -> None:
 
     summary = engine.telemetry.get_summary()
     assert summary is not None
-    assert summary["runtime_options"]["epoch_rebase"] is False
-    assert "epoch_rebase_us" not in summary["runtime_options"]
+    assert summary["runtime_options"]["epoch_rebase"] is True
+    assert isinstance(summary["runtime_options"]["epoch_rebase_us"], int)
+    assert summary["runtime_options"]["epoch_rebase_us"] >= 0
 
 
 def test_threaded_epoch_rebase_records_measured_delta_when_enabled() -> None:
