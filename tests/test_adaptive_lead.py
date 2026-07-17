@@ -481,79 +481,7 @@ def test_estimator_polyphony_buckets() -> None:
     assert est.get_lead_us(ActionKind.DOWN, 4) > est.get_lead_us(ActionKind.DOWN, 1)
 
 
-def test_estimator_linear_extrapolation_for_unseen_bucket() -> None:
-    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
-    # Seed buckets 1 and 4 so a linear model (a + b*N) is defined across >=2 sizes.
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 200, n_keys=1)
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 800, n_keys=4)
-    # Fit through (1,200) and (4,800): slope 200, intercept 0. Unseen sizes are EXTRAPOLATED,
-    # not borrowed from a smaller seeded bucket (which would under-lead the chord).
-    assert est.get_lead_us(ActionKind.DOWN, 2) == 400
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
-    # Seeded buckets still return their own EMA exactly.
-    assert est.get_lead_us(ActionKind.DOWN, 1) == 200
-    assert est.get_lead_us(ActionKind.DOWN, 4) == 800
 
-
-def test_estimator_extrapolates_beyond_default_max_poly() -> None:
-    # A song with an 8-key chord sets max_poly=8 on the estimator
-    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000, max_poly=8)
-    # Seed buckets 1 and 4 -> slope 200, intercept 0
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 200, n_keys=1)
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 800, n_keys=4)
-    # 8-key chord receives extrapolated lead matching the linear model instead of bucket-6
-    assert est.get_lead_us(ActionKind.DOWN, 8) == 1600
-
-
-def test_estimator_warm_start_uses_first_sample() -> None:
-    est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
-    # Seed buckets 1 and 2 so the linear model (slope 200, intercept 0) is available.
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 200, n_keys=1)
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 400, n_keys=2)
-    # First-ever poly-4 chord, with a real send (1000) above the linear prediction (800):
-    # the bucket warm-starts from linear then folds in the sample -> 0.2*1000 + 0.8*800 = 840.
-    # (Pure linear fallback would ignore the real sample and return 800.)
-    est.update(ActionKind.DOWN, 1000, n_keys=4)
-    assert est.get_lead_us(ActionKind.DOWN, 4) == 840
-
-
-def test_linear_model_forgets_old_regime_and_tracks_drift() -> None:
-    # Best-practice RLS with exponential forgetting: the linear backbone must track a shift in
-    # per-machine send latency, not stay pinned to a lifetime average. Small window for determinism.
-    est = SendLatencyEstimator(alpha=0.2, max_lead_us=10_000, lin_forget=0.9)
-
-    # Old regime: send ≈ 200·N (line through (1,200),(2,400)).
-    for _ in range(50):
-        est.update(ActionKind.DOWN, 200, n_keys=1)
-        est.update(ActionKind.DOWN, 400, n_keys=2)
-    # Sanity: before drift the unseen bucket extrapolates the old line.
-    assert abs(est.get_lead_us(ActionKind.DOWN, 3) - 600) < 30
-
-    # New regime: send ≈ 400·N (line through (1,400),(2,800)). With a ~10-sample window, the old
-    # regime decays to negligible weight, so the fit should track the NEW line (predict(3) ≈ 1200).
-    for _ in range(60):
-        est.update(ActionKind.DOWN, 400, n_keys=1)
-        est.update(ActionKind.DOWN, 800, n_keys=2)
-
-    predicted_3 = est.get_lead_us(ActionKind.DOWN, 3)
-    assert predicted_3 > 1000, predicted_3  # tracked the drift; a lifetime average would lag near 900
-
-
-def test_lin_forget_one_reproduces_lifetime_fit() -> None:
-    # lin_forget=1.0 disables decay → identical to the old lifetime-sum behaviour.
-    est = SendLatencyEstimator(alpha=0.2, max_lead_us=10_000, lin_forget=1.0)
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 200, n_keys=1)
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 800, n_keys=4)
-    # Fit through (1,200),(4,800): slope 200, intercept 0 → predict(3) = 600.
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
 
 
 def test_estimator_nearest_bucket_when_linear_undefined() -> None:
@@ -652,100 +580,10 @@ def test_down_lead_for_batch_scales_with_polyphony() -> None:
 # --- Per-machine estimator persistence (warm-start across sessions) ---
 
 
-def test_estimator_export_import_round_trip() -> None:
-    src = SendLatencyEstimator()
-    for _ in range(6):
-        src.update(ActionKind.DOWN, 280, n_keys=1)
-        src.update(ActionKind.DOWN, 420, n_keys=2)
-        src.update(ActionKind.DOWN, 560, n_keys=3)
-        src.update(ActionKind.UP, 200)
-
-    dst = SendLatencyEstimator()
-    dst.import_state(src.export_state())
-
-    for n in (1, 2, 3):
-        assert dst.get_lead_us(ActionKind.DOWN, n) == src.get_lead_us(ActionKind.DOWN, n)
-    assert dst.get_lead_us(ActionKind.UP) == src.get_lead_us(ActionKind.UP)
-    # Warm from the very first event: no cold-start zero.
-    assert dst.get_lead_us(ActionKind.DOWN, 3) > 0
-
-
-def test_imported_bucket_is_warm_from_first_event() -> None:
-    est = SendLatencyEstimator()
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 0  # cold
-
-    est.import_state({"version": 1, "ema_down": {"3": 600.0}})
-    # Seeded value used immediately, with no real samples sent.
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 600
-
-
-def test_import_ignores_unversioned_or_corrupt_state() -> None:
-    est = SendLatencyEstimator()
-    est.import_state({})  # missing version
-    est.import_state({"version": 2, "ema_down": {"3": 600.0}})  # wrong version
-    est.import_state("not a dict")  # type: ignore[arg-type]
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
-
-
-def test_import_rejects_out_of_range_values() -> None:
-    est = SendLatencyEstimator()
-    est.import_state({"version": 1, "ema_down": {"3": 1e12, "2": -5}})
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
-    assert est.get_lead_us(ActionKind.DOWN, 2) == 0
-
-
-def test_lead_cache_file_round_trip(tmp_path) -> None:
-    from sky_music.orchestration.engine import load_lead_cache, save_lead_cache
-
-    path = tmp_path / "cache" / "lead.json"
-    assert load_lead_cache(path) is None  # missing file -> None, no crash
-
-    src = SendLatencyEstimator()
-    for _ in range(6):
-        src.update(ActionKind.DOWN, 300, n_keys=1)
-    save_lead_cache(path, src.export_state())
-
-    loaded = load_lead_cache(path)
-    assert loaded is not None
-    dst = SendLatencyEstimator()
-    dst.import_state(loaded)
-    assert dst.get_lead_us(ActionKind.DOWN, 1) == src.get_lead_us(ActionKind.DOWN, 1)
-
-
-def test_load_lead_cache_handles_corrupt_file(tmp_path) -> None:
-    from sky_music.orchestration.engine import load_lead_cache
-
-    path = tmp_path / "lead.json"
-    path.write_text("{not valid json", encoding="utf-8")
-    assert load_lead_cache(path) is None
-
-
-def test_lead_cache_disabled_for_dry_run_backend(tmp_path) -> None:
-    from sky_music.infrastructure.backend import DryRunBackend
-
-    actions = (
-        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="d"),
-    )
-    path = tmp_path / "lead.json"
-
-    # Real-ish backend (TimedBackend) with adaptive lead + a path -> cache active.
-    real = _bias_engine(actions, enable_adaptive_lead=True, lead_cache_path=path)
-    assert real._lead_cache_enabled is True
-
-    # DryRunBackend must never read/write the per-machine cache (its sends are not representative).
-    dry = PlaybackEngine(
-        song=Song(name="poly", notes=()),
-        actions=actions,
-        backend=DryRunBackend(),
-        require_focus=False,
-        use_dispatch_thread=False,
-        enable_adaptive_lead=True,
-        lead_cache_path=path,
-    )
-    assert dry._lead_cache_enabled is False
-
-
 # --- Phase 4 SendInput-lifecycle plan §4.2 cold-start regression tests ---
+
+
+
 
 
 def test_first_three_key_chord_lead_positive_after_linear_seed_from_singles() -> None:
@@ -811,34 +649,3 @@ def test_residual_prologue_bias_is_positive_only_and_capped_at_500us() -> None:
     assert lead_after_late >= 200, "residual folds in positive side (>= EMA)"
     assert lead_after_late <= 200 + 500, "residual prologue bias capped at 500us"
 
-
-def test_lead_cache_warm_loaded_engine_immediately_uses_imported_lead(tmp_path) -> None:
-    """Phase 4 §4.1 verify production wiring — lead cache IMPORT path is correct.
-
-    The cache import is a warm-start: after ``import_state(loaded)``, the very first
-    ``get_lead_us`` for a cached polyphony bucket returns the imported value unchanged.
-    Guards the wiring ``_lead_cache_enabled => load_lead_cache => estimator.import_state``
-    against silent regressions in the engine boot sequence.
-    """
-    from json import dumps
-
-    from sky_music.orchestration.engine import load_lead_cache
-
-    cache = {
-        "version": 1,
-        "ema_down": {"1": 350.0, "3": 700.0},
-        "ema_up": 200.0,
-        "max_poly": 6,
-    }
-    path = tmp_path / "lead.json"
-    path.write_text(dumps(cache), encoding="utf-8")
-
-    loaded = load_lead_cache(path)
-    assert loaded is not None
-
-    est = SendLatencyEstimator()
-    est.import_state(loaded)
-    # Immediately after import the lead for cached N=1 is exactly 350.
-    assert est.get_lead_us(ActionKind.DOWN, 1) == 350
-    # And N=3 lead is exactly 700 too (warm-started from the import).
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 700

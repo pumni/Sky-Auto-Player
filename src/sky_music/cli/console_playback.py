@@ -389,7 +389,7 @@ def play_selected_song(
     from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
     from sky_music.domain.song_repository import get_shared_song_repository
     from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
-    from sky_music.orchestration.engine import _LEAD_CACHE_PATH, PlaybackEngine
+    from sky_music.orchestration.engine import PlaybackEngine
     from sky_music.ui.textual_app import TEXTUAL_THEME_TOKENS
     from sky_music.ui.textual_app.playback_app import (
         SnapshotRenderer,
@@ -609,7 +609,6 @@ def play_selected_song(
         enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
         rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
-        lead_cache_path=_LEAD_CACHE_PATH,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 

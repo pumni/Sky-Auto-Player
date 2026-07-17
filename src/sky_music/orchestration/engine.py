@@ -85,20 +85,7 @@ class SendLatencyEstimator:
 
     Down durations are bucketed by polyphony (number of scan-codes in the batch, clamped to
     [1, MAX_POLY]) so that each chord size gets its own EMA.  Fallback chain for an unseeded
-    bucket: online linear model (send ≈ a + b·N, fit across all down samples) → nearest seeded
-    bucket ≤ N → total down EMA → 0.  The linear model lets a rarely-seen or first-of-its-size
-    chord be led correctly (extrapolated) instead of borrowing a smaller chord's smaller lead.
-
-    The linear fit is recursive least squares with an EXPONENTIAL FORGETTING factor (``lin_forget``):
-    each new sample decays the prior weighted sums by ``lin_forget`` before accumulating, giving an
-    effective window of ~1/(1-lin_forget) samples.  This (a) lets the backbone track slow per-machine
-    send-latency drift instead of being a frozen lifetime average, and (b) bounds the accumulators so
-    they cannot grow without limit across long sessions.  The raw integer sample count is kept
-    separate from the decayed weight so the warm-up availability guard is unaffected by forgetting.
-
-    Warm-start: once the linear model is available, a bucket's EMA is seeded from the linear
-    prediction on its FIRST sample (then refined per-bucket via EMA), so a rare large chord is led
-    well from its first occurrence instead of needing a full cold warm-up.
+    bucket: nearest seeded bucket ≤ N → total down EMA → 0.
 
     Up durations use a single scalar EMA (unchanged from the original design).
 
@@ -123,9 +110,6 @@ class SendLatencyEstimator:
     # OS hitch cannot drag the lead into the multi-millisecond range.
     _MAX_RESIDUAL_US = 500
 
-    # State fields (natural sort for RUF023). Semantics:
-    # - down buckets by n_keys; total fallback; up scalar EMA
-    # - residual prologue EMA; RLS linear model with exponential forgetting
     __slots__ = (
         "_alpha",
         "_count_down",
@@ -136,13 +120,6 @@ class SendLatencyEstimator:
         "_ema_down_total",
         "_ema_residual",
         "_ema_up",
-        "_lin_count",
-        "_lin_forget",
-        "_lin_sx",
-        "_lin_sxx",
-        "_lin_sxy",
-        "_lin_sy",
-        "_lin_w",
         "_max_lead_us",
         "_sum_down",
         "_sum_down_total",
@@ -154,14 +131,11 @@ class SendLatencyEstimator:
     )
 
     def __init__(
-        self, alpha: float = 0.2, max_lead_us: int = 2_000, lin_forget: float = 0.999, max_poly: int = 6
+        self, alpha: float = 0.2, max_lead_us: int = 2_000, max_poly: int = 6
     ) -> None:
         self.max_poly = max_poly
         self._alpha: float = alpha
         self._max_lead_us: int = max_lead_us
-        # Forgetting factor in (0, 1]; 1.0 reproduces the old lifetime-sum behaviour. 0.999 ≈ a
-        # ~1000-sample effective window (about a song's worth of sends).
-        self._lin_forget: float = lin_forget
         self._count_down: list[int] = [0] * (max_poly + 1)
         self._sum_down: list[int] = [0] * (max_poly + 1)
         self._ema_down: list[float] = [0.0] * (max_poly + 1)
@@ -169,12 +143,6 @@ class SendLatencyEstimator:
         self._count_down_total: int = 0
         self._sum_down_total: int = 0
         self._ema_down_total: float = 0.0
-        self._lin_count: int = 0
-        self._lin_w: float = 0.0
-        self._lin_sx: float = 0.0
-        self._lin_sxx: float = 0.0
-        self._lin_sy: float = 0.0
-        self._lin_sxy: float = 0.0
         self._count_up: int = 0
         self._sum_up: int = 0
         self._ema_up: float = 0.0
@@ -192,20 +160,10 @@ class SendLatencyEstimator:
                     self._alpha * duration_us + (1.0 - self._alpha) * self._ema_down[n]
                 )
             else:
-                warm_base = self._predict_linear(n)
-                if warm_base is not None:
-                    # Warm-start this bucket from the linear model (built on prior samples),
-                    # then fold in the current sample so it is usable from the first occurrence.
-                    self._ema_down[n] = (
-                        self._alpha * duration_us + (1.0 - self._alpha) * warm_base
-                    )
+                self._sum_down[n] += duration_us
+                if self._count_down[n] >= self._SEED_SAMPLES:
+                    self._ema_down[n] = self._sum_down[n] / self._count_down[n]
                     self._warm_down[n] = True
-                else:
-                    # Linear model not ready yet: classic accumulate-then-seed.
-                    self._sum_down[n] += duration_us
-                    if self._count_down[n] >= self._SEED_SAMPLES:
-                        self._ema_down[n] = self._sum_down[n] / self._count_down[n]
-                        self._warm_down[n] = True
             # Total fallback
             self._count_down_total += 1
             if self._count_down_total <= self._SEED_SAMPLES:
@@ -217,15 +175,6 @@ class SendLatencyEstimator:
                     self._alpha * duration_us
                     + (1.0 - self._alpha) * self._ema_down_total
                 )
-            # RLS accumulators with exponential forgetting (x = polyphony, y = duration). Decay the
-            # prior weighted sums, then fold in the new sample at unit weight.
-            lam = self._lin_forget
-            self._lin_count += 1
-            self._lin_w = self._lin_w * lam + 1.0
-            self._lin_sx = self._lin_sx * lam + n
-            self._lin_sxx = self._lin_sxx * lam + n * n
-            self._lin_sy = self._lin_sy * lam + duration_us
-            self._lin_sxy = self._lin_sxy * lam + n * duration_us
         elif kind == "up":
             self._count_up += 1
             if self._count_up <= self._SEED_SAMPLES:
@@ -262,34 +211,13 @@ class SendLatencyEstimator:
             return 0
         return max(0, min(self._MAX_RESIDUAL_US, round(self._ema_residual)))
 
-    def _predict_linear(self, n: int) -> int | None:
-        """Predict send duration for polyphony n via online least-squares (a + b·N).
-
-        Returns None until there are enough samples spanning ≥2 distinct polyphony values
-        (otherwise the slope is undefined). Lets an unseen/rare chord size be extrapolated
-        instead of borrowing a smaller chord's smaller lead.
-        """
-        if self._lin_count < self._SEED_SAMPLES:
-            return None
-        w = self._lin_w
-        denom = w * self._lin_sxx - self._lin_sx * self._lin_sx
-        if denom <= 0:  # all samples share one polyphony → slope undefined
-            return None
-        slope = (w * self._lin_sxy - self._lin_sx * self._lin_sy) / denom
-        intercept = (self._lin_sy - slope * self._lin_sx) / w
-        return max(0, min(self._max_lead_us, round(intercept + slope * n)))
-
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
         residual = self._residual_bias_us()
         if kind == "down":
             n = max(1, min(self.max_poly, n_keys))
-            # Exact bucket usable (seeded or warm-started)?
+            # Exact bucket usable (seeded)?
             if self._warm_down[n]:
                 return max(0, min(self._max_lead_us, round(self._ema_down[n]) + residual))
-            # Linear extrapolation (best for an unseen/rare chord size)
-            predicted = self._predict_linear(n)
-            if predicted is not None:
-                return max(0, min(self._max_lead_us, predicted + residual))
             # Nearest usable bucket ≤ n
             for b in range(n, 0, -1):
                 if self._warm_down[b]:
@@ -304,136 +232,6 @@ class SendLatencyEstimator:
             # Ups do not include residual prologue bias — residual is an onset (down) effect.
             return max(0, min(self._max_lead_us, round(self._ema_up)))
         return 0
-
-    def export_state(self) -> dict:
-        """Serializable warm state for per-machine cross-session persistence.
-
-        Only WARM buckets/scalars are exported; cold seeding state is intentionally dropped
-        (it would just re-seed identically). Linear accumulators are exported so warm-start
-        for a not-yet-seen chord size also survives a restart. The send/prologue latency this
-        captures is a property of the machine (CPU + Python build), independent of song/profile,
-        so a single global cache is correct.
-        """
-        return {
-            "version": 1,
-            "max_poly": self.max_poly,
-            "ema_down": {
-                str(n): self._ema_down[n]
-                for n in range(1, self.max_poly + 1)
-                if self._warm_down[n]
-            },
-            "ema_down_total": (
-                self._ema_down_total
-                if self._count_down_total >= self._SEED_SAMPLES
-                else None
-            ),
-            "ema_up": self._ema_up if self._count_up >= self._SEED_SAMPLES else None,
-            "ema_residual": self._ema_residual if self._warm_residual else None,
-            "lin": (
-                {
-                    "count": self._lin_count,
-                    "w": self._lin_w,
-                    "sx": self._lin_sx,
-                    "sxx": self._lin_sxx,
-                    "sy": self._lin_sy,
-                    "sxy": self._lin_sxy,
-                }
-                if self._lin_count >= self._SEED_SAMPLES
-                else None
-            ),
-        }
-
-    def import_state(self, state: object) -> None:
-        """Seed warm EMAs from a previously exported state (best-effort, validated).
-
-        A bucket seeded this way is marked warm, so its lead is used from the FIRST event of a
-        run (no cold-start lateness), then refined by the normal EMA as real samples arrive. All
-        values are range-checked; a corrupt cache is ignored rather than allowed to inject an
-        absurd lead (get_lead_us also clamps to max_lead_us on read as a second guard).
-        """
-        if not isinstance(state, dict) or state.get("version") != 1:
-            return
-        sane_max = float(self._max_lead_us) * 4.0
-        ema_down = state.get("ema_down")
-        if isinstance(ema_down, dict):
-            for raw_key, raw_val in ema_down.items():
-                try:
-                    n = int(raw_key)
-                    val = float(raw_val)
-                except (TypeError, ValueError):
-                    continue
-                if 1 <= n <= self.max_poly and 0.0 <= val <= sane_max:
-                    self._ema_down[n] = val
-                    self._warm_down[n] = True
-                    if self._count_down[n] < self._SEED_SAMPLES:
-                        self._count_down[n] = self._SEED_SAMPLES
-        total = state.get("ema_down_total")
-        if isinstance(total, (int, float)) and 0.0 <= float(total) <= sane_max:
-            self._ema_down_total = float(total)
-            if self._count_down_total < self._SEED_SAMPLES:
-                self._count_down_total = self._SEED_SAMPLES
-        up = state.get("ema_up")
-        if isinstance(up, (int, float)) and 0.0 <= float(up) <= sane_max:
-            self._ema_up = float(up)
-            if self._count_up < self._SEED_SAMPLES:
-                self._count_up = self._SEED_SAMPLES
-        residual = state.get("ema_residual")
-        if isinstance(residual, (int, float)):
-            val = float(residual)
-            if 0.0 <= val <= float(self._MAX_RESIDUAL_US) * 2.0:
-                self._ema_residual = val
-                self._warm_residual = True
-                if self._count_residual < self._SEED_SAMPLES:
-                    self._count_residual = self._SEED_SAMPLES
-        lin = state.get("lin")
-        if isinstance(lin, dict):
-            try:
-                if "count" in lin:
-                    lin_count = int(lin["count"])
-                    lin_w = float(lin["w"])
-                else:
-                    # Legacy cache (pre-forgetting): "n" was the undecayed count and also served as
-                    # the weight, so reuse it for both — the restored fit matches what was saved.
-                    lin_count = int(lin["n"])
-                    lin_w = float(lin["n"])
-                lin_sx = float(lin["sx"])
-                lin_sxx = float(lin["sxx"])
-                lin_sy = float(lin["sy"])
-                lin_sxy = float(lin["sxy"])
-            except (KeyError, TypeError, ValueError):
-                return
-            if lin_count >= 0:
-                self._lin_count = lin_count
-                self._lin_w = lin_w
-                self._lin_sx = lin_sx
-                self._lin_sxx = lin_sxx
-                self._lin_sy = lin_sy
-                self._lin_sxy = lin_sxy
-
-
-_LEAD_CACHE_PATH = Path(__file__).resolve().parents[3] / ".cache" / "lead_estimator.json"
-
-
-def load_lead_cache(path: Path) -> dict | None:
-    """Read a persisted estimator state, or None on any error (missing/corrupt cache)."""
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-def save_lead_cache(path: Path, state: dict) -> None:
-    """Persist estimator state atomically. Best-effort: never raise into playback."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(state, f)
-        tmp.replace(path)
-    except Exception:
-        pass
 
 
 class PlaybackEngine:
@@ -483,7 +281,6 @@ class PlaybackEngine:
         enable_epoch_rebase: bool = True,
         wait_strategy: WaitStrategy | None = None,
         spin_floor_us: int = 700,
-        lead_cache_path: Path | None = None,
         retain_telemetry_records_after_save: bool = False,
     ):
         self.song = song
@@ -516,14 +313,6 @@ class PlaybackEngine:
             default=0,
         )
         self.estimator = SendLatencyEstimator(max_poly=max(6, max_chord))
-        # Per-machine warm-start: seed the estimator from a prior session so the first notes of
-        # each chord size are led correctly instead of paying full cold-start lateness (the first
-        # _SEED_SAMPLES events of every bucket would otherwise dispatch with lead 0). Best-effort.
-        self.lead_cache_path = lead_cache_path
-        if self._lead_cache_enabled:
-            cached = load_lead_cache(self.lead_cache_path)  # type: ignore[arg-type]
-            if cached is not None:
-                self.estimator.import_state(cached)
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, dispatch_lead_us)
         self.spin_floor_us = max(0, spin_floor_us)
@@ -608,15 +397,7 @@ class PlaybackEngine:
         # one cached loop so dispatch ids keep incrementing across calls. Lazily built.
         self._compat_loop: DispatchLoop | None = None
 
-    @property
-    def _lead_cache_enabled(self) -> bool:
-        # Only a real-backend, adaptive-lead run may read/write the per-machine cache. DryRunBackend
-        # sends never hit SendInput, so their ~0 durations would poison the cache for real sessions.
-        return (
-            self.enable_adaptive_lead
-            and self.lead_cache_path is not None
-            and self.backend.__class__.__name__ != "DryRunBackend"
-        )
+
 
     @property
     def input_path_degraded(self) -> bool:
@@ -908,10 +689,7 @@ class PlaybackEngine:
                 close = getattr(realtime_sleeper, "close", None)
                 if close is not None:
                     close()
-            # Persist the warmed estimator (any exit path) so the next run starts warm. Outside the
-            # RT scope's timing window — playback is already done — and fully best-effort.
-            if self._lead_cache_enabled:
-                save_lead_cache(self.lead_cache_path, self.estimator.export_state())  # type: ignore[arg-type]
+
             # Release the per-song data so a UI that keeps the engine instance alive between
             # playback sessions doesn't pin the compiled schedule + runtime coordinator in RSS.
             # ``self.actions`` is the persistent source of truth and stays; ``runtime_schedule``

@@ -862,7 +862,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             return
 
         from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
-        from sky_music.orchestration.engine import _LEAD_CACHE_PATH, PlaybackEngine
+        from sky_music.orchestration.engine import PlaybackEngine
 
         is_dry_run = picker_result.action == "dry_run"
         backend = DryRunBackend() if is_dry_run else WinSendInputBackend()
@@ -937,7 +937,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
             rt_priority_mode=rt_priority_mode,
             dispatch_lead_us=self.dispatch_lead_us,
             spin_floor_us=spin_floor_us,
-            lead_cache_path=_LEAD_CACHE_PATH,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
