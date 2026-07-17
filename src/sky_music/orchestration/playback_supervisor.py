@@ -392,6 +392,7 @@ class PlaybackSupervisor:
         last_snapshot_version = 0
         next_control_poll_s = 0.0
         next_focus_check_s = 0.0
+        next_full_focus_check_s = 0.0
         next_progress_publish_s = 0.0
         # 5 ms control poll fires ~200 Hz and spends the whole tick calling
         # GetAsyncKeyState ×5 (≈12 pollhammer calls/sec) — the user-visible CPU
@@ -433,7 +434,14 @@ class PlaybackSupervisor:
                     next_control_poll_s = now_s + control_poll_s
 
                 if now_s >= next_focus_check_s:
-                    active = True if not self.require_focus else self.focus_guard.is_active()
+                    if not self.require_focus:
+                        active = True
+                    elif now_s >= next_full_focus_check_s:
+                        active = self.focus_guard.is_active()
+                        next_full_focus_check_s = now_s + 1.0
+                    else:
+                        active = inputs.is_foreground_cached_hwnd()
+                        
                     if active != last_active_state:
                         last_active_state = active
                         focus_signal.set_active(active)

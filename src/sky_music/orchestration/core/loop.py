@@ -101,7 +101,7 @@ class DispatchHealthMonitor:
         self.clock = clock
         self.focus_guard = focus_guard
         self.require_focus = require_focus
-        self.input_path_warn_us = max(0, int(input_path_warn_us))
+        self.input_path_warn_us = max(0, input_path_warn_us)
         # Cheap HWND-only foreground probe (``inputs.is_foreground_cached_hwnd``), injected
         # by the engine so the core never imports the platform module (Phase 4 §7.6 boundary).
         # ``None`` in direct-mode fallback → degrade to ``focus_guard.is_active()``.
@@ -175,7 +175,7 @@ class DispatchHealthMonitor:
         window = self._send_duration_window
         # Evict before append so we read the outgoing element once (deque[0]) only when full.
         evicted: int | None = window[0] if len(window) == window.maxlen else None
-        val = max(0, int(send_duration_us))
+        val = max(0, send_duration_us)
         window.append(val)
 
         if evicted is not None and evicted > self.input_path_warn_us:
@@ -351,8 +351,9 @@ class DispatchLoop:
         self.telemetry.record_abort(reason)
         return outcome
 
-    @staticmethod
-    def _intent_generation_ids(intents: tuple[RuntimeKeyIntent, ...]) -> tuple[int, ...]:
+    def _intent_generation_ids(self, intents: tuple[RuntimeKeyIntent, ...]) -> tuple[int, ...]:
+        if not self.telemetry.enabled:
+            return ()
         return tuple(
             intent.generation_id
             for intent in intents
@@ -635,7 +636,7 @@ class DispatchLoop:
                 )
         self.coordinator.activate_sent_downs(
             playable,
-            tuple(int(scan_code) for scan_code in result.sent_scan_codes),
+            tuple(scan_code for scan_code in result.sent_scan_codes),
             dispatch_started_us=result.actual_us,
             dispatch_completed_us=result.dispatch_completed_us,
         )
@@ -682,8 +683,8 @@ class DispatchLoop:
                 self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
             self.coordinator.complete_releases(
                 releases,
-                tuple(int(sc) for sc in result.sent_scan_codes),
-                tuple(int(sc) for sc in result.skipped_scan_codes),
+                tuple(sc for sc in result.sent_scan_codes),
+                tuple(sc for sc in result.skipped_scan_codes),
             )
             return result
 
@@ -741,8 +742,8 @@ class DispatchLoop:
             self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
         self.coordinator.complete_releases(
             releases,
-            tuple(int(sc) for sc in result.sent_scan_codes),
-            tuple(int(sc) for sc in result.skipped_scan_codes),
+            tuple(sc for sc in result.sent_scan_codes),
+            tuple(sc for sc in result.skipped_scan_codes),
         )
         return result
 
