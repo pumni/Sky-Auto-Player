@@ -31,29 +31,35 @@ def test_full_send_records_no_partial(monkeypatch):
     }
 
 
-def test_partial_note_on_drops_remainder_without_second_sendinput(monkeypatch):
-    """Musical path: partial chord → count split + drop remainder; no 2nd SendInput."""
+def test_partial_note_on_same_frame_recovery(monkeypatch):
+    """Musical path: same-frame retry recovers remainder; exactly two SendInput calls, sleepless."""
     inputs.reset_send_diagnostics()
     calls: list[int] = []
 
     def fake_send_input(count, array, size):
         calls.append(count)
-        # First (only) call injects all-but-one.
-        return count - 1
+        if len(calls) == 1:
+            return count - 1  # drop one
+        return count  # retry recovers it
+
+    def fake_sleep(*args, **kwargs):
+        raise RuntimeError("Note-on same-frame retry must not sleep")
 
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
     monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
+    monkeypatch.setattr(inputs.time, "sleep", fake_sleep)
+    monkeypatch.setattr(inputs, "_retry_wait_seconds", fake_sleep)
 
     landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
 
-    assert landed == 2
-    assert calls == [3], "must not open a second SendInput for note-on remainder"
+    assert landed == 3
+    assert calls == [3, 1], "one initial send, one immediate retry"
     diag = inputs.get_send_diagnostics()
     assert diag["partial_send_events"] == 1
     assert diag["chord_split_events"] == 1
     assert diag["keys_deferred"] == 1
-    assert diag["keys_dropped"] == 1
-    assert diag["keys_retried"] == 0
+    assert diag["keys_retried"] == 1
+    assert diag["keys_dropped"] == 0
 
 
 def test_partial_note_off_completes_remainder(monkeypatch):
@@ -81,21 +87,26 @@ def test_partial_note_off_completes_remainder(monkeypatch):
     assert diag["keys_dropped"] == 0
 
 
-def test_single_key_note_on_zero_progress_is_dropped_not_retried(monkeypatch):
+def test_single_key_note_on_zero_progress_retries_once_then_drops(monkeypatch):
     inputs.reset_send_diagnostics()
     calls: list[int] = []
 
     def fake_send_input(count, array, size):
         calls.append(count)
-        return 0  # blocked — musical path does not spin-retry
+        return 0  # blocked — musical path does not spin-retry, just immediate retry
+
+    def fake_sleep(*args, **kwargs):
+        raise RuntimeError("Note-on retry must not sleep")
 
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
     monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
+    monkeypatch.setattr(inputs.time, "sleep", fake_sleep)
+    monkeypatch.setattr(inputs, "_retry_wait_seconds", fake_sleep)
 
     landed = inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
 
     assert landed == 0
-    assert calls == [1]
+    assert calls == [1, 1], "one initial send, exactly one immediate retry"
     diag = inputs.get_send_diagnostics()
     assert diag["chord_split_events"] == 0
     assert diag["partial_send_events"] == 1
@@ -114,18 +125,29 @@ def test_send_while_unfocused_counted_when_inactive():
 
 
 def test_backend_partial_note_on_tracks_only_landed_keys(monkeypatch):
-    """WinSendInputBackend must not invent active state for unsent chord members."""
+    """WinSendInputBackend must not invent active state for unsent chord members.
+    Test prefix invariant: send 4, first lands 2, retry lands 1."""
     from sky_music.infrastructure.backend import WinSendInputBackend
 
     inputs.reset_send_diagnostics()
-    monkeypatch.setattr(inputs.user32, "SendInput", lambda count, array, size: count - 1)
+    calls: list[int] = []
+
+    def fake_send_input(count, array, size):
+        calls.append(count)
+        if len(calls) == 1:
+            return 2  # first call lands 2 of 4
+        elif len(calls) == 2:
+            return 1  # retry lands 1 of 2
+        return 0
+
+    monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
 
     backend = WinSendInputBackend()
     backend.inputs_module = inputs
-    result = backend.key_down((0x15, 0x16, 0x17))
+    result = backend.key_down((0x11, 0x12, 0x13, 0x14))
 
-    assert result.sent == (0x15, 0x16)
+    assert result.sent == (0x11, 0x12, 0x13)
     assert result.success is False
-    assert backend.active_keys == {0x15, 0x16}
-    assert 0x17 not in backend.active_keys
-    assert 0x17 not in backend.possibly_active_keys
+    assert backend.active_keys == {0x11, 0x12, 0x13}
+    assert 0x14 not in backend.active_keys
+    assert 0x14 not in backend.possibly_active_keys

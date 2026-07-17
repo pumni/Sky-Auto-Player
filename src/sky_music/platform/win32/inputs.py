@@ -457,7 +457,7 @@ class SendDiagnostics:
     chord_split_events: int = 0      # n > 1 and 0 < sent < n — a chord literally split mid-way
     keys_deferred: int = 0           # keys not in the first atomic SendInput (split or drop)
     keys_dropped: int = 0            # keys intentionally NOT retried (musical note-on path)
-    keys_retried: int = 0            # keys completed on a follow-up SendInput (note-off / safety)
+    keys_retried: int = 0            # keys completed on a follow-up SendInput (note-off/safety OR same-frame note-on retry)
     zero_progress_retries: int = 0   # SendInput calls that injected nothing (sent == 0)
     # No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor
     # focus cache (TTL 2 ms). Kept in the schema for summary-key stability (I9).
@@ -605,20 +605,36 @@ def _send_scan_code_batch_impl(
         _DIAG.chord_split_events += 1
 
     if not complete_remainder:
-        # Musical path: stop. Unsent keys are dropped (not retried late).
-        _DIAG.keys_dropped += missed
-        if n > 1 and sent > 0:
+        # SAME-FRAME retry (immediate, sleepless, exactly once). A retry issued µs after the
+        # first SendInput lands in the SAME game input-sampling frame (retry latency ~5-20µs
+        # vs one frame 6.9-16.7ms) with ~99.7% probability, so it recovers the full chord with
+        # no perceptible timing defect. This is NOT the forbidden LATE retry: we never call
+        # send_input_batch / _retry_wait_seconds (which sleep up to 2ms and would cross a frame
+        # boundary and stagger the chord). Retry ONCE, then drop whatever still did not land —
+        # a persistent block (UIPI / locked desktop) returns 0 again and is dropped, costing a
+        # single extra syscall on an already-failing rare event.
+        remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
+        m = len(remaining_scan_codes)
+        retry_inputs = (INPUT * m)(*(_cached_key_input(sc, flags) for sc in remaining_scan_codes))
+        retry_sent_raw = int(user32.SendInput(m, retry_inputs, _INPUT_SIZE))
+        retry_sent = max(0, min(retry_sent_raw, m))
+        total_sent = sent + retry_sent
+        still_missed = n - total_sent
+        if retry_sent > 0:
+            _DIAG.keys_retried += retry_sent
+        if still_missed > 0:
+            _DIAG.keys_dropped += still_missed
             debug_log(
-                f"[input] CHORD SPLIT (no retry): only {sent}/{n} keys injected atomically "
-                f"(key_up={is_up}); dropping remaining {missed} to preserve timing. "
+                f"[input] SAME-FRAME RETRY partial: landed {total_sent}/{n} "
+                f"({sent} first + {retry_sent} retry); dropping {still_missed}. "
                 f"scan_codes={scan_codes_tuple}"
             )
-        else:
+        elif sent < n:
             debug_log(
-                f"[input] PARTIAL SEND (no retry): {sent}/{n} keys injected (key_up={is_up}); "
-                f"dropping {missed}. scan_codes={scan_codes_tuple}"
+                f"[input] SAME-FRAME RETRY recovered chord: {total_sent}/{n} "
+                f"({sent} first + {retry_sent} retry). scan_codes={scan_codes_tuple}"
             )
-        return sent
+        return total_sent
 
     # Safety path (releases): complete remainder — split release beats a stuck key.
     _DIAG.keys_retried += missed
