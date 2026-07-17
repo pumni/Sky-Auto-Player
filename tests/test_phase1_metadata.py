@@ -94,3 +94,52 @@ def test_telemetry_summary_schema_min_hold_assumes_fps() -> None:
     assert summary is not None
     assert summary["runtime_options"]["min_hold_assumes_fps"] == 144
 
+
+def test_schedule_metadata_gap_below_frame_repeats() -> None:
+    # Synthetic song, local_precise@144 (post-Phase-3 min_hold 7 445)
+    # two same-key notes 8 ms apart
+    song = Song(
+        name="gap_below_frame",
+        notes=(
+            Note(key=NoteKey("Key1"), time_ms=Millis(0)),
+            Note(key=NoteKey("Key1"), time_ms=Millis(8)),
+        ),
+    )
+    policy_144 = FrameTimingPolicy.from_profile_name("local_precise", fps=144)
+    meta_144 = build_key_actions(song, policy=policy_144)
+    
+    # interval = 8000 >= 7445 (feasible).
+    # hold = min(7445, 8000) = 7445.
+    # gap = 8000 - 7445 = 555 us.
+    # frame_us = ceil(1e6/144) = 6945 us.
+    # Since 555 < 6945, gap is below one frame!
+    assert meta_144.gap_below_frame_repeats == 1
+    assert any("release-to-repress gap is below one game frame" in w for w in meta_144.warnings)
+    assert any(d.code == "gap_below_frame" for d in meta_144.diagnostics)
+
+    # Two notes 500 ms apart -> gap should be 500ms - 7.445ms = 492.555ms >= one frame -> gap_below_frame_repeats == 0
+    song_far = Song(
+        name="gap_far",
+        notes=(
+            Note(key=NoteKey("Key1"), time_ms=Millis(0)),
+            Note(key=NoteKey("Key1"), time_ms=Millis(500)),
+        ),
+    )
+    meta_far = build_key_actions(song_far, policy=policy_144)
+    assert meta_far.gap_below_frame_repeats == 0
+
+    # A severe (interval < min_hold) case: two notes 5 ms apart
+    # interval = 5000 < 7445 (severe/impossible).
+    # should be counted ONLY as impossible_repeat, gap_below_frame_repeats == 0
+    song_severe = Song(
+        name="severe",
+        notes=(
+            Note(key=NoteKey("Key1"), time_ms=Millis(0)),
+            Note(key=NoteKey("Key1"), time_ms=Millis(5)),
+        ),
+    )
+    meta_severe = build_key_actions(song_severe, policy=policy_144)
+    assert meta_severe.impossible_same_key_repeats == 1
+    assert meta_severe.gap_below_frame_repeats == 0
+
+

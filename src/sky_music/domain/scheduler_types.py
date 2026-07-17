@@ -280,7 +280,7 @@ class ScheduleDiagnostic:
     scan_code: int
     # Shared diagnostic vocabulary. build_key_actions() only ever emits "impossible_repeat"; the
     # other codes are produced by domain/validation.py against the built schedule.
-    code: Literal["negative_timestamp", "duplicate_down", "stuck_keys", "impossible_repeat", "frame_lateness"]
+    code: Literal["negative_timestamp", "duplicate_down", "stuck_keys", "impossible_repeat", "frame_lateness", "gap_below_frame"]
     message: str
 
 
@@ -304,3 +304,4 @@ class ScheduleMetadata:
     recommended_profile: str | None = None
     recommended_tempo_scale: float | None = None
     sub_60fps_frame_notes: int = 0
+    gap_below_frame_repeats: int = 0

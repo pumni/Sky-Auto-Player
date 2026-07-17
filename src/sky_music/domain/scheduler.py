@@ -213,6 +213,7 @@ def build_key_actions(
     impossible_same_key_repeats = 0
     risky_same_key_repeats = 0
     sub_60fps_frame_notes = 0
+    gap_below_frame_repeats = 0
     shortest_same_key_interval_us = None
     min_same_key_up_gap_us = None
     note_count = len(song.notes)
@@ -309,6 +310,24 @@ def build_key_actions(
             same_key_up_gap_us = effective_delta_us - actual_hold
             if min_same_key_up_gap_us is None or same_key_up_gap_us < min_same_key_up_gap_us:
                 min_same_key_up_gap_us = same_key_up_gap_us
+
+            if (
+                int(policy.frame_us) > 0
+                and planned_hold.risk != "severe"
+                and same_key_up_gap_us < int(policy.frame_us)
+            ):
+                gap_below_frame_repeats += 1
+                diagnostics.append(ScheduleDiagnostic(
+                    source_index=draft.source_index,
+                    note_key=draft.note_key,
+                    scan_code=draft.scan_code,
+                    code="gap_below_frame",
+                    message=(
+                        f"Release-to-repress gap {same_key_up_gap_us / 1000:.1f}ms is below one frame "
+                        f"({int(policy.frame_us) / 1000:.1f}ms); the game may sample the key as continuously "
+                        "held and miss the repeat."
+                    ),
+                ))
             
         up_at_us = down_at_us + actual_hold
         
@@ -381,6 +400,12 @@ def build_key_actions(
             f"than one 60 fps frame; if your game runs below {policy.fps} fps they may not register. "
             "Lower fps in the profile or use `local_precise`."
         )
+    if gap_below_frame_repeats > 0:
+        warnings.append(
+            f"Detected {gap_below_frame_repeats} same-key repeat(s) whose release-to-repress gap is "
+            f"below one game frame ({int(policy.frame_us) / 1000:.1f}ms). The game may miss these repeats; "
+            "consider lowering the tempo scale or accepting probabilistic repeat registration."
+        )
 
     # Stage 6: onset-only intra-chord micro-stagger (remote-reliability knob; no-op when disabled).
     # Applied AFTER metrics so max_polyphony reflects the authored (logical) chord size, not the
@@ -424,4 +449,5 @@ def build_key_actions(
         recommended_profile=rec_profile,
         recommended_tempo_scale=rec_tempo_scale,
         sub_60fps_frame_notes=sub_60fps_frame_notes,
+        gap_below_frame_repeats=gap_below_frame_repeats,
     )
