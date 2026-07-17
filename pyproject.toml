@@ -1,6 +1,6 @@
 [project]
 name = "sky-player"
-version = "2.3.3"
+version = "2.3.4"
 description = "Sky Music Player"
 readme = "README.md"
 # The dispatch loop tight-spins on `time.perf_counter_ns` for up to ~800 us per action, and a

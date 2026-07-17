@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-07-17
+
+### Changed
+
+- **Refactored the dispatch loop and playback engine** for cleaner focus handling
+  and tighter spin-threshold management.
+- **Reworked timer management** in the main loop and playback supervisor for
+  improved accuracy and performance.
+- **Isolated the dispatch core** behind a structural interface, decoupling it
+  from platform backends so the scheduler stays pure and unit-testable.
+- **Removed the deprecated alias** for the abort input method in `DispatchLoop`.
+- **Added an update-flow simulator** (`simulate_update.py`) for exercising
+  update scenarios without a live network.
+- **Documented the UI CPU/RAM optimization plan** for the 2026-07 workstream.
+
+### Performance
+
+- **Phase 1–3 hot-path hardening**: telemetry flush, cheap focus gate,
+  symmetric reprobe, and uncontaminated overshoot samples — lowering tail
+  latency on the dispatch spin path.
+
+### Fixed
+
+- **Phase 1 correctness**: focus gate, pause owner, clock, and estimator
+  adjusted to remove residual bias and timing drift.
+
+### Housekeeping
+
+- **Backstop the O(polyphony) memory hardening** of `RuntimeDispatchCoordinator`
+  introduced in commit `26d9b00`. That fix reduced `status_by_generation` from
+  O(note_count) to O(polyphony) (≤ ~30 live entries); this release adds the
+  regression coverage the original fix lacked.
+
+## [2.3.3] - 2026-07-15
+
 ### Added
 
 - `tests/test_runtime_dispatch_bounded_memory.py` — regression tests asserting that

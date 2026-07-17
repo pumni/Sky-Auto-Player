@@ -53,7 +53,7 @@ if sys.platform == "win32":
 # Simulation constants
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION = "2.3.3"    # running version (mirrors _version.py)
+_CURRENT_VERSION = "2.3.4"    # running version (mirrors _version.py)
 _FAKE_NEW_VERSION = "2.4.0"   # version reported as available on GitHub
 
 _ANSI_RESET  = "\033[0m"
