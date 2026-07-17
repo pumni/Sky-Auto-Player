@@ -206,6 +206,9 @@ kernel32.GetModuleHandleW.argtypes = (wintypes.LPCWSTR,)
 kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
 
 
+_WND_PROC_REFS: list[Any] = []
+
+
 class CalibrationHarness:
     def __init__(self, scancode: int = 0x1E):
         self.scancode = scancode
