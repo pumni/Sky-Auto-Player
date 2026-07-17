@@ -550,7 +550,7 @@ def _run_textual_selftest() -> int:
             Path("songs/Diamonds.json"),
             Path("songs/Dandelions.json"),
         ]
-        app_module.MetadataCoordinator = SelftestMetadataCoordinator
+        app_module.MetadataCoordinator = SelftestMetadataCoordinator # type: ignore[assignment]
         try:
             app = SkyPickerApp(theme_name="aurora")
             async with app.run_test(size=(100, 30)) as pilot:

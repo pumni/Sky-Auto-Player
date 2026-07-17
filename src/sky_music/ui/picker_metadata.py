@@ -206,8 +206,8 @@ def _stable_file_identity(song_path: Path) -> dict[str, Any]:
         path_key = str(song_path)
     return {
         "path": path_key,
-        "mtime_ns": int(stat.st_mtime_ns),
-        "size": int(stat.st_size),
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
     }
 
 
@@ -247,8 +247,8 @@ def _persistent_cache_key(
                 path_str = str(song_path.resolve())
             except Exception:
                 path_str = str(song_path)
-            mtime_ns = int(stat.st_mtime_ns)
-            size = int(stat.st_size)
+            mtime_ns = stat.st_mtime_ns
+            size = stat.st_size
 
         # Build a lightweight, hashable RAM key without any SHA-256 work.
         ram_key = (
@@ -256,7 +256,7 @@ def _persistent_cache_key(
             mtime_ns,
             size,
             session.profile_name,
-            float(session.tempo_scale),
+            session.tempo_scale,
             session.fps,
             session.scan_code_mode,
             session.same_key_conflict_policy,
@@ -280,7 +280,7 @@ def _persistent_cache_key(
             "file": file_identity,
             "session": {
                 "profile_name": session.profile_name,
-                "tempo_scale": float(session.tempo_scale),
+                "tempo_scale": session.tempo_scale,
                 "fps": session.fps,
                 "scan_code_mode": session.scan_code_mode,
                 "same_key_conflict_policy": session.same_key_conflict_policy,
@@ -382,7 +382,7 @@ def warm_persistent_metadata_cache(
 
     # Phase 3A: derive adaptive limit.
     if limit is not None:
-        effective_limit = max(1, int(limit))
+        effective_limit = max(1, limit)
     elif song_paths is not None:
         effective_limit = max(500, len(song_paths) * 8)
     else:
@@ -501,7 +501,7 @@ def session_to_worker_payload(session: PlaybackSessionContext) -> dict[str, Any]
     """Return a small, picklable session payload for process workers."""
     return {
         "profile_name": session.profile_name,
-        "tempo_scale": float(session.tempo_scale),
+        "tempo_scale": session.tempo_scale,
         "fps": session.fps,
         "scan_code_mode": session.scan_code_mode,
         "same_key_conflict_policy": session.same_key_conflict_policy,

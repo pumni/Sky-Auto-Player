@@ -308,7 +308,7 @@ def create_high_resolution_waitable_timer() -> int | None:
 
 def set_waitable_timer_relative_us(handle: int, delay_us: int) -> bool:
     # Negative due time requests a relative interval in 100ns units.
-    due_time = ctypes.c_longlong(-max(1, int(delay_us) * 10))
+    due_time = ctypes.c_longlong(-max(1, delay_us * 10))
     return bool(
         kernel32.SetWaitableTimer(
             wintypes.HANDLE(handle),
