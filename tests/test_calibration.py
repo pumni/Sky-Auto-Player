@@ -24,8 +24,9 @@ def test_timing_profile_parsing():
     # 1. Test balanced profile (default)
     args = parser.parse_args(["--timing-profile", "balanced"])
     main.configure_from_args(args, AppConfig())
-    assert main.RUNTIME_STATE.timing_policy.hold_us == 17_000  # type: ignore[attr-defined]
-    assert main.RUNTIME_STATE.timing_policy.min_hold_us == 17_000  # type: ignore[attr-defined]
+    # balanced @60: round(1.02 x 16667) + 500us device-delivery margin
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 17_500  # type: ignore[attr-defined]
+    assert main.RUNTIME_STATE.timing_policy.min_hold_us == 17_500  # type: ignore[attr-defined]
     assert not hasattr(main.RUNTIME_STATE.timing_policy, "release_gap_us")
 
 
@@ -34,7 +35,8 @@ def test_local_precise_profile_from_builtin_defaults():
     args = parser.parse_args(["--timing-profile", "local-precise"])
     main.configure_from_args(args, AppConfig())
     assert main.RUNTIME_STATE.timing_policy.fps == 60  # type: ignore[attr-defined]
-    assert main.RUNTIME_STATE.timing_policy.hold_us == 16_667  # type: ignore[attr-defined]
+    # local_precise @60: ceil(1e6/60) + 500us device-delivery margin
+    assert main.RUNTIME_STATE.timing_policy.hold_us == 17_167  # type: ignore[attr-defined]
     assert main.RUNTIME_STATE.sleep_policy.spin_threshold_us == 800  # type: ignore[attr-defined]
 
 
@@ -395,7 +397,8 @@ def test_calibrate_hold_uses_frame_timing_policy():
     )
     rec = calibrate_profile(inp)
     assert rec.profile_name == "local-precise"
-    assert rec.hold_us == 33_334
+    # local_precise @30: ceil(1e6/30) + 500us device-delivery margin
+    assert rec.hold_us == 33_834
 
 
 def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):

@@ -80,6 +80,7 @@ PERSISTENT_CACHE_PATH = Path(".cache") / "sky_music" / "picker_metadata.sqlite3"
 _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "hold_us",
     "min_hold_us",
+    "min_hold_margin_us",
     "spin_threshold_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",

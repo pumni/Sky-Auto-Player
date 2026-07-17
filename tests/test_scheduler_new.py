@@ -297,8 +297,8 @@ def test_min_hold_scales_at_30fps():
     base = TimingPolicy.from_dict({"min_hold_us": 16000})
     frame_policy = FrameTimingPolicy.from_timing_policy(base, fps=30)
     # 30fps frame = ceil(1e6/30) = 33334us. Visibility floor (Exp1) = max(base 16000,
-    # ceil(1.25*frame)=41668) = 41668.
-    assert frame_policy.min_hold_us == 41668
+    # ceil(1.25*frame)=41668) = 41668, plus the 500us device-delivery margin.
+    assert frame_policy.min_hold_us == 42_168
 
 def test_strict_policy_rejects_impossible_repeat():
     song = Song(
@@ -458,9 +458,11 @@ def test_explicit_hold_declarations_remain_escape_hatches(
     assert policy.min_hold_us == 17_000
 
     if "hold_frames" in hold_declaration:
+        # Frame-model materialisation includes the +500us device-delivery margin:
+        # hold = round(2.0 x 16667) + 500; min_hold = round(1.2 x 16667) + 500.
         effective = FrameTimingPolicy.from_timing_policy(policy, fps=60)
-        assert effective.hold_us == 33_334
-        assert effective.min_hold_us == 20_000
+        assert effective.hold_us == 33_834
+        assert effective.min_hold_us == 20_500
 
 def test_timing_policy_from_profile_name():
     policy = TimingPolicy.from_profile_name("local-precise")
@@ -506,14 +508,15 @@ def test_min_hold_frame_floor_clamp():
     base = TimingPolicy.from_dict({
         "min_hold_us": 1000,
     })
-    # at 30fps (low-fps upscale triggers), frame_us = ceil(1e6/30) = 33334
+    # at 30fps (low-fps upscale triggers), frame_us = ceil(1e6/30) = 33334;
+    # frame-model values include the +500us device-delivery margin.
     p = FrameTimingPolicy.from_timing_policy(base, fps=30)
-    assert p.min_hold_us == 41668
+    assert p.min_hold_us == 42_168  # round(1.25 x 33334) + 500
 
     p_custom = FrameTimingPolicy.from_timing_policy(
         base, fps=30, min_hold_min_frame_ratio=1.05
     )
-    assert p_custom.min_hold_us == 35001
+    assert p_custom.min_hold_us == 35_501  # round(1.05 x 33334) + 500
 
 def test_timing_profile_validators():
     from sky_music.config import DEFAULT_TIMING_PROFILES
@@ -574,7 +577,8 @@ def test_removed_floor_keys_are_ignored():
         "min_hold_unframed_us": 17_000,
     })
     effective = FrameTimingPolicy.from_timing_policy(policy, fps=144)
-    assert effective.hold_us == effective.min_hold_us == 8334
+    # round(1.2 x 6945) + 500us margin
+    assert effective.hold_us == effective.min_hold_us == 8_834
 
 def test_unknown_profile_name_falls_back_to_balanced():
     from sky_music.domain.session_context import PlaybackSessionContext

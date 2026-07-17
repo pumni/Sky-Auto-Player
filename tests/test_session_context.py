@@ -73,9 +73,9 @@ def test_frame_timing_config_overrides_ratios():
     policy = session.resolve_effective_policy(cfg)
     # Built-in frame-model profiles declare their own frame margins (local_precise = 1.0 frame);
     # global frame_timing ratios are retained only for legacy _us-only policies. 30fps frame =
-    # ceil(1e6/30) = 33334.
-    assert policy.hold_us == 33_334
-    assert policy.min_hold_us == 33_334
+    # ceil(1e6/30) = 33334, plus the 500us device-delivery margin.
+    assert policy.hold_us == 33_834
+    assert policy.min_hold_us == 33_834
 
 
 def test_apply_recommendation_to_context_updates_session():

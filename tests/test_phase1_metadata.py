@@ -16,21 +16,16 @@ def test_schedule_metadata_short_note_counter() -> None:
         ),
     )
     
-    # 144 fps profile => 1 frame is ~6.9ms.
+    # 144 fps local_precise: min_hold_us = ceil(1e6/144) + 500us margin = 6945 + 500 = 7445 us.
+    # The scheduler counts a note as "short" when its authored down->up hold is below one
+    # 60 fps frame (ceil(1e6/60) = 16667 us); 7445 < 16667, so both notes count.
     policy_144 = FrameTimingPolicy.from_profile_name("local_precise", fps=144)
-    # The minimum hold is 6945 us. The same-key gap is 5ms (5000 us).
-    # It will trigger compression/drops, but the authored hold will be 6945 us? No, the second note overlaps.
-    
-    # Wait, the check in scheduler is: "authored down->up hold < ceil(1e6/60)".
-    # A single note's authored hold is min_hold_us for that policy.
-    # At 144 FPS, min_hold_us is ceil(1_000_000 / 144) = 6945 us.
-    # 6945 us < 16667 us, so it is counted as a short note!
     meta_144 = build_key_actions(song, policy=policy_144)
     assert meta_144.sub_60fps_frame_notes > 0
     assert any("short note(s) are shorter than one 60 fps frame" in w for w in meta_144.warnings)
 
-    # 60 fps profile => 1 frame is 16667 us. min_hold_us is 16667 us.
-    # 16667 is not < 16667 (it's equal). So it's not a short note.
+    # 60 fps local_precise: min_hold_us = 16667 + 500 = 17167 us >= one 60 fps frame,
+    # so nothing is counted as short (and the fps<=60 warning gate does not fire anyway).
     policy_60 = FrameTimingPolicy.from_profile_name("local_precise", fps=60)
     meta_60 = build_key_actions(song, policy=policy_60)
     assert meta_60.sub_60fps_frame_notes == 0

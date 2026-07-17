@@ -28,7 +28,8 @@ def test_frame_timing_defaults_encode_empirical_standard():
 
 @pytest.mark.parametrize(
     ("fps", "expected"),
-    [(30, 41668), (60, 20834), (144, 8681)],
+    # round(1.25 x ceil(1e6/fps)) + 500us device-delivery margin
+    [(30, 42_168), (60, 21_334), (144, 9_181)],
 )
 def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
     base = TimingPolicy.from_dict(
@@ -75,6 +76,8 @@ def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
         clear_config_cache()
 
 def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
+    # fps=None resolves to the session default (60), so this is the frame model:
+    # balanced = round(1.02 x 16667) + 500us margin = 17000 + 500.
     policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())  # type: ignore[arg-type]
     assert policy.frame_us == 16667
-    assert policy.hold_us == policy.min_hold_us == 17000
+    assert policy.hold_us == policy.min_hold_us == 17500

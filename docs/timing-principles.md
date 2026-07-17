@@ -8,7 +8,7 @@ This document is the engineering source of truth for designing, reviewing, and c
 
 ### Ground Truth
 * **Frame-Bound Sampling:** The game samples input state once per render frame. For a key-down event to be registered, the key must remain held down for **at least 1 game frame**. This is the only hard timing constraint.
-* **No Artificial Margins:** Same-key feasibility is determined strictly by the key's minimum hold duration (`min_hold_us`). The scheduler does not add an arbitrary fixed latency margin (such as the legacy `release_latency_margin_us`).
+* **No Arbitrary Margins:** Same-key feasibility is determined strictly by the key's minimum hold duration (`min_hold_us`). The scheduler does not add a separate scheduling-time latency guess (such as the legacy `release_latency_margin_us`). Note that since 2026-07 `min_hold_us` itself *includes* a small constant **device-delivery margin** (`min_hold_margin_us`, default 500 µs — see §2): that margin models a measured physical effect (post-`SendInput` kernel delivery latency), not a scheduling fudge factor, and setting it to 0 restores the pure frame-ratio model.
 
 ### Evidence Hierarchy
 When resolving conflicts, the following hierarchy applies:
@@ -40,12 +40,12 @@ All timing values are expressed in microseconds ($\mu\text{s}$).
 ## 2. Timing and Feasibility Model
 
 ### Hold Model
-When FPS is known and positive, built-in holds materialize purely based on their frame ratio:
-$$\text{hold\_us} = \text{min\_hold\_us} = \lceil \text{min\_hold\_frames} \times \text{frame\_us} \rceil$$
+When FPS is known and positive, built-in holds materialize from their frame ratio plus a constant device-delivery margin:
+$$\text{hold\_us} = \text{min\_hold\_us} = \lceil \text{min\_hold\_frames} \times \text{frame\_us} \rceil + \text{min\_hold\_margin\_us}$$
 Where:
 $$\text{frame\_us} = \lceil 1,000,000 / \text{game\_fps} \rceil$$
 
-There is no absolute floor applied to the frame calculation in built-in profiles. If FPS is unknown or disabled, the fallback `*_unframed_us` is used.
+`min_hold_margin_us` (profile key, default **500 µs**, `0` restores the pure ratio model) covers the residual kernel delivery latency after `SendInput` returns (generally <0.5 ms) and any down-vs-up delivery asymmetry — the only sender-side mechanism that can *shorten* the game-observed hold. It is applied only in the frame-model branch; explicit `hold_us`/`min_hold_us` overrides win verbatim, and the `*_unframed_us` fallback (used when FPS is unknown or disabled) gets no margin because those values already carry ample slack. The margin is a per-device allowance (planned to become measured via input-delivery calibration), not a return of the retired arbitrary `release_latency_margin_us`.
 
 ### FPS Assumption vs Real Game FPS
 The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
@@ -68,7 +68,7 @@ $$\text{release\_not\_before\_us} = \text{down\_dispatch\_completed\_us} + \text
 $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{release\_not\_before\_us})$$
 
 ### Rationale
-Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead. (Note: Residual completion latencies inside the kernel driver itself are generally <0.5ms on Windows, which is comfortably below the 1-frame game boundary and not accounted for.)
+Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead. (Note: Residual completion latencies inside the kernel driver itself are generally <0.5ms on Windows; since 2026-07 they are covered by the constant `min_hold_margin_us` in the Hold Model above rather than left unaccounted.)
 
 ### Interaction with Adaptive Dispatch Lead (2026-06)
 Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a per-kind EMA of `send_duration_us` (clamped to 2 ms) so completions land on `scheduled_us`. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at

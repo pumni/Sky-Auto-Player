@@ -202,7 +202,12 @@ def _frame_coupled_us(
         from sky_music.domain.scheduler_types import FrameTimingPolicy
         frame_us = math.ceil(1_000_000 / fps)
         frames = float(profile.get(f"{stem}_frames", default_frames))
-        return int(FrameTimingPolicy.materialise_frame_us(frames, frame_us))
+        # Device-delivery margin — mirror of FrameTimingPolicy.from_timing_policy: added only in
+        # the frame-model branch (explicit legacy/override values above win verbatim; both hold
+        # and min_hold stems get it so the ordering invariant is preserved). Keep the two
+        # computations identical.
+        margin_us = max(0, int(profile.get("min_hold_margin_us", 500)))
+        return int(FrameTimingPolicy.materialise_frame_us(frames, frame_us)) + margin_us
     return int(profile[legacy_key])
 
 

@@ -438,10 +438,11 @@ def save_lead_cache(path: Path, state: dict) -> None:
 
 class PlaybackEngine:
     """Facade wiring schedule compilation, realtime context, DispatchLoop, and PlaybackSupervisor.
-    
+
     Note on timing honesty: residual completion latencies inside the Windows kernel driver
-    itself (after SendInput returns to us) are generally <0.5ms. This is comfortably
-    below the game's 1-frame boundary and not explicitly accounted for.
+    itself (after SendInput returns to us) are generally <0.5ms. Since 2026-07 they are
+    covered by the constant ``min_hold_margin_us`` folded into the frame-model
+    ``min_hold_us`` (docs/timing-principles.md §2) rather than left unaccounted.
     """
 
     def __init__(

@@ -46,6 +46,14 @@ class TimingPolicy:
     chord_stagger_us: Microseconds = Microseconds(0)
     chord_stagger_max_us: Microseconds = Microseconds(15_000)
 
+    # Device-delivery margin added on top of the frame-model materialisation of hold/min_hold
+    # (frame branch only; explicit *_override_us values win verbatim; the unframed fallback gets
+    # no margin). Covers the residual kernel delivery latency after SendInput returns (<~0.5ms,
+    # previously acknowledged but unaccounted) plus down-vs-up delivery asymmetry, which is the
+    # only sender-side mechanism that can SHORTEN the game-observed hold. 0 restores the pure
+    # ratio model bit-for-bit. See docs/timing-principles.md §2 and the round-2 overhaul plan.
+    min_hold_margin_us: Microseconds = Microseconds(500)
+
     @classmethod
     def from_dict(cls, p_dict: dict, **kwargs) -> TimingPolicy:
         from sky_music.config import DEFAULT_TIMING_PROFILES
@@ -112,12 +120,14 @@ class TimingPolicy:
         
         chord_stagger_us = max(0, int_value("chord_stagger_us", 0))
         chord_stagger_max_us = max(0, int_value("chord_stagger_max_us", 15_000))
+        min_hold_margin_us = max(0, int_value("min_hold_margin_us", 500))
 
         return cls(
             hold_us=hold_us,
             min_hold_us=min_hold_us,
             chord_stagger_us=Microseconds(chord_stagger_us),
             chord_stagger_max_us=Microseconds(chord_stagger_max_us),
+            min_hold_margin_us=Microseconds(min_hold_margin_us),
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
@@ -170,6 +180,11 @@ class FrameTimingPolicy:
     chord_stagger_us: Microseconds = Microseconds(0)
     chord_stagger_max_us: Microseconds = Microseconds(15_000)
 
+    # The device-delivery margin that was APPLIED during materialisation (frame branch only).
+    # Recorded on the resolved policy so telemetry/diagnostics can state what was added; 0 when
+    # the frame model was inactive or the value came from an explicit override.
+    min_hold_margin_us: Microseconds = Microseconds(0)
+
     @staticmethod
     def materialise_frame_us(frames: float, frame_us: int) -> Microseconds:
         return Microseconds(round(frames * frame_us))
@@ -198,17 +213,30 @@ class FrameTimingPolicy:
                 if policy.min_hold_uses_frame_model
                 else min_hold_min_frame_ratio
             )
-            eff_hold_us = cls.materialise_frame_us(hold_frames, int(frame_us))
-            eff_min_hold_us = cls.materialise_frame_us(min_hold_frames, int(frame_us))
+            # Device-delivery margin (see TimingPolicy.min_hold_margin_us): added AFTER the
+            # ceil-materialisation, to BOTH hold and min_hold so the min_hold <= hold ordering
+            # invariant survives (built-ins derive hold from min_hold with equal frames), and
+            # BEFORE the override check so explicit *_override_us values win verbatim without
+            # margin. The unframed branch below gets no margin — those fallbacks already carry
+            # ample slack. Must match domain/validation.py:_frame_coupled_us exactly.
+            applied_margin_us = max(0, int(policy.min_hold_margin_us))
+            eff_hold_us = Microseconds(
+                int(cls.materialise_frame_us(hold_frames, int(frame_us))) + applied_margin_us
+            )
+            eff_min_hold_us = Microseconds(
+                int(cls.materialise_frame_us(min_hold_frames, int(frame_us))) + applied_margin_us
+            )
 
             if policy.hold_override_us is not None:
                 eff_hold_us = policy.hold_override_us
             if policy.min_hold_override_us is not None:
                 eff_min_hold_us = policy.min_hold_override_us
+                applied_margin_us = 0
         else:
             frame_us = Microseconds(0)
             eff_hold_us = policy.hold_us
             eff_min_hold_us = policy.min_hold_us
+            applied_margin_us = 0
             
         conflict_policy = same_key_conflict_policy if same_key_conflict_policy is not None else policy.same_key_conflict_policy
         if conflict_policy not in ("strict", "degraded"):
@@ -224,6 +252,7 @@ class FrameTimingPolicy:
             profile_name=profile_name,
             chord_stagger_us=policy.chord_stagger_us,
             chord_stagger_max_us=policy.chord_stagger_max_us,
+            min_hold_margin_us=Microseconds(applied_margin_us),
         )
 
     @classmethod

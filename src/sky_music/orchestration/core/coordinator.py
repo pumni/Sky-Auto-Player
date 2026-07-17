@@ -293,10 +293,11 @@ class RuntimeDispatchCoordinator:
         dispatch_completed_us: int,
     ) -> None:
         """Mark down dispatches as completed and anchor their minimum hold duration.
-        
-        Note on timing honesty: residual completion latencies inside the Windows kernel 
-        driver itself (after SendInput returns to us) are generally <0.5ms. This is 
-        comfortably below the game's 1-frame boundary and not explicitly accounted for.
+
+        Note on timing honesty: residual completion latencies inside the Windows kernel
+        driver itself (after SendInput returns to us) are generally <0.5ms. Since 2026-07
+        they are covered by the constant ``min_hold_margin_us`` folded into the frame-model
+        ``min_hold_us`` that this anchor consumes (docs/timing-principles.md §2).
         """
         # Single-key/codes fast path: skip the set allocation. The dispatch loop already collapses
         # small chords through this path; avoiding the per-down set allocation removes one of the

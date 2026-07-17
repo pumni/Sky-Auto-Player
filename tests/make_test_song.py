@@ -93,10 +93,11 @@ write("TEST_rolled_chord_18", rolled_chord(spread_ms=18))
 # completion-anchor contract, intervals below min_hold are intentionally infeasible; this probe is
 # now mainly for synthetic boundary/forensics work. Real-song acceptance should use
 # TEST_repeat_clean_* and the corpus gate in tests/acceptance_completion_anchor.py.
-#   144fps local_precise: min_hold = ceil(1e6/144) = 6945 us (~6.9 ms)
-#   60fps  local_precise: min_hold = ceil(1e6/60)  = 16667 us (~16.7 ms)
-# Headroom per 144fps block: 7ms=55us, 8ms=1055us, 9ms=2055us, 10ms=3055us, 12ms=5055us, ...
-# READING IT: the 7ms block sits just above the min_hold floor at 144fps. Blocks from 8ms upward
+#   144fps local_precise: min_hold = ceil(1e6/144) + 500us margin = 7445 us (~7.4 ms)
+#   60fps  local_precise: min_hold = ceil(1e6/60)  + 500us margin = 17167 us (~17.2 ms)
+# Headroom per 144fps block: 8ms=555us, 9ms=1555us, 10ms=2555us, 12ms=4555us, ...
+# (the 7ms block now sits BELOW the margin-included floor and probes the infeasible band).
+# READING IT: the 8ms block sits just above the min_hold floor at 144fps. Blocks from 9ms upward
 # have increasing headroom and remain useful as stress probes, but production-song gates should
 # avoid the synthetic fragile band.
 def repeat_floor(key=7, reps=12, intervals=(7, 8, 9, 10, 12, 15, 20), block_gap=1500):
