@@ -241,7 +241,6 @@ class DispatchLoop:
         enable_event_wait: bool = False,
         dispatch_lead_us: int = 0,
         estimator: LeadEstimator | None = None,
-        onset_bias_us: int = 0,
         unfocused_send_hook: Callable[[], None] | None = None,
         diagnostics_log: Callable[[str], None] | None = None,
         cheap_foreground_probe: Callable[[], bool] | None = None,
@@ -252,7 +251,6 @@ class DispatchLoop:
         self.wait_strategy = wait_strategy
         self.backend = backend
         self.telemetry = telemetry
-        self.onset_bias_us = onset_bias_us
         self.sleep_policy = sleep_policy
         self.health_monitor = health_monitor
         self.min_hold_us = min_hold_us
@@ -301,18 +299,16 @@ class DispatchLoop:
             lead_down = self.dispatch_lead_us
         else:
             lead_down = self.estimator.get_lead_us(ActionKind.DOWN)
-        lead_down += self.onset_bias_us
         return lead_down, self._current_lead_up()
 
     def _down_lead_for_batch(self, batch: RuntimeActionBatch) -> int:
-        # onset_bias_us is an onset-only (key-down) knob — never added to releases.
         if batch.kind == "up":
             if self.dispatch_lead_us > 0:
                 return self.dispatch_lead_us
             return self.estimator.get_lead_us(ActionKind.UP)
         if self.dispatch_lead_us > 0:
-            return self.dispatch_lead_us + self.onset_bias_us
-        return self.estimator.get_lead_us(ActionKind.DOWN, len(batch.intents)) + self.onset_bias_us
+            return self.dispatch_lead_us
+        return self.estimator.get_lead_us(ActionKind.DOWN, len(batch.intents))
 
     def _abort_input_safe(
         self,

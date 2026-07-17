@@ -13,7 +13,6 @@ class PlaybackOverrides:
     tempo: float | None = None
     fps: int | None = None
     dispatch_lead_us: int = 0
-    onset_bias_us: int = 0  # additive lead applied to key-down dispatches only (µs)
 
 
 @dataclass(slots=True)
@@ -40,7 +39,6 @@ class RuntimeSessionState:
     enable_epoch_rebase: bool = True
     rt_priority_mode: RtPriorityMode = "auto"
     check_input_path: bool = False
-    onset_bias_us: int = 0  # additive onset-only dispatch lead (µs); set via --onset-bias-us
     spin_floor_us: int | None = None
     # When True, the launch-time auto update check is suppressed (set via
     # ``--no-update`` / ``--no-update-check``); manual checks via the ``u``

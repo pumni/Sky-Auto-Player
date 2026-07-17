@@ -482,7 +482,6 @@ class PlaybackEngine:
         # against t=0 notes. Direct (non-threaded) mode never rebases regardless of this flag.
         enable_epoch_rebase: bool = True,
         wait_strategy: WaitStrategy | None = None,
-        onset_bias_us: int = 0,
         spin_floor_us: int = 700,
         lead_cache_path: Path | None = None,
         retain_telemetry_records_after_save: bool = False,
@@ -527,7 +526,6 @@ class PlaybackEngine:
                 self.estimator.import_state(cached)
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, dispatch_lead_us)
-        self.onset_bias_us = max(0, onset_bias_us)
         self.spin_floor_us = max(0, spin_floor_us)
         self.enable_event_wait = enable_event_wait
         self.enable_epoch_rebase = enable_epoch_rebase
@@ -732,7 +730,6 @@ class PlaybackEngine:
             enable_event_wait=self.enable_event_wait,
             dispatch_lead_us=self.dispatch_lead_us,
             estimator=self.estimator if self.enable_adaptive_lead else None,
-            onset_bias_us=self.onset_bias_us,
             unfocused_send_hook=unfocused_hook,
             diagnostics_log=diagnostics_log,
             cheap_foreground_probe=cheap_foreground_probe,

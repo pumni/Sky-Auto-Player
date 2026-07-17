@@ -627,21 +627,6 @@ def _bias_engine(actions: tuple, **kwargs: object) -> PlaybackEngine:
     )
 
 
-def test_down_lead_for_batch_onset_bias_is_onset_only() -> None:
-    actions = (
-        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="d"),
-        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),), at_us=Microseconds(500), reason="u"),
-    )
-    engine = _bias_engine(actions, dispatch_lead_us=1_000, onset_bias_us=500)
-    loop = engine._compat_dispatch_loop()
-    down_batch = engine.runtime_schedule.batches[0]
-    up_batch = engine.runtime_schedule.batches[1]
-    assert down_batch.kind == "down" and up_batch.kind == "up"
-    # Onset gets fixed lead + onset bias; release gets fixed lead only (no onset bias).
-    assert loop._down_lead_for_batch(down_batch) == 1_500
-    assert loop._down_lead_for_batch(up_batch) == 1_000
-
-
 def test_down_lead_for_batch_scales_with_polyphony() -> None:
     actions = (
         KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),), at_us=Microseconds(0), reason="single"),
@@ -652,7 +637,7 @@ def test_down_lead_for_batch_scales_with_polyphony() -> None:
             reason="chord",
         ),
     )
-    engine = _bias_engine(actions, enable_adaptive_lead=True, dispatch_lead_us=0, onset_bias_us=0)
+    engine = _bias_engine(actions, enable_adaptive_lead=True, dispatch_lead_us=0)
     for _ in range(5):
         engine.estimator.update(ActionKind.DOWN, 200, n_keys=1)
     for _ in range(5):
