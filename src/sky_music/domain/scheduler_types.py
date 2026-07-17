@@ -22,6 +22,36 @@ class KeyAction:
     reason: str = "note"
 
 
+def get_calibrated_margin_recommendation() -> int | None:
+    import json
+    from pathlib import Path
+    path = Path(".cache/input_latency.json")
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or data.get("version") != 1:
+            return None
+        down_us = data.get("down_us")
+        up_us = data.get("up_us")
+        if not isinstance(down_us, dict) or not isinstance(up_us, dict):
+            return None
+        p99_down = down_us.get("p99")
+        p50_up = up_us.get("p50")
+        if not isinstance(p99_down, (int, float)) or not isinstance(p50_up, (int, float)):
+            return None
+        if p99_down < 0 or p50_up < 0 or p99_down > 100_000 or p50_up > 100_000:
+            return None
+        # Recommended formula: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
+        # Put this comment for human review: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
+        margin_rec = p99_down - p50_up + 100
+        margin_rec = max(300.0, min(2000.0, margin_rec))
+        return round(margin_rec)
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class TimingPolicy:
     hold_us: Microseconds
@@ -120,7 +150,14 @@ class TimingPolicy:
         
         chord_stagger_us = max(0, int_value("chord_stagger_us", 0))
         chord_stagger_max_us = max(0, int_value("chord_stagger_max_us", 15_000))
-        min_hold_margin_us = max(0, int_value("min_hold_margin_us", 500))
+        
+        if "min_hold_margin_us" in p_dict:
+            min_hold_margin_us = max(0, int(p_dict["min_hold_margin_us"]))
+        else:
+            calibrated = get_calibrated_margin_recommendation()
+            min_hold_margin_us = calibrated if calibrated is not None else 500
+
+
 
         return cls(
             hold_us=hold_us,

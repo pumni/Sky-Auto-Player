@@ -517,3 +517,74 @@ def test_apply_calibration_uses_explicit_summary_path(tmp_path, monkeypatch):
     assert state.session.fps == 30
     assert state.session.profile_name == "audience-safe"
 
+
+def test_calibrated_margin_resolution(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from sky_music.domain.scheduler_types import (
+        TimingPolicy,
+        get_calibrated_margin_recommendation,
+    )
+    
+    # 1. No file exists -> returns None, policy defaults to 500
+    assert get_calibrated_margin_recommendation() is None
+    p = TimingPolicy.from_dict({})
+    assert p.min_hold_margin_us == 500
+    
+    # 2. Corrupt or unversioned file exists -> returns None, policy defaults to 500
+    cache_dir = tmp_path / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / "input_latency.json"
+    
+    cache_file.write_text('{"bad": "json"', encoding="utf-8")
+    assert get_calibrated_margin_recommendation() is None
+    
+    cache_file.write_text('{"version": 2}', encoding="utf-8")
+    assert get_calibrated_margin_recommendation() is None
+    
+    # 3. Valid file exists -> recommendation correctly resolved and clamped
+    # down p99 = 400, up p50 = 100 -> formula: 400 - 100 + 100 = 400
+    cache_data = {
+        "version": 1,
+        "down_us": {"p50": 200, "p90": 300, "p99": 400},
+        "up_us": {"p50": 100, "p90": 150, "p99": 200},
+    }
+    cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+    assert get_calibrated_margin_recommendation() == 400
+    
+    p = TimingPolicy.from_dict({})
+    assert p.min_hold_margin_us == 400
+    
+    # 4. Explicit profile value overrides recommendation
+    p_explicit = TimingPolicy.from_dict({"min_hold_margin_us": 600})
+    assert p_explicit.min_hold_margin_us == 600
+    
+    # 5. Clamping test: formula gives 100 - 300 + 100 = -100 -> clamped to 300
+    cache_data_clamp_low = {
+        "version": 1,
+        "down_us": {"p50": 50, "p90": 80, "p99": 100},
+        "up_us": {"p50": 300, "p90": 400, "p99": 500},
+    }
+    cache_file.write_text(json.dumps(cache_data_clamp_low), encoding="utf-8")
+    assert get_calibrated_margin_recommendation() == 300
+    
+    # Clamping test: formula gives 2500 - 100 + 100 = 2500 -> clamped to 2000
+    cache_data_clamp_high = {
+        "version": 1,
+        "down_us": {"p50": 2000, "p90": 2200, "p99": 2500},
+        "up_us": {"p50": 100, "p90": 150, "p99": 200},
+    }
+    cache_file.write_text(json.dumps(cache_data_clamp_high), encoding="utf-8")
+    assert get_calibrated_margin_recommendation() == 2000
+
+
+def test_doctor_calibration_command_fails_if_sky_running(monkeypatch):
+    from sky_music.cli.doctor_command import run_doctor_command
+    from sky_music.platform.win32 import inputs
+    
+    monkeypatch.setattr(inputs, "get_sky_window", lambda: 12345)
+    
+    exit_code = run_doctor_command(full=False, timing=False, input_check=False, calibrate=True)
+    assert exit_code == 1
+
+
+

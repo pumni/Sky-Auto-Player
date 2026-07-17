@@ -332,6 +332,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="check keyboard layout mapping and physically held note keys only",
     )
     diag.add_argument(
+        "--doctor-calibrate",
+        action="store_true",
+        help="run input delivery latency calibration and save to .cache/input_latency.json",
+    )
+    diag.add_argument(
         "--check-input-path",
         action="store_true",
         help="monitor input path duration and warn if degraded (OS-side/Filter Keys)",
@@ -785,11 +790,12 @@ def main() -> int:
     if getattr(args, "auto_calibrate", False):
         return run_auto_calibrate(getattr(args, "calibration_summary", None))
 
-    if args.doctor or args.doctor_timing or args.doctor_input:
+    if args.doctor or args.doctor_timing or args.doctor_input or args.doctor_calibrate:
         return run_doctor_command(
             full=bool(args.doctor),
             timing=bool(args.doctor_timing),
             input_check=bool(args.doctor_input),
+            calibrate=bool(args.doctor_calibrate),
         )
 
     song_choices = get_song_choices(force_refresh=True)
