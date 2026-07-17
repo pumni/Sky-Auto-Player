@@ -317,6 +317,16 @@ class PlaybackSupervisor:
             command_event_handle = inputs.create_auto_reset_event()
             if command_event_handle is None:
                 inputs.debug_log("[realtime] command event unavailable; falling back to polled waits")
+                # Surface the silent degradation: polled waits wake ~500x/second during long
+                # inter-note gaps (vs 0 wake-ups in event mode). Recorded here on the control
+                # thread BEFORE the dispatch thread starts, so the write is race-free. Absence
+                # of the key means "not degraded" — no False is ever written (stable summary keys).
+                self.telemetry.record_runtime_options(
+                    {
+                        **self.telemetry.runtime_options,
+                        "event_wait_degraded_to_polled": True,
+                    }
+                )
 
         def dispatch_target() -> None:
             try:

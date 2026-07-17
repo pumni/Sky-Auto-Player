@@ -119,12 +119,13 @@ def test_hybrid_strategy_timer_aware_ladder() -> None:
         )
 
     # 1. Timer-aware ladder (sleeper declares is_high_resolution)
-    # Case A: remaining large (50,000 us): sleeps up to 1ms caps towards target - guard.
-    # remaining_to_sleep = 49,500 -> sleep_us = min(49,500, 1000) = 1000 us.
+    # Case A: remaining large (50,000 us): sleeps up to 2ms caps towards target - guard
+    # (cap aligned with the dispatch loop's 2ms command poll interval).
+    # remaining_to_sleep = 49,500 -> sleep_us = min(49,500, 2000) = 2000 us.
     clock.time_us = 0
     wait_step(50_000, waitable_sleeper)
     assert len(waitable_sleeper.sleeps) == 1
-    assert waitable_sleeper.sleeps[-1] == 0.001  # capped at 1ms
+    assert waitable_sleeper.sleeps[-1] == 0.002  # capped at 2ms
 
     # Case B: remaining small (800 us): remaining_to_sleep = 300 us (0.0003s).
     clock.time_us = 0

@@ -101,10 +101,13 @@ class HybridWaitStrategy:
                 self.spin_until_us(target_system_us, clock)
                 return False
 
-            # Timer-aware sleep ladder: sleep towards target - guard in 1ms caps so the caller
-            # can still poll commands between steps (polled mode).
+            # Timer-aware sleep ladder: sleep towards target - guard in 2ms caps so the caller
+            # can still poll commands between steps (polled mode). The cap is aligned with the
+            # dispatch loop's poll_interval_us (2 ms): a 1 ms cap doubled the wake-up rate during
+            # long inter-note gaps without improving command latency, because the loop only polls
+            # commands every 2 ms anyway.
             if remaining_to_sleep > 0:
-                sleep_us = min(remaining_to_sleep, 1_000)
+                sleep_us = min(remaining_to_sleep, 2_000)
                 sleeper.sleep(sleep_us / 1_000_000.0)
             return False
 
