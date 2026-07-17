@@ -57,7 +57,7 @@ The Rust port replaces the seam defined by `docs/2026-07_core-dispatch-refactor-
 |---|---|
 | **I1** SendInput-only, no game-memory/hooks | §1.2 P0 Security Mandate (CI-gated `windows-sys` whitelist). |
 | **I2** Completion anchor (`release_not_before = down_completed + min_hold`) | §5 `ActiveGeneration.down_completed_ns` + `PendingRelease.effective_release_us`; never re-anchored to dispatch start. |
-| **I3** Musical no-retry (note-on drops tail; note-off completes) | §8 `emit(.., complete_remainder)` + parity test; §6 call sites. |
+| **I3** Musical no *late* retry (note-on immediate same-frame retry; note-off completes) | §8 `emit(.., complete_remainder)` + parity test; §6 call sites. |
 | **I4** No-early-conflict guard | §5/§6 `confirm_down_intents` (unchanged coordinator logic ported from `core/coordinator.py`). |
 | **I5** Single sender thread | §2 one dedicated worker OS thread; counters are worker-owned atomics. |
 | **I6** Adaptive-lead semantics (bucketed EMA + positive residual, `disp_lead>0` overrides) | §9 estimator port (1:1) + §5 `disp_lead_us`/`max_lead_us`. |
@@ -494,8 +494,8 @@ fn build_key_input(sc: u16, flags: u32) -> KEYBDINPUT {
 const SKY_PLAYER_SIGNATURE: usize = 0x5C1B9111usize;
 ```
 
-**Invariant I3 (musical no-retry) governs this function.** A partial note-on SendInput is
-NEVER completed by a second call — the unsent tail is DROPPED (an incomplete chord beats a
+**Invariant I3 (musical no *late* retry) governs this function.** A partial note-on SendInput is
+NEVER completed by a *late* sleeping call. It is retried exactly once immediately. Whatever still fails is DROPPED (an incomplete chord beats a
 staggered wrong-timing chord). Only note-off / panic (`complete_remainder = true`) loops to
 finish the remainder so keys cannot stick. This mirrors Python `_send_scan_code_batch_impl`;
 the coordinator promotes the dropped gens to `DROPPED_BACKEND`.
@@ -558,14 +558,14 @@ pub(crate) fn emit(
 ```
 
 > [!IMPORTANT]
-> - **No note-on retry (invariant I3):** with `complete_remainder = false`, a partial send returns the landed prefix and the dropped tail; it issues exactly one `SendInput`. Applying release-style retry to note-on would stagger the chord and is forbidden. The old draft's unconditional `remaining = &remaining[sent..]` loop is deleted.
+> - **No *late* retry (invariant I3):** with `complete_remainder = false`, a partial send is retried immediately exactly once; what still fails is dropped. It issues at most two `SendInput` calls. Applying late sleeping retry to note-on would stagger the chord and is forbidden. The old draft's unconditional `remaining = &remaining[sent..]` loop is deleted.
 > - **`sent` is the landed prefix**, not `scans.to_vec()`. The stray post-loop `sent` reference is gone (`landed` is the single source of truth). Callers/telemetry read `EmitResult.sent` as the keys that truly landed and `EmitResult.dropped` as the musical drops.
 > - `dwExtraInfo = SKY_PLAYER_SIGNATURE` is constant-backed (same `0x5C1B9111` as Python ctypes). This is required by the game-side dedup logic.
 > - **Layout dependency:** `KEYBDINPUT` is a packed C struct with `ULONG_PTR` fields whose width depends on the target arch (4 bytes on i686, 8 bytes on x86_64). Pinning target exclusively to `x86_64-pc-windows-msvc` (via `rust/rust-toolchain.toml` + Cargo target config) prevents accidental cross-compilation that would shift the struct layout and silently break the `dwExtraInfo` alignment. Adding i686 would require a parallel magic-constant strategy (separate `SKY_PLAYER_SIGNATURE` carrier) and is explicitly out of scope.
 > - No dedup/duplicate check at the Rust send layer: that's `RuntimeKernel::confirm_down_intents`'s job. The send layer only asserts `scans.dedup()` in debug builds.
 > - `Spin::busy_wait_ns(2_000)` in zero-progress matches the Python `_retry_wait_seconds(0.002)` — critical for UIPI elevation-error timing parity.
 >
-> **Parity test (required):** a note-on whose first `SendInput` lands a strict prefix must DROP the tail — `emit(.., key_up=false, complete_remainder=false)` returns `sent == landed prefix`, `dropped == tail`, issues exactly one `SendInput`; the coordinator marks the unsent gens `DROPPED_BACKEND` and diagnostics count `keys_dropped`. A note-off with the same partial first send must instead finish the remainder (`keys_retried`), never dropping. This mirrors the Python `tests/test_send_diagnostics.py` coverage of the split-chord path.
+> **Parity test (required):** a note-on whose first `SendInput` lands a strict prefix must DROP the tail AFTER one immediate retry — `emit(.., key_up=false, complete_remainder=false)` returns `sent == total landed prefix`, `dropped == tail`, issues exactly two `SendInput` calls; the coordinator marks the unsent gens `DROPPED_BACKEND` and diagnostics count `keys_dropped`. A note-off with the same partial first send must instead finish the remainder (`keys_retried`), never dropping. This mirrors the Python `tests/test_send_diagnostics.py` coverage of the split-chord path.
 
 ---
 
@@ -790,7 +790,7 @@ Each phase has a **Gate** (command-level pass/fail) AND a **Behavioral Exit Crit
 
 **Actions:**
 1. Implement `send/input_cache.rs` (LRU `HashMap<(u64,u32), Box<[INPUT]>>`).
-2. Implement `send/emit.rs` per §8: single note-on `SendInput` with **no tail retry** (invariant I3 — drop the unsent tail); note-off/panic completes the remainder with the zero-progress guard. Not a blanket "partial-retry" loop.
+2. Implement `send/emit.rs` per §8: single note-on `SendInput` with **immediate same-frame retry** (invariant I3 — one retry, then drop unsent tail); note-off/panic completes the remainder with the zero-progress guard. Not a blanket sleeping "partial-retry" loop.
 3. Implement `send/diagnostic.rs` (AtomicU64 counters + snapshot).
 4. Implement `py_types.rs` + `py_bridge.rs` — export `send_scan_code_batch_trusted(_)` as a module-level function for backward compat.
 5. **Add Python-side `try: import sky_player_rs`** + hard ImportError to `platform/win32/inputs.py`. Keep existing ctypes functions as dead code (not removed yet — removal in Phase 6).

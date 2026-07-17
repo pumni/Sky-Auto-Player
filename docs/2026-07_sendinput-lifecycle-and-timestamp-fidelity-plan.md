@@ -54,7 +54,7 @@ This plan is a staged hardening + small logic fix pass. It is **not** a schedule
 | G2 | **Scan-code path remains default.** `KEYEVENTF_SCANCODE`, `wVk = 0`, `time = 0`, physical 15-key map. |
 | G3 | **Pure AOT scheduler unchanged in golden meaning.** `build_key_actions` golden snapshots must stay green unless a phase *explicitly* documents a metadata-only additive field. |
 | G4 | **Completion-anchor stays.** `release_not_before = down_dispatch_completed + min_hold`. Floor always wins over lead. |
-| G5 | **Musical note-on partial policy stays.** If `SendInput` returns `sent < n` on note-on: **do not** complete the remainder late. Drop tail (`DROPPED_BACKEND`). Note-off / panic: **do** complete remainder. |
+| G5 | **Musical note-on partial policy stays (no late retry).** If `SendInput` returns `sent < n` on note-on: **do not** complete the remainder late. It is retried once immediately, then drop tail (`DROPPED_BACKEND`). Note-off / panic: **do** complete remainder. |
 | G6 | **Exact simultaneous chords** stay one `SendInput` batch when `chord_stagger_us == 0`. |
 | G7 | **Dispatch thread owns all backend sends** (existing threaded contract). Abort helpers may only be called from that thread or after join. |
 | G8 | Every phase: failing test first → green; gate `uv run ruff check . && uv run pyright && uv run pytest`. |
@@ -131,7 +131,7 @@ This supersedes archive keyboard plan A1 step 2 (“do not release on loss”).
 | 0 | Counters + doc truth + A/B flags placeholder | Shipped (counters, summary keys). A/B flags `release_all_on_focus_*` **not** added — dual-release hard-wired, see §11 row 3. | `telemetry.py:269,841,452,836`; `dispatch_loop.py:467-470`; `inputs.note_send_while_unfocused()` |
 | 1 | `_abort_input_safe` + focus dual-release | Shipped. Release-first, then cancel; regain re-`release_all()` (no re-cancel). | `dispatch_loop.py:334-372,858-861,892-901`; tests `test_focus_input_lifecycle.py` |
 | 2 | Pre-down focus recheck gate | Shipped with divergence — uses `FocusSignal` cached at `run()` entry + `_first_down_dispatched` arming, not `focus_is_active(force=True)` TTL=0. Race vs last control-thread focus sample, not live `GetForegroundWindow`. | `dispatch_loop.py:559-573,1127-1162`; tests in `test_focus_input_lifecycle.py` |
-| 3 | Partial-send outcome hygiene | Shipped. `runtime_outcome ∈ {"partial_note_on"}` for strict-prefix note-on; no late retry (G5 honored). | `dispatch_loop.py:618,624`; `telemetry.py:841` (`partial_note_on_count`) |
+| 3 | Partial-send outcome hygiene | Shipped. `runtime_outcome ∈ {"partial_note_on"}` for strict-prefix note-on; no late retry (G5 honored). Immediate same-frame retry is now the shipped policy. | `dispatch_loop.py:618,624`; `telemetry.py:841` (`partial_note_on_count`) |
 | 4 | Timestamp fidelity + cold-start | Shipped (audit + tests). Lead cache round-trip, DryRun no-write, poison rejection covered. | `tests/test_adaptive_lead.py` |
 | 5 | Doctor preflight + final doc sync | **Partial.** architecture.md + INDEX.md in sync; doctor `check_sky_window()` checks Sky **window found** but not **foreground before start** — §5.1 residual. | `doctor.py:27-54`; `architecture.md:64,65,70-72`; `INDEX.md:27,41` |
 | 6 | Optional WASAPI validation gate | Not shipped (optional / non-blocking, consistent with this plan). | — |
@@ -358,7 +358,7 @@ In `DispatchLoop._dispatch_down_batch` (or `_execute_action` when `kind==down` a
 - When `InputSendResult.success` is false on note-on (partial or empty):
   - `runtime_outcome` = `partial_note_on` or keep `sent` with explicit `dropped_backend` already on unsent gens (already in `activate_sent_downs`).
   - Ensure telemetry summary increments `partial_note_on_count` / exposes `keys_dropped` (BackendHealth already has `keys_dropped` — wire to HUD if not visible mid-play).
-- Never change note-on to late-retry remainder (G5).
+- Never change note-on to late-retry remainder (G5). Immediate same-frame retry is permitted.
 - Document in `get_send_diagnostics` comment block the musical vs safety policy (already in inputs.py — keep in sync with architecture).
 
 #### 3.2 Tests
@@ -587,7 +587,7 @@ multiple commits; the boxes above track contract delivery, not strictly one-PR-p
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Focus-loss KEYUP | **Yes, immediately** + KEYUP again on regain | OS hygiene + game-side clear |
-| Partial note-on | **No late retry** | Musical atomicity / no ghost notes |
+| Partial note-on | **No late retry** (immediate same-frame retry only) | Musical atomicity / no ghost notes |
 | Scheduler rewrite | **No** | Gaps are lifecycle + gate + defaults |
 | Timestamp goal | **Sender completion ≈ schedule** | Only controllable layer under SendInput-only |
 | Game 100% hear guarantee | **Not claimed** | Frame sample phase + remote net are outside control |
