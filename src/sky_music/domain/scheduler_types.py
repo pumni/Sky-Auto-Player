@@ -274,3 +274,4 @@ class ScheduleMetadata:
     diagnostics: tuple[ScheduleDiagnostic, ...] = ()
     recommended_profile: str | None = None
     recommended_tempo_scale: float | None = None
+    sub_60fps_frame_notes: int = 0

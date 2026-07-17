@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import gc
 import json
-import statistics
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -111,6 +110,12 @@ class SendLatencyEstimator:
     SendInput). An EMA of that residual is folded into ``get_lead_us`` (positive only, capped)
     so the next onsets pull earlier by the observed bias rather than leaving a constant late
     offset on every note.
+
+    Honesty note: the residual bias is capped at ``_MAX_RESIDUAL_US`` (≈ ½ ms) and is positive-
+    only, so a completion may land up to ~`_MAX_RESIDUAL_US` *late* of schedule (the cap absorbs
+    prologue beyond the cap). It does NOT land exactly on schedule — by design, since for a
+    frame-quantized target landing slightly early is strictly safer than late. A machine whose
+    prologue routinely exceeds the cap will sit at the cap rather than chase it upward.
     """
 
     _SEED_SAMPLES = 5
@@ -432,7 +437,12 @@ def save_lead_cache(path: Path, state: dict) -> None:
 
 
 class PlaybackEngine:
-    """Facade wiring schedule compilation, realtime context, DispatchLoop, and PlaybackSupervisor."""
+    """Facade wiring schedule compilation, realtime context, DispatchLoop, and PlaybackSupervisor.
+    
+    Note on timing honesty: residual completion latencies inside the Windows kernel driver
+    itself (after SendInput returns to us) are generally <0.5ms. This is comfortably
+    below the game's 1-frame boundary and not explicitly accounted for.
+    """
 
     def __init__(
         self,
@@ -468,6 +478,7 @@ class PlaybackEngine:
         enable_epoch_rebase: bool = False,
         wait_strategy: WaitStrategy | None = None,
         onset_bias_us: int = 0,
+        spin_floor_us: int = 700,
         lead_cache_path: Path | None = None,
         retain_telemetry_records_after_save: bool = False,
     ):
@@ -512,6 +523,7 @@ class PlaybackEngine:
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, dispatch_lead_us)
         self.onset_bias_us = max(0, onset_bias_us)
+        self.spin_floor_us = max(0, spin_floor_us)
         self.enable_event_wait = enable_event_wait
         self.enable_epoch_rebase = enable_epoch_rebase
         # Test seam: deterministic tests inject a strategy whose spin advances their fake clock.
@@ -535,6 +547,9 @@ class PlaybackEngine:
         )
         self.telemetry.record_runtime_options(
             {
+                "min_hold_assumes_fps": fps,
+                "min_hold_us": self.min_hold_us,
+                "note": "min_hold is sized for the CONFIGURED fps; if the game runs slower, short notes may land within one real frame and not register.",
                 "use_dispatch_thread": self.use_dispatch_thread,
                 "timer_guard": self.enable_timer_guard,
                 "waitable_timer": self.enable_waitable_timer,
@@ -727,18 +742,15 @@ class PlaybackEngine:
         re-probe was removed as dead code (never wired into production).
         """
         wake_errors: list[int] = []
-        for _ in range(10):
+        for _ in range(30):
             t0 = self.clock.now_us()
             sleeper.sleep(0.002)
             t1 = self.clock.now_us()
             wake_errors.append((t1 - t0) - 2_000)
 
-        # Use mean + 3σ rather than raw max: a single scheduler hiccup during the probe
-        # would inflate max by 2–5ms and push the threshold into territory where nearly
-        # every inter-note gap triggers a sleep, defeating the purpose of the spin floor.
-        mean = statistics.fmean(wake_errors)
-        stdev = statistics.pstdev(wake_errors)
-        threshold = max(700, min(3_000, int(mean + 3 * stdev) + 100))
+        wake_errors.sort()
+        p90 = wake_errors[int(len(wake_errors) * 0.9)]
+        threshold = max(self.spin_floor_us, min(3_000, p90 + 100))
         self.effective_spin_threshold_us = threshold
 
         self.telemetry.record_runtime_options(

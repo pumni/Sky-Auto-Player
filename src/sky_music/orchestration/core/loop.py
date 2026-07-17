@@ -636,7 +636,7 @@ class DispatchLoop:
                 )
         self.coordinator.activate_sent_downs(
             playable,
-            tuple(scan_code for scan_code in result.sent_scan_codes),
+            result.sent_scan_codes,
             dispatch_started_us=result.actual_us,
             dispatch_completed_us=result.dispatch_completed_us,
         )
@@ -683,8 +683,8 @@ class DispatchLoop:
                 self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
             self.coordinator.complete_releases(
                 releases,
-                tuple(sc for sc in result.sent_scan_codes),
-                tuple(sc for sc in result.skipped_scan_codes),
+                result.sent_scan_codes,
+                result.skipped_scan_codes,
             )
             return result
 
@@ -742,8 +742,8 @@ class DispatchLoop:
             self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
         self.coordinator.complete_releases(
             releases,
-            tuple(sc for sc in result.sent_scan_codes),
-            tuple(sc for sc in result.skipped_scan_codes),
+            result.sent_scan_codes,
+            result.skipped_scan_codes,
         )
         return result
 
@@ -1107,6 +1107,11 @@ class DispatchLoop:
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)
                 result = self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
             else:
+                # Lead is recomputed here intentionally (plan Phase 2 / Finding B — deliberately
+                # deferred): `pop_due_authored` above already reads `self._down_lead_for_batch`
+                # for the dueness test; no estimator.update runs between, so the value is
+                # identical. Re-reading is ~10 ops/note and cleaner than contorting
+                # `pop_due_authored` to yield (batch, lead) tuples. Do not "fix" this.
                 down_lead = self._down_lead_for_batch(batch)
                 result = self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
             if observe is not None:

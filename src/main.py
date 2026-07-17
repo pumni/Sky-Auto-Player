@@ -165,6 +165,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override CPU spin threshold in microseconds (precise=800, balanced=500, battery_safe=200/0) (overrides profile)",
     )
     timing.add_argument(
+        "--spin-floor-us",
+        type=int,
+        help="Override adaptive sleep spin floor threshold in microseconds (default: 700)",
+    )
+    timing.add_argument(
         "--focus-restore-grace-ms",
         type=float,
         help="Override focus restoration grace period in ms (precise=50, balanced=100, remote/safe=150-200) (overrides profile)",
@@ -481,6 +486,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     RUNTIME_STATE.enable_epoch_rebase = not args.no_epoch_rebase
     RUNTIME_STATE.check_input_path = args.check_input_path
     RUNTIME_STATE.onset_bias_us = args.onset_bias_us
+    RUNTIME_STATE.spin_floor_us = getattr(args, "spin_floor_us", None)
 
     if PLAYBACK_DEBUG:
         init_debug_log()

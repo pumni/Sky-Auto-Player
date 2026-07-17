@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -211,6 +212,7 @@ def build_key_actions(
     compressed_holds = 0
     impossible_same_key_repeats = 0
     risky_same_key_repeats = 0
+    sub_60fps_frame_notes = 0
     shortest_same_key_interval_us = None
     min_same_key_up_gap_us = None
     note_count = len(song.notes)
@@ -297,6 +299,9 @@ def build_key_actions(
             risky_same_key_repeats += 1
 
         actual_hold = planned_hold.hold_us
+        if actual_hold < math.ceil(1_000_000 / 60):
+            sub_60fps_frame_notes += 1
+
         if planned_hold.compressed:
             compressed_holds += 1
 
@@ -370,6 +375,12 @@ def build_key_actions(
         )
     if compressed_holds > 0:
         warnings.append(f"Compressed {compressed_holds} note hold(s) due to same-key scheduling pressure.")
+    if sub_60fps_frame_notes > 0 and policy.fps > 60:
+        warnings.append(
+            f"This profile assumes {policy.fps} fps. {sub_60fps_frame_notes} short note(s) are shorter "
+            f"than one 60 fps frame; if your game runs below {policy.fps} fps they may not register. "
+            "Lower fps in the profile or use `local_precise`."
+        )
 
     # Stage 6: onset-only intra-chord micro-stagger (remote-reliability knob; no-op when disabled).
     # Applied AFTER metrics so max_polyphony reflects the authored (logical) chord size, not the
@@ -412,4 +423,5 @@ def build_key_actions(
         diagnostics=tuple(diagnostics),
         recommended_profile=rec_profile,
         recommended_tempo_scale=rec_tempo_scale,
+        sub_60fps_frame_notes=sub_60fps_frame_notes,
     )

@@ -47,6 +47,9 @@ $$\text{frame\_us} = \lceil 1,000,000 / \text{game\_fps} \rceil$$
 
 There is no absolute floor applied to the frame calculation in built-in profiles. If FPS is unknown or disabled, the fallback `*_unframed_us` is used.
 
+### FPS Assumption vs Real Game FPS
+The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
+
 ### Same-Key Feasibility
 A same-key repeat is feasible if and only if:
 $$\text{same\_key\_interval\_us} \ge \text{min\_hold\_us}$$
@@ -65,7 +68,7 @@ $$\text{release\_not\_before\_us} = \text{down\_dispatch\_completed\_us} + \text
 $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{release\_not\_before\_us})$$
 
 ### Rationale
-Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead.
+Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead. (Note: Residual completion latencies inside the kernel driver itself are generally <0.5ms on Windows, which is comfortably below the 1-frame game boundary and not accounted for.)
 
 ### Interaction with Adaptive Dispatch Lead (2026-06)
 Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a per-kind EMA of `send_duration_us` (clamped to 2 ms) so completions land on `scheduled_us`. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at

@@ -205,10 +205,10 @@ def test_wake_error_probe() -> None:
     res = engine.play()
     assert res == PLAYBACK_FINISHED
     
-    # Probes: 10 sleeps of 2 ms
-    assert len(sleeper.sleeps) >= 10
-    # The first 10 sleeps should be exactly 2ms (0.002s)
-    for s in sleeper.sleeps[:10]:
+    # Probes: 30 sleeps of 2 ms
+    assert len(sleeper.sleeps) >= 30
+    # The first 30 sleeps should be exactly 2ms (0.002s)
+    for s in sleeper.sleeps[:30]:
         assert s == 0.002
         
     # Derived effective threshold:
@@ -223,7 +223,7 @@ def test_wake_error_probe() -> None:
     assert opts.get("enable_adaptive_spin") is True
     probe_errors = opts.get("probe_wake_errors_us")
     assert isinstance(probe_errors, list)
-    assert len(probe_errors) == 10
+    assert len(probe_errors) == 30
 
 
 def test_probes_complete_before_perf_anchor() -> None:
@@ -275,7 +275,7 @@ def test_probes_complete_before_perf_anchor() -> None:
     
     # Let's find index of sleep events using exact string matching
     sleep_indices = [i for i, event in enumerate(clock.trace) if event == "sleep_for_2000"]
-    assert len(sleep_indices) == 10
+    assert len(sleep_indices) == 30
     
     # The PlaybackState start_perf is captured after the 10th probe.
     # The 10th probe loop does:

@@ -889,6 +889,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_event_wait = getattr(main_mod.RUNTIME_STATE, "enable_event_wait", False)
             enable_epoch_rebase = getattr(main_mod.RUNTIME_STATE, "enable_epoch_rebase", True)
             rt_priority_mode = cast(RtPriorityMode, getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto"))
+            spin_floor_us = getattr(main_mod.RUNTIME_STATE, "spin_floor_us", None) or 700
         else:
             telemetry_enabled = self.cfg.telemetry_enabled_by_default or is_dry_run
             use_dispatch_thread = self.cfg.use_dispatch_thread
@@ -902,6 +903,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_event_wait = True
             enable_epoch_rebase = True
             rt_priority_mode = cast(RtPriorityMode, getattr(self.cfg, "rt_priority_mode", "auto"))
+            spin_floor_us = 700
 
         command_bridge = PlaybackCommandBridge(self.controls)
         self._active_playback_commands = command_bridge
@@ -934,6 +936,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             enable_epoch_rebase=enable_epoch_rebase,
             rt_priority_mode=rt_priority_mode,
             dispatch_lead_us=self.dispatch_lead_us,
+            spin_floor_us=spin_floor_us,
             lead_cache_path=_LEAD_CACHE_PATH,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)

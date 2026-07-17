@@ -41,6 +41,7 @@ class RuntimeSessionState:
     rt_priority_mode: RtPriorityMode = "auto"
     check_input_path: bool = False
     onset_bias_us: int = 0  # additive onset-only dispatch lead (µs); set via --onset-bias-us
+    spin_floor_us: int | None = None
     # When True, the launch-time auto update check is suppressed (set via
     # ``--no-update`` / ``--no-update-check``); manual checks via the ``u``
     # key still work. Honored by SkyPickerApp and the playback silent check.
