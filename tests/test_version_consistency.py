@@ -60,8 +60,9 @@ def test_runtime_version_prefers_version_module() -> None:
     never fall back to dist-info probing even if the latter happens to be
     available, removing a class of version-drift bugs.
     """
-    from sky_music import __version__
     from packaging.version import Version
+
+    from sky_music import __version__
 
     canonical = _pyproject_version()
     assert Version(__version__) == Version(canonical), (
