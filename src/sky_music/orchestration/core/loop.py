@@ -36,7 +36,8 @@ from sky_music.orchestration.core.state import PlaybackState as PlaybackState
 # downclocked; a short busy-spin before the next send warms the core so
 # SendInput prologue does not stretch beyond the deadline spin's budget.
 SEND_COLD_THRESHOLD_US = 20_000
-CORE_WARMUP_SPIN_US = 50
+CORE_WARMUP_SPIN_US = 200
+CORE_WARMUP_SPIN_MAX_US = 500
 
 # Phase H: Mid-song spin re-probe constants.
 REPROBE_MIN_GAP_US = 500_000          # next deadline at least 0.5 s away
@@ -1169,7 +1170,7 @@ class DispatchLoop:
             next_action_us = self.coordinator.next_authored_us(lead_for_batch=self._down_lead_for_batch)
             remaining_budget = (next_action_us - now_us) if next_action_us is not None else CORE_WARMUP_SPIN_US
             if remaining_budget > 0:
-                max_spin = min(CORE_WARMUP_SPIN_US, remaining_budget)
+                max_spin = min(CORE_WARMUP_SPIN_US, CORE_WARMUP_SPIN_MAX_US, remaining_budget)
                 self.core_warmup_hook(max_spin)
 
         pending = self.coordinator.pop_due_pending(now_us, lead_up)

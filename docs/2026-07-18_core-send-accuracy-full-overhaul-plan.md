@@ -15,7 +15,7 @@
 |-------|------|--------|
 | A | Baseline freeze + residual inventory | ✅ Shipped 2026-07-18 |
 | B | Metric honesty + claim surface | ✅ Shipped 2026-07-18 |
-| C | FPS assumption UX completion (schema+test) | ✅ Partial — advisory wiring open |
+| C | FPS assumption UX completion (schema+test) | ✅ Partial — advisory wiring continued in [2026-07-18_accuracy-refinement-and-fps-ux-plan.md](2026-07-18_accuracy-refinement-and-fps-ux-plan.md) Phases 1–2 |
 | D | Cold-start lead elimination | ✅ Shipped 2026-07-18 |
 | E | Idle-gap send-path warmup | ✅ Shipped 2026-07-18 |
 | F | Device margin productization | ✅ Shipped 2026-07-18 |

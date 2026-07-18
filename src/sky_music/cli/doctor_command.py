@@ -9,7 +9,7 @@ def run_doctor_command(
     timing: bool,
     input_check: bool,
     calibrate: bool = False,
-    song_path: str | None = None,
+    song_path: str | None = None,  # noqa: ARG001
 ) -> int:
     if full:
         doctor.run_all_doctor_checks()

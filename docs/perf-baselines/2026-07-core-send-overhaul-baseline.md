@@ -12,5 +12,7 @@ These metrics capture the static defaults and limits governing the high-precisio
 | Default `min_hold_margin_us` | 500 µs | `scheduler_types.py` |
 | Polled sleep cap | 2000 µs | `wait_strategy.py` |
 | Poll interval | 2000 µs | `loop.py` |
+| `CORE_WARMUP_SPIN_US` | 200 µs | `core/loop.py` |
+| `CORE_WARMUP_SPIN_MAX_US` | 500 µs | `core/loop.py` |
 
 Live Sky performance numbers are TBD (measure using `scripts/measure_dispatch_tail.py` when live audio loopback calibration is enabled).

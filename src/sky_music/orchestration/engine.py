@@ -645,8 +645,9 @@ class PlaybackEngine:
 
         Runs strictly BEFORE the playback perf anchor (start_perf) is captured, like gc.collect():
         nothing may delay the dispatch start after the anchor or the first onsets compress. This is
-        the single, one-shot adaptive-spin probe (``enable_adaptive_spin``); the former mid-play
-        re-probe was removed as dead code (never wired into production).
+        the one-shot pre-play adaptive-spin probe (``enable_adaptive_spin``); a mid-song re-probe
+        (Phase H) runs independently inside ``DispatchLoop._wait_until_runtime_deadline`` when long
+        inter-note gaps allow safe budget use.
         """
         wake_errors: list[int] = []
         for _ in range(30):

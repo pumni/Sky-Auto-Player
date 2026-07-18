@@ -617,11 +617,10 @@ class PickerScreen(Screen[SongPickerResult]):
                 return []
             y_min = table.scroll_y
             y_max = y_min + table.size.height
-            paths = [
+            return [
                 self.filtered[i].path
                 for i in range(int(y_min), min(int(y_max), len(self.filtered)))
             ]
-            return paths
         except Exception:
             # fallback
             return [c.path for c in self.filtered[:40]]
@@ -953,7 +952,11 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def action_open_profile(self) -> None:
         options = [PickerOption(name, f"{name} - {desc}") for name, desc in PROFILES_INFO]
-        self.app.push_screen(OptionModal("Timing Profile", options, theme_name=self.active_theme), self._apply_profile)
+        from sky_music.ui.timing_guidance import PROFILE_MODAL_INFO
+        self.app.push_screen(
+            OptionModal("Timing Profile", options, info_text=PROFILE_MODAL_INFO, theme_name=self.active_theme),
+            self._apply_profile,
+        )
 
     def _apply_profile(self, value: object | None) -> None:
         if value is None:
@@ -983,7 +986,11 @@ class PickerScreen(Screen[SongPickerResult]):
             PickerOption(value, f"{value} - {desc}")
             for value, desc in FPS_OPTIONS
         ]
-        self.app.push_screen(OptionModal("FPS", options, theme_name=self.active_theme), self._apply_fps)
+        from sky_music.ui.timing_guidance import FPS_MODAL_INFO
+        self.app.push_screen(
+            OptionModal("FPS", options, info_text=FPS_MODAL_INFO, theme_name=self.active_theme),
+            self._apply_fps,
+        )
 
     def _apply_fps(self, value: object | None) -> None:
         if value is None:

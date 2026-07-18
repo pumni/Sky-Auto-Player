@@ -130,8 +130,8 @@ Corrupt or version-mismatched cache is silently ignored — never raises into pl
 
 ### Idle-gap core warmup (Phase E)
 After a gap of ≥ 20 ms since the last `SendInput`, the dispatch thread runs a short busy-spin
-(≤ 50 µs) to warm the CPU core before the next send. The warmup is skipped if already past the
-note deadline. Controlled by `CORE_WARMUP_SPIN_US = 50` and `SEND_COLD_THRESHOLD_US = 20_000`
+(≤ 200 µs) to warm the CPU core before the next send. The warmup is skipped if already past the
+note deadline. Controlled by `CORE_WARMUP_SPIN_US = 200` and `SEND_COLD_THRESHOLD_US = 20_000`
 in `core/loop.py`.
 
 ### Mid-song spin re-probe (Phase H)

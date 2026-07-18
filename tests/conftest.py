@@ -15,9 +15,9 @@ if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
 
-import pytest
+import pytest  # noqa: E402
 
-import sky_music.domain.scheduler_types
+import sky_music.domain.scheduler_types  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

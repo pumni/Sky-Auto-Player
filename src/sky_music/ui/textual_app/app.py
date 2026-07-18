@@ -957,6 +957,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self.update_session_state(picker_result)
 
         def run_playback() -> None:
+            from sky_music.ui.timing_guidance import fps_play_advisory
+            _fps = getattr(plan.active_policy, "fps", 60)
+            _short = getattr(plan.sched_meta, "sub_60fps_frame_notes", 0)
+            _advisory = fps_play_advisory(fps=_fps, short_note_count=_short)
+            if _advisory:
+                self.notify(_advisory, severity="warning", timeout=8)
             card = self._show_playback_card(PlaybackMode.PLAYING)
             card.start_playback(
                 engine=engine,

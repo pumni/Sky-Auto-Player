@@ -804,7 +804,7 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             songs = app.query_one("#songs")
-            songs_height_before = songs.region.height
+
             await pilot.press("enter")
             await pilot.pause(0.2)
             card = app.query_one("#playback-card", PlaybackCard)
@@ -938,7 +938,7 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             songs = app.query_one("#songs")
-            songs_height_before = songs.region.height
+
             await pilot.press("enter")
             await pilot.pause(0.2)
             card = app.query_one("#playback-card", PlaybackCard)

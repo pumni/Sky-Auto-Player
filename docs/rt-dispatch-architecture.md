@@ -115,7 +115,7 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
    - event mode (command event handle present): arm the waitable timer for
      `remaining − guard` and block in `WaitForMultipleObjects(timer, command_event)` — zero
      polling; commands/focus transitions wake the thread instantly; then spin the guard.
-   - polled mode: 1 ms-capped sleeps towards `target − guard` so the loop can poll between steps.
+   - polled mode: 2 ms-capped sleeps towards `target − guard` so the loop can poll between steps.
 3. Fallback ladder (RealSleeper): coarse (≤20 ms, −5 ms buffer) → 1 ms ticks → yield → spin.
 
 Polling is governed by the *presence* of the command event, not a flag: the supervisor creates the
@@ -148,7 +148,7 @@ deterministic tests are unaffected):
 | Lead EMA cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
 | Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
-| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 50`, threshold 20 ms | `core_warmup_hook = None` |
+| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 200`, threshold 20 ms | `core_warmup_hook = None` |
 | Device margin | `.cache/input_latency.json` → `min_hold_margin_us`; default 500 | profile override |
 | Event-driven waits | on (runtime) | `--no-event-wait` |
 | GIL switch interval 1 ms | on | `--no-switch-interval-tuning` |

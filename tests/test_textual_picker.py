@@ -821,9 +821,9 @@ def test_custom_footer() -> None:
     
     assert len(footer.hints) > 0
     labels = [h.label.lower() for h in footer.hints]
-    assert any("commands" in l for l in labels)
-    assert any("play" in l for l in labels)
-    assert any("cancel" in l for l in labels)
+    assert any("commands" in label for label in labels)
+    assert any("play" in label for label in labels)
+    assert any("cancel" in label for label in labels)
 
 
 def test_risk_cell_semantic_colors() -> None:

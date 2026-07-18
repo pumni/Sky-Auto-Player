@@ -554,12 +554,10 @@ def play_selected_song(
     _fps_for_advisory = getattr(active_policy, "fps", None)
     _short_notes = getattr(sched_meta, "sub_60fps_frame_notes", 0)
     if _fps_for_advisory is not None and _fps_for_advisory > 60 and _short_notes > 0:
-        print(
-            f"\n[Advisory] Profile assumes {_fps_for_advisory} fps. "
-            f"{_short_notes} note(s) are shorter than one 60 fps frame (~16.7 ms); "
-            "if the game runs below the configured fps they may not register. "
-            "Lower fps in the profile or use a safer profile."
-        )
+        from sky_music.ui.timing_guidance import fps_play_advisory
+        _advisory = fps_play_advisory(fps=_fps_for_advisory, short_note_count=_short_notes)
+        if _advisory:
+            print(f"\n[Advisory] {_advisory}")
 
     # Preflight check and window readiness
     if not _mini_preflight(is_dry_run, profile=current_profile, tempo=current_tempo, controls=controls):

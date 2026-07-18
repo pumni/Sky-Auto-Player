@@ -140,9 +140,9 @@ def main() -> None:
     # Capture engine's deep footprint before drop
     keep_engine_ref = engine
     snap_held = tracemalloc.take_snapshot()
-    engine_id = id(engine)
-    coord_id = id(engine._runtime_coordinator) if engine._runtime_coordinator else 0
-    sched_id = id(engine.runtime_schedule)
+    id(engine)
+    id(engine._runtime_coordinator) if engine._runtime_coordinator else 0
+    id(engine.runtime_schedule)
 
     # Drop it
     engine = None  # type: ignore[assignment]
