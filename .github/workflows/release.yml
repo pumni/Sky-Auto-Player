@@ -105,7 +105,10 @@ jobs:
           $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
           Write-Host "is_prerelease: $isPre"
           "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
-          "is_prerelease=$isPre"  | Set-Content $env:GITHUB_OUTPUT -Append -Encoding ASCII
+          # `Add-Content` (not `Set-Content -Append`) — `Set-Content` has no
+          # `-Append` parameter in PowerShell 7; the previous form failed the
+          # v2.4.0 release run (29657111725) at this step.
+          "is_prerelease=$isPre"  | Add-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
       - name: Build + manifest + smoke test
         run: uv run --env-file .env python -m build_app --manifest
