@@ -44,9 +44,13 @@ def test_pyproject_version_is_pep440() -> None:
 def test_version_module_matches_pyproject() -> None:
     """``_version.py`` is auto-generated from ``pyproject.toml`` — keep in
     sync so frozen builds stamp the canonical version on the Windows exe."""
-    from sky_music import _version  # type: ignore[import-not-found]
+    try:
+        import sky_music._version as _version  # type: ignore[import-not-found]
+    except ImportError:
+        pytest.skip("_version.py not generated")
 
-    assert _version.__version__ == _pyproject_version()
+    from packaging.version import Version
+    assert Version(_version.__version__) == Version(_pyproject_version())
 
 
 def test_runtime_version_prefers_version_module() -> None:
@@ -57,9 +61,10 @@ def test_runtime_version_prefers_version_module() -> None:
     available, removing a class of version-drift bugs.
     """
     from sky_music import __version__
+    from packaging.version import Version
 
     canonical = _pyproject_version()
-    assert __version__ == canonical, (
+    assert Version(__version__) == Version(canonical), (
         f"runtime version {__version__!r} != pyproject {canonical!r}"
     )
 

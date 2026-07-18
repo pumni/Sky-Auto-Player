@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """Sky Music Player package.
 
 Single source of truth for the runtime version string.
@@ -24,8 +25,9 @@ _DEV_SENTINEL = "0.0.0-dev"
 
 def _resolve_version() -> str:
     try:
-        _version_mod = importlib.import_module("sky_music._version")
-        _v = getattr(_version_mod, "__version__", None)
+        from sky_music._version import (
+            __version__ as _v,  # type: ignore[import-not-found]
+        )
         if isinstance(_v, str) and _v:
             return _v
     except ImportError:
