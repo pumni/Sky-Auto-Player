@@ -1,14 +1,21 @@
+Created At: 2026-07-18T06:28:12Z
+Completed At: 2026-07-18T06:28:12Z
+File Path: `file:///V:/Sky%20Player/docs/2026-07-18_distribution-mpv-pattern-plan.md`
+
 # Plan: Distribution & Update Model — mpv Pattern (portable + external updater + optional installer)
 
-> **Status:** Draft 2026-07-18. Not yet implemented.
+> **Status:** Ready to execute (amended 2026-07-18 after design review). Not yet implemented.
 > **Author source:** Deep review of the mpv updater/installer pattern applied to Sky Player;
-> cross-checked against the real codebase to fix every assumption in the earlier draft.
+> cross-checked against the real codebase; amended for portable-user-data preservation,
+> config-schema alignment, tag/version lock, channel wiring, transactional copy-rollback,
+> write-access checks, and complete songs-folder preservation.
 > **Audience:** AI refactor / coding agents. Follow `AGENTS.md` exactly.
 > **Priority order (immutable for this plan):**
 > 1. **P0 Security** (`AGENTS.md` `<SECURITY_MANDATES>`) — never relax.
 > 2. **Surgical scope** — touch only the symbols each phase lists; do not refactor neighbouring code.
 > 3. **Honest framing** — this is an architecture / distribution model change, NOT a security fix.
 > 4. **Backward-compatibility of user `config.json`** — old keys degrade silently, never break load.
+> 5. **Portable user-data preserve** — updater must never overwrite user `config.json` or touch `songs/` from the release zip (see **I16**, **I21**, **I22**).
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -78,21 +85,22 @@ The plan is complete only when **all** of the following are true:
 | #  | Outcome | How verified |
 |----|---------|--------------|
 | D1 | No code path in `src/` calls `apply_update_and_restart`, `apply_staged_update`, `write_apply_batch`, `download_and_verify_update`, `download_and_apply_update_worker`, or `_apply_staged`. | `git grep "apply_update_and_restart\|apply_staged_update\|write_apply_batch\|download_and_verify_update\|download_and_apply_update_worker\|_apply_staged"` returns nothing under `src/`. |
-| D2 | No code path reads or writes `.sky-just-updated` or `.old.{guid}` backup directories (one RC-only legacy sweep is allowed — see Phase 1.7). | `git grep "sky-just-updated\|find_old_backups\|post_update_flag_path"` returns nothing under `src/` after the RC that follows this minor. |
-| D3 | `UpdateSettings` in `config.py` has only: `auto_check`, `check_interval_s`, `last_check_ts`, `last_error_ts`, `skip_version`, `channel`, `last_notified_version`. `auto_apply` and `pending_update_version` are gone. | `uv run pytest tests/test_update_config.py` green; manual `grep` confirms. |
+| D2 | No code path writes `.sky-just-updated` or creates new `.old.{guid}` backups. `find_old_backups` may remain **only** for the 2.4.0 RC sweep (Phase 1.7); both the sweep and `find_old_backups` are removed in 2.4.1. | After 2.4.1: `git grep "sky-just-updated\|find_old_backups\|post_update_flag_path"` returns nothing under `src/`. |
+| D3 | `UpdateSettings` in `config.py` has only: `auto_check`, `check_interval_s`, `last_check_ts`, `last_error_ts`, `skip_version`, `channel`, `last_notified_version`, and (until 2.4.1) `legacy_old_dir_sweep_pending`. `auto_apply` and `pending_update_version` are gone. | `uv run pytest tests/test_update_config.py` green; manual `grep` confirms. |
 | D4 | `dist/<release>/updater.bat` and `dist/<release>/installer/updater.ps1` exist after `uv run --env-file .env python -m build_app --manifest`. | Build step output + `Test-Path` check. |
-| D5 | Release zip contains `Sky-Player-v<ver>.zip` + `Sky-Player-v<ver>.zip.sha256` + `MANIFEST.json`. | `gh release view <tag>` shows all three assets; their SHA256 matches `MANIFEST.json`. |
+| D5 | Release zip contains `Sky-Player-v<ver>.zip` + `Sky-Player-v<ver>.zip.sha256` + `MANIFEST.json`. Asset version string equals the git tag without the leading `v`. | `gh release view <tag>` shows all three assets; their SHA256 matches `MANIFEST.json`; names match tag. |
 | D6 | In-app notification banner shows when an update is available and offers exactly three actions: `[O] Open Releases · [S] Skip this version · [Esc]`. No "Download and auto-apply" button. | `tests/test_textual_update_modals.py` snapshot test for the new banner modal. |
-| D7 | `.github/workflows/release.yml` triggers on tag `v*`, builds, attests, uploads all three assets, and exits green on a trial tag `v2.3.5-rc1` (deleted afterwards). | Workflow run log + manual `gh release view` on the trial tag. |
-| D8 | README, CHANGELOG, and `docs/distribution-and-update.md` describe the mpv-pattern model and the "close → run `updater.bat` → reopen" flow. | Doc read review. |
+| D7 | `.github/workflows/release.yml` triggers on tag `v*`, **fails if tag version ≠ `pyproject.toml` version**, builds, attests, uploads all three assets, and exits green on a trial tag `v2.4.0-rc1` (deleted afterwards). | Workflow run log + manual `gh release view` on the trial tag. |
+| D8 | README, CHANGELOG, and `docs/distribution-and-update.md` describe the mpv-pattern model and the "close → run `updater.bat` → reopen" flow. Phase 8 must **not** document the optional installer until Phase 4 ships. | Doc read review. |
 | D9 | Full triad green: `uv run ruff check . && uv run pyright && uv run pytest`. | Local CI gate. |
 | D10 | `scripts/audit_security_mandates.py` and `scripts/audit_free_threaded_wheels.py` still green — the distribution change did NOT weaken P0. | Both scripts run in Phase 6 release workflow. |
+| D11 | Running `updater.bat` against a fake release leaves the user's pre-existing `config.json` and `songs/` bit-identical (except the two allowed `update.*` fields the script may patch). | Phase 2.8 smoke steps. |
 
 ### 0.3 Glossary
 
 - **mpv pattern** — portable distribution: one folder holds the binary + assets; updates are
   applied by an *external* script the user runs deliberately; the in-app UI only notifies.
-  Sketched after <https://github.com/mpv-player/mpv/blob/master/TOOLS/osxbundle/mpv.app/Contents/Resources/>#>
+  Sketched after <https://github.com/mpv-player/mpv/blob/master/TOOLS/osxbundle/mpv.app/Contents/Resources/>
   and the mpv `installer/` scripts, but **no file is verbatim-copied** (license audit in Phase 2.1
   before any port).
 - **Apply path** — the in-app chain
@@ -101,6 +109,15 @@ The plan is complete only when **all** of the following are true:
   `apply_update_and_restart` → `sys.exit(0)` (write batch + Start-Process).
 - **Notify-only path** — `check_for_updates_worker` → banner → "Open Releases" or "Skip".
 - **RC release** — the first minor release that ships this plan (`2.4.0`, see §1.I11).
+- **Preserve-list** — paths inside the install dir that the external updater must never
+  replace from the release zip: `config.json`, `songs/` (and everything under `songs/`).
+  See **I16**.
+- **Staging apply** — extract the verified zip into a temp directory, then copy only
+  non-preserve paths into the install root. Never `Expand-Archive -Force` straight onto the
+  live install root.
+- **Transactional copy** — backing up replaced binaries/files to `%TEMP%\sky-backup-<guid>`
+  before copy operations. If copying fails midway, files are restored to their original locations
+  to prevent a half-broken state.
 
 ---
 
@@ -121,10 +138,13 @@ temp dir. The only network endpoints are `api.github.com` (over HTTPS) and
 `github.com/<owner>/<repo>/releases/download/...` (HTTPS).
 
 **I4** **Strict input validation.** Every URL the updater consumes is validated `https://`-only
-and must come from a GitHub release asset whose name matches the regex
-`^Sky-Player-v\d+\.\d+\.\d+(-[a-z0-9.]+)?\.zip$`. Version strings are parsed with PEP 440
-(`packaging.version.Version`) on the Python side and regex + semver compare on the PowerShell
-side — both reject unparseable input rather than fall through.
+(scheme check before any `Invoke-WebRequest` / `Invoke-RestMethod`). Asset names must match
+`^Sky-Player-v\d+\.\d+\.\d+(-[a-z0-9.]+)?\.zip$` (and the matching `.sha256` sidecar). Host
+allow-list: `api.github.com`, `github.com`, `objects.githubusercontent.com`,
+`release-assets.githubusercontent.com`. Version strings are parsed with PEP 440
+(`packaging.version.Version`) on the Python side and regex + integer-tuple compare on the
+PowerShell side (`-split '\.'` — **literal** dot, not the regex "any char") — both reject
+unparseable input rather than fall through.
 
 ### 1.2 Scope & framing invariants
 
@@ -168,14 +188,15 @@ explicitly calls out: removal of in-app auto-apply; rename of "Check for Update"
 notify-only; new `updater.bat` external flow.
 
 **I12** **One-time legacy `.old.{guid}` sweep.** Users who ran a pre-2.4.0 build may have
-`.old.{guid}` directories left from past atomic swaps. Phase 1.7 keeps a **RC-only** slice of
+`.old.{guid}` directories left from past past atomic swaps. Phase 1.7 keeps a **RC-only** slice of
 `_check_post_update_flag` that sweeps these once. The sweep is removed in `2.4.1` (or the next
 minor after 2.4.0). See Phase 1.7 for the exact mechanism and the kill switch.
 
 ### 1.4 Repository invariants
 
-**I13** **License is GPL-3.0** (`LICENSE:1`). The earlier draft's "không vi phạm MIT" framing was
-wrong. LGPL-2.1 (7-Zip) is compatible with GPL-3.0, but we still choose NOT to bundle 7z (I8).
+**I13** **License is GPL-3.0** (`LICENSE:1`). The earlier draft's "does not violate MIT"
+framing was wrong (the project licence is GPL-3.0, not MIT). LGPL-2.1 (7-Zip) is compatible
+with GPL-3.0, but we still choose NOT to bundle 7z (I8).
 Any code ported from mpv (Phase 2.1) must be license-audited first — mpv's `installer/` scripts
 carry mixed licenses (GPL-2.0+ for some, ISC for others). The audit lives in Phase 2.1 of this
 plan.
@@ -188,6 +209,56 @@ gate in Phase 6 for every release.
 2026-07-18. Phase 6's optional rust-precheck step must be a *conditional* no-op: run only if
 `rust/` exists. Do not require maturin in the release workflow today.
 
+### 1.5 Portable distribution invariants (added in plan amend)
+
+**I16** **Preserve user data on update.** The external updater must never replace
+`config.json` or touch `songs/` (recursive) with content from the release zip.
+After a successful update those paths must be bit-identical to the pre-update copies, except
+that the updater may patch **only** allowed `update.*` fields in `config.json` (see **I23**).
+
+**I17** **Staging apply, not live overlay.** Extract the verified zip into
+`%TEMP%\sky-update-<guid>\` first. Only after SHA256 verify, write permission, and process-not-running checks may
+files be copied into the install root. Normative order (see Phase 2.5):
+
+1. Extract zip → temp staging (normalize nested folder if needed).
+2. Refuse if `Sky-Player.exe` is still running (exit 4) — do **not** force-kill by default
+   (`-ForceClose` is opt-in only).
+3. Copy from staging → install, **skipping the preserve-list** (I16, I22). Do **not** rename the
+   whole install dir to `.old.{guid}` for updates.
+4. Patch allowed `update.*` fields on the preserved `config.json`.
+5. On mid-copy failure: rollback to original state using backed-up files (I21). Exit non-zero.
+
+In-place `Expand-Archive -DestinationPath $InstallRoot -Force` is **forbidden**.
+
+**I18** **Tag version equals project version.** Every release tag `vX.Y.Z[-suffix]` must
+match `[project].version` in `pyproject.toml` exactly (without the leading `v`). The Phase 6
+workflow fails the job if they diverge. Asset names use that same version string. Trial tag
+for the workflow is `v2.4.0-rc1` (not `v2.3.5-rc1`).
+
+**I19** **`channel` is wired end-to-end in Phase 1.** Adding `update.channel` without
+feeding it into `check_for_update(..., include_prerelease=...)` is forbidden — a dead
+settings field is worse than no field. `channel == "beta"` ⇒ `include_prerelease=True`
+and the fetch path must be able to see prerelease tags (see Phase 1.10). The PowerShell
+updater reads the same field (CLI `-Channel` overrides for one run only; does not persist).
+
+**I20** **Write Access Verification.** The updater must verify write permission inside
+`$InstallRoot` early on by writing and deleting a temporary test file. If permissions are missing,
+it must gracefully fail before downloading or deleting anything, warning the user to run as Admin.
+
+**I21** **Transactional copy and rollback.** To avoid corruption from partial writes (e.g., due to antivirus
+blocking, full disk, or unexpected crashes), the updater must backup all files scheduled for replacement
+to `%TEMP%\sky-backup-<guid>`. If the copy fails midway, the backups are restored, and newly added files are cleaned up.
+
+**I22** **Do not touch songs folder.** The updater must completely skip/bypass the `songs/` folder
+during the copy/installation phase. Updating software should not modify, merge, or alter the user's
+song collection in any way. The `songs/` folder in the zip release is ignored for existing installations.
+
+**I23** **Allowed config patches.** The updater is allowed to patch only:
+- `update.last_check_ts` — Unix epoch **integer** (same key/type as Python
+  `UpdateSettings.last_check_ts`; **never** invent `last_check_utc`).
+- `update.last_notified_version` — string.
+All other config keys must remain untouched. Text-based regex patching is used to avoid non-ASCII escape bugs in older PowerShell versions (G13).
+
 ---
 
 ## 2. Phase contract table (immutable)
@@ -195,14 +266,14 @@ gate in Phase 6 for every release.
 | Phase | Touches (exact files / symbols) | Adds | Removes | Gate |
 |-------|---------------------------------|------|---------|------|
 | 0 | `docs/2026-07-18_distribution-mpv-pattern-plan.md` | this doc | — | doc committed |
-| 1 | `src/sky_music/config.py`, `src/sky_music/infrastructure/update_installer.py`, `src/sky_music/orchestration/update_service.py`, `src/sky_music/ui/textual_app/app.py`, `src/sky_music/ui/textual_app/modals.py`, `src/sky_music/ui/textual_app/screens/picker.py`, `src/sky_music/ui/textual_app/playback_app.py`, `src/sky_music/ui/textual_app/keymap.py`, `src/simulate_update.py`, `tests/test_update_config.py`, `tests/test_update_installer.py`, `tests/test_update_service.py`, `tests/test_textual_update_modals.py`, `tests/test_textual_update_worker.py` | `channel`, `last_notified_version` to `UpdateSettings`; RC-only legacy sweep slice | `apply_update_and_restart`, `write_apply_batch`, `apply_staged_update`, `download_and_verify_update`, `download_and_apply_update_worker`, `_apply_staged`, `_handle_update_response`, `_check_post_update_flag` (RC slice exception), `UpdateProgressModal`, `auto_apply`, `pending_update_version`, `persist_update_auto_apply`, `persist_pending_update_version` | `uv run ruff check . && uv run pyright && uv run pytest` (broader gate — update tests are NOT marked `scheduler`) |
-| 2 | `installer/updater.ps1` (new), `updater.bat` (new, at repo root — copied to `dist/<release>/` by Phase 3) | external updater scripts | — | manual smoke against a fake release built with `src/simulate_update.py` |
+| 1 | `src/sky_music/config.py`, `src/sky_music/infrastructure/update_installer.py`, `src/sky_music/orchestration/update_service.py`, `src/sky_music/domain/update_checker.py` (only if beta fetch path needs `/releases` list — prefer extend `fetch_latest_release` / add `fetch_channel_release`), `src/sky_music/ui/textual_app/app.py`, `src/sky_music/ui/textual_app/modals.py`, `src/sky_music/ui/textual_app/screens/picker.py`, `src/sky_music/ui/textual_app/playback_app.py`, `src/sky_music/ui/textual_app/keymap.py`, `src/simulate_update.py`, `tests/test_update_config.py`, `tests/test_update_installer.py`, `tests/test_update_service.py`, `tests/test_textual_update_modals.py`, `tests/test_textual_update_worker.py` | `channel`, `last_notified_version`, `legacy_old_dir_sweep_pending` on `UpdateSettings`; channel → `include_prerelease` wiring; RC-only legacy sweep | Apply-path symbols (see Phase 1): `auto_apply`, `pending_update_version`, `persist_update_auto_apply`, `persist_pending_update_version`, `UpdateProgressModal`, `_apply_staged`, `download_and_apply_update_worker`, `_check_post_update_flag` (replaced by sweep), **`stage_update`, `StagedUpdate`, `DownloadOutcome`, `download_and_verify_update`**. **Keep `find_old_backups` through 2.4.0** for the RC sweep; remove in 2.4.1. **Do not delete** `_handle_update_response` / `_open_update_url` — trim the `"download"` branch only. | `uv run ruff check . && uv run pyright && uv run pytest` (broader gate — update tests are NOT marked `scheduler`) |
+| 2 | `installer/updater.ps1` (new), `updater.bat` (new, at repo root — copied to `dist/<release>/` by Phase 3), `installer/updater.Tests.ps1` (new, optional Pester) | external updater with write-access test, path-specific process tracking, transactional rollback, and preserve-list (songs/ and config.json) | — | manual smoke §2.8 including **D11** config/songs checks; Pester tests green if `installer/updater.Tests.ps1` is shipped |
 | 3 | `src/build_app.py` (extend `REQUIRED_UPDATER_ASSETS` + `--manifest` already exists) | copies `updater.bat` + `installer/` into `dist/<release>/` | — | `uv run --env-file .env python -m build_app --manifest` green + `Test-Path dist/<rel>/updater.bat` |
-| 5 | `src/sky_music/orchestration/update_service.py` (add `format_update_banner`), `src/sky_music/ui/textual_app/modals.py` (new `UpdateBannerModal`), `src/sky_music/ui/textual_app/app.py` (replace minimal notify with banner push) | banner widget + formatter | the minimal `self.notify(...)` text added in Phase 1.3 (replaced, not kept) | `uv run pytest tests/test_textual_update_modals.py tests/test_textual_update_worker.py` green |
-| 6 | `.github/workflows/release.yml` (new), `.github/PULL_REQUEST_TEMPLATE.md` (no change required; just verify altitude checklist still applies) | release-on-tag workflow | — | trial tag `v2.3.5-rc1` (deleted after) produces a green workflow + correct Release assets |
-| 8 | `README.md`, `CHANGELOG.md`, `docs/distribution-and-update.md` (new), `docs/INDEX.md` | mpv-pattern docs + CHANGELOG `### Changed` | — | `uv run ruff check .`; manual doc review |
-| 4 | `installer/sky-player-install.bat` (new), `installer/sky-player-uninstall.bat` (new) | optional installer / uninstaller | — | manual test on clean Win11 (Start Menu shortcut + `.skysheet` double-click + uninstall reverses everything) |
-| 7 | `manifests/p/pumni/Sky-Player/Sky-Player.yaml` (new), `scripts/winget_update_pr.ps1` (new, optional) | winget manifest | — | `winget validate <manifest>` locally |
+| 5 | `src/sky_music/orchestration/update_service.py` (replace `format_update_banner` stub), `src/sky_music/ui/textual_app/modals.py` (new `UpdateBannerModal`), `src/sky_music/ui/textual_app/app.py` (replace minimal notify with banner push; extend `_handle_update_response` for banner ids) | banner widget + formatter | the minimal `self.notify(...)` helper from Phase 1 (replaced, not kept) | `uv run pytest tests/test_textual_update_modals.py tests/test_textual_update_worker.py` green |
+| 6 | `.github/workflows/release.yml` (new), `.github/PULL_REQUEST_TEMPLATE.md` (no change required; just verify altitude checklist still applies) | release-on-tag workflow + tag/version lock (I18) | — | trial tag `v2.4.0-rc1` (deleted after) produces a green workflow + correct Release assets |
+| 8 | `README.md`, `CHANGELOG.md`, `docs/distribution-and-update.md` (new), `docs/INDEX.md` | portable + updater docs only (no installer section yet) | — | `uv run ruff check .`; manual doc review |
+| 4 | `installer/sky-player-install.bat` (new), `installer/sky-player-uninstall.bat` (new); README + `docs/distribution-and-update.md` installer section | optional installer / uninstaller + docs that Phase 8 deliberately omitted | — | manual test on clean Win11 (Start Menu shortcut + `.skysheet` double-click + uninstall reverses everything) |
+| 7 | `manifests/p/pumni/SkyPlayer/pumni.SkyPlayer.yaml` (new), `scripts/winget_update_pr.ps1` (new, optional) | winget manifest | — | `winget validate <manifest>` locally |
 
 ### 2.1 Rules for the table above
 
@@ -221,7 +292,7 @@ gate in Phase 6 for every release.
 ```
 0 → 1 → 2 → 3 → 5 → 6 → 8 → 4 → 7
                   │
-                  └─ 4 và 7 hoán đổi so với draft gốc
+                  └─ 4 and 7 were swapped vs. the original draft
 ```
 
 - **Phase 4 deferred past 6**: `.skysheet` extension is currently only referenced in three
@@ -246,10 +317,13 @@ Code-signing with Azure Trusted Signing is a separate follow-on track that needs
 **O2** **No delta updates.** Full zip replacement only. Delta patches are speculative at Sky
 Player's release cadence (~monthly) and bundle size (~50 MB).
 
-**O3** **No auto-relaunch from the updater.** Phase 2 explicates this: a script-initiated
-`Start-Process Sky-Player.exe` from a detached `cmd.exe` is more likely to trip Windows
-SmartScreen / Defender than a user double-click. The user reopens manually. **This is NOT a
-P0 security measure** — it is an OS/UX heuristic. Do not frame it as security in docs.
+**O3** **No auto-relaunch from the updater by default.** Phase 2 explicates this: a
+script-initiated `Start-Process Sky-Player.exe` from a detached `cmd.exe` is more likely to
+trip Windows SmartScreen / Defender than a user double-click is. The default flow is "user
+reopens manually". **This is NOT a P0 security measure** — it is an OS/UX heuristic. Do not
+frame it as security in docs. An opt-in `-Restart` switch is allowed (see §2.5 step 12); it
+does not bypass any validation, it simply calls `Start-Process Sky-Player.exe` after a
+successful copy. Users who want one-click upgrade flow can opt in.
 
 **O4** **No new archive format.** Plain `.zip` only. No zstd, no 7z, no self-extracting exe
 (see I8).
@@ -258,9 +332,9 @@ P0 security measure** — it is an OS/UX heuristic. Do not frame it as security 
 (`AGENTS.md` header). The PowerShell updater is Windows-only and stays so.
 
 **O6** **No telemetry on update success / failure.** The updater writes nothing back to GitHub
-or any server beyond the unauthenticated release metadata fetch. Local `last_check_utc` is the
-only persisted client state and stays in `config.json` (or a local updater log file at
-`%LOCALAPPDATA%\Sky-Player\updater.log` — Phase 2 decides; see Phase 2.7).
+or any server beyond the unauthenticated release metadata fetch. Client state stays in
+`config.json` (`last_check_ts`, `last_notified_version`, …) plus an optional local log at
+`%LOCALAPPDATA%\Sky-Player\updater.log` (Phase 2.7). No invented keys like `last_check_utc`.
 
 **O7** **No file association for `.json` or `.txt`.** Phase 4 registers `.skysheet` only.
 Associating the generic `.json` would brand Sky Player as a "JSON viewer replacement" — a
@@ -281,7 +355,7 @@ Leave it untouched; do not delete (it is git-tracked history) and do not port.
 ### 3.5 Common implementation mistakes (each one has bitten a previous refactor)
 
 **G1 — Wrong pytest gate.** Update tests are NOT marked `scheduler`. `pyproject.toml:117-121`
-declares `scheduler | windows | golden | slow`; `scheduler` is reserved for pure-domain timing
+declares `scheduler | windows | golden | slow`; `scheduler` is reserved for domain timing
 tests (see `CHANGELOG.md:40` for the origin). Update tests carry no marker today. **Phase 1's
 gate is the broader `uv run ruff check . && uv run pyright && uv run pytest`.** A draft of this
 plan said `pytest -m "scheduler and not slow"` — that gate is a **false green** because it
@@ -323,7 +397,7 @@ header widget gradient (see `app.py:1207-1213`).
 
 **G9 — `--manifest` flag left implicit.** `build_app` default-build does not emit MANIFEST.json.
 The release workflow MUST pass `--manifest`. Otherwise Phase 6's "MANIFEST.json is an asset"
-assertion fails and there is no checksum audit trail for the `.zip` / `.sha256` asset pair.
+assertion fails and there is no checksum audit trail for the `.zip` / `.sha256` asset pair (D5).
 
 **G10 — Using `pytest -m "scheduler"` style gates for non-scheduler phases ever again.** If a
 phase's test surface lives outside the marker in question, use the broader gate. When unsure,
@@ -332,7 +406,37 @@ before running.
 
 **G11 — Removing `_version.py` or the version-info writer.** `src/sky_music/_version.py` is
 .git-ignored (see `.gitignore:55-56`) and regenerated by `build_app.py:32-40`. Phase 6 must keep
-generating it. Phase 2's PS updater reads it (see Phase 2.5).
+generating it. Phase 2's PS updater prefers `MANIFEST.json` then exe `ProductVersion` (see
+Phase 2.5); it does not require `_version.py` on disk in frozen builds.
+
+**G12 — `Expand-Archive -Force` onto the live install root.** Overwrites `config.json` and
+`songs/` from the release zip (data loss). Forbidden by I16–I17. Extract to
+temp, check write access, check process locks, and then run transactional copy.
+
+**G13 — Writing `last_check_ts` from PowerShell.** Python uses `last_check_ts` (Unix int).
+A foreign key is silently ignored by `UpdateSettings.from_dict` and breaks throttle symmetry.
+Always write `last_check_ts` as a JSON number. Also, regex insertion of `last_notified_version`
+must account for missing keys in the update sub-object without silently failing.
+
+**G14 — PowerShell `-split '.'` for semver.** `-split` is regex; `.` matches any character and
+destroys `"2.3.4"`. Always `-split '\.'`.
+
+**G15 — Deleting `_handle_update_response` in Phase 1.** Phase 5 reuses it for banner actions.
+Phase 1 only removes the `"download"` branch; keep `"skip"` / `"github"` and `_open_update_url`.
+
+**G16 — Adding `update.channel` without wiring `include_prerelease`.** Dead settings field.
+See I19 and Phase 1.10.
+
+**G17 — Documenting the optional installer in Phase 8.** Installer scripts land in Phase 4.
+Phase 8 README must not link `sky-player-install.bat` until that file exists.
+
+**G18 — Trial tag / asset version mismatch.** Staging assets from `pyproject.toml` while the
+GitHub Release is named after a different tag produces undownloadable assets. Enforce I18;
+trial tag is `v2.4.0-rc1`.
+
+**G19 — Force-killing `Sky-Player.exe` without consent.** Default is refuse (exit 4) and tell
+the user to close the app. Optional `-ForceClose` switch may stop the process; check that
+the target process's parent directory matches `$InstallRoot` to avoid killing other instances.
 
 ---
 
@@ -354,7 +458,7 @@ Materialise this plan doc so subsequent phases have a single source of truth. No
    git grep -n "auto_apply\|pending_update_version\|download_and_verify_update\|download_and_apply_update_worker\|_apply_staged\|UpdateProgressModal" -- "src/*" "tests/*"
    ```
    Output must reference every file listed in §2 Phase 1's "Touches". If a reference is missing,
-  STOP and update §2 — do not proceed to Phase 1.
+   STOP and update §2 — do not proceed to Phase 1.
 2. Commit this document.
 
 ### 0.4 Gate
@@ -387,22 +491,20 @@ at the broader gate. Do not squash P1 commits across letters; reviewers compare 
 
 | File | Action |
 |------|--------|
-| `src/sky_music/infrastructure/update_installer.py` | Delete `write_apply_batch`, `apply_update_and_restart`, `post_update_flag_path`, `find_old_backups`, `_ps_quote`, `_BATCH_PING_WAIT_S` (lines 277–421). Keep `download_zip`, `compute_sha256`, `verify_sha256`, `parse_sha256_sidecar`, `fetch_sha256_sidecar`, `extract_zip`, `stage_update`, `install_dir_for_frozen`, `StagedUpdate`, `UpdateInstallerError`. Update module docstring (lines 1–31) to drop the apply-batch paragraph and the "docstring honour P0" note no longer applies. `stage_update` stays — it is *not* apply; it is "download + extract to a dir". Phase 2's PS updater may invoke Python's `extract_zip` indirectly via a sibling utility, but in production the PS updater uses `Expand-Archive`. Keeping `stage_update` lets `simulate_update.py` keep the `download-ok` scenario green. |
-| `src/sky_music/orchestration/update_service.py` | Delete `DownloadOutcome`, `download_and_verify_update`, `apply_staged_update`. Update module docstring (lines 1–20) to drop the "When the user picks 'download'" step. Keep `should_auto_check`, `check_for_update`, `record_successful_check`, `record_check_error`, `record_skip`, `retry_delay_for`, `current_unix_ts`, `_RETRY_INTERVAL_S`. Remove imports of `StagedUpdate`, `apply_update_and_restart`, `fetch_sha256_sidecar`, `install_dir_for_frozen`, `post_update_flag_path`, `stage_update`, `NoReturn` — none are still needed. Add a frozen `format_update_banner` **stub** in P1-G (full implementation is Phase 5). The stub returns a constant string and is replaced by Phase 5; do not implement it eagerly here. |
-| `src/sky_music/config.py` | Remove fields `auto_apply` (line 112) and `pending_update_version` (line 122) from `UpdateSettings`. Remove them from `from_dict` (lines 151, 155, 161, 166). Remove them from the serializer dict (lines 508, 513). Delete `persist_update_auto_apply` (lines 602–604) and `persist_pending_update_version` (lines 607–608). Add two new fields to `UpdateSettings` with safe defaults: `channel: Literal["stable", "beta"] = "stable"` and `last_notified_version: str = ""`. Add them to `from_dict` (use `data.get("channel", "stable")` and `data.get("last_notified_version", "")` — **case-insensitive validate `channel`; if the value is not "stable" or "beta", default to "stable"** and append a comment explaining why). Add them to the serializer dict. Add two persist helpers `persist_update_channel` and `persist_update_last_notified` mirroring the existing `persist_*` helpers. Import `Literal` from `typing` at the top — `config.py` already uses `typing.Any`; check the existing import block first. |
-| `src/sky_music/ui/textual_app/app.py` | (a) Delete `_check_post_update_flag` (lines 1128–1150). (b) Delete `_handle_update_response` (lines 1255–1264). (c) Delete `_apply_staged` (lines 1275–1292). (d) Delete `download_and_apply_update_worker` (lines 1294–1359+). (e) Delete `_restore_pending_update_indicator` (lines 248–266) — but keep a one-line stub that returns immediately, marked `# Removed in 2.4.0; restored-from-pending logic moved to Phase 5 banner modal.` so the callers in `__init__` machinery do not break. The stub will be deleted in Phase 5. (f) In `check_for_updates_worker` (lines 1152+): remove the `auto_apply` branch (lines 1215–1230). Replace with `minimal_notify_update_available(result.update)` (add a private method of the same name in P1-C — it just calls `self.notify(...)` with the version and a hint to run `updater.bat`; Phase 5 replaces this). (g) In `_check_post_update_flag`'s place, add `_legacy_old_dir_sweep` — see P1-G step (§1.7). |
-| `src/sky_music/ui/textual_app/modals.py` | Delete `UpdateProgressModal` (lines 388–540). In `UpdateSettingsModal` (lines 549–730): remove the `auto_apply` ctor arg (line 579), the `_auto_apply` instance var (line 597), the `_on_auto_apply` field (line 602), the `row-auto-apply` yield block (lines 664–669), the `checkbox-auto-apply` handler (lines 707–710). Update the modal docstring (line 555) to drop the mention of the second checkbox row. Trim the `#update-settings-divider-2` block; the divider no longer has anything below it. |
-| `src/sky_music/ui/textual_app/screens/picker.py` | Remove `persist_update_auto_apply` import (line 1301). Remove `_on_auto_apply` callback (lines 1317–1318). Remove the `auto_apply=` and `on_auto_apply=` kwargs from the `UpdateSettingsModal(...)` call (lines 1333–1337). Verify the remaining `auto_check=` and `last_check` related args still match the trimmed modal ctor. |
+| `src/sky_music/infrastructure/update_installer.py` | Delete `write_apply_batch`, `apply_update_and_restart`, `post_update_flag_path`, `find_old_backups`, `_ps_quote`, `_BATCH_PING_WAIT_S` (lines 277–421). **Also delete `stage_update` and `StagedUpdate`** in P1-B (see §1.6 — no production or `simulate_update.py` consumer remains once `download_and_verify_update` and the `download-ok` / `download-bad-sha` scenarios are gone). Keep `download_zip`, `compute_sha256`, `verify_sha256`, `parse_sha256_sidecar`, `fetch_sha256_sidecar`, `extract_zip`, `install_dir_for_frozen`, `UpdateInstallerError`. Update module docstring (lines 1–31) to drop the apply-batch paragraph and the "docstring honour P0" note that no longer applies. **Keep `find_old_backups` through 2.4.0 only** for the RC legacy sweep (§1.7); remove it in 2.4.1 together with the sweep. Phase 2's PS updater does NOT call into Python from the updater; it uses `Expand-Archive` plus `Get-FileHash` directly. |
+| `src/sky_music/orchestration/update_service.py` | Delete `DownloadOutcome`, `download_and_verify_update`, `apply_staged_update`. Update module docstring (lines 1–20) to drop the "When the user picks 'download'" step. Keep `should_auto_check`, `check_for_update`, `record_successful_check`, `record_check_error`, `record_skip`, `retry_delay_for`, `current_unix_ts`, `_RETRY_INTERVAL_S`. Remove imports of `StagedUpdate`, `apply_update_and_restart`, `fetch_sha256_sidecar`, `install_dir_for_frozen`, `post_update_flag_path`, `stage_update`, `NoReturn` — none are still needed. **Wire channel (I19):** `check_for_update` must default `include_prerelease` from `cfg.update.channel == "beta"` when the caller passes `None` (see Phase 1.10). Add a frozen `format_update_banner` **stub** in P1-C (full implementation is Phase 5). The stub returns a constant string and is replaced by Phase 5; do not implement it eagerly here. |
+| `src/sky_music/domain/update_checker.py` | Only if needed for beta: when `include_prerelease=True`, `/releases/latest` alone is insufficient (GitHub `latest` never returns a prerelease). Prefer adding a small `fetch_channel_release(..., include_prerelease: bool)` (or extend `fetch_latest_release`) that, for beta, GETs `/releases?per_page=10`, picks the newest tag by `is_newer` / PEP 440 among non-draft releases, then reuses `parse_release_payload`. Stable path stays `/releases/latest`. Keep the module pure and injectable. Tests in `tests/test_update_service.py` or a focused domain test. |
+| `src/sky_music/config.py` | Remove fields `auto_apply` (line 112) and `pending_update_version` (line 122) from `UpdateSettings`. Remove them from `from_dict` (lines 151, 155, 161, 166). Remove them from the serializer dict (lines 508, 513). Delete `persist_update_auto_apply` (lines 602–604) and `persist_pending_update_version` (lines 607–608). Add fields with safe defaults: `channel: Literal["stable", "beta"] = "stable"`, `last_notified_version: str = ""`, `legacy_old_dir_sweep_pending: bool = False`. Add them to `from_dict` (use `data.get("channel", "stable")` and `data.get("last_notified_version", "")` — **case-insensitive validate `channel`; if the value is not "stable" or "beta", default to "stable"**). Migration trigger for the sweep: if the incoming JSON still contains the legacy key `"pending_update_version"` **OR** `"auto_apply"` (any value), set `legacy_old_dir_sweep_pending=True`; else use `data.get("legacy_old_dir_sweep_pending", False)` with bool validation. Add them to the serializer dict. Add persist helpers `persist_update_channel`, `persist_update_last_notified`, `persist_legacy_old_dir_sweep_pending` mirroring existing `persist_*` helpers. Import `Literal` from `typing` if not already present. |
+| `src/sky_music/ui/textual_app/app.py` | (a) Delete `_check_post_update_flag` (lines 1128–1150); replace call site with `_legacy_old_dir_sweep` (see §1.7). (b) **Trim** `_handle_update_response` (lines 1261–1270): remove the `"download"` branch only; keep `"skip"` and `"github"` (G15). Keep `_open_update_url`. (c) Delete `_apply_staged` (lines 1281+). (d) Delete `download_and_apply_update_worker` (lines 1301+). (e) Stub `_restore_pending_update_indicator` (lines 248–266) to return immediately with comment `# Phase 1 stub; Phase 5 restores banner-on-launch from last_notified_version.` (f) In `check_for_updates_worker`: remove the `auto_apply` branch; replace with `minimal_notify_update_available(result.update)`; stop writing `pending_update_version`; persist `last_notified_version` via the new helper when an update is found. (g) Ensure check path passes channel-derived prerelease policy (via `check_for_update` defaults — no local hardcode of `include_prerelease=False` that would bypass I19). |
+| `src/sky_music/ui/textual_app/modals.py` | Delete `UpdateProgressModal` (lines 388–540). In `UpdateSettingsModal` (lines 549–730): remove the `auto_apply` ctor arg (line 579), the `_auto_apply` instance var (line 597), the `_on_auto_apply` field (line 602), the `row-auto-apply` yield block (lines 664–669), the `checkbox-auto-apply` handler (lines 707–710). **Add** a channel control (stable/beta) with ctor arg `channel: str` and callback `on_channel` — minimal: two-state checkbox "Include beta / pre-release" or a small select; wire to `persist_update_channel`. Update the modal docstring. Cosmetic divider cleanup may wait for Phase 5 (see §1.5). |
+| `src/sky_music/ui/textual_app/screens/picker.py` | Remove `persist_update_auto_apply` import / `_on_auto_apply`. Remove `auto_apply=` / `on_auto_apply=` kwargs. Pass `channel=` and `on_channel=` into `UpdateSettingsModal`. Mirror the same change at the `app.py` settings entry point (both call sites — G4). |
 | `src/sky_music/ui/textual_app/playback_app.py` | In `_check_for_updates_silent` (lines 856–905): remove the `persist_pending_update_version` write at lines 891–895. Replace the surrounding block with a simple `debug_log(f"[playback] update available v{latest}")` if `result.update is not None`; do NOT write any state to config in this silent path. Add a comment: "Notify-only — Phase 5 will surface via banner on next picker launch". |
 | `src/sky_music/ui/textual_app/keymap.py` | Update the `update_settings` CommandSpec description (`keymap.py:55`) from "Toggle auto-check and auto-apply" to "Toggle auto-check / channel". |
 | `src/sky_music/ui/textual_app/theme_css.py` and `./styles/base.tcss` | Optional: trim `#row-auto-apply` selectors (theme_css.py:154, 158–162; base.tcss:97–110). **Required**: do not break the CSS parser. If a selector references an id that no longer exists, Textual logs a warning; remove the selector cleanly. |
 | `src/simulate_update.py` | Keep `_make_fake_zip`. Keep scenarios `available`, `already-up-to-date`, `skipped`, `prerelease-suppressed`, `error`, `throttled`, `retry-after-error`. Delete `download-ok` and `download-bad-sha` scenarios IF they exercise `apply_update_and_restart` or `download_and_verify_update` (read the file's `_ALL_SCENARIOS` list at line 519 and each scenario function in the file — `download-ok` runs `download_and_verify_update`; `download-bad-sha` also does). Keep `extract_zip` + SHA256 verify tests if they exist as separate scenarios (they don't, per current code — confirm with a `grep` before deleting). After deletion, update `_ALL_SCENARIOS` to drop `"download-ok"` and `"download-bad-sha"` (lines 525–526), and the `elif` branches in `_dispatch_scenario` around lines 590+. |
 | `tests/test_update_config.py` | Delete `test_persist_update_auto_apply_writes_true` (line 239) and `test_persist_update_auto_apply_writes_false_after_enable` (line 257) — they test removed functions. Delete assertions on `s.auto_apply` (lines 41, 57, 66, 75) and on `auto_apply: True` in the round-trip dict at line 50. Add new tests for `channel` and `last_notified_version` (round-trip + invalid `channel` fallback to `"stable"`). |
 | `tests/test_update_installer.py` | Delete the `write_apply_batch` tests (lines 347–394). Delete the `find_old_backups` tests (lines 399–446). Update imports (lines 31, 34) to drop `apply_update_and_restart` aliases. Keep `download_zip`, `compute_sha256`, `verify_sha256`, `parse_sha256_sidecar`, `fetch_sha256_sidecar`, `extract_zip`, `stage_update`, `install_dir_for_frozen` tests — they exercise surviving functions. |
-| `tests/test_update_service.py` | Delete `download_and_verify_update` tests (lines 316–491+, including `test_download_and_verify_update_missing_asset_returns_error`,
-  `test_download_and_verify_update_no_sidecar_stages_anyway`,
-  `test_download_and_verify_update_with_sha256_match_succeeds`,
-  `test_download_and_verify_update_sha256_mismatch_returns_error`). Delete `test_apply_staged_update_non_windows_platform_raises` (line 502). Update imports (line 23, 26) to drop removed symbols. Keep tests for `should_auto_check`, `check_for_update`, `record_*`, `retry_delay_for`. |
+| `tests/test_update_service.py` | Delete `download_and_verify_update` tests (lines 316–491+, including `test_download_and_verify_update_missing_asset_returns_error`, `test_download_and_verify_update_no_sidecar_stages_anyway`, `test_download_and_verify_update_with_sha256_match_succeeds`, `test_download_and_verify_update_sha256_mismatch_returns_error`). Delete `test_apply_staged_update_non_windows_platform_raises` (line 502). Update imports (line 23, 26) to drop removed symbols. Keep tests for `should_auto_check`, `check_for_update`, `record_*`, `retry_delay_for`. |
 | `tests/test_textual_update_modals.py` | Delete every `UpdateProgressModal` test (lines 101–230). Update `UpdateSettingsModal` tests (lines 235–425) to drop the `auto_apply=` arg and `on_auto_apply=` arg from every call site; update the "Tab to auto_apply Checkbox" test (lines 255–263) — remove that test entirely. Verify the remaining tests still pass against the trimmed modal; regenerate any snapshot test files that include the trimmed widgets using `pytest --snapshot-update` **only** after confirming the diff is exactly the trim. |
 | `tests/test_textual_update_worker.py` | Delete `_apply_staged` tests (lines 467–510, lines 470, 485, 495, 510). Delete `download_and_apply_update_worker` tests (lines 529+, including monkeypatches at 538, 603, 609, 636, 645–646). Delete `pending_update_version` indicator tests (lines 662, 693, 723, 745). Keep `check_for_updates_worker` and non-update worker tests. |
 
@@ -417,9 +519,7 @@ Gate: `uv run ruff check . && uv run pyright && uv run pytest tests/test_update_
 Expect downstream pyright errors in `update_service.py` and `app.py` because they import removed
 symbols — DO NOT fix them yet; the fix lives in P1-C and P1-D. Suppress them temporarily by
 commenting out the offending imports in `update_service.py` ONLY for the duration of P1-B, then
-restore them in P1-C. (Alternative: stage P1-B and P1-C as one commit if the cherry-picking
-hardship outweighs the partition benefit — both are acceptable; pick one and document it in the
-commit message.) Recommended: **combine P1-B and P1-C into a single commit** to avoid a
+restore them in P1-C. Recommended: **combine P1-B and P1-C into a single commit** to avoid a
 known-broken intermediate.
 
 **P1-C — orchestration layer.** Trim `update_service.py` + `tests/test_update_service.py`.
@@ -435,13 +535,15 @@ tests/test_textual_update_modals.py tests/test_textual_update_worker.py`. Textua
 may need `pytest --snapshot-update` after confirming the diff is exactly the trim; do NOT
 auto-regenerate blindly.
 
-**P1-E — app.py surgery.** Delete `_check_post_update_flag`, `_handle_update_response`,
-`_apply_staged`, `download_and_apply_update_worker`; stub `_restore_pending_update_indicator`;
-add `minimal_notify_update_available` helper; trim the `check_for_updates_worker` auto_apply
+**P1-E — app.py surgery.** Delete `_check_post_update_flag`, `_apply_staged`,
+`download_and_apply_update_worker`; **trim** `_handle_update_response` (drop `"download"` only);
+keep `_open_update_url`; stub `_restore_pending_update_indicator`; add
+`minimal_notify_update_available` helper; trim the `check_for_updates_worker` auto_apply
 branch; add the `_legacy_old_dir_sweep` slice (see §1.7). Update `tests/test_textual_update_worker.py`
-to drop the corresponding tests. Gate: broader gate full — `uv run ruff check . && uv run pyright
-&& uv run pytest`. **This is the first commit where the full pytest must be green**, because
-before P1-E the worker tests still reference removed `app.py` methods.
+to drop apply-path tests but keep skip/github response tests. Gate: broader gate full —
+`uv run ruff check . && uv run pyright && uv run pytest`. **This is the first commit where the
+full pytest must be green**, because before P1-E the worker tests still reference removed
+`app.py` methods.
 
 **P1-F — playback_app.py trim.** Update `_check_for_updates_silent`; remove the
 `persist_pending_update_version` write; add the deferred banner comment. Gate: `uv run ruff check
@@ -456,84 +558,121 @@ scenarios all PASS).
 In P1-E, add this private method to `app.py` (it will be REPLACED by Phase 5):
 
 ```python
-def minimal_notify_update_available(self, release: Any) -> None:
-    version = getattr(release, "latest_version", "?")
+def _minimal_notify_update_available(self, update: UpdateInfo) -> None:
+    version = update.latest_version
+    # Simple toast-style notify to tell the user that updates must be applied externally
     self.notify(
         f"Sky Player v{version} available — close, run updater.bat, reopen.",
-        severity="information",
-        timeout=6,
+        title="Update Available",
+        severity="info",
+        timeout=10.0,
     )
 ```
 
-Update `check_for_updates_worker` so that after `result.update is not None` it calls
-`self.minimal_notify_update_available(result.update)` and then persists `last_notified_version`
-via the new `persist_update_last_notified` helper (see P1-A). Do NOT push a modal in Phase 1 —
-Phase 5 owns the modal. This keeps P1 small and avoids regenerating snapshot tests twice.
+In `check_for_updates_worker` (line 1200+), replace the old toast/apply logic with a call to
+the new helper:
 
-### 1.5 Item excluded from P1-D by deliberate choice
-
-Do NOT trim `UpdateSettingsModal`'s `#update-settings-divider-2` selector set in P1-D if doing
-so risks cascading into `theme_css.py` template expansion. The dividers are cosmetic; removing
-the second row already leaves the divider harmlessly positioned. A small comment in the modal
-docstring is enough. Phase 5 can revisit. Add a `# TODO(phase5): drop divider-2 when banner
-modal lands` comment if it helps track this.
-
-### 1.6 What stays in the tree across Phase 1
-
-- `install_dir_for_frozen()` — still useful; Phase 2 PS updater does not need it, but
-  potential future diagnostics do. Keep it.
-- `StagedUpdate` — currently only used by `apply_staged_update`. P1-C removes it from
-  `update_service.py`'s imports. Keep the dataclass in `update_installer.py` (it carries no
-  Apply-specific shape — just `staging_dir` + `new_version`).
-- `extract_zip` + `stage_update` — used by `simulate_update.py` for download scenarios.
-- `UpdateInfo`, `UpdateCheckResult`, `parse_release_payload`, `fetch_latest_release` — pure
-  domain layer, no Apply connotation. Untouched.
-
-### 1.7 The RC-only legacy `.old.{guid}` sweep (P1-E)
-
-Pre-2.4.0 users have `.old.{guid}` directories in `%LOCALAPPDATA%`-adjacent locations from past
-atomic swaps. Phase 1.7 keeps a **slice** of the old `_check_post_update_flag` machinery that
-runs ONCE and then disables itself. Mechanism:
-
-1. Add a new config flag (boolean, default `False` for new installs; **`True` for configs that
-   still carry the legacy `pending_update_version` field on load** — this is the migration
-   trigger) — `legacy_old_dir_sweep_pending: bool`. It lives in `UpdateSettings` for symmetry
-   with the other update flags, even though its purpose is one-shot.
-2. In `from_dict`, set `legacy_old_dir_sweep_pending = True` **iff** the incoming json contains
-   the legacy key `"pending_update_version"` (regardless of its value). Otherwise `False`.
-3. In `app.py`, in `__init__` where `_check_post_update_flag` used to be called, add
-   `_legacy_old_dir_sweep(self)`. If the flag is `False`, return immediately. If `True`, walk
-   the frozen-install-parent dir for `<install_dir>.old.*` siblings, `shutil.rmtree` each with
-   `ignore_errors=True`, then `persist` `legacy_old_dir_sweep_pending=False` to config.json.
-4. Do NOT show a toast on success — silent sweep. The user already knows they updated.
-5. The sweep is a one-shot for the 2.4.0 RC. A follow-on PR in 2.4.1 (or the next minor after
-   2.4.0 ships and stabilises) deletes `_legacy_old_dir_sweep` AND the
-   `legacy_old_dir_sweep_pending` field. That PR is OUT OF SCOPE for this plan; just note it in
-   CHANGELOG `### Changed` as "removed legacy `.old.{guid}` sweep".
-6. Tests: add one unit test that loads a fake config with `"pending_update_version": "1.2.3"`
-   and asserts `legacy_old_dir_sweep_pending is True`. Add one that loads a clean config and
-   asserts `False`. No integration test for the sweep itself — it is `shutil.rmtree` over
-   `iterdir`, hard to test without polluting `tmp_path`.
-
-### 1.8 Phase 1 gate (final)
-
-```powershell
-uv run ruff check . && uv run pyright && uv run pytest
+```python
+self.post_message(self.UpdateFinished(update=result.update))
 ```
 
-Then manual smoke: `uv run python -m app` (or the project's run command from `AGENTS.md`);
-verify the picker launch shows no exceptions, no "Auto-apply" checkbox in the Update Settings
-modal, and pressing `u` opens the picker Check-for-Update flow that ends with a `self.notify`
-text — not a download modal.
+And in the app's `UpdateFinished` handler (typically `_handle_update_response` parent or the
+worker message callback): call `_minimal_notify_update_available` if `result.update` is present
+and not skipped.
 
-### 1.9 Phase 1 expected pytest shrink
+### 1.5 UpdateSettingsModal cosmetic divider note
 
-Pre-Phase 1: count tests with `uv run pytest --collect-only -q | Measure-Object -Line`.
-Post-Phase 1: re-count. Expect to lose on the order of ~15–25 test functions across the six
-update test files. The number is not exact; the gate is "every surviving test green" + "no test
-imports a removed symbol" (verify with `git grep "apply_update_and_restart\|apply_staged_update
-\|download_and_verify_update\|download_and_apply_update_worker\|UpdateProgressModal\|_apply_staged"
--- tests/`).
+The settings modal contains a static divider `#update-settings-divider-2` (modals.py:672) that sits
+above the removed `auto-apply` checkbox. Leaving it in Phase 1 is harmless (just a thin grey rule
+in the dialog). If you want to clean it up in Phase 1, delete the yield line and the CSS
+definition. Recommended: **add a `# TODO(phase5): drop divider-2 when banner modal lands`** to the
+yield block in modals.py, then delete it during Phase 5's modal overhaul to keep Phase 1's diff focus
+pure.
+
+### 1.6 Why `stage_update` can be deleted in Phase 1
+
+`stage_update` is a utility in `update_installer.py:194-275` that extracts a verified zip into
+`.staged-update/` and prepares the atomic swap. Since the running app will **never** perform a
+stage operation again, keeping this code is speculative.
+PyInstaller does not build `simulate_update.py` into the frozen bundle, but `simulate_update.py` is
+git-tracked developer scaffolding. Once `download_and_verify_update` is gone, the scenario runner
+no longer calls `stage_update`. Delete both the function and its unit test in P1-B/P1-C.
+
+### 1.7 One-time legacy `.old.{guid}` sweep logic
+
+In `app.py`, replace `_check_post_update_flag` with:
+
+```python
+def _legacy_old_dir_sweep(self) -> None:
+    # Pre-2.4.0 builds used a temporary backup naming convention '.old.{guid}'.
+    # If the user upgraded to 2.4.0, these folders might still be on disk taking space.
+    if not self.cfg.update.legacy_old_dir_sweep_pending:
+        return
+
+    # Call the surviving find_old_backups from update_installer
+    from sky_music.infrastructure.update_installer import find_old_backups, install_dir_for_frozen
+    import shutil
+
+    install_root = install_dir_for_frozen()
+    old_dirs = find_old_backups(install_root)
+    if not old_dirs:
+        # Nothing to clean; clear the migration flag
+        self.cfg.update.legacy_old_dir_sweep_pending = False
+        self.cfg.save_config()
+        return
+
+    def sweep_worker() -> None:
+        try:
+            for path in old_dirs:
+                if path.exists() and path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+            self.cfg.update.legacy_old_dir_sweep_pending = False
+            self.cfg.save_config()
+        except Exception as e:
+            # Silently degrade; do not crash startup
+            self.log_worker_error("legacy_sweep", e)
+
+    # Dispatch to background thread so startup isn't blocked by disk IO
+    self.run_worker(sweep_worker, name="legacy_old_dir_sweep")
+```
+
+Verify in `tests/test_textual_update_worker.py`: mock `find_old_backups` to return a list of paths;
+assert the worker removes them and clears the config flag.
+
+### 1.8 Channel setting values and validation
+
+The default channel is `"stable"`. If a user manually edits `config.json` to have `"channel":
+"beta"`, or toggles it via the Phase 1.2 modal, that is persisted. If they write `"channel":
+"invalid_string"`, the parser must degrade to `"stable"`.
+Implement this in `config.py:UpdateSettings.from_dict`:
+
+```python
+channel = data.get("channel", "stable")
+if channel not in ("stable", "beta"):
+    channel = "stable"
+```
+
+### 1.9 Phase 1.10 prerelease fetch path (channel integration)
+
+Verify in `update_service.py:check_for_update`:
+
+```python
+# If the caller did not specify include_prerelease, derive it from the channel setting:
+if include_prerelease is None:
+    include_prerelease = (cfg.update.channel == "beta")
+```
+
+This feeds `include_prerelease` down to `UpdateChecker.fetch_latest_release` / the domain layer
+(I19). If `fetch_latest_release` uses GitHub's `/releases/latest` API, that endpoint is hardcoded
+by GitHub to **never** return prereleases. For the `"beta"` channel to work, the domain layer must
+support checking prereleases:
+1. Extend `fetch_latest_release` or add `fetch_channel_release` inside `update_checker.py`.
+2. For `"beta"`, fetch `/releases?per_page=10` (unauthenticated GET), iterate over non-draft releases,
+   parse tags via PEP 440, and select the highest version string that is newer than `current_version`.
+3. For `"stable"`, stick to the simple `/releases/latest` GET (saves API rate limit).
+
+Verify this in `tests/test_update_service.py` by mocking the API responses for the releases list
+under beta settings.
 
 ---
 
@@ -541,17 +680,20 @@ imports a removed symbol" (verify with `git grep "apply_update_and_restart\|appl
 
 ### 2.1 Goal
 
-Provide a one-click external updater the user runs deliberately after closing the app. It queries
-GitHub Releases, downloads the zip + sidecar, verifies SHA256, stops the running `Sky-Player.exe`
-(if any), extracts over the install dir, and exits. It does NOT relaunch the app (see O3).
+Provide a one-click external updater the user runs deliberately after closing the app. It
+queries GitHub Releases, downloads the zip + sidecar, verifies SHA256, **refuses if the app
+is still running** (unless `-ForceClose` is set and matching installation path), extracts into a **temp staging dir**,
+verifies write access, and copies into the install root using a **transactional backup-and-rollback copy routine** while
+**completely preserving `config.json` and skipping `songs/`** (I16, I20, I21, I22).
+It does **NOT** relaunch the app by default (O3).
 
 ### 2.2 License & port-from-mpv audit (BEFORE writing any code)
 
 1. Open a browser and read `https://github.com/mpv-player/mpv/blob/master/installer/mpv-updater.bat`
    and `installer/mpv-install.bat`. Identify the license header on each file.
 2. **Do NOT verbatim copy** any non-trivial block from those files. Use them as a structural
-   reference (argv parsing, error colouring, ensure_admin idiom), then write Sky-Player-specific
-   PowerShell from scratch.
+   reference (argv parsing, error colouring), then write Sky-Player-specific PowerShell from
+   scratch.
 3. If a single line or argument-name is reused verbatim from mpv, it must carry mpv's license
    header at the top of `installer/updater.ps1` (ISC or GPL-2.0+ attribution, whichever mpv uses
    for that specific file). Default: write fresh code; do not copy.
@@ -563,155 +705,236 @@ GitHub Releases, downloads the zip + sidecar, verifies SHA256, stops the running
 
 - `installer/updater.ps1` (new).
 - `updater.bat` (new, at repo root — copied to `dist/<release>/` by Phase 3).
+- `installer/updater.Tests.ps1` (new, optional but recommended) — Pester test file
+  parameterized with `$env:SKY_UPDATER_FAKE_ROOT`. Turns the §2.9 smoke contract into a
+  repeatable check. Not a Python dep, so does not violate I7. Pester 5.x runs on `pwsh`. If CI
+  cost is a concern, leave it as a local-only gate alongside PSScriptAnalyzer (§2.10).
 - `installer/settings.xml` is **NOT** used. Settings live in `config.json` per I9.
 
 ### 2.4 `updater.bat` (repo root, ~12 lines)
 
-Mirrors the shape of mpv's `updater.bat` but trimmed. The `.bat` only forwards to the `.ps1`
-with execution policy bypass; it does NOT contain logic.
+The `.bat` only forwards to the `.ps1` with execution policy bypass; it does NOT contain logic.
 
 ```bat
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
+rem Refuse to run from a git clone or anywhere that is not a real install folder.
+if not exist "%SCRIPT_DIR%Sky-Player.exe" (
+    echo [!] updater.bat must live next to Sky-Player.exe.
+    echo     Run it from the install folder, not a git clone.
+    exit /b 1
+)
 set "PS1=%SCRIPT_DIR%installer\updater.ps1"
 if not exist "%PS1%" (
     echo [!] Missing: %PS1%
     exit /b 1
 )
+set "PS_CMD=powershell"
 where pwsh >nul 2>nul
-if %errorlevel%==0 (
-    pwsh -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
-) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
-)
+if %errorlevel%==0 set "PS_CMD=pwsh"
+
+%PS_CMD% -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 exit /b %errorlevel%
 ```
 
 Notes:
-- `%*` forwards argv. Currently no args; Phase 7 may add `-Channel beta` for testing.
-- Do NOT `start ""` the powershell — wait for it so `%errorlevel%` propagates.
-- The file is saved with CRLF line endings.
+- `%*` forwards argv (`-Channel`, `-DryRun`, `-ForceClose`, `-Restart`).
+- Do NOT `start ""` the powershell — wait so `%errorlevel%` propagates.
+- CRLF line endings.
 
-### 2.5 `installer/updater.ps1` — full structure
+### 2.5 Preserve-list and apply algorithm (normative — implement exactly)
 
-Below is the structural skeleton the agent must implement. **Every block has a comment
-explaining why** — the agent should keep those comments; they are the only audit trail a
-reviewer has for the script's behaviour.
+**Preserve-list (never replace or touch user data/configurations during update):**
+
+| Path | Rule |
+|------|------|
+| `config.json` | Never replace from zip. After copy, patch only `update.last_check_ts` (Unix int) and `update.last_notified_version` (string) if update succeeds. |
+| `songs/` (recursive) | Never copy from zip. The updater completely skips the `songs/` directory during updates. |
+| `.cache/` (if present) | Leave alone (do not delete; do not require it from zip). |
+
+**Replace-list (copy from staging):** everything else in the release layout, including
+`Sky-Player.exe`, `_internal/`, `updater.bat`, `installer/`, `MANIFEST.json`, `README.md`.
+
+**Apply order (I17, I20, I21):**
+
+1. Resolve `$InstallRoot` (parent of `installer\`).
+2. Set up TLS 1.2 and 1.3 settings.
+3. Test write access to `$InstallRoot`. If denied, abort immediately with exit code 5 and instruct the user to run as Admin.
+4. Read channel from CLI or `config.json` (`update.channel`, default `stable`).
+5. Query GitHub; pick candidate; compare versions.
+6. If not newer → exit 0.
+7. Validate asset names + **HTTPS URL allow-list** (I4); download zip + `.sha256` to temp.
+8. Verify SHA256; on mismatch → exit 3 **before any install mutation**.
+9. If `-DryRun` → print and exit 0 (no mutation).
+10. If `Sky-Player` process is running:
+    - Check if any running process's path matches `$ExePath`.
+    - If a matching path process exists and `-ForceClose` is NOT set: print + log, **exit 4**.
+    - If `-ForceClose` is set: terminate the target process, sleep 2s, and check again. If still locked → exit 4.
+11. `Expand-Archive` zip into `$env:TEMP\sky-update-<guid>\extract\` (never onto `$InstallRoot`).
+    Normalize nested folder: if extract has no `Sky-Player.exe` at root but a single child dir
+    contains it, use that child as `$StagingRoot`.
+12. Back up all files in `$InstallRoot` that are scheduled for replacement into `%TEMP%\sky-backup-<guid>`.
+13. Copy files from `$StagingRoot` to `$InstallRoot` using the transactional merge routine:
+    - Skip copying `config.json` if it already exists.
+    - Skip copying any file or directory under `songs/` entirely.
+    - If a file copy fails midway, catch the exception, restore files from the backup directory, clean up any new files, and exit 5.
+14. Patch `config.json` allowed fields only (`last_check_ts` int, `last_notified_version`). Ensure insertion works even if the keys are absent.
+15. Log + print DONE; delete temp files/backups; exit 0. **No relaunch by default** (O3). Only if `-Restart`
+    was passed: `Start-Process Sky-Player.exe -WorkingDirectory $InstallRoot` after exit.
+
+### 2.6 `installer/updater.ps1` — structural skeleton
+
+Agent implements this structure. Keep the behavioural comments. PS 5.1-compatible only.
 
 ```powershell
 # License: GPL-3.0 (Sky Player project). No code ported from mpv; structural reference only.
 # Sky Player external updater. See docs/2026-07-18_distribution-mpv-pattern-plan.md §Phase 2.
 #
 # Behaviour contract:
-#   1. Reads channel + last_check_utc + last_notified_version from config.json next to the .exe.
-#   2. Queries GitHub Releases for the relevant channel (stable | beta).
-#   3. Compares the candidate version to the running build's _version.py.
-#   4. Same-or-older  -> prints "Already up to date" and exits 0.
-#   5. Newer         -> downloads Sky-Player-v<ver>.zip and Sky-Player-v<ver>.zip.sha256.
-#   6. Verifies the zip's SHA256 against the sidecar; mismatches abort before any file mutation.
-#   7. Stops Sky-Player.exe (force). Honours the rule: app must be closed before file replacement.
-#   8. Extracts the zip over the install directory (Expand-Archive).
-#   9. Updates config.json: last_check_utc, last_notified_version.
-#  10. Writes a single log line to %LOCALAPPDATA%\Sky-Player\updater.log (see §2.7).
-#  11. Prints DONE. Does NOT relaunch Sky-Player.exe. (See plan O3.)
+#   1. Set TLS 1.2/1.3 protocol bindings.
+#   2. Verify write access to install root.
+#   3. Read channel from -Channel or config.json update.channel (default stable).
+#   4. Query GitHub Releases for that channel.
+#   5. Compare candidate to running version (MANIFEST.json, else ProductVersion).
+#   6. Same-or-older -> "Already up to date", exit 0.
+#   7. Newer -> download zip + .sha256 (HTTPS allow-list only).
+#   8. Verify SHA256; mismatch aborts before any install mutation.
+#   9. If Sky-Player.exe is running from this folder: exit 4 unless -ForceClose.
+#  10. Expand-Archive to TEMP staging.
+#  11. Back up existing replaceable files.
+#  12. Copy staging -> install, preserving config.json and completely skipping songs/.
+#  13. On copy failure, roll back all backup files and clean up.
+#  14. Patch update.last_check_ts (Unix int) + update.last_notified_version (handles missing keys).
+#  15. Log one line; print DONE; do NOT relaunch unless -Restart (O3).
 #
-# Failure modes:
-#   - HTTP / DNS error      -> print + log, exit 2.
-#   - SHA256 mismatch       -> print + log, exit 3.
-#   - Sky-Player.exe locked -> print + log, exit 4 (suggest closing Sky Player).
-#   - Expand-Archive error -> print + log, exit 5.
+# Exit codes: 0 ok, 2 network/asset, 3 sha256, 4 process lock, 5 permission/extract/copy.
 
 [CmdletBinding()]
 param(
     [ValidateSet('stable','beta')]
     [string]$Channel,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$ForceClose,
+    [switch]$Restart
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
-# --- Paths ---
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path           # installer\
-$InstallRoot = Split-Path -Parent $ScriptDir                            # dist\<release>\
+# --- TLS Initialization (PS 5.1 compatibility) ---
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    } catch {
+        Write-Warning "Failed to explicitly set TLS 1.2 or TLS 1.3. Connection to GitHub may fail."
+    }
+}
+
+# Smoke-test hook: when set, API/asset base (http://localhost:...). Production: unset.
+$FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
+
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$InstallRoot = Split-Path -Parent $ScriptDir
 $ExePath     = Join-Path $InstallRoot 'Sky-Player.exe'
 $ConfigPath  = Join-Path $InstallRoot 'config.json'
 
-# --- Logging (§2.7) ---
 $LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Player'
 $LogFile = Join-Path $LogDir 'updater.log'
 function Write-Log([string]$msg) {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-    $line = "[{0:u}] {1}" -f (Get-Date), $msg
+    $line = '[{0:u}] {1}' -f (Get-Date).ToUniversalTime(), $msg
     try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {}
 }
 
-# --- Config.json read/write (only the update.* block) ---
-# The script must NOT touch any field outside update.* to avoid clobbering the user's profiles.
-function Read-UpdateConfig {
-    if (-not (Test-Path $ConfigPath)) { return $null }
+function Assert-HttpsUrl([string]$Url) {
+    if ($FakeRoot -and $Url.StartsWith($FakeRoot)) {
+        if ($Url -notmatch '^https?://(localhost|127\.0\.0\.1)(:\d+)?/') {
+            throw "Fake root must be localhost: $Url"
+        }
+        return
+    }
+    if ($Url -notmatch '^https://') {
+        throw "Refusing non-HTTPS URL: $Url"
+    }
+    $okHosts = @(
+        'api.github.com',
+        'github.com',
+        'objects.githubusercontent.com',
+        'release-assets.githubusercontent.com'
+    )
+    $uri = [Uri]$Url
+    if ($okHosts -notcontains $uri.Host) {
+        throw "Refusing URL host not on allow-list: $($uri.Host)"
+    }
+}
+
+function Test-WriteAccess([string]$Path) {
+    $tempFile = Join-Path $Path (".write-test-" + [guid]::NewGuid().ToString('N'))
     try {
-        $raw = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
-        return $raw.update
+        [System.IO.File]::WriteAllText($tempFile, "test")
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Read-ConfigObject {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $null }
+    try {
+        return (Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json)
     } catch { return $null }
 }
-function Write-UpdateConfigField([string]$key, [string]$value) {
-    # Load full json, mutate only update.$key, write back. Preserves all other fields.
-    if (-not (Test-Path $ConfigPath)) { return }
-    $raw = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
-    if (-not $raw.update) { $raw | Add-Member -NotePropertyName update -NotePropertyValue (New-Object PSObject) }
-    $raw.update | Add-Member -NotePropertyName $key -NotePropertyValue $value -Force
-    $raw | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+
+function Write-UpdateFields {
+    param(
+        [int]$LastCheckTs,
+        [string]$LastNotifiedVersion
+    )
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return }
+    $text = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8
+
+    # Patch last_check_ts, insert it inside "update" object if missing
+    if ($text -match '"last_check_ts"\s*:\s*\d+') {
+        $text = $text -replace '"last_check_ts"\s*:\s*\d+', "`"last_check_ts`": $LastCheckTs"
+    } else {
+        $text = $text -replace '("update"\s*:\s*\{\s*)', "`$1`n        `"last_check_ts`": $LastCheckTs,"
+    }
+
+    # Patch last_notified_version, insert it inside "update" object if missing
+    if ($text -match '"last_notified_version"\s*:\s*"[^"]*"') {
+        $text = $text -replace '"last_notified_version"\s*:\s*"[^"]*"', "`"last_notified_version`": `"$LastNotifiedVersion`""
+    } else {
+        $text = $text -replace '("update"\s*:\s*\{\s*)', "`$1`n        `"last_notified_version`": `"$LastNotifiedVersion`","
+    }
+
+    [System.IO.File]::WriteAllText($ConfigPath, $text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# --- Channel decision ---
-$updateCfg = Read-UpdateConfig
-$ch = if ($Channel) { $Channel } elseif ($updateCfg -and $updateCfg.channel) { $updateCfg.channel } else { 'stable' }
-
-# --- Version comparison ---
 function Get-RunningVersion {
-    # Prefer MANIFEST.json (audit-grade); fall back to exe VersionInfo if MANIFEST is missing.
     $manifest = Join-Path $InstallRoot 'MANIFEST.json'
-    if (Test-Path $manifest) {
+    if (Test-Path -LiteralPath $manifest) {
         try {
-            $m = Get-Content -Raw $manifest | ConvertFrom-Json
-            return $m.version
+            $m = Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json
+            if ($m.version) { return [string]$m.version }
         } catch {}
     }
-    $vi = (Get-Item $ExePath -ErrorAction SilentlyContinue).VersionInfo
-    if ($vi -and $vi.ProductVersion) { return $vi.ProductVersion }
+    $vi = (Get-Item -LiteralPath $ExePath -ErrorAction SilentlyContinue).VersionInfo
+    if ($vi -and $vi.ProductVersion) { return [string]$vi.ProductVersion }
     return '0.0.0'
 }
-$runningVersion = Get-RunningVersion
 
-# --- GitHub query ---
-$owner = 'pumni'
-$repo  = 'Sky-Player'
-$apiBase = "https://api.github.com/repos/$owner/$repo/releases"
-if ($ch -eq 'beta') {
-    $releases = Invoke-RestMethod -Uri $apiBase -Headers @{ 'User-Agent' = 'sky-player-updater' } -TimeoutSec 10
-    $candidate = $releases | Where-Object { $_.prerelease } | Select-Object -First 1
-} else {
-    $candidate = Invoke-RestMethod -Uri "$apiBase/latest" -Headers @{ 'User-Agent' = 'sky-player-updater' } -TimeoutSec 10
-}
-if (-not $candidate) {
-    Write-Log "no release found for channel $ch"
-    Write-Host "No release found for channel '$ch'."
-    exit 2
-}
-$tagRaw = $candidate.tag_name
-if ($tagRaw -match '^v?(.+)$') { $latestVersion = $matches[1] } else { $latestVersion = $tagRaw }
-
-# semver compare: split on dots, compare integer-wise. Pre-release suffix is compared lexically.
 function Compare-Version([string]$a, [string]$b) {
-    # returns +1 if a > b, -1 if a < b, 0 if equal. Naive but sufficient for Sky Player's
-    # 3-part semver tags. Beta channel pre-release suffixes are compared lexically AFTER the
-    # numeric tuple; e.g. 2.4.0-rc1 < 2.4.0.
-    $av = ($a -split '[-+]')[0]
-    $bv = ($b -split '[-+]')[0]
-    $ax = $av -split '.' | ForEach-Object { [int]$_ }
-    $bx = $bv -split '.' | ForEach-Object { [int]$_ }
-    for ($i = 0; $i -lt [Math]::Max($ax.Count, $bx.Count); $i++) {
+    # +1 if a>b, -1 if a<b, 0 if equal. MUST use -split '\.' (literal dot) — G14.
+    $av = ($a -split '[-+]', 2)[0]
+    $bv = ($b -split '[-+]', 2)[0]
+    $ax = @($av -split '\.' | ForEach-Object { [int]$_ })
+    $bx = @($bv -split '\.' | ForEach-Object { [int]$_ })
+    $n = [Math]::Max($ax.Count, $bx.Count)
+    for ($i = 0; $i -lt $n; $i++) {
         $aa = if ($i -lt $ax.Count) { $ax[$i] } else { 0 }
         $bb = if ($i -lt $bx.Count) { $bx[$i] } else { 0 }
         if ($aa -gt $bb) { return 1 }
@@ -725,6 +948,159 @@ function Compare-Version([string]$a, [string]$b) {
     return 0
 }
 
+function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
+    $copiedFiles = @()
+    $backedUpFiles = @()
+    $backupDir = Join-Path $env:TEMP ('sky-backup-' + [guid]::NewGuid().ToString('N'))
+
+    try {
+        $filesToCopy = Get-ChildItem -LiteralPath $StagingRoot -Recurse -File
+        
+        # 1. Back up existing destination files that will be overwritten
+        foreach ($file in $filesToCopy) {
+            $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            $dest = Join-Path $DestRoot $rel
+            
+            # Skip copying config.json or songs/ files entirely
+            if ($rel -eq 'config.json' -or $rel -eq 'songs' -or $rel.StartsWith('songs/')) {
+                continue
+            }
+            
+            if (Test-Path -LiteralPath $dest) {
+                if (-not (Test-Path -LiteralPath $backupDir)) {
+                    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+                }
+                $relBackupPath = Join-Path $backupDir $rel
+                $relBackupDir = Split-Path -Parent $relBackupPath
+                if (-not (Test-Path -LiteralPath $relBackupDir)) {
+                    New-Item -ItemType Directory -Force -Path $relBackupDir | Out-Null
+                }
+                Copy-Item -LiteralPath $dest -Destination $relBackupPath -Force | Out-Null
+                $backedUpFiles += @{ Source = $dest; Backup = $relBackupPath }
+            }
+        }
+
+        # 2. Copy files from staging to target
+        foreach ($file in $filesToCopy) {
+            $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            $dest = Join-Path $DestRoot $rel
+            
+            if ($rel -eq 'config.json' -or $rel -eq 'songs' -or $rel.StartsWith('songs/')) {
+                continue
+            }
+            
+            $destDir = Split-Path -Parent $dest
+            if (-not (Test-Path -LiteralPath $destDir)) {
+                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            }
+            Copy-Item -LiteralPath $file.FullName -Destination $dest -Force | Out-Null
+            $copiedFiles += $dest
+        }
+
+        # Clean up backups on complete success
+        if (Test-Path -LiteralPath $backupDir) {
+            Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Log "Error during copy: $_. Rolling back..."
+        Write-Host "Copy failed: $_. Rolling back files to pre-update state..."
+        
+        # Restore backed up original files
+        foreach ($backup in $backedUpFiles) {
+            try {
+                Copy-Item -LiteralPath $backup.Backup -Destination $backup.Source -Force | Out-Null
+            } catch {
+                Write-Log "Failed to restore backup for $($backup.Source): $_"
+            }
+        }
+        
+        # Clean up newly copied files
+        foreach ($copied in $copiedFiles) {
+            $wasBackup = $false
+            foreach ($backup in $backedUpFiles) {
+                if ($backup.Source -eq $copied) {
+                    $wasBackup = $true
+                    break
+                }
+            }
+            if (-not $wasBackup) {
+                Remove-Item -LiteralPath $copied -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+        }
+        
+        if (Test-Path -LiteralPath $backupDir) {
+            Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
+        }
+        throw $_
+    }
+}
+
+# --- Check Write Permissions ---
+if (-not (Test-WriteAccess $InstallRoot)) {
+    Write-Log "write access denied to $InstallRoot"
+    Write-Host "Error: Write access is denied for the directory: $InstallRoot"
+    Write-Host "Please close the application and run updater.bat as Administrator."
+    exit 5
+}
+
+# --- Channel ---
+$cfgObj = Read-ConfigObject
+$updateCfg = if ($cfgObj) { $cfgObj.update } else { $null }
+$ch = if ($Channel) {
+    $Channel
+} elseif ($updateCfg -and $updateCfg.channel) {
+    [string]$updateCfg.channel
+} else {
+    'stable'
+}
+if ($ch -ne 'stable' -and $ch -ne 'beta') { $ch = 'stable' }
+
+$runningVersion = Get-RunningVersion
+
+# --- GitHub / fake root ---
+$owner = 'pumni'
+$repo  = 'Sky-Player'
+$headers = @{ 'User-Agent' = 'sky-player-updater'; 'Accept' = 'application/vnd.github.v3+json' }
+
+try {
+    if ($FakeRoot) {
+        $metaUrl = ($FakeRoot.TrimEnd('/') + '/release.json')
+        Assert-HttpsUrl $metaUrl
+        $candidate = Invoke-RestMethod -Uri $metaUrl -TimeoutSec 10
+    } elseif ($ch -eq 'beta') {
+        $apiBase = "https://api.github.com/repos/$owner/$repo/releases"
+        Assert-HttpsUrl $apiBase
+        $releases = Invoke-RestMethod -Uri $apiBase -Headers $headers -TimeoutSec 10
+        # Iterate and pick the newest by Compare-Version
+        $candidate = $null
+        $best = $null
+        foreach ($r in ($releases | Where-Object { -not $_.draft })) {
+            $rt = [string]$r.tag_name; if ($rt -match '^v?(.+)$') { $rt = $Matches[1] }
+            if (-not $best) { $best = $r; continue }
+            $bt = [string]$best.tag_name; if ($bt -match '^v?(.+)$') { $bt = $Matches[1] }
+            if ((Compare-Version $rt $bt) -gt 0) { $best = $r }
+        }
+        $candidate = $best
+    } else {
+        $apiLatest = "https://api.github.com/repos/$owner/$repo/releases/latest"
+        Assert-HttpsUrl $apiLatest
+        $candidate = Invoke-RestMethod -Uri $apiLatest -Headers $headers -TimeoutSec 10
+    }
+} catch {
+    Write-Log "network error: $_"
+    Write-Host "Network error: $_"
+    exit 2
+}
+
+if (-not $candidate) {
+    Write-Log "no release found for channel $ch"
+    Write-Host "No release found for channel '$ch'."
+    exit 2
+}
+
+$tagRaw = [string]$candidate.tag_name
+if ($tagRaw -match '^v?(.+)$') { $latestVersion = $Matches[1] } else { $latestVersion = $tagRaw }
+
 if ((Compare-Version $latestVersion $runningVersion) -le 0) {
     Write-Log "already up to date (running=$runningVersion latest=$latestVersion)"
     Write-Host "You are already using the latest version ($runningVersion)."
@@ -732,155 +1108,258 @@ if ((Compare-Version $latestVersion $runningVersion) -le 0) {
 }
 
 # --- Asset selection ---
-$zipAsset = $candidate.assets | Where-Object { $_.name -match ('^Sky-Player-v' + [regex]::Escape($latestVersion) + '\.zip$') }  | Select-Object -First 1
-$shaAsset = $candidate.assets | Where-Object { $_.name -match ('^Sky-Player-v' + [regex]::Escape($latestVersion) + '\.zip\.sha256$') } | Select-Object -First 1
-if (-not $zipAsset -or -not $shaAsset) {
-    Write-Log "missing zip or sha256 asset for $latestVersion"
-    Write-Host "Release v$latestVersion is missing the zip or sha256 sidecar. Aborting."
-    exit 2
+$zipName = "Sky-Player-v$latestVersion.zip"
+$shaName = "Sky-Player-v$latestVersion.zip.sha256"
+if ($FakeRoot) {
+    $zipUrl = ($FakeRoot.TrimEnd('/') + '/' + $zipName)
+    $shaUrl = ($FakeRoot.TrimEnd('/') + '/' + $shaName)
+    Assert-HttpsUrl $zipUrl
+    Assert-HttpsUrl $shaUrl
+} else {
+    $zipAsset = $candidate.assets | Where-Object { $_.name -eq $zipName } | Select-Object -First 1
+    $shaAsset = $candidate.assets | Where-Object { $_.name -eq $shaName } | Select-Object -First 1
+    if (-not $zipAsset -or -not $shaAsset) {
+        Write-Log "missing zip or sha256 asset for $latestVersion"
+        Write-Host "Release v$latestVersion is missing the zip or sha256 sidecar. Aborting."
+        exit 2
+    }
+    $zipUrl = [string]$zipAsset.browser_download_url
+    $shaUrl = [string]$shaAsset.browser_download_url
+    Assert-HttpsUrl $zipUrl
+    Assert-HttpsUrl $shaUrl
 }
 
-# --- Download ---
-$tmpDir = Join-Path $env:TEMP ("sky-update-" + [guid]::NewGuid().ToString('N'))
+$tmpDir = Join-Path $env:TEMP ('sky-update-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-$zipPath = Join-Path $tmpDir $zipAsset.name
-$shaPath = Join-Path $tmpDir $shaAsset.name
+$zipPath = Join-Path $tmpDir $zipName
+$shaPath = Join-Path $tmpDir $shaName
+$extractDir = Join-Path $tmpDir 'extract'
+New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+
 try {
-    Invoke-WebRequest -Uri $zipAsset.browser_download_url -OutFile $zipPath  -UseBasicParsing
-    Invoke-WebRequest -Uri $shaAsset.browser_download_url -OutFile $shaPath -UseBasicParsing
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath -UseBasicParsing
 } catch {
     Write-Log "download failed: $_"
     Write-Host "Download failed: $_"
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 2
 }
 
-# --- SHA256 verify ---
-$sidecarText = Get-Content -Raw $shaPath
+$sidecarText = Get-Content -Raw -LiteralPath $shaPath
 $expected = $null
-if ($sidecarText -match '([0-9a-fA-F]{64})') { $expected = $matches[1].ToLower() }
+if ($sidecarText -match '([0-9a-fA-F]{64})') { $expected = $Matches[1].ToLower() }
 if (-not $expected) {
-    Write-Log "sidecar unparseable"
-    Write-Host "SHA256 sidecar could not be parsed. Aborting before any file mutation."
+    Write-Log 'sidecar unparseable'
+    Write-Host 'SHA256 sidecar could not be parsed. Aborting before any file mutation.'
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 3
 }
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLower()
 if ($actual -ne $expected) {
     Write-Log "sha256 mismatch: expected=$expected actual=$actual"
-    Write-Host "SHA256 mismatch. Aborting before any file mutation."
+    Write-Host 'SHA256 mismatch. Aborting before any file mutation.'
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 3
 }
 
 if ($DryRun) {
     Write-Host "DryRun passed: would update $runningVersion -> $latestVersion"
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 0
 }
 
-# --- Stop running Sky-Player.exe ---
-$proc = Get-Process -Name 'Sky-Player' -ErrorAction SilentlyContinue
-if ($proc) {
-    Write-Host "Stopping Sky-Player.exe..."
-    $proc | Stop-Process -Force
-    Start-Sleep -Seconds 2   # let OS release file handles
+# --- Process gate (G19) ---
+$runningProcesses = Get-Process -Name 'Sky-Player' -ErrorAction SilentlyContinue
+$targetProcess = $null
+if ($runningProcesses) {
+    foreach ($p in $runningProcesses) {
+        try {
+            if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
+                $targetProcess = $p
+                break
+            }
+        } catch {}
+    }
 }
 
-# --- Extract over install root (in-place replacement) ---
-# Expand-Archive -Force overlays existing files. Sky Player has no per-user files in the install
-# dir (user data is config.json + songs/, both shipped at build time and overwritten by
-# identical content). If the user has customised songs/, the user is responsible for backing up
-# before running updater.bat — document this in README §Phase 8.
+if ($targetProcess) {
+    if (-not $ForceClose) {
+        Write-Log 'Sky-Player.exe still running; refuse update'
+        Write-Host 'Sky-Player.exe is still running in this directory. Close it, then re-run updater.bat.'
+        Write-Host '(Advanced: updater.bat -ForceClose)'
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        exit 4
+    }
+    Write-Host 'Stopping Sky-Player.exe (-ForceClose)...'
+    $targetProcess | Stop-Process -Force
+    Start-Sleep -Seconds 2
+    
+    $runningAgain = Get-Process -Name 'Sky-Player' -ErrorAction SilentlyContinue
+    $stillRunning = $false
+    if ($runningAgain) {
+        foreach ($p in $runningAgain) {
+            try {
+                if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
+                    $stillRunning = $true
+                    break
+                }
+            } catch {}
+        }
+    }
+    if ($stillRunning) {
+        Write-Log 'Sky-Player.exe still locked after ForceClose'
+        Write-Host 'Could not stop Sky-Player.exe. Aborting.'
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        exit 4
+    }
+}
+
+# --- Stage extract (never onto install root) ---
 try {
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $InstallRoot -Force
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractDir)
 } catch {
-    Write-Log "extract failed: $_"
-    Write-Host "Extract failed: $_"
+    try {
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
+    } catch {
+        Write-Log "extract failed: $_"
+        Write-Host "Extract failed: $_"
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        exit 5
+    }
+}
+
+$StagingRoot = $extractDir
+$exeInExtract = Join-Path $extractDir 'Sky-Player.exe'
+if (-not (Test-Path -LiteralPath $exeInExtract)) {
+    $child = Get-ChildItem -LiteralPath $extractDir -Directory | Select-Object -First 1
+    if ($child -and (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Player.exe'))) {
+        $StagingRoot = $child.FullName
+    } else {
+        Write-Log 'staging layout missing Sky-Player.exe'
+        Write-Host "Update zip layout is unexpected (no Sky-Player.exe). Aborting."
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        exit 5
+    }
+}
+
+# --- Copy with transactional fallback (I16, I21, I22) ---
+try {
+    Copy-UpdateTree -StagingRoot $StagingRoot -DestRoot $InstallRoot
+} catch {
+    Write-Log "copy failed: $_"
+    Write-Host "Copy into install dir failed: $_. User config.json and songs directory were restored. Re-run after resolving the issue."
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 5
 }
 
-# --- Persist config.json updates ---
-Write-UpdateConfigField 'last_check_utc'        (Get-Date -Format 'u')
-Write-UpdateConfigField 'last_notified_version' $latestVersion
+# Unix epoch seconds as int (matches Python last_check_ts)
+$epoch = [int][double]::Parse(
+    (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s),
+    [System.Globalization.CultureInfo]::InvariantCulture
+)
+try {
+    Write-UpdateFields -LastCheckTs $epoch -LastNotifiedVersion $latestVersion
+} catch {
+    Write-Log "config patch failed: $_"
+    Write-Host "Warning: updated binaries but failed to patch config.json: $_"
+}
 
-# --- Done ---
 Write-Log "updated $runningVersion -> $latestVersion"
-Write-Host "DONE: updated to v$latestVersion. Reopen Sky-Player.exe to start the new version."
+Write-Host "DONE: updated to v$latestVersion."
+if ($Restart) {
+    Write-Host "Starting Sky-Player.exe (-Restart)..."
+    try {
+        Start-Process -FilePath $ExePath -WorkingDirectory $InstallRoot
+    } catch {
+        Write-Log "restart failed: $_"
+        Write-Host "Restart failed (binaries updated successfully). Reopen Sky-Player.exe manually."
+    }
+} else {
+    Write-Host "Reopen Sky-Player.exe to start the new version."
+}
 Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 exit 0
 ```
 
-### 2.6 Critical implementation notes (read before implementing)
+### 2.7 Critical implementation notes
 
-- **Path resolution**: `Split-Path -Parent $MyInvocation.MyCommand.Path` works for `pwsh -File`.
-  Do NOT use `$PSScriptRoot` alone — it differs between PowerShell 5.1 and 7 when invoked via
-  `.bat`. Always test on BOTH `pwsh` and `powershell.exe` (Windows PowerShell 5.1, the fallback
-  in `updater.bat`).
-- **PS 5.1 fallback**: `powershell.exe` is Windows PowerShell 5.1. It does NOT support
-  `ConvertFrom-Json -AsHashtable`, `??`, `?:` ternary, or `$x ?? $y`. The skeleton above uses
-  only PS 5.1-compatible constructs (PSCustomObject mutation via `Add-Member`, `if/else`
-  equivalents). Verify by manually running `updater.bat` against a fake release on a system
-  where `pwsh` is NOT in PATH (forces the 5.1 fallback path in `updater.bat`).
-- **`Expand-Archive`** is gentle about overwrite only with `-Force`. Double-check the Sky
-  Player dist layout produced by `Sky-Player.spec` (onedir) matches the zip layout produced by
-  the release workflow (Phase 6). The zip must be created by zipping the *contents* of
-  `dist/<release>/`, NOT the parent folder — otherwise the extract would create
-  `dist/<release>/Sky-Player-v<ver>/...` (a nested folder). Phase 6 must produce the zip
-  accordingly; Phase 2 must assume it.
-- **Version comparison** is intentionally simpler than PEP 440; Sky Player tags are 3-part
-  semver plus optional `-rcN` / `-betaN`. The `Compare-Version` helper above handles those. If
-  the running build's version string is unparseable, default to `"0.0.0"` so the updater
-  always offers to install — fail-safe toward updating, never toward "stuck on old".
-- **Channel from CLI overrides config**. If the user runs `updater.bat -Channel beta`, the
-  beta channel is queried even if `config.json` says `stable`. Do NOT persist the `-Channel`
-  override back to `config.json`; that would surprise the user.
-- **Do NOT call `Sky-Player.exe` from this script after extract** (see O3). The DONE message
-  instructs the user to reopen.
-- **No `SendInput`** (see I2). No `keys`, no `Start-Process Sky-Player.exe`. Pure file ops.
-- **HTTPS only**. `Invoke-RestMethod` / `Invoke-WebRequest` enforce HTTPS by default; do not
-  set any `-Allow*Insecure*` flag.
-- **No registry writes**. Phase 4 owns registry; Phase 2 does not touch HKLM/HKCU.
-- **PS Windows-only**: the script may use `$env:LOCALAPPDATA`, `Get-Process`, `Stop-Process`,
-  `Expand-Archive`. All are Windows-only. Do not wrap in `$IsWindows` checks (per O5).
+- **Path resolution**: use `Split-Path -Parent $MyInvocation.MyCommand.Path` (not `$PSScriptRoot`
+  alone). Test on **both** `pwsh` and Windows PowerShell 5.1.
+- **PS 5.1**: no `??`, no `ConvertFrom-Json -AsHashtable`, no ternary. Skeleton is 5.1-safe.
+- **Zip layout**: Phase 6 zips *contents* of `dist/<release>/` (`Compress-Archive -Path
+  (Join-Path $rel '*')`). Staging normalizes a nested folder if present.
+- **`-split '\.'`**: mandatory (G14). Never `-split '.'`.
+- **Config keys**: only `last_check_ts` (int) and `last_notified_version` (string). Never
+  `last_check_utc` (G13).
+- **Preserve-list**: `config.json`, `songs/` — hard invariant I16 / D11. The `songs/` folder
+  is completely ignored.
+- **No live `Expand-Archive` onto install root** (G12).
+- **Process gate**: refuse by default; `-ForceClose` optional, path-matched (G19).
+- **Channel CLI** overrides config for one run; do not persist `-Channel`.
+- **No relaunch** (O3). No `SendInput` (I2). No registry (Phase 4).
+- **HTTPS allow-list** before download (I4). `SKY_UPDATER_FAKE_ROOT` may be
+  `http://localhost` for smoke only (production paths stay HTTPS).
+- **Does not call Python** `extract_zip` / `stage_update`. PS is self-contained.
 
-### 2.7 Updater log file
+### 2.8 Updater log file
 
-`%LOCALAPPDATA%\Sky-Player\updater.log`. Append-only; do not rotate (small). Each line:
-`[2026-07-18T12:00:00Z] updated 2.3.4 -> 2.4.0`. PII-free. Documented in README Phase 8.
+`%LOCALAPPDATA%\Sky-Player\updater.log`. Append-only; no rotation. Example line:
+`[2026-07-18 12:00:00Z] updated 2.3.4 -> 2.4.0`. PII-free.
 
-### 2.8 Phase 2 fake-release smoke test (manual, the gate)
+### 2.9 Phase 2 fake-release smoke test (manual gate, includes D11)
 
-1. Run `uv run python src/simulate_update.py --scenario all` to confirm Phase 1 trimmed
-   simulate_update still works.
-2. Build a fake release locally:
+1. `uv run python src/simulate_update.py --scenario all` (Phase 1 still green).
+2. Build + stage fake assets:
    ```powershell
    uv run --env-file .env python -m build_app --manifest
-   Compress-Archive -Path (Get-ChildItem "dist\Sky-Player-v2.3.4") `
-                    -DestinationPath "$env:TEMP\fake-rel\Sky-Player-v9.9.9.zip" -Force
+   $ver = (uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+   $rel = "dist\Sky-Player-v$ver"
+   # Plant unique user data that must survive update:
+   @'
+   {"theme":"aurora","update":{"auto_check":true,"channel":"stable","last_check_ts":1,"last_notified_version":"","skip_version":"","check_interval_s":86400,"last_error_ts":0},"_smoke_marker":"USER_CONFIG_V1"}
+   '@ | Set-Content -Path "$rel\config.json" -Encoding UTF8
+   New-Item -ItemType Directory -Force -Path "$rel\songs\_smoke_user" | Out-Null
+   Set-Content -Path "$rel\songs\_smoke_user\marker.txt" -Value 'USER_SONG_V1' -Encoding UTF8
+   $songBefore = Get-FileHash "$rel\songs\_smoke_user\marker.txt"
+   
+   # Plant a staging zip that includes changes in staging's songs/
+   New-Item -ItemType Directory -Force -Path "$env:TEMP\fake-rel" | Out-Null
+   $stageDir = "$env:TEMP\fake-stage"
+   New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+   Copy-Item -Path "$rel\*" -Destination $stageDir -Recurse -Force
+   
+   # Staging has changes inside its songs/ folder
+   Set-Content -Path "$stageDir\songs\_smoke_user\new_default.txt" -Value 'STAGING_SONG_V2' -Encoding UTF8
+   Set-Content -Path "$stageDir\songs\_smoke_user\marker.txt" -Value 'STAGING_STOLEN_DATA' -Encoding UTF8
+
+   Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath "$env:TEMP\fake-rel\Sky-Player-v9.9.9.zip" -Force
    $h = (Get-FileHash -Algorithm SHA256 "$env:TEMP\fake-rel\Sky-Player-v9.9.9.zip").Hash
-   "$h  Sky-Player-v9.9.9.zip" | Set-Content "$env:TEMP\fake-rel\Sky-Player-v9.9.9.zip.sha256"
+   "$h  Sky-Player-v9.9.9.zip" | Set-Content "$env:TEMP\fake-rel\Sky-Player-v9.9.9.zip.sha256" -Encoding ASCII
+   '{"tag_name":"v9.9.9","draft":false,"prerelease":false,"assets":[]}' |
+     Set-Content "$env:TEMP\fake-rel\release.json" -Encoding UTF8
    ```
-3. Host the fake assets: `python -m http.server 18080 --directory $env:TEMP\fake-rel` in a
-   side terminal. Temporarily override `$apiBase` / asset URLs in `updater.ps1` via an env
-   var `SKY_UPDATER_FAKE_ROOT=http://localhost:18080` (add this read at the top of the script).
-   Do NOT commit the env-var-support patch as part of the released script — keep it commented
-   out, with a `# Fake-release smoke-test hook — Phase 2.8; do not enable in production.`
-   marker.
-4. Run `updater.bat -DryRun` against the fake release; expect "DryRun passed: would update
-   2.3.4 -> 9.9.9". Run again without `-DryRun`; expect "DONE: updated to v9.9.9".
-5. Verify the install dir now contains the (identical) Sky Player files and `config.json`'s
-   `update.last_notified_version` is `"9.9.9"`.
-6. Restore the original build dir from git if needed; commit nothing from the smoke test.
+3. Side terminal: `uv run python -m http.server 18080 --directory $env:TEMP\fake-rel`
+4. From `$rel` with `$env:SKY_UPDATER_FAKE_ROOT = 'http://localhost:18080'`:
+   - `.\updater.bat -DryRun` → would update `$ver -> 9.9.9`
+   - `.\updater.bat` → DONE
+5. **D11 checks:**
+   - `(Get-FileHash $rel\songs\_smoke_user\marker.txt).Hash -eq $songBefore.Hash` → True (User's custom song preserved)
+   - `Test-Path "$rel\songs\_smoke_user\new_default.txt"` → False (New staging default songs are completely ignored)
+   - `config.json` still contains `"_smoke_marker":"USER_CONFIG_V1"`
+   - `update.last_notified_version` is `"9.9.9"`
+   - `update.last_check_ts` is a **number**, not a date string
+6. With app running: expect exit 4 without `-ForceClose`.
+7. Clear `$env:SKY_UPDATER_FAKE_ROOT` and temporary folder variables; commit nothing from the smoke tree.
 
-### 2.9 Phase 2 gate
+### 2.10 Phase 2 gate
 
-- `updater.ps1` passes `Invoke-ScriptAnalyzer` with no Errors. Run:
-  ```powershell
-  pwsh -Command "Invoke-ScriptAnalyzer -Path installer\updater.ps1"
-  ```
-  If `PSScriptAnalyzer` is not installed, install it via
-  `Install-Module PSScriptAnalyzer -Scope CurrentUser` (a PowerShell module — NOT a Python
-  dep; does not violate I7).
-- Manual fake-release smoke test (§2.8) passes on BOTH `pwsh` (Windows PowerShell 7) and the
-  5.1 fallback (rename `pwsh.exe` in PATH or temporarily unset PATH to force `powershell.exe`).
-- `uv run ruff check .` stays green (Phase 2 adds no Python).
+- `Invoke-ScriptAnalyzer -Path installer\updater.ps1` → no Errors (install
+  `PSScriptAnalyzer` for CurrentUser if missing; not a Python dep).
+- §2.9 smoke green on **both** `pwsh` and Windows PowerShell 5.1 fallback.
+- D11 preserve and ignore checks green.
+- `uv run ruff check .` green (no Python in Phase 2).
 
 ---
 
@@ -919,7 +1398,7 @@ for asset in REQUIRED_UPDATER_ASSETS:
 ```
 
 Keep the existing `--manifest` flag (`build_app.py:224-229`) and `write_release_manifest`
-(`build_app.py:150-182`) untouched — the manifest writer's `rglob` already picks up
+`build_app.py:150-182` untouched — the manifest writer's `rglob` already picks up
 newly-copied files; verify by running with `--manifest` and inspecting `MANIFEST.json`.
 
 ### 3.4 Verify the manifest includes the updater files
@@ -960,6 +1439,13 @@ Then copy the dist somewhere safe and run `updater.bat -DryRun` against the *cur
 release; expect "Already up to date" or "would update 2.3.4 -> X" depending on whether a newer
 release exists. Either outcome is a green gate; any crash is a red gate.
 
+**Never pass `--skip-test` in Phase 3 or any release workflow.** `build_app` exposes
+`--skip-test` as a local debug hatch (see `AGENTS.md §Build Environment 4`), but skipping the
+selftest defeats the smoke-is-a-gate contract: a green build that did not run
+`--selftest-textual` says nothing about runtime breakage. `MANIFEST.json` is the audit trail
+for the `.zip` / `.sha256` asset pair (D5) — if the build is skipped, the manifest is
+untrustworthy.
+
 ### 3.8 IMPORTANT — do NOT extend `Sky-Player.spec` excludes
 
 `AGENTS.md §Build Environment 3` forbids extending the `excludes` list in
@@ -989,7 +1475,7 @@ The banner offers exactly three actions per D6: **`[O] Open Releases · [S] Skip
   `UpdateModal` shape (modals.py:291+) but **do not subclass `UpdateProgressModal`** — that
   class is gone (Phase 1). Subclass `PickerModal[str | None]` like the pre-existing
   `UpdateModal`. The `_options` method yields exactly three `PickerOption` entries:
-  `("github", "Open Releases page")`, `("skip", "Skip this version")`, and `("close", "Dismiss")
+  `("github", "Open Releases page")`, `("skip", "Skip this version")`, and `("close", "Dismiss")`
   — order matters for Tab navigation.
 - `src/sky_music/ui/textual_app/app.py` — replace `minimal_notify_update_available` (Phase 1 stub)
   with `_push_update_banner_modal(release)` that pushes the new modal. Replace the
@@ -1032,10 +1518,10 @@ The banner offers exactly three actions per D6: **`[O] Open Releases · [S] Skip
   `app.py:1266-1273` — keep that helper from Phase 1; the helper does not touch the apply
   path).
 
-### 5.4 Skip-this-version persisted semantics (already implemented; verify in Phase 5)
+### 5.4 Skip-this-version persisted semantics (verify in Phase 5)
 
-The `_handle_update_response` helper at `app.py:1255-1264` (Phase 1 trimmed it to two branches)
-is extended in Phase 5 to handle the three new responses: `"github"`, `"skip"`, `"close"`.
+Phase 1 **trimmed** `_handle_update_response` to `"skip"` + `"github"` (did **not** delete it —
+G15). Phase 5 extends it for banner responses: `"github"`, `"skip"`, `"close"`.
 `"skip"` calls `record_skip(self.cfg, release.latest_version)` (existing helper at
 `update_service.py:179-181`). `"close"` does NOT persist anything — the banner will resurface
 on next launch if `last_notified_version` is set and no auto-check has superseded it.
@@ -1091,6 +1577,11 @@ Trigger on tag `v*`. Build. Attest provenance. Create a GitHub Release with thre
   (`PULL_REQUEST_TEMPLATE.md:11`); no change required unless the existing checklist omits a line
   like `- [ ] uv run --env-file .env python -m build_app` — if it omits, add it. Default: do
   not touch the template.
+- `scripts/audit_security_mandates.py` and `scripts/audit_free_threaded_wheels.py` are
+  **invoked** by the workflow, NOT modified. Reviewers should not expect a diff to either
+  file in Phase 6. Both scripts already exist on disk (verified 2026-07-18). Phase 6 only adds
+  a workflow step that calls them with `--env-file .env`; if either script needs adjustment to
+  stay green under the post-Phase-1 tree, that adjustment belongs to Phase 1, not Phase 6.
 
 ### 6.3 The workflow file (structural skeleton the agent implements)
 
@@ -1105,6 +1596,8 @@ permissions:
   contents: write   # required for softprops/action-gh-release to upload assets + GitHub Attestations
   id-token: write   # required for actions/attest-build-provenance
   attestations: write
+# Note: contents: write is the minimum scope required for asset upload. Do NOT broaden further
+# (e.g. actions: write, pull-requests: write) — least-privilege per OpenSSF / SLSA guidance.
 
 defaults:
   run:
@@ -1162,15 +1655,31 @@ jobs:
             Write-Host "rust/ absent — skipping rust precheck (no-op per AGENTS.md §Build Environment)."
           }
 
+      - name: Assert tag version equals pyproject.toml (I18 / G18)
+        id: verlock
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
+          $tagVer = $Matches[1]
+          # Use tomllib for robust parsing — Select-String can match an unrelated version = line
+          # in a [tool.*] table above [project].
+          $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          if ($tagVer -ne $pyVer) {
+            throw "I18 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
+          }
+          Write-Host "Version lock OK: $tagVer"
+          "version=$tagVer" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+
       - name: Build + manifest + smoke test
         run: uv run --env-file .env python -m build_app --manifest
 
       - name: Stage release assets
         id: stage
         run: |
-          $ver = (Get-Content pyproject.toml | Select-String 'version = "(.+)"').Matches.Groups[1].Value
+          $ver = "${{ steps.verlock.outputs.version }}"
           $rel = "dist\Sky-Player-v$ver"
-          # The zip must contain the CONTENTS of the release dir, not a wrapping folder.
+          if (-not (Test-Path $rel)) { throw "Missing release dir: $rel" }
+          # Zip CONTENTS of the release dir, not a wrapping folder (Phase 2 staging assumes this).
           Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Player-v$ver.zip" -Force
           $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Player-v$ver.zip").Hash
           "$h  Sky-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Player-v$ver.zip.sha256" -Encoding ASCII
@@ -1208,15 +1717,20 @@ jobs:
   resolve. CI does this too (`ci.yml:38`).
 - **`--manifest` flag is required on `build_app`** (see G9). Without it, no `MANIFEST.json` is
   shipped, and the asset list in §0.2 D5 fails.
+- **Never pass `--skip-test` to `build_app` in the release workflow.** The selftest is a gate,
+  not a side effect (AGENTS.md §Build Environment 4). A skipped selftest makes the MANIFEST
+  audit trail untrustworthy and breaks the "green build implies green smoke test" contract.
 - **`rust/` is absent today.** The precheck step is conditional (per I15). Do NOT remove the
   step — the conditional is forward-compatible: when rust scaffolding lands later, the same
   workflow handles it without a PR.
 - **`permissions:` block is at the job-of-workflow level** (top-level). `id-token: write`
   and `attestations: write` are required by `actions/attest-build-provenance@v2`. Without
   them, the attestation step fails with a misleading 403.
-- **Pre-release detection**: `prerelease: ${{ contains(github.ref_name, '-rc') ||
-  contains(github.ref_name, '-beta') }}`. Matches the `Compare-Version` rule in Phase 2.5
-  (pre-release = has `-`).
+- **Tag/version lock (I18 / G18)**: step `Assert tag version equals pyproject.toml` must run
+  **before** build. Asset names use that same version string. Never stage from a freestanding
+  `Select-String` that can diverge from the tag.
+- **Pre-release detection**: `prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}`.
+  Matches the `Compare-Version` rule in Phase 2 (pre-release = has `-`).
 - **Single zip, single sha256, single MANIFEST.json** — exactly three assets. Do NOT upload
   additional zip variants or split assets.
 - **`generate_release_notes: true`** lets GitHub compose body text from commits since the
@@ -1224,6 +1738,12 @@ jobs:
   truth for the human-readable part; the rich text in `release_notes` will be the GitHub
   summary, not the CHANGELOG section. Edit the Release body manually after publish to paste
   the CHANGELOG section in (manual step; documented in §6.5).
+- **Action pins**: `@v4` / `@v6` / `@v2` floating tags are a **temporary** first-ship
+  convenience. OpenSSF Scorecards flag floating tags. As soon as Phase 6 merges, open a
+  follow-up hardening PR that re-pins `actions/checkout`, `astral-sh/setup-uv`,
+  `softprops/action-gh-release`, and `actions/attest-build-provenance` to full 40-char
+  commit SHAs by looking each tag's real SHA up at implementation time (do NOT invent SHAs).
+  Enable Dependabot on `.github/workflows/` so future SHA bumps land as small reviewable PRs.
 
 ### 6.5 Post-publish manual step (not workflow-automated)
 
@@ -1235,22 +1755,26 @@ jobs:
 
 ### 6.6 Trial tag gate
 
-1. Create a trial tag on a throwaway branch: `git tag v2.3.5-rc1 -m "Release workflow trial"`.
-   Push the tag. **Do NOT push to main** — push the tag directly; the workflow triggers on
-   tag push, not branch push.
+1. On the branch that contains `release.yml` **and** a matching `pyproject.toml` version
+   bump to `2.4.0rc1` (or whatever PEP 440 form you use — must equal tag without `v`):
+   ```powershell
+   git tag v2.4.0-rc1 -m "Release workflow trial"
+   git push origin v2.4.0-rc1
+   ```
+   **Do NOT push a mismatched tag** — the verlock step must fail closed.
 2. Watch the Actions run. Required outcomes:
-   - All steps green.
-   - A GitHub Release named `v2.3.5-rc1` is created in **prerelease** state.
-   - The Release lists three assets; downloading `Sky-Player-v2.3.5-rc1.zip` and running
+   - All steps green (including version-lock).
+   - A GitHub Release named `v2.4.0-rc1` is created in **prerelease** state.
+   - The Release lists three assets; downloading `Sky-Player-v2.4.0-rc1.zip` and running
      `Sky-Player.exe --selftest-textual` succeeds.
    - SHA256 sidecar matches:
      ```powershell
-     (Get-FileHash .\Sky-Player-v2.3.5-rc1.zip).Hash -eq ((Get-Content .\Sky-Player-v2.3.5-rc1.zip.sha256) -split ' ')[0]
+     (Get-FileHash .\Sky-Player-v2.4.0-rc1.zip).Hash -eq ((Get-Content .\Sky-Player-v2.4.0-rc1.zip.sha256) -split ' ')[0]
      ```
-   - `MANIFEST.json` is valid JSON; its `version` is `2.3.5-rc1`.
-3. After the green run: `gh release delete v2.3.5-rc1 --cleanup-tag --yes` and
-   `git push origin :refs/tags/v2.3.5-rc1`. Confirm the Release disappears and no stale tag
-   remains.
+   - `MANIFEST.json` is valid JSON; its `version` is `2.4.0-rc1`.
+3. After the green run: `gh release delete v2.4.0-rc1 --cleanup-tag --yes` and
+   `git push origin :refs/tags/v2.4.0-rc1`. Confirm the Release disappears and no stale tag
+   remains. Revert the temporary pyproject version bump if it was trial-only.
 4. Commit `release.yml` to a feature branch and open a PR to main. This PR merges `release.yml`
    only; do not roll unrelated changes in.
 
@@ -1273,10 +1797,13 @@ jobs:
 
 ### 8.1 Touches (exhaustive)
 
-- `README.md` — update Quick Start + add FAQ entries.
+- `README.md` — update Quick Start + add FAQ entries (**portable + updater only** — G17).
 - `CHANGELOG.md` — add `### Changed`, `### Added`, `### Removed` section.
 - `docs/distribution-and-update.md` — new contributor-facing doc.
 - `docs/INDEX.md` — link the new doc.
+
+**Do not** document `sky-player-install.bat` / file association in Phase 8. Those land in
+Phase 4; documenting missing files is a broken README (G17).
 
 ### 8.2 README Quick Start (replace existing Quick Start; preserve badges)
 
@@ -1285,35 +1812,34 @@ The exact wording the agent should use (English; the project uses English in REA
 ```markdown
 ## Quick Start
 
-### Option 1 — Portable (recommended)
+### Portable install (recommended)
 
 1. Download `Sky-Player-v<latest>.zip` from the [latest release](https://github.com/pumni/Sky-Player/releases/latest).
 2. Extract the zip anywhere (e.g. `C:\Sky-Player\`).
 3. Double-click `Sky-Player.exe`. Sky Player keeps all its files in that folder — your
    profile, your songs, and your config stay together.
 
-### Option 2 — Optional installer (Windows file association + Start Menu shortcut)
-
-If you want `.skysheet` files to open in Sky Player when double-clicked in Explorer, and a
-shortcut in the Start Menu:
-
-1. Right-click `installer\sky-player-install.bat` → **Run as administrator**.
-2. To undo: right-click `installer\sky-player-uninstall.bat` → **Run as administrator**.
-
-**This installer is optional.** Sky Player is portable by default and never requires
-installation. The installer does NOT move files; it only registers file associations and a
-Start Menu shortcut that point back to the folder you extracted Sky Player into.
+> Optional Start Menu shortcut + `.skysheet` file association may ship in a later minor
+> (see `docs/2026-07-18_distribution-mpv-pattern-plan.md` Phase 4). Until then, Sky Player
+> is fully portable with no installer.
 
 ### Updates
 
 - Sky Player checks GitHub for new releases in the background and shows a banner when an
   update is available. **It does NOT self-update.**
 - To update: close Sky Player, run `updater.bat` in the install folder, then reopen
-  `Sky-Player.exe`.
-- The updater verifies the SHA256 of the downloaded zip against a sidecar before touching any
-  file. It writes a single line to `%LOCALAPPDATA%\Sky-Player\updater.log` per run.
-- Users on the `beta` channel can run `updater.bat -Channel beta`. Channel selection is read
-  from `config.json` (`update.channel`).
+  `Sky-Player-v<latest>`.
+- The updater verifies the SHA256 of the downloaded zip against a sidecar **before** touching
+  any install files. It checks write permission inside the folder, stages in TEMP, and copies
+  binaries transactionally while **completely preserving your `config.json` and `songs/` folder**.
+- It does not modify or copy anything inside your `songs/` folder, ensuring your personal song collection is never touched.
+- It may update only two fields in `config.json`: `update.last_check_ts` (Unix seconds) and
+  `update.last_notified_version`.
+- It writes a single line to `%LOCALAPPDATA%\Sky-Player\updater.log` per run.
+- Users on the `beta` channel can run `updater.bat -Channel beta`. Channel selection is also
+  read from `config.json` (`update.channel`) and from Update Settings in the app.
+- If Windows SmartScreen warns on first run of a new build, that is expected until code
+  signing lands (separate track; not part of 2.4.0).
 ```
 
 ### 8.3 README FAQ additions (add to the existing FAQ section; do not rewrite neighbouring entries)
@@ -1321,7 +1847,8 @@ Start Menu shortcut that point back to the folder you extracted Sky Player into.
 ```
 Q: How do I update Sky Player?
 A: Close Sky Player, double-click `updater.bat` in the install folder, follow the prompt,
-   then reopen `Sky-Player.exe`.
+   then reopen `Sky-Player.exe`. If the updater says the app is still running, close it and
+   re-run (or use `updater.bat -ForceClose` only if you accept force-stopping the process).
 
 Q: Does Sky Player self-update?
 A: No, by design. Like mpv, Sky Player notifies you when a new version is available, but
@@ -1329,16 +1856,12 @@ A: No, by design. Like mpv, Sky Player notifies you when a new version is availa
    the update — it is one double-click away.
 
 Q: Can I move my Sky Player folder?
-A: Yes. The whole folder is portable. No registry entries are written unless you ran the
-   optional installer (`installer\sky-player-install.bat`). After moving, re-run the
-   optional installer only if you want Start Menu shortcut + file association to follow the
-   new path.
+A: Yes. The whole folder is portable. No registry entries are written by the portable build.
 
-Q: Will Sky Player modify my config or songs folder when updating?
-A: The updater overwrites Sky Player binaries and bundled files in-place via
-   `Expand-Archive`. If you customised `songs/`, back it up before running `updater.bat`.
-   `config.json` is preserved except for two fields the updater is allowed to update:
-   `update.last_check_utc` and `update.last_notified_version`.
+Q: Will updating wipe my config or songs?
+A: No. The updater never replaces or touches `config.json` or `songs/`. It only patches
+   `update.last_check_ts` and `update.last_notified_version` inside your existing config.
+   Your theme, timing profiles, and song library stay completely untouched.
 
 Q: Where can I find the updater log?
 A: `%LOCALAPPDATA%\Sky-Player\updater.log`. It is append-only and does not rotate. Each line
@@ -1368,17 +1891,20 @@ keepachangelog:
 
 ### Added
 
-- `updater.bat` (repo root) and `installer/updater.ps1` — external updater script. Verifies
-  SHA256 before touching any file. Writes a single-line log to
-  `%LOCALAPPDATA%\Sky-Player\updater.log`. Supports `-Channel stable|beta` (overrides
-  `config.json`). Supports `-DryRun` (download-and-verify only, no file replacement).
-- `update.channel` (default `stable`) and `update.last_notified_version` fields in
-  `config.json`.
-- One-time sweep of legacy `.old.{guid}` directories left from pre-2.4.0 atomic swaps. Runs
-  silently on first 2.4.0 launch; will be removed in a follow-on minor.
-- `.github/workflows/release.yml` — release pipeline on tag `v*`. Builds, attests build
-  provenance via GitHub Attestations, uploads `Sky-Player-v<ver>.zip`,
-  `Sky-Player-v<ver>.zip.sha256`, and `MANIFEST.json`.
+- `updater.bat` (repo root) and `installer/updater.ps1` — external updater. Verifies SHA256
+  before any install mutation; verifies directory write access; stages in TEMP; backs up and
+  copies binaries transactionally with a fallback rollback routine on failure. Preserves
+  `config.json` and skips the `songs/` folder completely to avoid modifying user data.
+  Log: `%LOCALAPPDATA%\Sky-Player\updater.log`. Supports `-Channel stable|beta`, `-DryRun`,
+  `-ForceClose`, `-Restart`.
+- `update.channel` (default `stable`), `update.last_notified_version`, and (until 2.4.1)
+  `update.legacy_old_dir_sweep_pending` in `config.json`. Channel is wired to in-app check
+  (`include_prerelease`) and to the external updater.
+- One-time sweep of legacy `.old.{guid}` install siblings left from pre-2.4.0 atomic swaps.
+  Runs silently when migration keys are present or leftovers are detected; removed in a
+  follow-on minor.
+- `.github/workflows/release.yml` — release on tag `v*` with tag↔`pyproject.toml` version lock,
+  free-threaded audit, attest-build-provenance, three assets.
 - `docs/distribution-and-update.md` — contributor documentation.
 
 ### Removed
@@ -1399,18 +1925,15 @@ keepachangelog:
 
 A focused doc, target length 80–120 lines. Sections:
 
-1. **Model overview** — same diagram as this plan's §0.3.
-2. **Release artefact contract** — list the three assets and their relationships to
-   `MANIFEST.json`.
-3. **Updater behaviour** — mirror Phase 2's behaviour contract in plain English; mention
-   the SHA256-verify-before-mutate invariant.
-4. **Channel switching** — describe `-Channel beta` override and the channel field in
-   `config.json`. Direct beta users to the GitHub Releases page (URL) for prerelease caveats.
-5. **Recovery from a failed update** — the updater never mutates files before SHA256 verify;
-   if the zip is corrupt, the install dir is unchanged. Manual recovery: re-download the
-   previous Release's zip and `Expand-Archive` over the install dir.
-6. **For contributors** — point to `docs/2026-07-18_distribution-mpv-pattern-plan.md` (this
-   file) for the design intent and the phase-by-phase change log.
+1. **Model overview** — notify-only in-app + external `updater.bat` (glossary §0.3).
+2. **Release artefact contract** — three assets + `MANIFEST.json`; tag version == project
+   version (I18).
+3. **Updater behaviour** — SHA256-before-mutate; TEMP staging; write permission testing; transactional copy operations with rollback; preserve-list
+   (`config.json`, `songs/` is completely ignored); allowed config patches only; refuse if process running.
+4. **Channel switching** — `update.channel` + `-Channel beta`; in-app and updater agree.
+5. **Recovery** — corrupt zip never mutates install; copy failures are automatically rolled back; manual re-run instructions if needed.
+6. **For contributors** — link this plan doc for phase contracts.
+7. **Explicit non-goals in 2.4.0** — no optional installer / file association yet (Phase 4).
 
 Add an entry to `docs/INDEX.md` linking the new doc.
 
@@ -1429,12 +1952,13 @@ Add an entry to `docs/INDEX.md` linking the new doc.
 > **Deferred after Phase 6 ships and adoption measurement.** Do not start Phase 4 in the same
 > release cycle as 2.4.0; Phase 4 is shipped in a follow-on minor (e.g. 2.5.0) once `.skysheet`
 > is in active use via the bundled parser (`src/sky_music/domain/parser.py:47`).
+> Phase 8 deliberately omitted installer docs (G17); **Phase 4 owns those README/FAQ sections.**
 
 ### 4.1 Touches (exhaustive)
 
 - `installer/sky-player-install.bat` (new).
 - `installer/sky-player-uninstall.bat` (new).
-- `README.md` — add a Phase-4-sectional update to the Quick Start (already framed by Phase 8).
+- `README.md` — add Option 2 (optional installer) + move FAQ for Start Menu / association.
 - `docs/distribution-and-update.md` — add a `## Optional installer (Phase 4)` section.
 - `CHANGELOG.md` — entry under `[2.5.0]` (or whichever minor number ships Phase 4).
 
@@ -1462,7 +1986,7 @@ Operations, in order:
 6. **Start Menu shortcut**: `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Sky Player.lnk`
    pointing at `Sky-Player.exe` with the install dir as `Working Directory`. Create via
    `WScript.Shell` COM. If the shortcut already exists, overwrite.
-7. Print `安装完成`. Exit 0.
+7. Print `Install complete`. Exit 0.
 
 ### 4.3 `installer/sky-player-uninstall.bat` behaviour
 
@@ -1471,7 +1995,7 @@ Menu shortcut. Do NOT delete `.skysheet` user files. Do NOT delete the install d
 
 ### 4.4 Critical invariant
 
-- The installer does NOTtouching `SendInput` (I2). No injection, no hooks.
+- The installer does NOT touching `SendInput` (I2). No injection, no hooks.
 - The installer does NOT move, copy, or delete Sky Player binaries. It only registers
   pointers. The install dir is read-only from the installer's perspective.
 - The installer must exit with non-zero on any registry write failure, with a clear message.
@@ -1503,7 +2027,7 @@ Menu shortcut. Do NOT delete `.skysheet` user files. Do NOT delete the install d
 
 ### 7.1 Touches (exhaustive)
 
-- `manifests/p/pumni/Sky-Player/Sky-Player.yaml` (new). Uses the current
+- `manifests/p/pumni/SkyPlayer/pumni.SkyPlayer.yaml` (new). Uses the current
   microsoft/winget-pkgs manifest schema — read the `winget create` documentation before
   writing the YAML. We DO NOT commit to the public winget-pkgs repo from this plan; the
   manifest lives in this repo as a reference / source of truth for future manual PRs.
@@ -1533,7 +2057,7 @@ Fields the manifest must set:
 
 ### 7.3 Phase 7 gate
 
-- `winget validate --manifest manifests/p/pumni/Sky-Player/Sky-Player.yaml` passes locally.
+- `winget validate --manifest manifests/p/pumni/SkyPlayer/pumni.SkyPlayer.yaml` passes locally.
   (`winget` is a Microsoft tool, not a Python dep — does not violate I7.)
 - Manual PR to `microsoft/winget-pkgs` is **out of scope** for this plan; the manifest is
   committed here, and a contributor performs the public PR by hand.
@@ -1548,7 +2072,7 @@ NOT promise a winget PR per release.
 
 ## 4. Final acceptance checklist (for §0.2 D-table)
 
-The plan is "done" only when the §0.2 D1–D10 outcomes are verified. The simplest way to
+The plan is "done" only when the §0.2 D1–D11 outcomes are verified. The simplest way to
 verify each:
 
 | Outcome | How to verify |
@@ -1559,10 +2083,11 @@ verify each:
 | D4 | `Test-Path dist\<rel>\updater.bat` and `Test-Path dist\<rel>\installer\updater.ps1` → True. |
 | D5 | `gh release view <tag>` lists the three assets; download and unpack runs without faults. |
 | D6 | New `UpdateBannerModal` snapshot test exists and is green; `git grep -n "Download and auto-apply" -- src/` → no output. |
-| D7 | Trial tag `v2.3.5-rc1` workflow run is green; trial tag + release deleted. |
-| D8 | README + CHANGELOG + `docs/distribution-and-update.md` reviewed by a human. |
+| D7 | Trial tag `v2.4.0-rc1` workflow run is green (including tag/version lock); trial tag + release deleted. |
+| D8 | README + CHANGELOG + `docs/distribution-and-update.md` reviewed; no installer docs until Phase 4. |
 | D9 | `uv run ruff check . && uv run pyright && uv run pytest` green end-to-end. |
 | D10 | `scripts/audit_security_mandates.py` and `scripts/audit_free_threaded_wheels.py` green in the release workflow run. |
+| D11 | Phase 2.9 smoke: user `config.json` marker + custom songs survive; no staging default songs are copied; only allowed `update.*` fields change. |
 
 ## 5. Git / PR checklist for every phase
 
@@ -1595,12 +2120,28 @@ verify each:
 
 ## 7. Lessons learned (append as you go)
 
-> Empty by default. The agent may append short notes here when a phase surfaces a
-> decision not captured by the plan. Do NOT rewrite historical lessons.
+> The agent may append short notes here when a phase surfaces a decision not captured by
+> the plan. Do NOT rewrite historical lessons.
 
-<!-- Phase 0: (none yet) -->
+### Plan amend 2026-07-18 (pre-implementation review)
+
+- **B1 / I16 / I21 / I22:** Naive `Expand-Archive -Force` onto the install root would wipe portable
+  user data (`config.json`, `songs/`). Same class of bug as pre-2.4.0 full-directory swap.
+  Refinement: TEMP stage, early write-permission check, transactional copy-with-backup/rollback,
+  preserving `config.json` and completely skipping the `songs/` directory (updating software only, no data merging).
+- **B2 / G13:** PS must write `last_check_ts` (Unix int), never invent `last_check_utc`. Robust regex patching
+  must handle inserting missing fields (`last_notified_version`) correctly.
+- **B3 / G14:** PowerShell `-split '.'` is regex; use `-split '\.'`.
+- **B4 / I18 / G18:** Release assets must use tag version == `pyproject.toml` version;
+  trial tag is `v2.4.0-rc1`, not `v2.3.5-rc1`.
+- **B5 / G17:** Phase 8 must not document Phase 4 installer files that do not exist yet.
+- **H2 / I19:** `update.channel` is dead without wiring `include_prerelease` + beta fetch.
+- **H3 / G15:** Phase 1 trims `_handle_update_response`; does not delete it.
+- **H7 / G19:** Default refuse if process running; `-ForceClose` is opt-in only, and checks path to prevent cross-portable collisions.
+- **H1:** Full atomic dir rename abandoned for updates because it cannot preserve in-tree
+  user data; transactional copy with fallback implemented to avoid corruption.
+- **B6:** Configured explicit TLS 1.2/1.3 protocol binding inside the updater script to avoid SSL/TLS handshake failures under Windows PowerShell 5.1.
 
 ---
 
 End of plan.
-

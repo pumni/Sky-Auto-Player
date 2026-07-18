@@ -1,71 +1,43 @@
 """Windows-side self-update installer.
 
-This module performs the concrete steps of downloading, verifying, staging, and
-applying an update of Sky Player itself. It isolates all OS-specific code here
+This module performs the concrete steps of downloading and verifying
+an update of Sky Player itself. It isolates all OS-specific code here
 behind small, testable functions:
 
 1. ``download_zip`` — stream a release zip into a temp file.
-2. ``extract_zip`` — unzip into a staging directory beside the install.
+2. ``extract_zip`` — unzip into a staging directory.
 3. ``verify_sha256`` / ``compute_sha256``/ ``parse_sha256_sidecar`` — verify a
    downloaded file's SHA256 against a checksum asset (either bare hash or the
    standard Coreutils ``<hash>  <filename>`` sidecar form).
-   4. ``write_apply_batch`` / ``apply_update_and_restart`` — emit a detached
-    ``.cmd`` script that performs an atomic ``Rename-Item`` swap of the versioned
-    staging tree over the install tree, then relaunches the exe, then deletes
-    itself. The old install tree is renamed to a ``.old.{guid}`` backup first
-    (rollback): if the new exe fails to start, the user can manually restore it.
 
 Security notes
 --------------
-- Only the Sky Player install tree is touched. There is no interaction with the
-  Sky game process, game files, game memory, or anti-cheat — the
-  ``SECURITY_MANDATES`` in ``AGENTS.md`` forbid those things and this module
-  honors them.
 - HTTPS is mandatory for downloads; HTTP URLs are rejected to mitigate MITM.
 - SHA256 verification guards the downloaded zip against transport corruption
   or donor tampering; if the sidecar is missing or mismatches, the caller is
   expected to refuse the update.
-- The apply batch uses PowerShell ``Rename-Item`` to atomically swap the
-  versioned staging tree over the install tree on the same volume. The old
-  install is preserved as a ``.old.{guid}`` fallback for manual rollback.
 """
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 import uuid
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 from urllib.request import Request, urlopen
-
-from sky_music.domain.update_checker import UpdateInfo
 
 # Default chunk size for streaming downloads. 64 KiB balances syscall overhead
 # against memory pressure under free-threaded CPython.
 _DOWNLOAD_CHUNK: int = 64 * 1024
 _HASH_CHUNK: int = 65536
-_BATCH_PING_WAIT_S: int = 2  # `ping -n 3` sleeps ~2s on Windows
 
 
 class UpdateInstallerError(RuntimeError):
     """Raised for unrecoverable install-side errors."""
-
-
-@dataclass(frozen=True, slots=True)
-class StagedUpdate:
-    """Result of a successful download/extract run prior to apply."""
-
-    staging_dir: Path
-    new_version: str
 
 
 def _urlopen_default(url: str | Request, *, timeout: float) -> Any:
@@ -216,160 +188,7 @@ def fetch_sha256_sidecar(
     return parse_sha256_sidecar(text)
 
 
-def stage_update(
-    release: UpdateInfo,
-    *,
-    staging_parent: Path,
-    timeout: float = 30.0,
-    opener: Callable[[str], Any] | None = None,
-    sha256_sum: str | None = None,
-    versioned_dir: bool = False,
-    progress: Callable[[int, int | None], None] | None = None,
-) -> StagedUpdate:
-    """Download + (optionally) verify + extract an update to a staging dir.
 
-    Returns ``StagedUpdate`` ready for :func:`apply_update_and_restart`. The
-    staging directory is cleaned up if any step fails before extraction
-    completes successfully.
-
-    When ``versioned_dir`` is True, the staging dir is named
-    ``Sky-Player-v{version}`` under ``staging_parent`` (same volume as install
-    — enables atomic rename swap). Otherwise, a UUID-based name is used.
-
-    ``sha256_sum`` (when provided) is compared against the downloaded zip's
-    SHA256; mismatch raises :class:`UpdateInstallerError`.
-
-    ``progress`` is forwarded to :func:`download_zip` for download progress.
-    """
-    if not release.download_url:
-        raise UpdateInstallerError("release has no downloadable asset")
-    if not staging_parent.exists():
-        staging_parent.mkdir(parents=True, exist_ok=True)
-    if versioned_dir:
-        staging_dir = staging_parent / f"Sky-Player-v{release.latest_version}"
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
-    else:
-        staging_dir = staging_parent / f"sky-pending-{uuid.uuid4().hex}"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        zip_path = download_zip(
-            release.download_url,
-            dest_dir=staging_dir,
-            timeout=timeout,
-            opener=opener,
-            progress=progress,
-        )
-        # SHA256 verification guards against transport corruption and donor
-        # tampering; verify_sha256 returns False on missing file or empty sum.
-        if sha256_sum and not verify_sha256(zip_path, sha256_sum):
-            raise UpdateInstallerError("sha256 mismatch — refusing to stage")
-        extract_zip(zip_path, staging_dir)
-        with contextlib.suppress(OSError):
-            zip_path.unlink()
-    except Exception:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
-    return StagedUpdate(staging_dir=staging_dir, new_version=release.latest_version)
-
-
-def _ps_quote(p: Path) -> str:
-    """Single-quote a path for PowerShell (escapes embedded single quotes)."""
-    s = str(p)
-    return "'" + s.replace("'", "''") + "'"
-
-
-def write_apply_batch(
-    *,
-    staging_dir: Path,
-    install_dir: Path,
-    post_update_flag: Path,
-    batch_path: Path,
-) -> Path:
-    """Emit a detached ``.cmd`` that performs the atomic swap + restart.
-
-    The script:
-      1. ``ping 127.0.0.1 -n 3`` — wait ~2s for the current exe to exit.
-      2. PowerShell ``Rename-Item`` — atomic directory swap on the same volume.
-         The old install dir is renamed to ``.old.{guid}`` (rollback: if the new
-         exe fails, the user can manually restore it), then the staging dir is
-         renamed to take its place.
-      3. Touch ``post_update_flag`` so the next launch shows a success toast.
-      4. ``start "" "<install-dir>/Sky-Player.exe"`` — relaunch detached.
-      5. ``del "%~f0"`` — the batch deletes itself.
-
-    The ``.old.{guid}`` backup is NOT removed by this script — it is cleaned up
-    on the next successful app launch by the consumer of
-    :func:`find_old_backups` (e.g. ``_check_post_update_flag``). This leaves a
-    manual rollback path if the new exe fails to start.
-    """
-    exe_path = install_dir / "Sky-Player.exe"
-    ps_script = (
-        f"$install={_ps_quote(install_dir)}; "
-        f"$staging={_ps_quote(staging_dir)}; "
-        f"$flag={_ps_quote(post_update_flag)}; "
-        f"$exe={_ps_quote(exe_path)}; "
-        f"$guid=[guid]::NewGuid().hex; "
-        f"$bak=$install.Parent.ToString()+'\\'+$install.Name+'.old.'+$guid; "
-        f"if (-not (Test-Path $staging)) {{exit 1}}; "
-        f"Rename-Item -LiteralPath $install -NewName ([IO.Path]::GetFileName($bak)) -ErrorAction Stop; "
-        f"Rename-Item -LiteralPath $staging -NewName $install.Name -ErrorAction Stop; "
-        f"if (-not (Test-Path $flag)) {{New-Item $flag -ItemType File > $null}}; "
-        f"Start-Process -FilePath $exe -WorkingDirectory $install"
-    )
-    batch_lines = [
-        "@echo off",
-        f"ping 127.0.0.1 -n {_BATCH_PING_WAIT_S + 1} > NUL",
-        f"powershell -Command \"& {{ {ps_script} }}\"",
-    ]
-    batch_lines.append("del \"%~f0\"")
-    # Write in binary mode so we control the exact line endings (\r\n) without
-    # Python's text-mode newline translation doubling ``\r`` on Windows.
-    batch_path.write_bytes(("\r\n".join(batch_lines) + "\r\n").encode("ascii"))
-    return batch_path
-
-
-def apply_update_and_restart(
-    *,
-    staging_dir: Path,
-    install_dir: Path,
-    post_update_flag: Path,
-) -> NoReturn:
-    """Write the apply batch, launch it detached, and exit the current process.
-
-    IMPORTANT: This call does not return. Invoke it as the final step after
-    Textual UI teardown and config flush; once it runs, ``sys.exit(0)`` is
-    invoked and the batch takes over the install swap.
-    """
-    if sys.platform != "win32":
-        raise UpdateInstallerError("apply_update_and_restart is Windows-only")
-    if not install_dir.exists():
-        raise UpdateInstallerError(f"install dir missing: {install_dir}")
-
-    batch_dir = Path(tempfile.gettempdir())
-    batch_name = f"sky-apply-{uuid.uuid4().hex}.cmd"
-    batch_path = batch_dir / batch_name
-    write_apply_batch(
-        staging_dir=staging_dir,
-        install_dir=install_dir,
-        post_update_flag=post_update_flag,
-        batch_path=batch_path,
-    )
-    # CREATE_NEW_PROCESS_GROUP so Ctrl+C in the parent terminal doesn't kill
-    # the application batch; DETACHED_PROCESS so it survives the parent exit.
-    DETACHED_PROCESS = 0x00000008
-    CREATE_NEW_PROCESS_GROUP = 0x00000200
-    try:
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(batch_path)],
-            cwd=str(batch_dir),
-            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
-    except Exception as exc:
-        raise UpdateInstallerError(f"failed to launch apply batch: {exc}") from exc
-    sys.exit(0)
 
 
 def install_dir_for_frozen() -> Path:
@@ -383,10 +202,6 @@ def install_dir_for_frozen() -> Path:
         raise UpdateInstallerError("install_dir_for_frozen only meaningful in frozen builds")
     return Path(sys.executable).resolve().parent
 
-
-def post_update_flag_path(install_dir: Path) -> Path:
-    """Path to a flag file consumed by the next launch's success toast."""
-    return install_dir / ".sky-just-updated"
 
 
 def find_old_backups(install_dir: Path) -> list[Path]:

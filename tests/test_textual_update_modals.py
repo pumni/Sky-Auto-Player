@@ -97,128 +97,7 @@ def test_update_modal_handles_empty_notes_gracefully(monkeypatch: pytest.MonkeyP
     _run(_with_app(actions))
 
 
-def test_update_progress_modal_mounts_without_total(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``UpdateProgressModal`` must mount cleanly when total size is unknown
-    (e.g. server omitted Content-Length). The progress bar uses
-    indeterminate advance in that case.
-    """
-    from sky_music.ui.textual_app.modals import UpdateProgressModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateProgressModal(
-            latest_version="2.3.2",
-            current_version="2.3.1",
-            total=None,
-            theme_name="aurora",
-        )
-        app.push_screen(modal)
-        await pilot.pause()
-        # update_progress with unknown total must not raise.
-        modal.update_progress(2 * 1024 * 1024, None)
-        modal.update_progress(4 * 1024 * 1024, None)
-        bar = modal.query_one("#update-progress-bar")
-        assert bar is not None
-        await pilot.press("escape")
-
-    _run(_with_app(actions))
-
-
-def test_update_progress_modal_esc_blocked_while_in_flight(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Bug D guard: pressing Esc while ``allow_close`` is False must NOT dismiss
-    the modal — otherwise the user could close it mid-download, leaving the
-    worker running detached and crashing on the next progress callback when
-    the widget DOM is unmounted.
-    """
-    from sky_music.ui.textual_app.modals import UpdateProgressModal
-
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateProgressModal(
-            latest_version="2.3.2",
-            current_version="2.3.1",
-            theme_name="aurora",
-        )
-        assert modal.allow_close is False  # default — in-flight
-        blocked_calls: list[bool] = []
-        modal.on_blocked_close_attempt = lambda: blocked_calls.append(True)
-        app.push_screen(modal)
-        await pilot.pause()
-
-        # Attempts to close while in-flight must be swallowed + callback fired
-        # so the worker stays alive and the user gets a hint toast.
-        await pilot.press("escape")
-        await pilot.pause()
-        assert blocked_calls == [True]
-        assert modal._closed is False
-        # Modal is still in the screen stack.
-        assert modal in app.screen_stack
-
-    _run(_with_app(actions))
-
-
-def test_update_progress_modal_esc_allowed_after_terminal_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Once the worker flips ``allow_close`` back to True (failure path),
-    Esc dismisses the modal as expected.
-    """
-    from sky_music.ui.textual_app.modals import UpdateProgressModal
-
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateProgressModal(
-            latest_version="2.3.2",
-            current_version="2.3.1",
-            theme_name="aurora",
-        )
-        app.push_screen(modal)
-        await pilot.pause()
-
-        # Simulate the worker reaching terminal failure: it flips allow_close.
-        modal.allow_close = True
-        await pilot.press("escape")
-        await pilot.pause()
-        assert modal._closed is True
-
-    _run(_with_app(actions))
-
-
-def test_update_progress_modal_callbacks_safe_after_dismiss(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Defensive guard: even if the modal was dismissed by some other path
-    (e.g. test harness, programmatic caller), ``update_progress`` and
-    ``set_status`` must no-op instead of raising ``NoMatches`` on the
-    unmounted widgets. Defends against the previous Bug D race.
-    """
-    from sky_music.ui.textual_app.modals import UpdateProgressModal
-
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-
-    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
-        modal = UpdateProgressModal(
-            latest_version="2.3.2",
-            current_version="2.3.1",
-            theme_name="aurora",
-        )
-        app.push_screen(modal)
-        await pilot.pause()
-        modal.allow_close = True
-        await pilot.press("escape")
-        await pilot.pause()
-        assert modal._closed is True
-
-        # Even after dismiss, callbacks must not raise.
-        modal.update_progress(5 * 1024, 10 * 1024)
-        modal.set_status("checksum mismatch", severity="error")
-
-    _run(_with_app(actions))
 
 
 def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,14 +111,11 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
 
     auto_check_calls: list[bool] = []
-    auto_apply_calls: list[bool] = []
 
     async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
         modal = UpdateSettingsModal(
             auto_check=True,
-            auto_apply=False,
             on_auto_check=auto_check_calls.append,
-            on_auto_apply=auto_apply_calls.append,
             theme_name="aurora",
         )
         app.push_screen(modal)
@@ -252,15 +128,6 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
         await pilot.pause()
         assert cb_check.value is False
         assert auto_check_calls == [False]
-        # Tab to auto_apply Checkbox (value is False).
-        await pilot.press("tab")
-        await pilot.pause()
-        cb_apply = modal.query_one("#checkbox-auto-apply", Checkbox)
-        assert cb_apply.value is False
-        await pilot.press("space")
-        await pilot.pause()
-        assert cb_apply.value is True
-        assert auto_apply_calls == [True]
         # Modal remains open until Esc.
         await pilot.press("escape")
 
@@ -287,9 +154,7 @@ def test_update_settings_modal_clear_skip_version(
             await pilot.pause()
             modal = UpdateSettingsModal(
                 auto_check=True,
-                auto_apply=False,
                 on_auto_check=lambda _v: None,
-                on_auto_apply=lambda _v: None,
                 skip_version="2.4.0",
                 theme_name="aurora",
             )
@@ -335,7 +200,7 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
 
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
 
-    cfg = AppConfig(update=UpdateSettings(auto_check=False, auto_apply=True))
+    cfg = AppConfig(update=UpdateSettings(auto_check=False))
 
     pushed: list[Any] = []
 
@@ -354,7 +219,6 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
         assert isinstance(modal, UpdateSettingsModal)
         # The modal was seeded with the live cfg values.
         assert modal._auto_check is False
-        assert modal._auto_apply is True
         # First checkbox is auto-focused; toggle auto_check.
         cb_check = modal.query_one("#checkbox-auto-check", Checkbox)
         assert cb_check.value is False
@@ -383,9 +247,7 @@ def test_update_settings_modal_renders_divider_between_info_and_rows(
     async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
         modal = UpdateSettingsModal(
             auto_check=True,
-            auto_apply=False,
             on_auto_check=lambda _v: None,
-            on_auto_apply=lambda _v: None,
             theme_name="aurora",
         )
         app.push_screen(modal)
@@ -413,9 +275,7 @@ def test_update_settings_modal_escape_works_immediately(
     async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
         modal = UpdateSettingsModal(
             auto_check=True,
-            auto_apply=False,
             on_auto_check=lambda _v: None,
-            on_auto_apply=lambda _v: None,
             theme_name="aurora",
         )
         original_dismiss = modal.dismiss

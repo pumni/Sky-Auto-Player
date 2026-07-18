@@ -38,41 +38,49 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_update_settings_defaults() -> None:
     s = UpdateSettings()
     assert s.auto_check is True
-    assert s.auto_apply is False
+    assert s.channel == "stable"
     assert s.skip_version == ""
     assert s.check_interval_s == 86400
     assert s.last_check_ts == 0
+    assert s.last_notified_version == ""
+    assert s.legacy_old_dir_sweep_pending is False
 
 
 def test_update_settings_from_dict_full() -> None:
     raw: dict[str, Any] = {
         "auto_check": False,
-        "auto_apply": True,
+        "channel": "beta",
         "skip_version": "2.4.0",
         "check_interval_s": 3600,
         "last_check_ts": 1718200000,
+        "last_notified_version": "2.4.0",
+        "legacy_old_dir_sweep_pending": True,
     }
     s = UpdateSettings.from_dict(raw)
     assert s.auto_check is False
-    assert s.auto_apply is True
+    assert s.channel == "beta"
     assert s.skip_version == "2.4.0"
     assert s.check_interval_s == 3600
     assert s.last_check_ts == 1718200000
+    assert s.last_notified_version == "2.4.0"
+    assert s.legacy_old_dir_sweep_pending is True
 
 
 def test_update_settings_from_dict_optional_keys_use_defaults() -> None:
     s = UpdateSettings.from_dict({"auto_check": False})
     assert s.auto_check is False
-    assert s.auto_apply is False
+    assert s.channel == "stable"
     assert s.skip_version == ""
     assert s.check_interval_s == 86400
     assert s.last_check_ts == 0
+    assert s.last_notified_version == ""
+    assert s.legacy_old_dir_sweep_pending is False
 
 
 def test_update_settings_from_dict_non_dict_returns_defaults() -> None:
     s = UpdateSettings.from_dict("not a dict")  # type: ignore[arg-type]
     assert s.auto_check is True  # default
-    assert s.auto_apply is False
+    assert s.channel == "stable"
     assert s.check_interval_s == 86400
 
 
@@ -91,6 +99,20 @@ def test_update_settings_from_dict_negative_interval_clamps_to_zero() -> None:
 def test_update_settings_from_dict_skip_version_normalizes_none_to_empty() -> None:
     s = UpdateSettings.from_dict({"skip_version": None})
     assert s.skip_version == ""
+
+
+def test_update_settings_from_dict_channel_invalid_fallback() -> None:
+    s = UpdateSettings.from_dict({"channel": "invalid"})
+    assert s.channel == "stable"
+
+
+def test_update_settings_from_dict_migration_trigger() -> None:
+    s1 = UpdateSettings.from_dict({"pending_update_version": "2.0"})
+    assert s1.legacy_old_dir_sweep_pending is True
+    s2 = UpdateSettings.from_dict({"auto_apply": True})
+    assert s2.legacy_old_dir_sweep_pending is True
+    s3 = UpdateSettings.from_dict({"auto_apply": False})
+    assert s3.legacy_old_dir_sweep_pending is True
 
 
 # ── AppConfig.update field ─────────────────────────────────────────────────────
@@ -236,36 +258,31 @@ def test_persist_update_auto_check(isolated_config: Path) -> None:
     assert reloaded.update.auto_check is False
 
 
-def test_persist_update_auto_apply_writes_true(isolated_config: Path) -> None:
-    """Toggling auto-apply=True must round-trip through config.json."""
+def test_persist_update_channel(isolated_config: Path) -> None:
     from sky_music.config import (
         clear_config_cache,
         load_config,
-        persist_update_auto_apply,
+        persist_update_channel,
     )
 
     clear_config_cache()
     cfg = load_config(force_reload=True)
-    persist_update_auto_apply(cfg, True)
+    persist_update_channel(cfg, "beta")
     clear_config_cache()
     reloaded = load_config(force_reload=True)
-    assert reloaded.update.auto_apply is True
-    # The other update settings must not be touched as a side effect.
-    assert reloaded.update.auto_check is True  # default
+    assert reloaded.update.channel == "beta"
 
 
-def test_persist_update_auto_apply_writes_false_after_enable(isolated_config: Path) -> None:
-    """Toggling back to False must also persist."""
+def test_persist_update_last_notified(isolated_config: Path) -> None:
     from sky_music.config import (
         clear_config_cache,
         load_config,
-        persist_update_auto_apply,
+        persist_update_last_notified,
     )
 
     clear_config_cache()
     cfg = load_config(force_reload=True)
-    persist_update_auto_apply(cfg, True)
-    persist_update_auto_apply(cfg, False)
+    persist_update_last_notified(cfg, "2.4.0")
     clear_config_cache()
     reloaded = load_config(force_reload=True)
-    assert reloaded.update.auto_apply is False
+    assert reloaded.update.last_notified_version == "2.4.0"

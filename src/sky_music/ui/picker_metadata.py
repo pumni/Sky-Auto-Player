@@ -27,7 +27,7 @@ _PKEY_RAM_CACHE_MAX = 2000
 _PATH_SESSION_RAM_CACHE_MAX = 5000
 
 
-def _lru_set[K, V](cache: OrderedDict[_K, _V], key: _K, value: _V, *, maxsize: int) -> None:
+def _lru_set[K, V](cache: OrderedDict[K, V], key: K, value: V, *, maxsize: int) -> None:
     """Insert or update key with LRU eviction. Caller holds the cache lock."""
     if key in cache:
         cache.move_to_end(key)
@@ -36,7 +36,7 @@ def _lru_set[K, V](cache: OrderedDict[_K, _V], key: _K, value: _V, *, maxsize: i
         cache.popitem(last=False)
 
 
-def _lru_get[K, V](cache: OrderedDict[_K, _V], key: _K) -> _V | None:
+def _lru_get[K, V](cache: OrderedDict[K, V], key: K) -> V | None:
     """Return value for key and promote to MRU; None if absent. Caller holds lock."""
     if key not in cache:
         return None

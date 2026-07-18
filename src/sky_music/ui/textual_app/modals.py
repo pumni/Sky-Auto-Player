@@ -14,7 +14,6 @@ from textual.widgets import (
     Checkbox,
     Input,
     OptionList,
-    ProgressBar,
     RichLog,
     Rule,
     Static,
@@ -323,7 +322,6 @@ class UpdateModal(PickerModal[str | None]):
         self.published_at = (published_at or "").split("T", 1)[0]
         self.options = [
             PickerOption("github", "Download from GitHub"),
-            PickerOption("download", "Download and auto-apply"),
             PickerOption("remind", "Remind me later"),
             PickerOption("skip", "Skip this version"),
         ]
@@ -342,7 +340,6 @@ class UpdateModal(PickerModal[str | None]):
         yield RichLog(id="update-notes", highlight=True, markup=True, wrap=True, auto_scroll=False)
         yield OptionList(*(o.label for o in self.options), id="modal-options")
         yield Static(
-            "Auto-apply overwrites files in-place.\n"
             "If interrupted, re-download manually from GitHub.",
             id="update-caution",
         )
@@ -384,154 +381,7 @@ class UpdateModal(PickerModal[str | None]):
         self.dismiss("remind")
 
 
-class UpdateProgressModal(PickerModal[None]):
-    """Modal that shows download/apply progress for an auto-update.
 
-    Replaces the previous notify-per-chunk spam — a single modal with one
-    ``ProgressBar`` and one label ``Static`` updated via
-    :meth:`update_progress` / :meth:`set_status`.
-
-    Closing during an active update is gated by ``allow_close`` — the worker
-    disables Esc/Enter until it reaches a terminal state (success → the
-    process exits via ``sys.exit(0)`` from ``apply_staged_update``; failure →
-    the status label shows the error message and the worker flips
-    ``allow_close`` back on). This avoids the previous race where:
-
-      * the user pressed Esc mid-download,
-      * the modal was removed from the DOM,
-      * the progress callback then crashed on ``query_one`` because the widgets
-        were unmounted,
-      * and the worker kept downloading silently before exiting the app on
-        success.
-
-    Now the close attempt is swallowed while ``allow_close`` is False, and a
-    gentle hint toast is shown so the user understands why Esc is ignored.
-    """
-
-    BINDINGS = [("escape", "close", "Close"), ("enter", "close", "Close")]
-
-    _OBSERVABLE_DOWNLOAD: int = 1024 * 1024  # only update label at >=1 MiB deltas
-
-    def __init__(
-        self,
-        latest_version: str,
-        current_version: str,
-        *,
-        total: int | None = None,
-        theme_name: str = "aurora",
-    ) -> None:
-        PickerModal.__init__(
-            self,
-            f"Updating to v{latest_version}",
-            [KeyHint("esc", "Close when done")],
-            theme_name=theme_name,
-        )
-        self.latest_version = latest_version
-        self.current_version = current_version
-        self._total = total
-        self._last_reported = -1
-        self._closed = False
-        # ``allow_close`` is False while the download/apply is in flight; the
-        # worker flips it True on terminal status (error). The success path
-        # exits the process before any close can happen.
-        self.allow_close: bool = False
-        # Optional callable the modal invokes when the user attempts to close
-        # while ``allow_close`` is False — used by the worker to surface a
-        # "please wait" toast instead of silently dropping the keystroke.
-        self.on_blocked_close_attempt: Any = None
-
-    def compose_modal_content(self) -> ComposeResult:
-        yield Static(
-            f"Updating from v{self.current_version} to v{self.latest_version}…",
-            id="update-progress-info",
-        )
-        yield ProgressBar(total=self._total, id="update-progress-bar")
-        yield Static("", id="update-progress-status")
-
-    def update_progress(self, downloaded: int, total: int | None) -> None:
-        """Advance the progress bar. Called from the worker via call_from_thread.
-
-        Throttles label updates to one per MiB to avoid swamping the
-        Textual message queue on slow links — the bar still advances on every
-        call.
-
-        No-ops if the modal has been closed, so the worker may keep streaming
-        progress callbacks after dismiss without raising ``NoMatches`` on the
-        unmounted widgets. (Closing mid-flight is now gated by
-        :attr:`allow_close`, but tests / programmatic callers may dismiss the
-        screen other ways — this guard keeps the contract defensive.)
-        """
-        if self._closed:
-            return
-        with contextlib.suppress(Exception):
-            bar = self.query_one("#update-progress-bar", ProgressBar)
-            if total is not None and self._total is None:
-                self._total = total
-                bar.update(total=total)
-            if total is not None and total > 0:
-                bar.progress = downloaded
-            else:
-                # Unknown length — nudge forward without a known ceiling.
-                bar.advance(1)
-            # Throttle label update to >=1 MiB deltas.
-            mb = downloaded // self._OBSERVABLE_DOWNLOAD
-            if mb == self._last_reported:
-                return
-            self._last_reported = mb
-            if total is not None and total > 0:
-                pct = downloaded * 100 // total
-                text = (
-                    f"Downloading: {pct}%  "
-                    f"({downloaded // 1024 // 1024} / {total // 1024 // 1024} MiB)"
-                )
-            else:
-                text = f"Downloading: {downloaded // 1024 // 1024} MiB"
-            self.query_one("#update-progress-status", Static).update(text)
-
-    def set_status(self, text: str, *, severity: str = "information") -> None:
-        """Replace the progress label with a final status line (done/failed).
-
-        Also clears :attr:`allow_close` to ``False`` so the guard logic below
-        does not double-flip it back; on a terminal status the worker flips
-        ``allow_close=True`` BEFORE calling ``set_status`` so Esc is honoured.
-        """
-        if self._closed:
-            return
-        prefix = {
-            "error": "[bold red]Error:[/] ",
-            "warning": "[bold yellow]Warning:[/] ",
-            "information": "",
-        }.get(severity, "")
-        with contextlib.suppress(Exception):
-            self.query_one("#update-progress-status", Static).update(f"{prefix}{text}")
-
-    def on_key(self, event: events.Key) -> None:
-        if event.key in {"escape", "enter"}:
-            if self._closed:
-                return
-            if not self.allow_close:
-                # Swallowed — the update is still in flight. Surface a hint to
-                # the app (toast) rather than letting the modal disappear and
-                # leave the worker running detached.
-                event.stop()
-                if callable(self.on_blocked_close_attempt):
-                    with contextlib.suppress(Exception):
-                        self.on_blocked_close_attempt()
-                return
-            event.stop()
-            self._closed = True
-            self.dismiss(None)
-
-    def action_close(self) -> None:
-        if self._closed:
-            return
-        if not self.allow_close:
-            if callable(self.on_blocked_close_attempt):
-                with contextlib.suppress(Exception):
-                    self.on_blocked_close_attempt()
-            return
-        self._closed = True
-        self.dismiss(None)
 
 
 class CheckBoxSquare(Checkbox):
@@ -576,9 +426,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
         self,
         *,
         auto_check: bool,
-        auto_apply: bool,
         on_auto_check: Any,
-        on_auto_apply: Any,
         skip_version: str = "",
         check_interval_s: int = 86400,
         last_check_ts: int = 0,
@@ -594,12 +442,10 @@ class UpdateSettingsModal(PickerModal[str | None]):
             theme_name=theme_name,
         )
         self._auto_check = bool(auto_check)
-        self._auto_apply = bool(auto_apply)
         self._skip_version = (skip_version or "").strip()
         self._check_interval_s = int(check_interval_s) if isinstance(check_interval_s, int) else 86400
         self._last_check_ts = int(last_check_ts) if isinstance(last_check_ts, int) else 0
         self._on_auto_check = on_auto_check
-        self._on_auto_apply = on_auto_apply
         # Hot color references so renderers pick up theme-aware hex strings.
         self._theme: ThemePreset = get_theme_preset(theme_name)
         # Optional callback to clear the skip-version marker; set by the app.
@@ -634,9 +480,6 @@ class UpdateSettingsModal(PickerModal[str | None]):
             f"[bold {accent}]Auto-check:[/]  {cadence}   [bold {accent}]Last check:[/]  {last}",
             "",
             "Toggle switches reflect and persist the live setting immediately.",
-            "",
-            "[bold]Auto-apply[/] downloads and installs newer releases without asking.\n"
-            "It is deferred during playback; the previous install is kept as a backup.",
         ]
         if self._skip_version:
             lines.append("")
@@ -661,14 +504,7 @@ class UpdateSettingsModal(PickerModal[str | None]):
                 id="label-auto-check",
                 markup=True,
             )
-        with Horizontal(id="row-auto-apply"):
-            yield CheckBoxSquare(value=self._auto_apply, id="checkbox-auto-apply", compact=True)
-            yield Static(
-                f"[bold]Auto-apply without asking[/]\n"
-                f"[{muted}]Download and install newer releases automatically.[/]",
-                id="label-auto-apply",
-                markup=True,
-            )
+
         yield Rule.horizontal(id="update-settings-divider-2")
         # Action buttons — using Textual Button.Pressed → on_button_pressed.
         with Horizontal(id="row-actions"):
@@ -704,9 +540,6 @@ class UpdateSettingsModal(PickerModal[str | None]):
         if event.checkbox.id == "checkbox-auto-check":
             self._auto_check = event.value
             self._on_auto_check(event.value)
-        elif event.checkbox.id == "checkbox-auto-apply":
-            self._auto_apply = event.value
-            self._on_auto_apply(event.value)
         with contextlib.suppress(Exception):
             self.query_one("#update-settings-info", Static).update(self._info_text())
 

@@ -1305,7 +1305,6 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def action_open_update_settings(self) -> None:
         from sky_music.config import (
-            persist_update_auto_apply,
             persist_update_auto_check,
             persist_update_skip_version,
         )
@@ -1321,27 +1320,13 @@ class PickerScreen(Screen[SongPickerResult]):
                 timeout=4,
             )
 
-        def _on_auto_apply(value: bool) -> None:
-            persist_update_auto_apply(self.cfg, value)
-            if value:
-                app.notify(
-                    "Auto-apply enabled — newer releases will be downloaded and"
-                    " installed automatically on the next check.",
-                    severity="warning",
-                    timeout=6,
-                )
-            else:
-                app.notify("Auto-apply disabled.", severity="information", timeout=4)
-
         def _on_settings_result(result: object) -> None:
             if result == "check_now":
                 app.check_for_updates_worker(force=True)
 
         modal = UpdateSettingsModal(
             auto_check=self.cfg.update.auto_check,
-            auto_apply=self.cfg.update.auto_apply,
             on_auto_check=_on_auto_check,
-            on_auto_apply=_on_auto_apply,
             skip_version=self.cfg.update.skip_version,
             check_interval_s=self.cfg.update.check_interval_s,
             last_check_ts=self.cfg.update.last_check_ts,

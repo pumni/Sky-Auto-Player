@@ -888,8 +888,6 @@ class PlaybackApp(App[str]):
                 from sky_music.domain.update_checker import is_newer
                 if not is_newer(result.update.latest_version, VERSION):
                     return
-                from sky_music.config import persist_pending_update_version
-                persist_pending_update_version(cfg, result.update.latest_version)
                 self.call_from_thread(
                     self.notify,
                     f"Update v{result.update.latest_version} available — "

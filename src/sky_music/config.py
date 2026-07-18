@@ -109,7 +109,7 @@ DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.ex
 @dataclass
 class UpdateSettings:
     auto_check: bool = True
-    auto_apply: bool = False
+    channel: Literal["stable", "beta"] = "stable"
     skip_version: str = ""
     check_interval_s: int = 86400
     last_check_ts: int = 0
@@ -119,7 +119,8 @@ class UpdateSettings:
     # checks) so a one-off network blip does not lock the user out of update
     # notifications for a full day.
     last_error_ts: int = 0
-    pending_update_version: str = ""
+    last_notified_version: str = ""
+    legacy_old_dir_sweep_pending: bool = False
 
     @classmethod
     def from_dict(cls, data: Any) -> UpdateSettings:
@@ -148,22 +149,32 @@ class UpdateSettings:
         if not isinstance(auto_chk, bool):
             auto_chk = True
 
-        auto_app = data.get("auto_apply", False)
-        if not isinstance(auto_app, bool):
-            auto_app = False
+        raw_channel = data.get("channel", "stable")
+        if isinstance(raw_channel, str) and raw_channel.lower() in ("stable", "beta"):
+            channel = cast(Literal["stable", "beta"], raw_channel.lower())
+        else:
+            channel = "stable"
 
-        pending = data.get("pending_update_version", "")
-        if not isinstance(pending, str):
-            pending = ""
+        last_notified = data.get("last_notified_version", "")
+        if not isinstance(last_notified, str):
+            last_notified = ""
+
+        legacy_sweep = data.get("legacy_old_dir_sweep_pending", False)
+        if not isinstance(legacy_sweep, bool):
+            legacy_sweep = False
+
+        if "pending_update_version" in data or "auto_apply" in data:
+            legacy_sweep = True
 
         return cls(
             auto_check=auto_chk,
-            auto_apply=auto_app,
+            channel=channel,
             skip_version=skip,
             check_interval_s=interval,
             last_check_ts=last_check,
             last_error_ts=last_err,
-            pending_update_version=pending,
+            last_notified_version=last_notified,
+            legacy_old_dir_sweep_pending=legacy_sweep,
         )
 
 
@@ -505,12 +516,13 @@ def save_config(cfg: AppConfig) -> None:
     raw["allow_title_fallback"]         = cfg.allow_title_fallback
     raw["update"] = {
         "auto_check": cfg.update.auto_check,
-        "auto_apply": cfg.update.auto_apply,
+        "channel": cfg.update.channel,
         "skip_version": cfg.update.skip_version,
         "check_interval_s": cfg.update.check_interval_s,
         "last_check_ts": cfg.update.last_check_ts,
         "last_error_ts": cfg.update.last_error_ts,
-        "pending_update_version": cfg.update.pending_update_version,
+        "last_notified_version": cfg.update.last_notified_version,
+        "legacy_old_dir_sweep_pending": cfg.update.legacy_old_dir_sweep_pending,
     }
     raw["schema_version"]               = SCHEMA_VERSION
 
@@ -599,14 +611,20 @@ def persist_update_auto_check(cfg: AppConfig, auto: bool) -> None:
     save_config(cfg)
 
 
-def persist_update_auto_apply(cfg: AppConfig, auto: bool) -> None:
-    cfg.update.auto_apply = auto
+def persist_update_channel(cfg: AppConfig, channel: Literal["stable", "beta"]) -> None:
+    cfg.update.channel = channel
     save_config(cfg)
 
 
-def persist_pending_update_version(cfg: AppConfig, version: str) -> None:
-    cfg.update.pending_update_version = version
+def persist_update_last_notified(cfg: AppConfig, version: str) -> None:
+    cfg.update.last_notified_version = version
     save_config(cfg)
+
+
+def persist_legacy_old_dir_sweep_pending(cfg: AppConfig, pending: bool) -> None:
+    cfg.update.legacy_old_dir_sweep_pending = pending
+    save_config(cfg)
+
 
 def persist_update_error_ts(cfg: AppConfig, ts: int) -> None:
     """Persist ``last_error_ts`` so a short-backoff retry can be scheduled.
