@@ -41,7 +41,7 @@ uv run --env-file .env python scripts/audit_security_mandates.py
 
 If you discover a way to bypass these mandates or abuse Sky Player in a way that violates the P0 rules (memory tampering, hooks, DLL injection, anti-cheat evasion, etc.):
 
-- Email **security@pumni.dev** (mailto:security@pumni.dev) and encrypt sensitive material at the PGP key linked from the publisher profile.
+- Email **pumni.dev@gmail.com** and encrypt sensitive material at the PGP key linked from the publisher profile.
 - Do **not** open a public issue for reproducer steps.
 - Expect an acknowledgement within 7 days and a triage decision within 14 days.
 
