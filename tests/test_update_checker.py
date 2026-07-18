@@ -194,6 +194,31 @@ def test_fetch_latest_release_forward_include_prerelease(
     assert result2.update is None
     assert result2.error is None  # suppressed, not error: stable-channel no-op
 
+def test_fetch_latest_release_beta_channel_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``fetch_latest_release`` must handle a list of releases when include_prerelease=True,
+    picking the highest non-draft release.
+    """
+    payload = [
+        _make_release("v2.4.0"),
+        _make_release("v2.5.0-rc1"),
+        _make_release("v2.5.0-rc2"),
+        {**_make_release("v2.6.0"), "draft": True},
+    ]
+    
+    def fake_opener(req: Any, timeout: Any = None) -> _StubResponse:
+        assert "releases?per_page=10" in req.full_url
+        return _StubResponse(json.dumps(payload).encode("utf-8"))
+
+    result = fetch_latest_release(
+        current_version="2.4.0",
+        opener=fake_opener,
+        include_prerelease=True,
+    )
+    assert result.update is not None
+    assert result.update.latest_version == "2.5.0-rc2"
+
 
 def test_parse_release_payload_older_tag_is_no_update() -> None:
     payload = _make_release("v2.2.0")

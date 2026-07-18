@@ -274,7 +274,10 @@ def fetch_latest_release(
     tags unless the caller explicitly opts in (e.g. a future "show
     pre-releases" opt-in in Update Settings).
     """
-    url = f"{GITHUB_API}/{owner}/{repo}/releases/latest"
+    if include_prerelease:
+        url = f"{GITHUB_API}/{owner}/{repo}/releases?per_page=10"
+    else:
+        url = f"{GITHUB_API}/{owner}/{repo}/releases/latest"
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
     open_with = opener or urlopen
     try:
@@ -286,6 +289,36 @@ def fetch_latest_release(
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return UpdateCheckResult(update=None, current_version=current_version, error=str(exc))
+    if include_prerelease and isinstance(payload, list):
+        best_release = None
+        best_version = None
+        for release in payload:
+            if not isinstance(release, dict):
+                continue
+            if release.get("draft"):
+                continue
+            
+            tag = release.get("tag_name")
+            if not isinstance(tag, str) or not tag:
+                continue
+                
+            latest = _strip_leading_v(tag)
+            v = parse_version(latest)
+            if v is None:
+                continue
+                
+            if best_version is None or v > best_version:
+                best_version = v
+                best_release = release
+                
+        if best_release is None:
+            return UpdateCheckResult(
+                update=None,
+                current_version=current_version,
+                error="no valid releases found",
+            )
+        payload = best_release
+
     if not isinstance(payload, dict):
         return UpdateCheckResult(
             update=None,

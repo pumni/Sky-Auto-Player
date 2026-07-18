@@ -25,6 +25,7 @@ BUILD_DIR = PROJECT_ROOT / "build"
 
 APP_NAME = "Sky-Player"
 REQUIRED_ASSETS = ("config.json", "songs")
+REQUIRED_UPDATER_ASSETS = ("updater.bat", "installer")
 OPTIONAL_ASSETS = ("README.md",)
 
 VERSION_PY = PROJECT_ROOT / "src" / "sky_music" / "_version.py"
@@ -279,6 +280,13 @@ def main() -> None:
         src = PROJECT_ROOT / asset
         if src.exists():
             copy_asset(src, release_dir / asset)
+
+    print("[+] Copying updater assets...")
+    for asset in REQUIRED_UPDATER_ASSETS:
+        src = PROJECT_ROOT / asset
+        if not src.exists():
+            raise FileNotFoundError(f"Required updater asset missing: {src}")
+        copy_asset(src, release_dir / asset)
 
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)

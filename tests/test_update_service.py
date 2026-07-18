@@ -309,5 +309,23 @@ def test_record_successful_check_writes_timestamp(isolated_config: Path) -> None
     reloaded = load_config(force_reload=True)
     assert reloaded.update.last_check_ts == 1718200000
 
+def test_check_for_update_beta_channel_passes_include_prerelease(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sky_music.config import AppConfig, UpdateSettings
+    cfg = AppConfig(update=UpdateSettings(channel="beta"))
+    
+    called_with_prerelease = False
 
+    def fake_fetch(**kwargs: Any) -> Any:
+        nonlocal called_with_prerelease
+        called_with_prerelease = kwargs.get("include_prerelease", False)
+        from sky_music.domain.update_checker import UpdateCheckResult
+        return UpdateCheckResult(update=None, current_version="2.3.0")
 
+    monkeypatch.setattr(
+        "sky_music.orchestration.update_service.fetch_latest_release", fake_fetch
+    )
+    from sky_music.orchestration.update_service import check_for_update
+    check_for_update(cfg, current_version="2.3.0")
+    assert called_with_prerelease is True
