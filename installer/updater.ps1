@@ -12,13 +12,15 @@
 #   8. Verify SHA256; mismatch aborts before any install mutation.
 #   9. If Sky-Player.exe is running from this folder: exit 4 unless -ForceClose.
 #  10. Expand-Archive to TEMP staging.
-#  11. Back up existing replaceable files.
-#  12. Copy staging -> install, preserving config.json and completely skipping songs/.
-#  13. On copy failure, roll back all backup files and clean up.
-#  14. Patch update.last_check_ts (Unix int) + update.last_notified_version (handles missing keys).
-#  15. Log one line; print DONE; do NOT relaunch unless -Restart (O3).
+#  11. Verify MANIFEST.json per-file integrity (MANDATORY — fail-closed if
+#       MANIFEST.json is absent; aborts before any install mutation).
+#  12. Back up existing replaceable files.
+#  13. Copy staging -> install, preserving config.json and completely skipping songs/.
+#  14. On copy failure, roll back all backup files and clean up.
+#  15. Patch update.last_check_ts (Unix int) + update.last_notified_version (handles missing keys).
+#  16. Log one line; print DONE; do NOT relaunch unless -Restart (O3).
 #
-# Exit codes: 0 ok, 2 network/asset, 3 sha256, 4 process lock, 5 permission/extract/copy.
+# Exit codes: 0 ok, 2 network/asset, 3 sha256, 4 process lock, 5 permission/extract/copy/manifest.
 
 [CmdletBinding()]
 param(
@@ -43,20 +45,73 @@ try {
     }
 }
 
-# Smoke-test hook: when set, API/asset base (http://localhost:...). Production: unset.
-$FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
+# --- Path Management ---
+# If test environment has already set script-scoped paths, use those.
+# Otherwise, paths will be auto-detected on first use via Initialize-Paths.
+if ($script:InstallRoot -and $script:ExePath -and $script:ConfigPath) {
+    $InstallRoot = $script:InstallRoot
+    $ExePath = $script:ExePath
+    $ConfigPath = $script:ConfigPath
+    $LogDir = $script:LogDir
+    $LogFile = $script:LogFile
+} else {
+    $InstallRoot = $null
+    $ExePath = $null
+    $ConfigPath = $null
+    $LogDir = $null
+    $LogFile = $null
+    $FakeRoot = $null
+}
 
-$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$InstallRoot = Split-Path -Parent $ScriptDir
-$ExePath     = Join-Path $InstallRoot 'Sky-Player.exe'
-$ConfigPath  = Join-Path $InstallRoot 'config.json'
+function Initialize-Paths {
+    if ($global:InstallRoot -and $global:ExePath -and $global:ConfigPath) {
+        return  # already initialized
+    }
+    # Only auto-detect if we're running directly (not dot-sourced for testing)
+    # When dot-sourced, $MyInvocation.MyCommand.Path points to the caller's script
+    if ($MyInvocation.MyCommand.Path -eq $PSCommandPath) {
+        $global:FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
+        $global:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+        $global:InstallRoot = Split-Path -Parent $global:ScriptDir
+        $global:ExePath     = Join-Path $global:InstallRoot 'Sky-Player.exe'
+        $global:ConfigPath  = Join-Path $global:InstallRoot 'config.json'
+    }
+    $global:LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Player'
+    $global:LogFile = Join-Path $global:LogDir 'updater.log'
+}
 
-$LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Player'
-$LogFile = Join-Path $LogDir 'updater.log'
+function Get-ExePath {
+    if (-not $global:ExePath) { Initialize-Paths }
+    return $global:ExePath
+}
+function Get-ConfigPath {
+    if (-not $global:ConfigPath) { Initialize-Paths }
+    return $global:ConfigPath
+}
+function Get-InstallRoot {
+    if (-not $global:InstallRoot) { Initialize-Paths }
+    return $global:InstallRoot
+}
+function Get-LogFile {
+    if (-not $global:LogFile) { Initialize-Paths }
+    return $global:LogFile
+}
 function Write-Log([string]$msg) {
-    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    # Best-effort log writer. Defensive against a null $LogDir / $LogFile —
+    # E.g. when updater.ps1 helpers are dot-sourced into Pester tests where
+    # the script-level $LogDir variable resolves through a different scope
+    # chain than $global:LogDir set by the test BeforeAll. Falling back to
+    # Get-LogFile / Get-InstallRoot (both of which consult Initialize-Paths)
+    # keeps logging workable while never crashing a fail-closed path that
+    # logs an error then returns $false.
+    $logFile = $LogFile
+    if (-not $logFile) { $logFile = Get-LogFile }
+    if (-not $logFile) { return }
+    $logDir = Split-Path -Parent $logFile
+    if (-not $logDir) { return }
+    try { New-Item -ItemType Directory -Force -Path $logDir | Out-Null } catch {}
     $line = '[{0:u}] {1}' -f (Get-Date).ToUniversalTime(), $msg
-    try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {}
+    try { Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 } catch {}
 }
 
 function Assert-HttpsUrl([string]$Url) {
@@ -93,9 +148,10 @@ function Test-WriteAccess([string]$Path) {
 }
 
 function Read-ConfigObject {
-    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $null }
+    $cfgPath = Get-ConfigPath
+    if (-not (Test-Path -LiteralPath $cfgPath)) { return $null }
     try {
-        return (Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json)
+        return (Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json)
     } catch { return $null }
 }
 
@@ -104,58 +160,65 @@ function Write-UpdateFields {
         [int]$LastCheckTs,
         [string]$LastNotifiedVersion
     )
-    if (-not (Test-Path -LiteralPath $ConfigPath)) { return }
-    $text = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8
-
-    # Patch last_check_ts, insert it inside "update" object if missing
-    if ($text -match '"last_check_ts"\s*:\s*\d+') {
-        $text = $text -replace '"last_check_ts"\s*:\s*\d+', "`"last_check_ts`": $LastCheckTs"
-    } else {
-        $text = $text -replace '("update"\s*:\s*\{\s*)', "`$1`n        `"last_check_ts`": $LastCheckTs,"
+    $cfgPath = Get-ConfigPath
+    if (-not (Test-Path -LiteralPath $cfgPath)) { return }
+    
+    # Read and parse JSON properly
+    $raw = Get-Content -Raw -LiteralPath $cfgPath -Encoding UTF8
+    try {
+        $cfg = $raw | ConvertFrom-Json
+    } catch {
+        Write-Log "Failed to parse config.json: $_"
+        throw
     }
-
-    # Patch last_notified_version, insert it inside "update" object if missing
-    if ($text -match '"last_notified_version"\s*:\s*"[^"]*"') {
-        $text = $text -replace '"last_notified_version"\s*:\s*"[^"]*"', "`"last_notified_version`": `"$LastNotifiedVersion`""
-    } else {
-        $text = $text -replace '("update"\s*:\s*\{\s*)', "`$1`n        `"last_notified_version`": `"$LastNotifiedVersion`","
+    
+    # Ensure update object exists - ConvertFrom-Json creates PSCustomObject which doesn't allow dynamic properties
+    # Convert to hashtable if needed
+    if ($cfg -is [System.Management.Automation.PSCustomObject]) {
+        $ht = @{}
+        $cfg.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }
+        $cfg = $ht
     }
-
-    [System.IO.File]::WriteAllText($ConfigPath, $text, (New-Object System.Text.UTF8Encoding($false)))
+    
+    if (-not $cfg.update) { $cfg.update = @{} }
+    
+    # Update the fields
+    $cfg.update.last_check_ts = $LastCheckTs
+    $cfg.update.last_notified_version = $LastNotifiedVersion
+    
+    # Write back with preserved formatting (depth 10 to handle nested objects)
+    $json = $cfg | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Get-RunningVersion {
-    $manifest = Join-Path $InstallRoot 'MANIFEST.json'
+    $manifest = Join-Path (Get-InstallRoot) 'MANIFEST.json'
     if (Test-Path -LiteralPath $manifest) {
         try {
             $m = Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json
             if ($m.version) { return [string]$m.version }
         } catch {}
     }
-    $vi = (Get-Item -LiteralPath $ExePath -ErrorAction SilentlyContinue).VersionInfo
+    $vi = (Get-Item -LiteralPath (Get-ExePath) -ErrorAction SilentlyContinue).VersionInfo
     if ($vi -and $vi.ProductVersion) { return [string]$vi.ProductVersion }
     return '0.0.0'
 }
 
-function Compare-Version([string]$a, [string]$b) {
-    # +1 if a>b, -1 if a<b, 0 if equal. MUST use -split '\.' (literal dot) — G14.
-    $av = ($a -split '[-+]', 2)[0]
-    $bv = ($b -split '[-+]', 2)[0]
-    $ax = @($av -split '\.' | ForEach-Object { [int]$_ })
-    $bx = @($bv -split '\.' | ForEach-Object { [int]$_ })
-    $n = [Math]::Max($ax.Count, $bx.Count)
-    for ($i = 0; $i -lt $n; $i++) {
-        $aa = if ($i -lt $ax.Count) { $ax[$i] } else { 0 }
-        $bb = if ($i -lt $bx.Count) { $bx[$i] } else { 0 }
-        if ($aa -gt $bb) { return 1 }
-        if ($aa -lt $bb) { return -1 }
+function Compare-Version([string]$Current, [string]$Latest) {
+    # Delegate to Sky-Player.exe --compare-versions for PEP 440 compliance.
+    # Exit codes: 0=equal, 1=latest>current, 2=latest<current, 3=parse error.
+    $exe = Get-ExePath
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw "Sky-Player.exe not found at $exe; cannot compare versions"
     }
-    $aPre = $a.Contains('-')
-    $bPre = $b.Contains('-')
-    if (-not $aPre -and $bPre) { return 1 }
-    if ($aPre -and -not $bPre) { return -1 }
-    if ($aPre -and $bPre) { return [string]::CompareOrdinal($a, $b) }
-    return 0
+    & $exe --compare-versions $Current $Latest
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 3) { throw "Version parse failed: $Current vs $Latest" }
+    # Map to -1/0/1 for backward compat with callers
+    if ($exitCode -eq 0) { return 0 }
+    if ($exitCode -eq 1) { return 1 }
+    if ($exitCode -eq 2) { return -1 }
+    throw "Unexpected exit code $exitCode from --compare-versions"
 }
 
 function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
@@ -169,10 +232,15 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
         # 1. Back up existing destination files that will be overwritten
         foreach ($file in $filesToCopy) {
             $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            # Normalize path separators to backslash so preserve-list comparisons
+            # work regardless of whether Get-ChildItem -Recurse emitted '\' or '/'.
+            $relNorm = $rel -replace '/', '\'
             $dest = Join-Path $DestRoot $rel
             
-            # Skip copying config.json or songs/ files entirely
-            if ($rel -eq 'config.json' -or $rel -eq 'songs' -or $rel.StartsWith('songs/')) {
+            # Skip copying config.json or songs/ files entirely (preserve-list mandate).
+            # $relNorm -eq 'songs' is defensive — Get-ChildItem -File never returns
+            # directories, but a future caller could pass a directory in.
+            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\')) {
                 continue
             }
             
@@ -193,9 +261,10 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
         # 2. Copy files from staging to target
         foreach ($file in $filesToCopy) {
             $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            $relNorm = $rel -replace '/', '\'
             $dest = Join-Path $DestRoot $rel
             
-            if ($rel -eq 'config.json' -or $rel -eq 'songs' -or $rel.StartsWith('songs/')) {
+            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\')) {
                 continue
             }
             
@@ -245,6 +314,78 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
     }
 }
 
+function Test-ManifestIntegrity {
+    param([string]$StagingRoot)
+
+    # Returns $true if MANIFEST.json exists at $StagingRoot AND its files[]
+    # array's per-file SHA256 hashes all match the staged files. Returns
+    # $false on: missing MANIFEST, missing files[] array, per-file hash
+    # mismatch, missing file, or JSON parse error.
+    #
+    # This is the fail-closed per-file integrity gate per
+    # docs/distribution-and-update.md §3 "Mandatory MANIFEST.json
+    # Verification". Callers MUST abort the install on $false.
+    #
+    # Per docs/distribution-and-update.md §1 release contract, every
+    # official release ships with MANIFEST.json — a missing MANIFEST
+    # implies either a regressed build pipeline (release.yml --manifest
+    # gate skipped) or a tampered/3rd-party-repackaged zip; neither case
+    # should the updater install.
+    $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Log "MANIFEST.json missing from staging — refusing to install (fail-closed)."
+        Write-Host "MANIFEST.json is missing from the update zip. Per the release contract,"
+        Write-Host "every official release ships with MANIFEST.json. The updater refuses to"
+        Write-Host "install a zip that bypasses the per-file integrity invariant."
+        Write-Host "Re-download from https://github.com/pumni/Sky-Player/releases and try again."
+        return $false
+    }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        if (-not $manifest.files) {
+            Write-Log "MANIFEST.json present but has no `"files`" array — refusing to install."
+            Write-Host "MANIFEST.json is missing its required `"files`" array. Aborting."
+            return $false
+        }
+        $failed = 0
+        foreach ($file in $manifest.files) {
+            $fullPath = Join-Path $StagingRoot $file.path
+            if (Test-Path -LiteralPath $fullPath) {
+                $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash.ToLower()
+                if ($actual -ne $file.sha256) {
+                    Write-Log "MANIFEST mismatch: $($file.path) expected $($file.sha256) got $actual"
+                    $failed++
+                }
+            } else {
+                Write-Log "MANIFEST missing file: $($file.path)"
+                $failed++
+            }
+        }
+        if ($failed -gt 0) {
+            Write-Log "MANIFEST verification failed: $failed file(s)"
+            Write-Host "MANIFEST verification failed: $failed file(s) mismatch. Aborting before any file mutation."
+            return $false
+        }
+        Write-Log "MANIFEST.json verification passed ($($manifest.files.Count) files)"
+        return $true
+    } catch {
+        Write-Log "MANIFEST.json parse error: $_"
+        Write-Host "MANIFEST.json is corrupted or invalid. Aborting."
+        return $false
+    }
+}
+
+# --- MAIN EXECUTION GUARD ---
+# Only run the update logic when executed directly, not when dot-sourced for testing.
+# When dot-sourced, $MyInvocation.InvocationName is '.' (a single dot).
+if ($MyInvocation.InvocationName -eq '.') {
+    Write-Host "DEBUG updater.ps1: Dot-sourced, skipping main execution"
+    return
+}
+
+Write-Host "DEBUG updater.ps1: Running main execution"
+Initialize-Paths
+
 # --- Check Write Permissions ---
 if (-not (Test-WriteAccess $InstallRoot)) {
     Write-Log "write access denied to $InstallRoot"
@@ -288,7 +429,7 @@ try {
             $rt = [string]$r.tag_name; if ($rt -match '^v?(.+)$') { $rt = $Matches[1] }
             if (-not $best) { $best = $r; continue }
             $bt = [string]$best.tag_name; if ($bt -match '^v?(.+)$') { $bt = $Matches[1] }
-            if ((Compare-Version $rt $bt) -gt 0) { $best = $r }
+            if ((Compare-Version -Current $bt -Latest $rt) -gt 0) { $best = $r }
         }
         $candidate = $best
     } else {
@@ -311,7 +452,7 @@ if (-not $candidate) {
 $tagRaw = [string]$candidate.tag_name
 if ($tagRaw -match '^v?(.+)$') { $latestVersion = $Matches[1] } else { $latestVersion = $tagRaw }
 
-if ((Compare-Version $latestVersion $runningVersion) -le 0) {
+if ((Compare-Version -Current $runningVersion -Latest $latestVersion) -le 0) {
     Write-Log "already up to date (running=$runningVersion latest=$latestVersion)"
     Write-Host "You are already using the latest version ($runningVersion)."
     exit 0
@@ -452,6 +593,17 @@ if (-not (Test-Path -LiteralPath $exeInExtract)) {
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 5
     }
+}
+
+# --- Verify MANIFEST.json integrity (mandatory; fail-closed if absent) ---
+# Behavior contract step 11. Per docs/distribution-and-update.md §3, every
+# official release ships with MANIFEST.json. We delegate to
+# Test-ManifestIntegrity (returns $false on missing/corrupt/mismatching
+# manifest) and abort on $false — fail-closed per the per-file integrity
+# invariant.
+if (-not (Test-ManifestIntegrity -StagingRoot $StagingRoot)) {
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    exit 5
 }
 
 # --- Copy with transactional fallback (I16, I21, I22) ---

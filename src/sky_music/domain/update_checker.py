@@ -20,6 +20,8 @@ from urllib.request import Request, urlopen
 
 from packaging.version import InvalidVersion, Version
 
+from sky_music.domain.update_policy import get_policy
+
 AssetPredicate = Callable[[dict[str, Any]], bool]
 
 DEFAULT_OWNER: str = "pumni"
@@ -260,24 +262,24 @@ def fetch_latest_release(
     timeout: float = FETCH_TIMEOUT_S,
     opener: _Opener | None = None,
     asset_predicate: AssetPredicate | None = None,
-    include_prerelease: bool = False,
+    channel: str = "stable",
 ) -> UpdateCheckResult:
-    """Fetch ``releases/latest`` from GitHub and return an update check result.
+    """Fetch latest release from GitHub and return an update check result.
 
     Network failures (DNS, HTTP 4xx/5xx, rate-limit, timeouts, malformed JSON)
     are returned as an error result with ``update=None`` — they never raise.
     The caller decides whether to surface errors to the user; auto-check ignores
     them silently.
 
-    ``include_prerelease`` (default ``False``) is forwarded to
-    :func:`parse_release_payload` so the stable channel never surfaces rc/dev
-    tags unless the caller explicitly opts in (e.g. a future "show
-    pre-releases" opt-in in Update Settings).
+    ``channel`` determines the update policy (stable vs beta). Defaults to stable.
     """
-    if include_prerelease:
-        url = f"{GITHUB_API}/{owner}/{repo}/releases?per_page=10"
-    else:
-        url = f"{GITHUB_API}/{owner}/{repo}/releases/latest"
+    policy = get_policy(channel)
+
+    # The stable/beta distinction is encoded entirely in ``policy.github_api_path``
+    # (``/releases/latest`` vs ``/releases?per_page=10``); we do not also need
+    # to branch on ``include_prerelease`` here. (Previous code had an if/else
+    # that produced the identical URL string on both arms — collapsed.)
+    url = f"{GITHUB_API}/{owner}/{repo}{policy.github_api_path}"
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
     open_with = opener or urlopen
     try:
@@ -289,7 +291,7 @@ def fetch_latest_release(
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return UpdateCheckResult(update=None, current_version=current_version, error=str(exc))
-    if include_prerelease and isinstance(payload, list):
+    if policy.include_prerelease and isinstance(payload, list):
         best_release = None
         best_version = None
         for release in payload:
@@ -330,5 +332,5 @@ def fetch_latest_release(
         current_version=current_version,
         skip_version=skip_version,
         asset_predicate=asset_predicate,
-        include_prerelease=include_prerelease,
+        include_prerelease=policy.include_prerelease,
     )

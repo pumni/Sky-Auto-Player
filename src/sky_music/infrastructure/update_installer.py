@@ -201,36 +201,3 @@ def install_dir_for_frozen() -> Path:
     if not getattr(sys, "frozen", False):
         raise UpdateInstallerError("install_dir_for_frozen only meaningful in frozen builds")
     return Path(sys.executable).resolve().parent
-
-
-
-def find_old_backups(install_dir: Path) -> list[Path]:
-    """Return sibling directories named ``<install_dir>.old.{guid}`` left by
-    past atomic swaps.
-
-    Pure / side-effect free: lists the filesystem but never mutates. The
-    caller (typically ``_check_post_update_flag`` on app boot) is responsible
-    for removing them once a launch with the new version succeeds.
-
-    Returns paths sorted by mtime descending so a single ``rmtree`` pass can
-    be aborted cleanly if any removal fails.
-    """
-    if install_dir.exists() is False or install_dir.parent == install_dir:
-        return []
-    prefix = f"{install_dir.name}.old."
-    matches: list[Path] = []
-    try:
-        for entry in install_dir.parent.iterdir():
-            if not entry.is_dir():
-                continue
-            name = entry.name
-            if not name.startswith(prefix):
-                continue
-            # The .old.suffix must be a non-empty hex-guid-like token.
-            tail = name[len(prefix):]
-            if tail and len(tail) >= 4:
-                matches.append(entry)
-    except OSError:
-        return []
-    matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
-    return matches

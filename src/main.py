@@ -367,6 +367,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="check GitHub for a newer release, print the result and exit (no TUI)",
     )
     diag.add_argument(
+        "--compare-versions",
+        nargs=2,
+        metavar=("CURRENT", "LATEST"),
+        help="compare two version strings (PEP 440). Exit: 0=equal, 1=latest>current, 2=latest<current, 3=parse error",
+    )
+    diag.add_argument(
         "--no-update",
         action="store_true",
         help="suppress the launch-time automatic update check for this session "
@@ -658,6 +664,29 @@ def _run_check_update_command(cfg: AppConfig) -> int:
     return 0
 
 
+def _run_compare_versions_command(current: str, latest: str) -> int:
+    """Headless ``--compare-versions CURRENT LATEST`` — PEP 440 version compare.
+
+    Exit codes:
+      0  = equal
+      1  = latest > current (newer)
+      2  = latest < current (older)
+      3  = parse error / invalid version
+    """
+    from sky_music.domain.update_checker import parse_version
+
+    cv = parse_version(current)
+    lv = parse_version(latest)
+    if cv is None or lv is None:
+        print(f"Error: invalid version string — current={current!r} latest={latest!r}", file=sys.stderr)
+        return 3
+    if lv > cv:
+        return 1
+    if lv < cv:
+        return 2
+    return 0
+
+
 
 def prompt_song_selection(
     profile: str = "balanced",
@@ -763,6 +792,10 @@ def main() -> int:
 
     if getattr(args, "check_update", False):
         return _run_check_update_command(user_cfg)
+
+    if getattr(args, "compare_versions", None):
+        current, latest = args.compare_versions
+        return _run_compare_versions_command(current, latest)
     try:
         controls = build_playback_controls(args)
     except ValueError as exc:

@@ -26,6 +26,7 @@ The external updater (`updater.bat` delegating to `installer/updater.ps1`) enfor
 - **Pre-mutation SHA256 Verification:** The updater downloads the zip and compares its hash against the sidecar *before* touching any files in the installation directory.
 - **TEMP Staging:** Updates are extracted to a temporary staging folder (`%TEMP%\SkyPlayerUpdate-*`).
 - **Write Permission Checks:** The updater validates it has write access to the target installation directory before attempting any copies.
+- **Mandatory MANIFEST.json Verification:** After staging, the updater reads `MANIFEST.json` from the zip and verifies every file's SHA256 against the manifest's per-file hashes. **A zip without `MANIFEST.json` (or with an empty `files` array, or with any mismatched hash) is refused before any install mutation** — this is a fail-closed defense-in-depth invariant. Every official release since the `release.yml --manifest` gate carries `MANIFEST.json`; an absent manifest implies either a regressed build pipeline or a stripped zip, neither of which the updater will install.
 - **Transactional Copy & Rollback:** Binaries are copied over in a transactional sequence. If any part of the operation fails, a rollback routine automatically reverts to the backup state.
 - **Preserve-list (Data Safety):** The updater explicitly skips modifying `config.json` (except for allowed patch fields) and completely ignores the `songs/` folder. User profiles and song libraries are never touched.
 - **Process Guard:** The updater refuses to run if it detects `Sky-Player.exe` is currently running, avoiding file locking issues.
@@ -36,7 +37,14 @@ Users can subscribe to different update channels:
 - By default, users are on the `stable` channel.
 - Users can switch to `beta` through the "Update Settings" in the app or manually editing `update.channel` in `config.json`.
 - The external updater also accepts a command-line override: `updater.bat -Channel beta`.
-- Both the in-app checker (`include_prerelease`) and the external updater use the same channel definition to find the appropriate GitHub Release.
+- Both the in-app checker and the external updater use the same channel definition to find the appropriate GitHub Release. The authoritative policy for each channel is defined in `src/sky_music/domain/update_policy.py`:
+
+| Channel | Pre-releases | GitHub API endpoint |
+|---------|--------------|---------------------|
+| stable  | Excluded     | `/releases/latest`  |
+| beta    | Included     | `/releases?per_page=10` |
+
+The stable channel never surfaces rc/beta/alpha/dev tags; the beta channel includes them and picks the highest non-draft version.
 
 ## 5. Recovery
 

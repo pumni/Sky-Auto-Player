@@ -126,27 +126,23 @@ def check_for_update(
     owner: str = "pumni",
     repo: str = "Sky-Player",
     timeout: float = 5.0,
-    include_prerelease: bool | None = None,
+    channel: str | None = None,
 ) -> UpdateCheckResult:
     """Wrap :func:`sky_music.domain.update_checker.fetch_latest_release` with
     config-driven defaults. Does NOT persist the check timestamp — callers
     must call :func:`record_successful_check` after a non-erroring fetch.
 
-    ``include_prerelease``: when ``None`` (default), follows the policy
-    "auto path = stable only, manual path = stable only". Callers that want to
-    surface pre-releases (e.g. a future "include pre-releases" toggle in
-    Update Settings) can pass ``True``; explicit ``False`` is also honoured.
+    ``channel``: when ``None`` (default), uses ``cfg.update.channel``.
     """
     skip = skip_version if skip_version is not None else cfg.update.skip_version
-    if include_prerelease is None:
-        include_prerelease = (cfg.update.channel == "beta")
+    ch = channel if channel is not None else cfg.update.channel
     return fetch_latest_release(
         owner=owner,
         repo=repo,
         current_version=current_version,
         skip_version=skip or None,
         timeout=timeout,
-        include_prerelease=include_prerelease,
+        channel=ch,
     )
 
 

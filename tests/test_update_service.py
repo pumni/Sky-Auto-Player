@@ -309,17 +309,17 @@ def test_record_successful_check_writes_timestamp(isolated_config: Path) -> None
     reloaded = load_config(force_reload=True)
     assert reloaded.update.last_check_ts == 1718200000
 
-def test_check_for_update_beta_channel_passes_include_prerelease(
+def test_check_for_update_beta_channel_passes_channel(
     isolated_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sky_music.config import AppConfig, UpdateSettings
     cfg = AppConfig(update=UpdateSettings(channel="beta"))
     
-    called_with_prerelease = False
+    called_with_channel = None
 
     def fake_fetch(**kwargs: Any) -> Any:
-        nonlocal called_with_prerelease
-        called_with_prerelease = kwargs.get("include_prerelease", False)
+        nonlocal called_with_channel
+        called_with_channel = kwargs.get("channel")
         from sky_music.domain.update_checker import UpdateCheckResult
         return UpdateCheckResult(update=None, current_version="2.3.0")
 
@@ -328,7 +328,7 @@ def test_check_for_update_beta_channel_passes_include_prerelease(
     )
     from sky_music.orchestration.update_service import check_for_update
     check_for_update(cfg, current_version="2.3.0")
-    assert called_with_prerelease is True
+    assert called_with_channel == "beta"
 
 
 def test_format_update_banner_no_notes() -> None:

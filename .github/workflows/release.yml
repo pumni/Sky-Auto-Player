@@ -55,6 +55,24 @@ jobs:
       - name: Tests — full
         run: uv run pytest
 
+      - name: Pester — installer/updater.ps1 tests
+        run: |
+          # Pester 5.x is required — the test file uses `BeforeAll`/`AfterAll`
+          # at the top of a wrapper Describe block, and root-level setup is
+          # deprecated in Pester 6. Pin to 5.x to keep the syntax compatible.
+          Install-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99 `
+            -Force -Scope CurrentUser -SkipPublisherCheck -AcceptLicense
+          Import-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99 -ErrorAction Stop
+          $r = Invoke-Pester -Path .\installer\Tests\updater.Tests.ps1 -PassThru
+          if ($r.FailedCount -gt 0) {
+            Write-Host "::error::Pester failed: $($r.FailedCount) of $($r.TotalCount) tests"
+            $r.Tests | Where-Object { $_.Result -ne 'Passed' } | ForEach-Object {
+              Write-Host ("  - " + $_.Path + " :: " + $_.ErrorRecord.Exception.Message)
+            }
+            exit 1
+          }
+          Write-Host "Pester OK: $($r.PassedCount)/$($r.TotalCount) tests passed"
+
       - name: Rust wheel precheck (only when rust/ exists)
         run: |
           if (Test-Path rust) {
@@ -74,7 +92,20 @@ jobs:
             throw "I18 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
           }
           Write-Host "Version lock OK: $tagVer"
-          "version=$tagVer" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+          # Compute prerelease flag using the SAME PEP 440 parser the in-app
+          # update checker uses (sky_music.domain.update_checker imports
+          # packaging.version.Version), so the GitHub Release's prerelease
+          # bit agrees with `is_prerelease` in src/sky_music/domain/
+          # update_checker.py. The previous substring match
+          # (`contains(github.ref_name, '-rc') || contains('-beta')`)
+          # missed `-alpha` / `-dev` / `-a` / `-b` — packaging would have
+          # flagged those as prerelease, so they would have been silently
+          # promoted to stable channel via /releases/latest and picked up
+          # by the external updater's stable selector.
+          $isPre = uv run python -c "from packaging.version import Version; print('true' if Version('$tagVer').is_prerelease else 'false')"
+          Write-Host "is_prerelease: $isPre"
+          "version=$tagVer"       | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+          "is_prerelease=$isPre"  | Set-Content $env:GITHUB_OUTPUT -Append -Encoding ASCII
 
       - name: Build + manifest + smoke test
         run: uv run --env-file .env python -m build_app --manifest
@@ -108,6 +139,6 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          prerelease: ${{ steps.verlock.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -57,3 +57,8 @@ src/sky_music/_version.py
 
 # Local uv environment overrides (copy from .env.example)
 .env
+
+# Pester test report artifacts (regenerated on every Invoke-Pester run, never
+# source — also excluded from release zips by build_app.py's installer_ignore).
+TestResults.xml
+**/TestResults.xml

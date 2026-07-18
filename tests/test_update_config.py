@@ -286,3 +286,145 @@ def test_persist_update_last_notified(isolated_config: Path) -> None:
     clear_config_cache()
     reloaded = load_config(force_reload=True)
     assert reloaded.update.last_notified_version == "2.4.0"
+
+
+# ── save_config concurrency (Bug D regression guard) ──────────────────────────
+#
+# Bug D: the original save_config held _runtime_cfg_lock only around the
+# in-memory cache update, NOT around the file write. Two threads doing
+# save_config concurrently could each truncate CONFIG_PATH.open("w") and emit
+# interleaved JSON, corrupting config.json. The fix wraps the full RMW in
+# _runtime_cfg_lock and uses os.replace(tmp, path) so a concurrent reader
+# either sees the old or new contents atomically — never a partial write.
+#
+# The test races N threads doing save_config with distinct field values
+# (different theme + auto_check + skip_version combos). After joining, the
+# config file must: (a) parse as valid JSON, (b) carry the schema_version
+# field, (c) carry consistent values from the *last* winning writer (one
+# tarefa's full overlay — fields must not bleed across writers).
+#
+# Note: this is a regression test on the LOCK + atomic-replace strategy,
+# not on absence of *content* races (a write that loads-then-overlays will
+# still lose updates made between load and write by another writer);
+# seemingly "dropped" updates are the intended consequence of last-writer-
+# wins for a single user-facing setting change, but a TRUNCATED OR
+# INTERLEAVED file is a corruption bug and is what this test guards.
+
+def test_save_config_concurrent_writes_do_not_corrupt(
+    isolated_config: Path,
+) -> None:
+    import threading
+
+    from sky_music.config import save_config
+
+    N_THREADS = 8
+    N_ITERS = 25
+    barrier = threading.Barrier(N_THREADS)
+    errors: list[BaseException] = []
+
+    def worker(idx: int) -> None:
+        try:
+            barrier.wait()
+            for i in range(N_ITERS):
+                cfg = AppConfig()
+                cfg.theme = f"theme-{idx}-{i}"
+                cfg.update.auto_check = (i % 2 == 0)
+                cfg.update.skip_version = f"sk-{idx}-{i}"
+                save_config(cfg)
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(N_THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert errors == [], f"worker exceptions: {errors}"
+
+    # File must parse cleanly — no truncated JSON or interleaved writes.
+    raw = json.loads(isolated_config.read_text(encoding="utf-8"))
+
+    # Every save_config writes schema_version — verifies the file is one
+    # writer's complete output, not a partial overlay.
+    assert raw["schema_version"] == config_mod.SCHEMA_VERSION
+
+    # The last writer must have written all three of *its* fields — a
+    # truncated/partial write would surface as mismatched index suffixes
+    # (e.g. theme from writer A but skip_version from writer B).
+    theme = raw["theme"]
+    auto_check = raw["update"]["auto_check"]
+    skip_version = raw["update"]["skip_version"]
+    # All three fields share the same "{idx}-{i}" suffix pair — i.e. they
+    # were emitted by the same save_config call. The exact (idx, i) pair
+    # doesn't matter; structural consistency does.
+    assert theme.startswith("theme-")
+    assert skip_version.startswith("sk-")
+    theme_suffix = theme[len("theme-"):]
+    skip_suffix = skip_version[len("sk-"):]
+    assert theme_suffix == skip_suffix, (
+        f"interleaved write detected: theme={theme_suffix} but "
+        f"skip_version={skip_suffix} (Bug D regression — partial write)"
+    )
+    # auto_check is a bool — its value should be (i % 2 == 0) for whatever
+    # i the last writer used. We can't easily verify the bool directly
+    # without re-deriving i, but we can at least assert it is a proper bool
+    # (not a stray int from a half-written JSON update).
+    assert isinstance(auto_check, bool)
+
+
+def test_save_config_is_atomic_under_reader(isolated_config: Path) -> None:
+    """A reader that opens CONFIG_PATH mid-write must never see a truncated body.
+
+    Bug D regression guard part 2: BEFORE the fix, the writer used
+    ``CONFIG_PATH.open("w")`` which truncates the file *first*, then writes
+    the JSON body. A reader opening the file in that window saw ``{`` or
+    ``""`` and would throw ``json.JSONDecodeError``. AFTER the fix, the
+    writer writes to ``config.json.tmp`` and ``os.replace``-swaps it in —
+    so a reader always observes either the old or the new contents, never
+    a partial file.
+    """
+    import threading
+
+    from sky_music.config import save_config
+
+    stop = threading.Event()
+    reader_errors: list[BaseException] = []
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                # The reader does NOT hold _runtime_cfg_lock — real readers
+                # (load_config at startup, the updater.ps1 patch step) do not
+                # take it either, so this mirrors a real concurrent observer.
+                text = isolated_config.read_text(encoding="utf-8")
+                json.loads(text)
+            except json.JSONDecodeError as e:
+                # JSON corruption is the Bug D failure mode — surface it.
+                reader_errors.append(e)
+            except OSError:
+                # Windows: during os.replace, a brief window exists where the
+                # target file handle returns ERROR_SHARING_VIOLATION /
+                # PermissionError to other openers. This is the kernel's
+                # file-lock semantics for a swap-in-progress — not corruption.
+                # The next iteration will see either the old or new complete
+                # contents (atomic guarantee). Swallowing OSError here is
+                # therefore correct and matches what load_config already does
+                # (returns {} via _load_raw's broad except).
+                pass
+
+    def writer() -> None:
+        for i in range(200):
+            cfg = AppConfig()
+            cfg.theme = f"theme-{i}"
+            cfg.update.skip_version = f"sk-{i}"
+            save_config(cfg)
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    writer()
+    stop.set()
+    reader_thread.join(timeout=5)
+    assert not reader_errors, (
+        f"reader observed truncated/corrupt config.json: {reader_errors[:3]}"
+    )

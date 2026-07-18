@@ -171,22 +171,21 @@ def test_parse_release_payload_stable_tag_unaffected_by_gating() -> None:
     assert result.update is not None
     assert result.update.latest_version == "2.5.0"
 
-
-def test_fetch_latest_release_forward_include_prerelease(
+def test_fetch_latest_release_forward_channel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``fetch_latest_release`` must forward ``include_prerelease`` to
-    :func:`parse_release_payload` so callers can opt into pre-releases."""
+    """``fetch_latest_release`` must forward ``channel`` to use the correct policy."""
+    # Test with beta channel (should include pre-releases)
     payload = _make_release("v2.5.0rc1")
     result = fetch_latest_release(
         current_version="2.4.0",
         opener=_stub_opener(payload),
-        include_prerelease=True,
+        channel="beta",
     )
     assert result.update is not None
     assert result.update.latest_version == "2.5.0rc1"
 
-    # Same payload, default include_prerelease=False → suppressed.
+    # Same payload, default stable channel → suppressed.
     result2 = fetch_latest_release(
         current_version="2.4.0",
         opener=_stub_opener(payload),
@@ -194,10 +193,11 @@ def test_fetch_latest_release_forward_include_prerelease(
     assert result2.update is None
     assert result2.error is None  # suppressed, not error: stable-channel no-op
 
+
 def test_fetch_latest_release_beta_channel_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``fetch_latest_release`` must handle a list of releases when include_prerelease=True,
+    """``fetch_latest_release`` must handle a list of releases when channel=beta,
     picking the highest non-draft release.
     """
     payload = [
@@ -214,7 +214,7 @@ def test_fetch_latest_release_beta_channel_list(
     result = fetch_latest_release(
         current_version="2.4.0",
         opener=fake_opener,
-        include_prerelease=True,
+        channel="beta",
     )
     assert result.update is not None
     assert result.update.latest_version == "2.5.0-rc2"

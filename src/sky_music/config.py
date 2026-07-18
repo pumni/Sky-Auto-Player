@@ -5,7 +5,9 @@ overridden by CLI flags.  Saving happens when the user explicitly changes a
 setting in the UI.
 """
 
+import contextlib
 import json
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -478,62 +480,89 @@ def load_config(*, force_reload: bool = False) -> AppConfig:
 
 
 def save_config(cfg: AppConfig) -> None:
-    """Persist ``cfg`` to config.json, preserving any unknown keys."""
-    raw = _load_raw()
-    
-    # Update known keys
-    raw["theme"]                        = cfg.theme
-    raw["ui_background_mode"]           = cfg.ui_background_mode
-    raw["default_timing_profile"]       = canonical_profile_name(cfg.default_timing_profile)
-    raw["default_tempo_scale"]          = cfg.default_tempo_scale
-    raw["game_fps"]                     = cfg.game_fps
-    raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
-    raw["verbose_hud"]                  = cfg.verbose_hud
-    raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
-    raw["input_path_warn_us"]           = cfg.input_path_warn_us
-    raw.pop("rt_time_critical", None)
-    raw["rt_priority_mode"]             = cfg.rt_priority_mode
-    raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
-    raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
-    raw["hotkeys"] = {
-        "pause":   cfg.hotkeys.pause,
-        "skip":    cfg.hotkeys.skip,
-        "quit":    cfg.hotkeys.quit,
-        "refocus": cfg.hotkeys.refocus,
-        "panic":   cfg.hotkeys.panic,
-    }
-    raw["safety"] = {
-        "prompt_on_medium_risk": cfg.safety.prompt_on_medium_risk,
-        "prompt_on_high_risk":   cfg.safety.prompt_on_high_risk,
-    }
-    raw["frame_timing"] = {
-        "min_visible_hold_frames": cfg.frame_timing.min_visible_hold_frames,
-        "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
-    }
-    raw["timing_profiles"]              = cfg.timing_profiles
-    raw["songs_dir"]                    = cfg.songs_dir
-    raw["sky_process_names"]            = cfg.sky_process_names
-    raw["allow_title_fallback"]         = cfg.allow_title_fallback
-    raw["update"] = {
-        "auto_check": cfg.update.auto_check,
-        "channel": cfg.update.channel,
-        "skip_version": cfg.update.skip_version,
-        "check_interval_s": cfg.update.check_interval_s,
-        "last_check_ts": cfg.update.last_check_ts,
-        "last_error_ts": cfg.update.last_error_ts,
-        "last_notified_version": cfg.update.last_notified_version,
-        "legacy_old_dir_sweep_pending": cfg.update.legacy_old_dir_sweep_pending,
-    }
-    raw["schema_version"]               = SCHEMA_VERSION
+    """Persist ``cfg`` to config.json, preserving any unknown keys.
 
+    Concurrency: the full read-modify-write cycle (load raw → overlay known
+    keys → write file → swap into place → update in-memory cache) is wrapped
+    in ``_runtime_cfg_lock`` AND uses an atomic ``os.replace`` swap. Two
+    writers racing would otherwise interleave mid-stream and corrupt
+    config.json — a real scenario once the picker's launch-time update worker
+    (``app.py::check_for_updates_worker``) and the playback-screen silent
+    check (``playback_app.py::_check_for_updates_silent``) both call
+    ``record_successful_check`` concurrently.
+    """
     global _runtime_cfg
-    try:
-        with CONFIG_PATH.open("w", encoding="utf-8") as f:
-            json.dump(raw, f, indent=4)
-        with _runtime_cfg_lock:
-            _runtime_cfg = cfg
-    except Exception as e:
-        print(f"Failed to save config: {e}")
+    with _runtime_cfg_lock:
+        raw = _load_raw()
+
+        # Update known keys
+        raw["theme"]                        = cfg.theme
+        raw["ui_background_mode"]           = cfg.ui_background_mode
+        raw["default_timing_profile"]       = canonical_profile_name(cfg.default_timing_profile)
+        raw["default_tempo_scale"]          = cfg.default_tempo_scale
+        raw["game_fps"]                     = cfg.game_fps
+        raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
+        raw["verbose_hud"]                  = cfg.verbose_hud
+        raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
+        raw["input_path_warn_us"]           = cfg.input_path_warn_us
+        raw.pop("rt_time_critical", None)
+        raw["rt_priority_mode"]             = cfg.rt_priority_mode
+        raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
+        raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
+        raw["hotkeys"] = {
+            "pause":   cfg.hotkeys.pause,
+            "skip":    cfg.hotkeys.skip,
+            "quit":    cfg.hotkeys.quit,
+            "refocus": cfg.hotkeys.refocus,
+            "panic":   cfg.hotkeys.panic,
+        }
+        raw["safety"] = {
+            "prompt_on_medium_risk": cfg.safety.prompt_on_medium_risk,
+            "prompt_on_high_risk":   cfg.safety.prompt_on_high_risk,
+        }
+        raw["frame_timing"] = {
+            "min_visible_hold_frames": cfg.frame_timing.min_visible_hold_frames,
+            "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
+        }
+        raw["timing_profiles"]              = cfg.timing_profiles
+        raw["songs_dir"]                    = cfg.songs_dir
+        raw["sky_process_names"]            = cfg.sky_process_names
+        raw["allow_title_fallback"]         = cfg.allow_title_fallback
+        raw["update"] = {
+            "auto_check": cfg.update.auto_check,
+            "channel": cfg.update.channel,
+            "skip_version": cfg.update.skip_version,
+            "check_interval_s": cfg.update.check_interval_s,
+            "last_check_ts": cfg.update.last_check_ts,
+            "last_error_ts": cfg.update.last_error_ts,
+            "last_notified_version": cfg.update.last_notified_version,
+            "legacy_old_dir_sweep_pending": cfg.update.legacy_old_dir_sweep_pending,
+        }
+        raw["schema_version"]               = SCHEMA_VERSION
+
+        try:
+            # Write to a sibling tempfile then os.replace into place. On NTFS
+            # (and POSIX) ``os.replace`` is atomic: a concurrent reader will
+            # observe either the old contents or the new contents, never a
+            # truncated/partial write. The tempfile inherits CONFIG_PATH's
+            # directory so the rename stays on the same volume.
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CONFIG_PATH.with_suffix(".json.tmp")
+            try:
+                with tmp.open("w", encoding="utf-8") as f:
+                    json.dump(raw, f, indent=4)
+                os.replace(tmp, CONFIG_PATH)
+                _runtime_cfg = cfg
+            except Exception:
+                # tmp.open()/os.replace may fail (disk full, antivirus, etc.).
+                # Clean up the tempfile if it exists; suppress cleanup errors.
+                with contextlib.suppress(Exception):
+                    tmp.unlink(missing_ok=True)
+                raise
+        except Exception as e:
+            # Failure to persist is non-fatal; we still hold the latest
+            # in-memory cfg so the running session keeps working.
+            print(f"Failed to save config: {e}")
 
 
 def apply_config_defaults(args: Any, cfg: AppConfig) -> None:

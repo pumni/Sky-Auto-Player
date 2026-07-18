@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -100,7 +101,11 @@ VSVersionInfo(
 """
     VERSION_FILE.write_text(content.strip(), encoding="utf-8")
 
-def copy_asset(src: Path, dst: Path) -> None:
+def copy_asset(
+    src: Path,
+    dst: Path,
+    ignore: Callable[[str, list[str]], set[str]] | None = None,
+) -> None:
     if dst.exists():
         if dst.is_dir():
             shutil.rmtree(dst)
@@ -108,7 +113,12 @@ def copy_asset(src: Path, dst: Path) -> None:
             dst.unlink()
 
     if src.is_dir():
-        shutil.copytree(src, dst)
+        # `ignore` is a callable returned by shutil.ignore_patterns(...). We
+        # use it to exclude the installer/Tests/ subtree and stale
+        # TestResults.xml from releases — those are dev-only artifacts and
+        # bloat the zip (the Tests/ subtree also leaks machine name / user /
+        # OS via the committed TestResults.xml).
+        shutil.copytree(src, dst, ignore=ignore)
     else:
         shutil.copy2(src, dst)
 
@@ -282,11 +292,17 @@ def main() -> None:
             copy_asset(src, release_dir / asset)
 
     print("[+] Copying updater assets...")
+    # Exclude dev-only artifacts from the installer/ tree shipped with the
+    # release: the Pester Tests/ subtree and stale TestResults.xml bloat the
+    # zip and leak the previous build's machine/user identifiers. Embedded
+    # updater.ps1 + its #Requires manifest are still copied.
+    installer_ignore = shutil.ignore_patterns("Tests", "TestResults.xml", "__pycache__")
     for asset in REQUIRED_UPDATER_ASSETS:
         src = PROJECT_ROOT / asset
         if not src.exists():
             raise FileNotFoundError(f"Required updater asset missing: {src}")
-        copy_asset(src, release_dir / asset)
+        ignore = installer_ignore if asset == "installer" else None
+        copy_asset(src, release_dir / asset, ignore=ignore)
 
     if not args.skip_test and not run_smoke_test(release_dir / f"{APP_NAME}.exe"):
         raise SystemExit(1)
