@@ -24,11 +24,8 @@ _DEV_SENTINEL = "0.0.0-dev"
 
 def _resolve_version() -> str:
     try:
-        # fmt: off
-        from sky_music._version import (
-            __version__ as _v,  # type: ignore  # pyright: ignore[reportMissingImports]
-        )
-        # fmt: on
+        _version_mod = importlib.import_module("sky_music._version")
+        _v = getattr(_version_mod, "__version__", None)
         if isinstance(_v, str) and _v:
             return _v
     except ImportError:
