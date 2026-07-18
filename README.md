@@ -52,28 +52,34 @@ Sky Player reads JSON, skysheet, or JSON-compatible txt song files downloaded fr
 
 ## Quick Start
 
-<a href="https://github.com/pumni/Sky-Player/releases/latest">
-  <img src="https://github.com/machiav3lli/oandbackupx/blob/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png" alt="Download from GitHub" height="50">
-</a>
+### Portable install (recommended)
 
-### Option 1: Standalone Release (Recommended)
+1. Download `Sky-Player-v<latest>.zip` from the [latest release](https://github.com/pumni/Sky-Player/releases/latest).
+2. Extract the zip anywhere (e.g. `C:\Sky-Player\`).
+3. Double-click `Sky-Player.exe`. Sky Player keeps all its files in that folder — your
+   profile, your songs, and your config stay together.
 
-1. Download `Sky-Player.zip` from [Releases](https://github.com/pumni/Sky-Player/releases).
-2. Extract the ZIP anywhere on your PC.
-3. Launch **Sky**, then double-click `Sky-Player.exe`.
+> Optional Start Menu shortcut + `.skysheet` file association may ship in a later minor
+> (see `docs/2026-07-18_distribution-mpv-pattern-plan.md` Phase 4). Until then, Sky Player
+> is fully portable with no installer.
 
-### Option 2: Running from Source
+### Updates
 
-Requires Python >= 3.11 and `uv`:
-
-```bash
-# Install dependencies
-uv sync
-
-# Run the app
-uv run python src/main.py
-# Or use the quick script: .\play.bat
-```
+- Sky Player checks GitHub for new releases in the background and shows a banner when an
+  update is available. **It does NOT self-update.**
+- To update: close Sky Player, run `updater.bat` in the install folder, then reopen
+  `Sky-Player-v<latest>`.
+- The updater verifies the SHA256 of the downloaded zip against a sidecar **before** touching
+  any install files. It checks write permission inside the folder, stages in TEMP, and copies
+  binaries transactionally while **completely preserving your `config.json` and `songs/` folder**.
+- It does not modify or copy anything inside your `songs/` folder, ensuring your personal song collection is never touched.
+- It may update only two fields in `config.json`: `update.last_check_ts` (Unix seconds) and
+  `update.last_notified_version`.
+- It writes a single line to `%LOCALAPPDATA%\Sky-Player\updater.log` per run.
+- Users on the `beta` channel can run `updater.bat -Channel beta`. Channel selection is also
+  read from `config.json` (`update.channel`) and from Update Settings in the app.
+- If Windows SmartScreen warns on first run of a new build, that is expected until code
+  signing lands (separate track; not part of 2.4.0).
 
 ### Adding More Songs
 
@@ -85,6 +91,28 @@ uv run python src/main.py
 ---
 
 ## FAQ
+
+Q: How do I update Sky Player?
+A: Close Sky Player, double-click `updater.bat` in the install folder, follow the prompt,
+   then reopen `Sky-Player.exe`. If the updater says the app is still running, close it and
+   re-run (or use `updater.bat -ForceClose` only if you accept force-stopping the process).
+
+Q: Does Sky Player self-update?
+A: No, by design. Like mpv, Sky Player notifies you when a new version is available, but
+   does NOT download or install the new version while running. Run `updater.bat` to apply
+   the update — it is one double-click away.
+
+Q: Can I move my Sky Player folder?
+A: Yes. The whole folder is portable. No registry entries are written by the portable build.
+
+Q: Will updating wipe my config or songs?
+A: No. The updater never replaces or touches `config.json` or `songs/`. It only patches
+   `update.last_check_ts` and `update.last_notified_version` inside your existing config.
+   Your theme, timing profiles, and song library stay completely untouched.
+
+Q: Where can I find the updater log?
+A: `%LOCALAPPDATA%\Sky-Player\updater.log`. It is append-only and does not rotate. Each line
+   has a UTC timestamp and a short status; no personal information is logged.
 
 <details>
 <summary><b>Does this work on macOS / Linux?</b></summary>
