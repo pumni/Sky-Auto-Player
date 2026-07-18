@@ -293,3 +293,38 @@ def test_update_settings_modal_escape_works_immediately(
         )
 
     _run(_with_app(actions))
+
+
+def test_update_banner_modal_renders(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sky_music.ui.textual_app.modals import UpdateBannerModal
+
+    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+
+    notes = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11"
+
+    async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
+        modal = UpdateBannerModal(
+            latest_version="2.0.1",
+            current_version="2.0.0",
+            release_notes=notes,
+            published_at="2024-01-01T12:00:00Z",
+            theme_name="aurora",
+        )
+        app.push_screen(modal)
+        await pilot.pause()
+
+        # Check for static banner text
+        banner = modal.query_one("#update-banner-info").render()
+        assert banner is not None
+        banner_text = str(banner)
+        assert "Sky Player v2.0.1 is now available." in banner_text
+        assert "Line 1" in banner_text
+        assert "Line 11" not in banner_text
+        assert "... (see GitHub for full notes)" in banner_text
+
+        options = modal.query_one("#update-banner-options")
+        assert options is not None
+
+        await pilot.press("escape")
+
+    _run(_with_app(actions))

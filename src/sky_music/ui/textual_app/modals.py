@@ -505,7 +505,6 @@ class UpdateSettingsModal(PickerModal[str | None]):
                 markup=True,
             )
 
-        yield Rule.horizontal(id="update-settings-divider-2")
         # Action buttons — using Textual Button.Pressed → on_button_pressed.
         with Horizontal(id="row-actions"):
             yield Button(
@@ -569,3 +568,74 @@ class UpdateSettingsModal(PickerModal[str | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class UpdateBannerModal(PickerModal[str | None]):
+    """Modal to notify the user of an available update (Phase 5)."""
+
+    BINDINGS = [("escape", "close", "Dismiss")]
+
+    def __init__(
+        self,
+        latest_version: str,
+        current_version: str,
+        *,
+        release_notes: str = "",
+        published_at: str = "",
+        theme_name: str = "aurora",
+    ) -> None:
+        PickerModal.__init__(
+            self,
+            "Update available",
+            [
+                KeyHint("enter", "Select"),
+                KeyHint("escape", "Dismiss"),
+            ],
+            theme_name=theme_name,
+        )
+        self.options = [
+            PickerOption("github", "Open Releases"),
+            PickerOption("skip", "Skip this version"),
+            PickerOption("close", "Dismiss"),
+        ]
+        from sky_music.domain.update_checker import UpdateInfo
+        from sky_music.orchestration.update_service import format_update_banner
+        
+        update_info = UpdateInfo(
+            latest_version=latest_version,
+            download_url="",
+            release_notes=release_notes,
+            html_url="",
+            published_at=published_at,
+        )
+        self._banner_text = format_update_banner(update_info, current_version=current_version)
+
+    def compose_modal_content(self) -> ComposeResult:
+        # Use a fresh id for snapshot testing (Phase 5)
+        yield Static(self._banner_text, id="update-banner-info")
+        yield OptionList(*(o.label for o in self.options), id="update-banner-options")
+
+    def on_modal_mounted(self) -> None:
+        options = self.query_one("#update-banner-options", OptionList)
+        options.highlighted = 0
+        self.set_focus(options)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss("close")
+        elif event.key == "enter":
+            event.stop()
+            self._select_current()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self._select_current()
+
+    def _select_current(self) -> None:
+        options = self.query_one("#update-banner-options", OptionList)
+        idx = options.highlighted
+        if idx is not None and 0 <= idx < len(self.options):
+            self.dismiss(self.options[idx].value)
+        else:
+            self.dismiss(None)

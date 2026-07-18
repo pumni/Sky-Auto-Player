@@ -33,9 +33,29 @@ from sky_music.domain.update_checker import (
 )
 
 
-def format_update_banner(update: UpdateInfo) -> str:
-    """Format the update banner string (Phase 5 will replace this stub)."""
-    return f"Sky Player v{update.latest_version} available"
+def format_update_banner(update: UpdateInfo, current_version: str) -> str:
+    """Format the update banner string."""
+    latest = update.latest_version
+    
+    lines = [
+        f"Sky Player v{latest} is now available.",
+        f"You are running v{current_version}.",
+        "To update: close Sky Player, run updater.bat, reopen.",
+        ""
+    ]
+    
+    notes = (update.release_notes or "").strip()
+    if notes:
+        # Truncate to max 10 lines
+        note_lines = notes.splitlines()
+        if len(note_lines) > 10:
+            note_lines = note_lines[:10]
+            note_lines.append("... (see GitHub for full notes)")
+        lines.append("\n".join(note_lines))
+    else:
+        lines.append("(no release notes)")
+        
+    return "\n".join(lines)
 
 
 def current_unix_ts() -> int:

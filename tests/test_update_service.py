@@ -329,3 +329,35 @@ def test_check_for_update_beta_channel_passes_include_prerelease(
     from sky_music.orchestration.update_service import check_for_update
     check_for_update(cfg, current_version="2.3.0")
     assert called_with_prerelease is True
+
+
+def test_format_update_banner_no_notes() -> None:
+    from sky_music.domain.update_checker import UpdateInfo
+    from sky_music.orchestration.update_service import format_update_banner
+    update = UpdateInfo(
+        latest_version="2.0.1",
+        download_url="url",
+        release_notes="",
+        html_url="html",
+        published_at="time"
+    )
+    banner = format_update_banner(update, current_version="2.0.0")
+    assert "Sky Player v2.0.1 is now available." in banner
+    assert "You are running v2.0.0." in banner
+    assert "(no release notes)" in banner
+
+def test_format_update_banner_truncates_long_notes() -> None:
+    from sky_music.domain.update_checker import UpdateInfo
+    from sky_music.orchestration.update_service import format_update_banner
+    notes = "\n".join(f"line {i}" for i in range(15))
+    update = UpdateInfo(
+        latest_version="2.0.1",
+        download_url="url",
+        release_notes=notes,
+        html_url="html",
+        published_at="time"
+    )
+    banner = format_update_banner(update, current_version="2.0.0")
+    assert "line 9" in banner
+    assert "line 10" not in banner
+    assert "... (see GitHub for full notes)" in banner

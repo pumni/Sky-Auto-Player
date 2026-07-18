@@ -229,6 +229,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_mount(self) -> None:
         self._set_version_indicator()
+        self._restore_pending_update_indicator()
         # Auto-check after a short quiet window so the launch is not
         # immediately sent to the network — improves perceived responsiveness
         # and avoids a network hit on metered connections the instant the
@@ -1122,7 +1123,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if result.update is not None:
             from sky_music.config import persist_update_last_notified
             persist_update_last_notified(self.cfg, result.update.latest_version)
-            self.call_from_thread(self.minimal_notify_update_available, result.update)
+            self.call_from_thread(self._push_update_banner_modal, result.update)
         elif result.error is None and force:
             self.call_from_thread(
                 self.notify,
@@ -1131,7 +1132,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 timeout=4,
             )
 
-    def minimal_notify_update_available(self, update: Any) -> None:
+    def _push_update_banner_modal(self, update: Any) -> None:
         if update is None:
             return
 
@@ -1144,17 +1145,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             from sky_music.platform.win32 import inputs
             inputs.debug_log("[app] failed to set update version indicator")
 
-        from sky_music.orchestration.update_service import format_update_banner
-        banner = format_update_banner(update)
-        self.notify(banner, severity="information", timeout=6)
-
-        self.notify(
-            f"Update v{update.latest_version} available! (press Esc to dismiss)",
-            severity="information",
-            timeout=6,
-        )
-        from sky_music.ui.textual_app.modals import UpdateModal
-        modal = UpdateModal(
+        from sky_music.ui.textual_app.modals import UpdateBannerModal
+        modal = UpdateBannerModal(
             latest_version=update.latest_version,
             current_version=VERSION,
             release_notes=getattr(update, "release_notes", "") or "",
@@ -1164,8 +1156,17 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.push_screen(modal, lambda res: self._handle_update_response(res, update))
 
     def _restore_pending_update_indicator(self) -> None:
-        # Phase 1 stub; Phase 5 restores banner-on-launch from last_notified_version.
-        pass
+        notified = self.cfg.update.last_notified_version
+        if notified and notified != VERSION:
+            from sky_music.domain.update_checker import UpdateInfo
+            mock_update = UpdateInfo(
+                latest_version=notified,
+                download_url="",
+                release_notes="",
+                html_url="",
+                published_at=""
+            )
+            self._push_update_banner_modal(mock_update)
 
     def _clear_pending_update_indicator(self) -> None:
         self._update_available_version = None
