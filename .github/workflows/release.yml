@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  FORCE_COLOR: "1"
+
+jobs:
+  release:
+    name: Build + attest + publish
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Materialize .env
+        run: |
+          New-Item -ItemType File -Force -Path .env | Out-Null
+          Copy-Item -Force .env.example .env
+
+      - name: Sync deps (frozen)
+        run: uv sync --frozen
+
+      - name: Runtime audit — free-threaded readiness
+        run: uv run --env-file .env python scripts/audit_free_threaded_wheels.py
+
+      - name: Lint — ruff
+        run: uv run ruff check .
+
+      - name: Types — pyright
+        run: uv run pyright
+
+      - name: Security — AGENTS.md P0 audit
+        run: uv run --env-file .env python scripts/audit_security_mandates.py
+
+      - name: Tests — full
+        run: uv run pytest
+
+      - name: Rust wheel precheck (only when rust/ exists)
+        run: |
+          if (Test-Path rust) {
+            uv run --env-file .env python scripts/build_rust_wheel.py
+          } else {
+            Write-Host "rust/ absent — skipping rust precheck (no-op per AGENTS.md §Build Environment)."
+          }
+
+      - name: Assert tag version equals pyproject.toml
+        id: verlock
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(.+)$') { throw "Tag must look like vX.Y.Z[-suffix], got: $tag" }
+          $tagVer = $Matches[1]
+          $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          if ($tagVer -ne $pyVer) {
+            throw "I18 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
+          }
+          Write-Host "Version lock OK: $tagVer"
+          "version=$tagVer" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+
+      - name: Build + manifest + smoke test
+        run: uv run --env-file .env python -m build_app --manifest
+
+      - name: Stage release assets
+        id: stage
+        run: |
+          $ver = "${{ steps.verlock.outputs.version }}"
+          $rel = "dist\Sky-Player-v$ver"
+          if (-not (Test-Path $rel)) { throw "Missing release dir: $rel" }
+          Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Player-v$ver.zip" -Force
+          $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Player-v$ver.zip").Hash
+          "$h  Sky-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Player-v$ver.zip.sha256" -Encoding ASCII
+          Copy-Item "$rel\MANIFEST.json" "$env:RUNNER_TEMP\MANIFEST.json"
+          "version=$ver" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/MANIFEST.json
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/MANIFEST.json
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
