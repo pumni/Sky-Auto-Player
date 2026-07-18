@@ -90,9 +90,22 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   its scan codes is active or pending release (an early pop would become a dropped note).
   `next_authored_us` is guard-aware so a blocked batch reports its authored time as the deadline
   (no busy-loop while waiting for the blocking release).
-- **Wake-error probe** (`enable_adaptive_spin`): ~10×2 ms probe sleeps run strictly *before*
+- **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
-  `effective_spin_threshold = clamp(max_error + 200, 300, 3000)` µs.
+  `effective_spin_threshold = clamp(spin_floor_us, 3000, p90(errors) + 100)` µs (default
+  `spin_floor_us = 700`, cap 3000 µs). Recorded in `runtime_options.probe_wake_errors_us`.
+- **Cross-session EMA lead cache (Phase D):** `SendLatencyEstimator` exports/imports per-kind
+  EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
+  warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
+  `runtime_options.lead_cache_loaded`.
+- **Idle-gap core warmup (Phase E):** When the gap since last `SendInput` ≥ 20 ms, the dispatch
+  thread runs ≤ 50 µs busy-spin before drain to warm the CPU core. Skipped when already past the
+  note deadline. Hook: `DispatchLoop.core_warmup_hook`.
+- **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
+  since the last reprobe, the dispatch thread re-probes timer wake error (8 × 2 ms) and applies
+  a new threshold with hysteresis (± 50 µs). Kill switch: `enable_spin_reprobe` (auto-off when
+  `enable_adaptive_spin = False`). Applied thresholds recorded in
+  `runtime_options.reprobe_applied_thresholds`.
 
 ## 4. Wait strategy
 
@@ -132,7 +145,11 @@ deterministic tests are unaffected):
 |---|---|---|
 | MMCSS/priority ladder | `rt_priority_mode: auto` (config) | `--rt-priority-mode off` |
 | Adaptive dispatch lead | `enable_adaptive_lead: true` (config) | `--no-adaptive-lead` |
+| Lead EMA cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
+| Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
+| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 50`, threshold 20 ms | `core_warmup_hook = None` |
+| Device margin | `.cache/input_latency.json` → `min_hold_margin_us`; default 500 | profile override |
 | Event-driven waits | on (runtime) | `--no-event-wait` |
 | GIL switch interval 1 ms | on | `--no-switch-interval-tuning` |
 | GC pause, timer guard, waitable timer, dispatch thread | on (pre-existing) | `--no-gc-pause`, `--no-timer-guard`, `--no-waitable-timer`, `--no-dispatch-thread` |

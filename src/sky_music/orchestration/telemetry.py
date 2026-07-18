@@ -510,6 +510,7 @@ class TelemetryLogger:
             "note_count": int(getattr(metadata, "note_count", 0)),
             "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),
             "min_same_key_up_gap_us": getattr(metadata, "min_same_key_up_gap_us", None),
+            "sub_60fps_frame_notes": int(getattr(metadata, "sub_60fps_frame_notes", 0)),
         }
 
     def get_summary(self) -> dict | None:
@@ -737,6 +738,13 @@ class TelemetryLogger:
             "fps": self.fps,
             "tempo_scale": self.tempo_scale,
             "total_events": len(rows),
+            "timing_semantics": {
+                "clock": "perf_counter_ns_us_quantized",
+                "onset_definition": "sendinput_return",
+                "visible_lateness_means": "send_completed_us - scheduled_us (sender proxy)",
+                "game_phase_locked": False,
+                "game_observed_available": False,
+            },
             "evidence_boundaries": {
                 "schedule": {
                     "intended_down_count": intended_down_count,

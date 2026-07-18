@@ -796,6 +796,7 @@ def main() -> int:
             timing=bool(args.doctor_timing),
             input_check=bool(args.doctor_input),
             calibrate=bool(args.doctor_calibrate),
+            song_path=args.song,
         )
 
     song_choices = get_song_choices(force_refresh=True)

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import json
 import threading
 from collections.abc import Callable
+from pathlib import Path
+from typing import cast
 
 from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
@@ -97,7 +100,7 @@ class SendLatencyEstimator:
     offset on every note.
 
     Honesty note: the residual bias is capped at ``_MAX_RESIDUAL_US`` (≈ ½ ms) and is positive-
-    only, so a completion may land up to ~`_MAX_RESIDUAL_US` *late* of schedule (the cap absorbs
+    only. Completions land within ~``_MAX_RESIDUAL_US`` of schedule when residual warm; not exact (the cap absorbs
     prologue beyond the cap). It does NOT land exactly on schedule — by design, since for a
     frame-quantized target landing slightly early is strictly safer than late. A machine whose
     prologue routinely exceeds the cap will sit at the cap rather than chase it upward.
@@ -231,6 +234,91 @@ class SendLatencyEstimator:
             return max(0, min(self._max_lead_us, round(self._ema_up)))
         return 0
 
+    def export_state(self) -> dict[str, object]:
+        return {
+            "version": 2,
+            "saved_at": __import__("datetime").datetime.now().isoformat(),
+            "max_poly": self.max_poly,
+            "ema_down": list(self._ema_down),
+            "warm_down": list(self._warm_down),
+            "count_down": list(self._count_down),
+            "sum_down": list(self._sum_down),
+            "ema_down_total": self._ema_down_total,
+            "warm_down_total": self._count_down_total >= self._SEED_SAMPLES,
+            "count_down_total": self._count_down_total,
+            "sum_down_total": self._sum_down_total,
+            "ema_up": self._ema_up,
+            "warm_up": self._count_up >= self._SEED_SAMPLES,
+            "count_up": self._count_up,
+            "sum_up": self._sum_up,
+            "ema_residual": self._ema_residual,
+            "warm_residual": self._warm_residual,
+            "count_residual": self._count_residual,
+            "sum_residual": self._sum_residual,
+        }
+
+    def import_state(self, data: dict[str, object]) -> bool:
+        try:
+            if not isinstance(data, dict):
+                return False
+            if data.get("version") != 2:
+                return False
+            max_poly = data.get("max_poly", 0)
+            if not isinstance(max_poly, int) or max_poly < 1 or max_poly > 32:
+                return False
+            ema_down = data.get("ema_down", [])
+            if not isinstance(ema_down, list) or len(ema_down) != max_poly + 1:
+                return False
+            for v in ema_down:
+                if not isinstance(v, (int, float)) or not (0 <= v <= self._max_lead_us):
+                    return False
+            warm_down = data.get("warm_down", [])
+            if not isinstance(warm_down, list) or len(warm_down) != max_poly + 1:
+                return False
+            if not all(isinstance(v, bool) for v in warm_down):
+                return False
+            count_down = data.get("count_down", [])
+            if not isinstance(count_down, list) or len(count_down) != max_poly + 1:
+                return False
+            sum_down = data.get("sum_down", [])
+            if not isinstance(sum_down, list) or len(sum_down) != max_poly + 1:
+                return False
+            ema_down_total = data.get("ema_down_total", 0.0)
+            if not isinstance(ema_down_total, (int, float)) or not (0 <= ema_down_total <= self._max_lead_us):
+                return False
+            ema_up = data.get("ema_up", 0.0)
+            if not isinstance(ema_up, (int, float)) or not (0 <= ema_up <= self._max_lead_us):
+                return False
+            ema_residual = data.get("ema_residual", 0.0)
+            if not isinstance(ema_residual, (int, float)) or not (0 <= ema_residual <= self._MAX_RESIDUAL_US):
+                return False
+            for key in ("warm_down_total", "warm_up", "warm_residual"):
+                if not isinstance(data.get(key), bool):
+                    return False
+            for key in ("count_down_total", "count_up", "count_residual"):
+                val = data.get(key, 0)
+                if not isinstance(val, int) or val < 0:
+                    return False
+            # All valid — apply
+            self.max_poly = max_poly
+            self._ema_down = [float(v) for v in ema_down]
+            self._warm_down = list(warm_down)
+            self._count_down = list(count_down)
+            self._sum_down = list(sum_down)
+            self._ema_down_total = float(ema_down_total)
+            self._count_down_total = cast(int, data["count_down_total"])
+            self._sum_down_total = cast(int, data.get("sum_down_total", 0))
+            self._ema_up = float(ema_up)
+            self._count_up = cast(int, data["count_up"])
+            self._sum_up = cast(int, data.get("sum_up", 0))
+            self._ema_residual = float(ema_residual)
+            self._warm_residual = cast(bool, data["warm_residual"])
+            self._count_residual = cast(int, data["count_residual"])
+            self._sum_residual = cast(int, data.get("sum_residual", 0))
+            return True
+        except (KeyError, TypeError, ValueError):
+            return False
+
 
 class PlaybackEngine:
     """Facade wiring schedule compilation, realtime context, DispatchLoop, and PlaybackSupervisor.
@@ -280,9 +368,16 @@ class PlaybackEngine:
         wait_strategy: WaitStrategy | None = None,
         spin_floor_us: int = 700,
         retain_telemetry_records_after_save: bool = False,
+        lead_cache_path: str | None = None,
+        # Phase F.3: margin transparency — the applied device-delivery margin and its origin.
+        # Passed by callers that resolve a FrameTimingPolicy so the summary is self-describing.
+        min_hold_margin_us: int = 0,
+        min_hold_margin_source: str = "default_500",
     ):
         self.song = song
         self.actions = actions
+        self.lead_cache_path: str | None = lead_cache_path
+        self._lead_cache_loaded: bool = False
         self.runtime_schedule: RuntimeSchedule | None = compile_runtime_intents(actions)
         self.total_time_us = max((int(action.at_us) for action in actions), default=0)
         self.backend = backend
@@ -311,6 +406,18 @@ class PlaybackEngine:
             default=0,
         )
         self.estimator = SendLatencyEstimator(max_poly=max(6, max_chord))
+        # Phase D: Load cross-session lead estimator state if cache available.
+        self._lead_cache_loaded = False
+        if self.lead_cache_path and enable_adaptive_lead:
+            try:
+                cache_file = Path(self.lead_cache_path)
+                if cache_file.is_file() and cache_file.stat().st_size < 64 * 1024:
+                    raw = cache_file.read_text(encoding="utf-8")
+                    data = json.loads(raw)
+                    if self.estimator.import_state(data):
+                        self._lead_cache_loaded = True
+            except Exception:
+                pass  # Corrupt cache — silently fall back to cold start
         self.rt_priority_mode: RtPriorityMode = rt_priority_mode
         self.dispatch_lead_us = max(0, dispatch_lead_us)
         self.spin_floor_us = max(0, spin_floor_us)
@@ -339,6 +446,8 @@ class PlaybackEngine:
             {
                 "min_hold_assumes_fps": fps,
                 "min_hold_us": self.min_hold_us,
+                "min_hold_margin_us": min_hold_margin_us,
+                "min_hold_margin_source": min_hold_margin_source,
                 "note": "min_hold is sized for the CONFIGURED fps; if the game runs slower, short notes may land within one real frame and not register.",
                 "use_dispatch_thread": self.use_dispatch_thread,
                 "timer_guard": self.enable_timer_guard,
@@ -350,6 +459,8 @@ class PlaybackEngine:
                 "rt_priority_mode": self.rt_priority_mode,
                 "enable_event_wait": self.enable_event_wait,
                 "epoch_rebase": self.enable_epoch_rebase,
+                "lead_cache_loaded": self._lead_cache_loaded,
+                "lead_cache_path": self.lead_cache_path,
             }
         )
         self.require_focus = require_focus
@@ -492,7 +603,7 @@ class PlaybackEngine:
 
                 cheap_foreground_probe = _probe_foreground_hwnd
 
-        return DispatchLoop(
+        loop = DispatchLoop(
             coordinator=coordinator,
             clock=self.clock,
             sleeper=sleeper,
@@ -513,6 +624,21 @@ class PlaybackEngine:
             diagnostics_log=diagnostics_log,
             cheap_foreground_probe=cheap_foreground_probe,
         )
+        # Phase E: wire idle-gap core warmup hook
+        loop.core_warmup_hook = lambda max_us: self._spin_warmup(max_us)
+        # Phase H: propagate reprobe kill switch and spin floor.
+        loop.enable_spin_reprobe = self.enable_adaptive_spin
+        loop._spin_floor_us = self.spin_floor_us
+        return loop
+
+    def _spin_warmup(self, max_us: int) -> None:
+        """Busy-spin for up to max_us to warm the CPU core before sending after idle."""
+        if max_us <= 0:
+            return
+        perf_counter_ns = __import__("time").perf_counter_ns
+        target_ns = perf_counter_ns() + max_us * 1000
+        while perf_counter_ns() < target_ns:
+            pass
 
     def _probe_timer_wake_error(self, sleeper: Sleeper) -> int:
         """Measure this machine's sleeper wake error and derive the effective spin threshold.
@@ -672,6 +798,17 @@ class PlaybackEngine:
                     total_time_us=self.total_time_us,
                     use_dispatch_thread=use_dispatch_thread,
                 )
+                # Phase H: persist reprobe telemetry. Dispatch thread has joined by this
+                # point (supervisor.run() returned), so reading loop fields is race-free.
+                self.telemetry.record_runtime_options(
+                    {
+                        **self.telemetry.runtime_options,
+                        "reprobe_applied_thresholds": list(
+                            dispatch_loop._reprobe_applied_thresholds
+                        ),
+                        "enable_spin_reprobe": dispatch_loop.enable_spin_reprobe,
+                    }
+                )
                 if result == PLAYBACK_FINISHED:
                     self._log_timing_summary()
                     self.telemetry.release_summary()  # MEM-4: free ~100-500 KB summary dict
@@ -718,6 +855,20 @@ class PlaybackEngine:
             # can plateau even after this collection — that is platform behaviour, not an app leak.
             with contextlib.suppress(Exception):
                 gc.collect()
+
+            # Phase D: Persist lead estimator state for next session.
+            if self.lead_cache_path and self.enable_adaptive_lead:
+                try:
+                    cache_file = Path(self.lead_cache_path)
+                    cache_file.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = cache_file.with_suffix(".tmp")
+                    tmp.write_text(
+                        json.dumps(self.estimator.export_state(), indent=2),
+                        encoding="utf-8",
+                    )
+                    tmp.replace(cache_file)
+                except Exception:
+                    pass
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (

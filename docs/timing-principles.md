@@ -103,8 +103,48 @@ At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94
 
 ---
 
-## 6. Appendix: Retired Knobs
-To clean up the codebase and reduce scheduling overhead, several historical timing knobs were completely removed in June 2026 after empirical testing proved they had no beneficial impact on real playback. 
+## 6. Metric Honesty (2026-07-18)
+
+Telemetry metrics are sender-side proxies, **not** game-onset ground truth:
+
+| Metric | Means | Does **not** mean |
+|--------|--------|---------|
+| `actual_us` | Timeline when backend call began | Game sampled the key |
+| `send_completed_us` / `dispatch_completed_us` | `perf_counter` after `SendInput` returned | Kernel delivered key; game polled |
+| `visible_lateness_us` | `send_completed_us − scheduled_us` (sender proxy) | Game-onset error |
+| `observed_hold_us` | Completion-to-completion on sender timeline | Game-visible hold |
+
+The summary JSON includes `timing_semantics.onset_definition = "sendinput_return"` and
+`game_observed.available = false` until WASAPI/onset evidence is explicitly attached (Phase J).
+Do **not** treat `visible_lateness_us ≈ 0` as proof the game received the note on time.
+
+---
+
+## 7. Accuracy Improvements (2026-07-18 Overhaul)
+
+### Cold-start lead elimination (Phase D)
+The `SendLatencyEstimator` now persists its per-kind EMA state to `.cache/lead_estimator.json`
+between sessions. On the next play, warm EMA values are imported so the first note benefits from
+previous-session lead estimates rather than cold-starting at zero for `_SEED_SAMPLES` (5) sends.
+Corrupt or version-mismatched cache is silently ignored — never raises into play.
+
+### Idle-gap core warmup (Phase E)
+After a gap of ≥ 20 ms since the last `SendInput`, the dispatch thread runs a short busy-spin
+(≤ 50 µs) to warm the CPU core before the next send. The warmup is skipped if already past the
+note deadline. Controlled by `CORE_WARMUP_SPIN_US = 50` and `SEND_COLD_THRESHOLD_US = 20_000`
+in `core/loop.py`.
+
+### Mid-song spin re-probe (Phase H)
+The pre-play spin probe derives `effective_spin_threshold_us` once before playback. Mid-song,
+if a gap of ≥ 0.5 s remains to the next deadline AND ≥ 30 s have elapsed since the last reprobe,
+the dispatch thread re-probes timer wake error (8 × 2 ms sleeps) and updates
+`spin_threshold_us` with hysteresis (±50 µs). Kill switch: `enable_spin_reprobe = False`
+(auto-disabled when `enable_adaptive_spin = False`).
+
+---
+
+## 8. Appendix: Retired Knobs
+To clean up the codebase and reduce scheduling overhead, several historical timing knobs were completely removed in June 2026 after empirical testing proved they had no beneficial impact on real playback.
 
 For historical context and audit details of these knobs, refer to the archived documents in [archive/](archive/):
 * **`input_lead_us`:** Retired because the player generates its own timeline with no external clock reference. A uniform shift is unobservable. See [timing-architecture-audit.md](archive/2026-06_timing-architecture-audit.md).

@@ -143,7 +143,6 @@ def test_backend_partial_note_on_tracks_only_landed_keys(monkeypatch):
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
 
     backend = WinSendInputBackend()
-    backend.inputs_module = inputs
     result = backend.key_down((0x11, 0x12, 0x13, 0x14))
 
     assert result.sent == (0x11, 0x12, 0x13)

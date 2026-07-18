@@ -3,6 +3,7 @@ import sys
 from ctypes import wintypes
 from typing import Any
 
+from sky_music.config import load_config
 from sky_music.layouts import PHYSICAL_SCAN_CODES, SKY_15_KEY_PROFILE, VK_CODES
 from sky_music.platform.win32 import inputs
 
@@ -27,29 +28,32 @@ def is_admin() -> bool:
 def check_sky_window() -> dict:
     """Diagnoses Sky window handle, process name, and potential UIPI elevation mismatches."""
     status: dict[str, Any] = {"ok": False, "msg": "", "hwnd": None, "process": ""}
-    
+
     hwnd = inputs.get_sky_window()
     if hwnd is None:
         status["msg"] = "Sky window NOT found. Ensure the game is running and verify --sky-process-names."
         return status
-        
+
     pid = wintypes.DWORD()
     inputs.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     proc_name = inputs.get_process_name_by_pid(pid.value)
-    
+
     status["hwnd"] = hwnd
     status["process"] = proc_name or "Unknown Process"
-    
-    # Preflight Admin Integrity warning (UIPI mitigation)
+
     current_admin = is_admin()
     status["ok"] = True
-    
+
     msg_parts = [f"Found Sky window (HWND={hwnd}, PID={pid.value}, Process={status['process']})."]
+    # Phase G.3: exact UIPI advisory text (plan §G.3).
     if not current_admin:
-        msg_parts.append("Note: Running as standard user. If Sky is elevated (Administrator), Windows UIPI may block keystrokes — run this tool as Admin if input is not reaching the game.")
+        msg_parts.append(
+            "If Sky runs elevated (Admin) and Sky Player does not, SendInput may return 0 (UIPI). "
+            "Run both elevated or both not elevated."
+        )
     else:
         msg_parts.append("Running as Administrator — input compatibility with elevated game windows is likely.")
-        
+
     status["msg"] = " ".join(msg_parts)
     return status
 
@@ -113,6 +117,45 @@ def check_physical_keys_held() -> dict:
         
     return status
 
+def check_calibration_cache() -> dict:
+    """Checks whether the input-latency calibration cache exists."""
+    from pathlib import Path
+    path = Path(".cache/input_latency.json")
+    status = {"ok": True, "msg": "", "path": str(path)}
+    if path.exists():
+        status["msg"] = f"Calibration cache found at {path}."
+    else:
+        status["ok"] = False
+        status["msg"] = "Calibration cache not found. Run `--doctor-calibrate` to measure input latency for tighter margins."
+    return status
+
+
+def check_sky_foreground() -> dict:
+    """Checks whether the Sky window is currently the foreground (active) window."""
+    status = {"ok": True, "msg": ""}
+    try:
+        from sky_music.platform.win32 import inputs as _inputs
+        if _inputs.is_sky_active():
+            status["msg"] = "Sky window is currently in the foreground."
+        else:
+            status["ok"] = False
+            status["msg"] = "Sky window exists but is NOT in the foreground. No input will reach the game until it is focused."
+    except Exception as exc:
+        status["ok"] = False
+        status["msg"] = f"Could not check foreground state: {exc}"
+    return status
+
+
+def print_fps_advisory() -> None:
+    cfg = load_config()
+    fps = cfg.game_fps
+    if fps > 60:
+        print(f"\nFPS Advisory: Configured game FPS is {fps}. Notes shorter than one 60 fps frame")
+        print("  (~16.7ms) may not register if the game runs below the configured FPS.")
+        print("  Consider lowering game_fps in the config or using a safer timing profile.")
+        print()
+
+
 def run_all_doctor_checks() -> bool:
     """Runs a complete diagnostic suite and prints standard actionable recommendations."""
     print("=" * 60)
@@ -126,35 +169,58 @@ def run_all_doctor_checks() -> bool:
     print(f"Admin Privileges : {'YES' if is_admin() else 'NO'}")
     print("-" * 60)
     
-    # 1. Sky Window Check
-    print("[1/4] Sky Window Detection:")
+    # 1. Sky Window + Foreground
+    print("[1/7] Sky Window Detection:")
     win_diag = check_sky_window()
     print(f"      Status: {'OK' if win_diag['ok'] else 'FAILED'}")
     print(f"      Details: {win_diag['msg']}")
+    fg_diag = check_sky_foreground()
+    print(f"      Foreground: {'OK' if fg_diag['ok'] else 'WARNING'}")
+    print(f"      Details: {fg_diag['msg']}")
     print("-" * 60)
     
     # 2. Timer Resolution Check
-    print("[2/4] Multimedia High-Precision Timers:")
+    print("[2/7] Multimedia High-Precision Timers:")
     time_diag = check_timer_resolution()
     print(f"      Status: {'OK' if time_diag['ok'] else 'FAILED'}")
     print(f"      Details: {time_diag['msg']}")
     print("-" * 60)
     
-    # 3. Note Key Mapping Check
-    print("[3/4] Note Mapping Configuration:")
+    # 3. Calibration Cache Check
+    print("[3/7] Calibration Cache:")
+    cal_diag = check_calibration_cache()
+    print(f"      Status: {'OK' if cal_diag['ok'] else 'ADVISORY'}")
+    print(f"      Details: {cal_diag['msg']}")
+    print("-" * 60)
+    
+    # 4. Note Key Mapping Check
+    print("[4/7] Note Mapping Configuration:")
     kb_diag = check_keyboard_layout()
     print(f"      Status: {'OK' if kb_diag['ok'] else 'FAILED'}")
     print(f"      Details: {kb_diag['msg']}")
     print("-" * 60)
     
-    # 4. Preflight Key Conflict Check
-    print("[4/4] Keyboard Preflight Checks:")
+    # 5. Preflight Key Conflict Check
+    print("[5/7] Keyboard Preflight Checks:")
     conflict_diag = check_physical_keys_held()
     print(f"      Status: {'OK' if conflict_diag['ok'] else 'WARNING'}")
     print(f"      Details: {conflict_diag['msg']}")
+    print("-" * 60)
+
+    # 6. FPS Advisory
+    print("[6/7] FPS Configuration:")
+    print_fps_advisory()
+    print("-" * 60)
+
+    # 7. Input Latency Calibration Cache (redundant path hint)
+    print("[7/7] Preflight Summary:")
+    print("      Run `--doctor-calibrate` if calibration cache is missing (see check 3/7).")
     print("=" * 60)
     
-    all_ok = win_diag["ok"] and time_diag["ok"] and kb_diag["ok"] and conflict_diag["ok"]
+    all_ok = (
+        win_diag["ok"] and fg_diag["ok"] and time_diag["ok"]
+        and cal_diag["ok"] and kb_diag["ok"] and conflict_diag["ok"]
+    )
     if all_ok:
         print("Result: ALL CHECKS PASSED — ready for precise playback.")
     else:

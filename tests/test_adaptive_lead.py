@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from sky_music.domain import Song
 from sky_music.domain.domain import ScanCode
@@ -649,4 +650,121 @@ def test_residual_prologue_bias_is_positive_only_and_capped_at_500us() -> None:
     lead_after_late = est.get_lead_us(ActionKind.DOWN, 1)
     assert lead_after_late >= 200, "residual folds in positive side (>= EMA)"
     assert lead_after_late <= 200 + 500, "residual prologue bias capped at 500us"
+
+
+# --- Phase D: Cross-session EMA cache ---
+
+
+def test_lead_export_import_round_trip() -> None:
+    """Phase D: export_state then import_state preserves lead values within 1 us."""
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    for _ in range(6):
+        est.update(ActionKind.DOWN, 800, n_keys=1)
+        est.update(ActionKind.DOWN, 1500, n_keys=4)
+        est.update(ActionKind.UP, 400)
+    lead_down_1_before = est.get_lead_us(ActionKind.DOWN, 1)
+    lead_down_4_before = est.get_lead_us(ActionKind.DOWN, 4)
+    lead_up_before = est.get_lead_us(ActionKind.UP)
+
+    state = est.export_state()
+    est2 = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    assert est2.import_state(state)
+
+    assert abs(est2.get_lead_us(ActionKind.DOWN, 1) - lead_down_1_before) <= 1
+    assert abs(est2.get_lead_us(ActionKind.DOWN, 4) - lead_down_4_before) <= 1
+    assert abs(est2.get_lead_us(ActionKind.UP) - lead_up_before) <= 1
+
+
+def test_lead_import_poison_rejected() -> None:
+    """Phase D: Corrupt or invalid import data is rejected without changing estimator."""
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 500, n_keys=1)
+
+    # Wrong version
+    assert not est.import_state({"version": 1, "max_poly": 6, "ema_down": [0.0] * 7, "warm_down": [False] * 7})
+    # Negative EMA
+    state_bad = est.export_state()
+    state_bad["ema_down"] = [-100.0] * (est.max_poly + 1)
+    assert not est.import_state(state_bad)
+    # Truncated lists
+    state_trunc = est.export_state()
+    state_trunc["ema_down"] = [0.0] * 2
+    assert not est.import_state(state_trunc)
+    # Wrong max_poly
+    state_wp = est.export_state()
+    state_wp["max_poly"] = -1
+    assert not est.import_state(state_wp)
+    # Non-dict
+    assert not est.import_state(["not", "a", "dict"])  # type: ignore[arg-type]
+    # Estimator unchanged after poisoning
+    assert est.get_lead_us(ActionKind.DOWN, 1) == 500
+
+
+def test_lead_cache_cross_engine_persistence(tmp_path: Path) -> None:
+    """Phase D: First engine play seeds estimator; second engine loads warm lead > 0."""
+    from sky_music.infrastructure.timing import SleepPolicy
+
+    actions = tuple(
+        KeyAction(kind=ActionKind.DOWN if i % 2 == 0 else ActionKind.UP,
+                  scan_codes=(ScanCode(i // 2 + 1),),
+                  at_us=Microseconds(i * 20_000), reason=f"a{i}")
+        for i in range(12)
+    )
+    song = Song(name="persist", notes=())
+    cache_path = str(tmp_path / ".cache" / "lead_estimator.json")
+
+    clock1 = FakeClock()
+    backend1 = TimedBackend(clock1, send_duration_us=800)
+    engine1 = PlaybackEngine(
+        song=song, actions=actions, backend=backend1,
+        telemetry_enabled=False, require_focus=False,
+        clock=clock1, sleeper=FakeSleeper(clock1),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        use_dispatch_thread=False, enable_adaptive_lead=True,
+        lead_cache_path=cache_path,
+    )
+    assert engine1.play() == PLAYBACK_FINISHED
+    # Cache file should exist after play
+    assert Path(cache_path).exists()
+
+    clock2 = FakeClock()
+    backend2 = TimedBackend(clock2, send_duration_us=800)
+    engine2 = PlaybackEngine(
+        song=song, actions=actions, backend=backend2,
+        telemetry_enabled=False, require_focus=False,
+        clock=clock2, sleeper=FakeSleeper(clock2),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        use_dispatch_thread=False, enable_adaptive_lead=True,
+        lead_cache_path=cache_path,
+    )
+    # Before any update, the loaded estimator should give non-zero lead
+    assert engine2.estimator.get_lead_us(ActionKind.DOWN, 1) > 0
+    assert engine2.estimator.get_lead_us(ActionKind.UP) > 0
+    assert engine2.play() == PLAYBACK_FINISHED
+
+
+def test_lead_cache_default_path_not_written(tmp_path: Path) -> None:
+    """Phase D: No lead_cache_path set does not create cache file."""
+    from sky_music.infrastructure.backend import DryRunBackend
+    from sky_music.infrastructure.timing import SleepPolicy
+
+    actions = (KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(1),),
+                         at_us=Microseconds(0), reason="d"),
+               KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(1),),
+                         at_us=Microseconds(10_000), reason="u"))
+    song = Song(name="drytest", notes=())
+    clock = FakeClock()
+    backend = DryRunBackend()
+    nonexistent = str(tmp_path / "nonexistent_lead.json")
+    engine = PlaybackEngine(
+        song=song, actions=actions, backend=backend,
+        telemetry_enabled=False, require_focus=False,
+        clock=clock, sleeper=FakeSleeper(clock),
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        use_dispatch_thread=False, enable_adaptive_lead=True,
+    )
+    assert engine.play() == PLAYBACK_FINISHED
+    # No default cache path set — ensure no stray file created
+    assert not Path(nonexistent).exists()
 

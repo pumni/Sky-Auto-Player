@@ -220,10 +220,11 @@ def test_removed_phase2_timing_arguments_are_rejected(args):
 def test_cli_doctor_routing(monkeypatch) -> None:
     called_args = {}
 
-    def mock_run_doctor_command(*, full: bool, timing: bool, input_check: bool) -> int:
+    def mock_run_doctor_command(*, full: bool, timing: bool, input_check: bool, calibrate: bool = False) -> int:
         called_args["full"] = full
         called_args["timing"] = timing
         called_args["input_check"] = input_check
+        called_args["calibrate"] = calibrate
         return 0
 
     monkeypatch.setattr("sky_music.cli.doctor_command.run_doctor_command", mock_run_doctor_command)
@@ -243,6 +244,16 @@ def test_cli_doctor_routing(monkeypatch) -> None:
     assert called_args["full"] is True
     assert called_args["timing"] is False
     assert called_args["input_check"] is False
+
+
+def test_doctor_fps_advisory_prints_for_fps_above_60(capsys, monkeypatch) -> None:
+    """Phase C: Doctor FPS advisory prints when configured fps > 60."""
+    monkeypatch.setattr("sky_music.infrastructure.doctor.load_config", lambda: type("cfg", (), {"game_fps": 144})())
+    from sky_music.infrastructure.doctor import print_fps_advisory
+    print_fps_advisory()
+    captured = capsys.readouterr()
+    assert "Configured game FPS is 144" in captured.out
+    assert "Notes shorter than one 60 fps frame" in captured.out
 
 
 

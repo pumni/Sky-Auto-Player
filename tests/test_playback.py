@@ -116,6 +116,7 @@ def test_telemetry_includes_send_duration_us(tmp_path):
     res = engine.play()
     assert res == PLAYBACK_FINISHED
 
+    assert engine.telemetry.log_filepath is not None
     with open(engine.telemetry.log_filepath, newline="") as f:
         reader = csv.DictReader(f)
         rows = list(reader)

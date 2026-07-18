@@ -143,3 +143,18 @@ def test_schedule_metadata_gap_below_frame_repeats() -> None:
     assert meta_severe.gap_below_frame_repeats == 0
 
 
+def test_schedule_warnings_include_fps_advisory_message() -> None:
+    """Phase C: ScheduleMetadata.warnings contains the FPS advisory with expected message fragment."""
+    song = Song(
+        name="fps_advisory",
+        notes=(
+            Note(key=NoteKey("Key1"), time_ms=Millis(0)),
+            Note(key=NoteKey("Key1"), time_ms=Millis(5)),
+        ),
+    )
+    policy_144 = FrameTimingPolicy.from_profile_name("local_precise", fps=144)
+    meta = build_key_actions(song, policy=policy_144)
+    assert any("shorter than one 60 fps frame" in w for w in meta.warnings)
+    assert any("Lower fps in the profile" in w for w in meta.warnings)
+
+

@@ -812,6 +812,7 @@ class PlaybackApp(App[str]):
         theme_name: str,
         song_name: str,
         total_us: int,
+        warnings: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         self.engine = engine
@@ -821,6 +822,8 @@ class PlaybackApp(App[str]):
             self.theme_name = "aurora"
         self.song_name = song_name
         self.total_us = total_us
+        self._schedule_warnings = warnings
+        self._warnings_shown = False
         self._exited = False
 
     def compose(self) -> ComposeResult:
@@ -964,8 +967,14 @@ class PlaybackApp(App[str]):
         self.query_one("#status-info", Static).update(f"[{color}]{label}[/]")
 
         warn_widget = self.query_one("#warning-info", Static)
+        warnings_to_show = []
+        if self._schedule_warnings and not self._warnings_shown:
+            warnings_to_show.extend(f"[{t.warning}]{w}[/]" for w in self._schedule_warnings)
+            self._warnings_shown = True
         if snap.input_path_degraded:
-            warn_widget.update(f"[{t.warning}]Input path throttled (Filter Keys?) - playback may stutter[/]")
+            warnings_to_show.append(f"[{t.warning}]Input path throttled (Filter Keys?) - playback may stutter[/]")
+        if warnings_to_show:
+            warn_widget.update("\n".join(warnings_to_show))
             warn_widget.styles.display = "block"
         else:
             warn_widget.update("")
@@ -978,6 +987,7 @@ def run_playback_textual(
     theme_name: str,
     song_name: str,
     total_us: int,
+    warnings: tuple[str, ...] = (),
 ) -> str:
     app = PlaybackApp(
         engine=engine,
@@ -985,6 +995,7 @@ def run_playback_textual(
         theme_name=theme_name,
         song_name=song_name,
         total_us=total_us,
+        warnings=warnings,
     )
     return app.run() or "quit"
 

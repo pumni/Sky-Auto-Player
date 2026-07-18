@@ -32,6 +32,19 @@ from sky_music.orchestration.core.ports import (
 )
 from sky_music.orchestration.core.state import PlaybackState as PlaybackState
 
+# Phase E: Idle-gap core warmup. After long idle gaps the CPU may have
+# downclocked; a short busy-spin before the next send warms the core so
+# SendInput prologue does not stretch beyond the deadline spin's budget.
+SEND_COLD_THRESHOLD_US = 20_000
+CORE_WARMUP_SPIN_US = 50
+
+# Phase H: Mid-song spin re-probe constants.
+REPROBE_MIN_GAP_US = 500_000          # next deadline at least 0.5 s away
+REPROBE_MIN_INTERVAL_US = 30_000_000  # at most once per 30 s of elapsed time
+REPROBE_SAMPLES = 8                   # shorter than the 30-sample pre-play probe
+REPROBE_SLEEP_S = 0.002              # 2 ms sleeps (same as pre-play)
+REPROBE_HYSTERESIS_US = 50            # ignore changes smaller than this
+
 
 class RuntimeSameKeyConflictError(RuntimeError):
     """Raised when confirmed runtime hold makes a strict same-key down infeasible."""
@@ -64,7 +77,8 @@ class ExecutionResult:
     scheduled_us: int
     actual_us: int
     lateness_us: int           # actual_us - scheduled_us; negative means early (expected when
-                               # dispatch lead is applied — visible_lateness_us is the on-time metric)
+                               # dispatch lead is applied — visible_lateness_us is the sender-side
+                               # injection-completion metric, not game-onset error)
     send_duration_us: int      # wall-clock time the backend call took (including bookkeeping)
     is_late: bool              # True when lateness_us > 0
     is_critically_late: bool   # True when lateness_us > 10_000 (10 ms)
@@ -272,6 +286,17 @@ class DispatchLoop:
         # ``_dispatch_down_batch``). ``None`` (test/DryRun / no platform) → gate relies on
         # the runtime FocusSignal alone, preserving the pre-fix behaviour. Phase 4 §7.6 boundary.
         self.cheap_foreground_probe = cheap_foreground_probe
+        # Phase E: injected hook for idle-gap core warmup. Called with max_us
+        # when the gap since last send exceeds SEND_COLD_THRESHOLD_US.
+        self.core_warmup_hook: Callable[[int], None] | None = None
+        # Phase H: kill switch for mid-song reprobe (disabled when adaptive_spin is off).
+        self.enable_spin_reprobe: bool = True
+        # Spin floor for clamp during reprobe (mirrors engine.spin_floor_us).
+        self._spin_floor_us: int = 700
+        # Wall-clock epoch time of last reprobe (elapsed_us from playback start).
+        self._last_reprobe_elapsed_us: int = -REPROBE_MIN_INTERVAL_US - 1
+        # Accumulated telemetry list of applied thresholds (capped at 32 entries).
+        self._reprobe_applied_thresholds: list[int] = []
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -955,6 +980,36 @@ class DispatchLoop:
             if not wait_res:
                 return None
 
+    def _run_mid_song_reprobe(self, elapsed_us: int) -> None:
+        """Phase H: Re-probe timer wake error during a long inter-note gap.
+
+        Runs REPROBE_SAMPLES × REPROBE_SLEEP_S sleeps on the dispatch thread while
+        still inside a long wait window (caller guarantees remaining > REPROBE_MIN_GAP_US).
+        Applies the new threshold only if the change exceeds REPROBE_HYSTERESIS_US.
+        Never fired while paused or when enable_spin_reprobe / enable_adaptive_spin is off.
+        Charge wall time is ~16 ms (8 × 2 ms) — negligible vs the 0.5 s gap floor.
+        """
+        wake_errors: list[int] = []
+        for _ in range(REPROBE_SAMPLES):
+            t0 = self.clock.now_us()
+            self.sleeper.sleep(REPROBE_SLEEP_S)
+            t1 = self.clock.now_us()
+            wake_errors.append((t1 - t0) - int(REPROBE_SLEEP_S * 1_000_000))
+
+        wake_errors.sort()
+        p90 = wake_errors[int(len(wake_errors) * 0.9)]
+        candidate = max(self._spin_floor_us, min(3_000, p90 + 100))
+
+        if abs(candidate - self.spin_threshold_us) >= REPROBE_HYSTERESIS_US:
+            self.spin_threshold_us = candidate
+
+        # Append to telemetry list (cap at 32) regardless of whether threshold changed.
+        self._reprobe_applied_thresholds.append(candidate)
+        if len(self._reprobe_applied_thresholds) > 32:
+            self._reprobe_applied_thresholds = self._reprobe_applied_thresholds[-32:]
+
+        self._last_reprobe_elapsed_us = elapsed_us
+
     def _wait_until_runtime_deadline(
         self,
         target_elapsed_us: int,
@@ -1012,6 +1067,21 @@ class DispatchLoop:
             )
             if service_result:
                 return service_result, last_runtime_poll_us, last_render_time_us, first_action_executed
+
+            # Phase H: mid-song spin re-probe. Only when:
+            #   • adaptive spin reprobe is enabled (kill switch off → skip)
+            #   • gap is large enough (≥ 0.5 s to deadline)
+            #   • minimum interval since last reprobe has elapsed
+            #   • not paused / focus lost (checked via service state above)
+            if (
+                self.enable_spin_reprobe
+                and remaining_us >= REPROBE_MIN_GAP_US
+                and elapsed_us - self._last_reprobe_elapsed_us >= REPROBE_MIN_INTERVAL_US
+                and not state.is_paused()
+            ):
+                self._run_mid_song_reprobe(elapsed_us)
+                # Re-read elapsed in case probe took ~16 ms wall time; remaining stays valid
+                # for the outer iteration — the loop will recompute on the next pass.
 
             # Event-mode spin happens inside wait_until_us; record the nominal spin start so
             # pre_send_spin_us reflects the guard spin (the high-res sleeper wakes within the guard
@@ -1089,6 +1159,19 @@ class DispatchLoop:
         The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch);
         a scalar down lead would be overridden inside pop_due_authored anyway.
         """
+        # Phase E: idle-gap core warmup. If the gap since last send exceeds
+        # threshold and the core warmup hook is set, spin briefly to wake the
+        # core before issuing the first send. Skip if already late (deadline
+        # passed) so warmup never adds lateness.
+        if self.core_warmup_hook is not None and now_us - self._last_send_completed_us > SEND_COLD_THRESHOLD_US:
+            # Compute safe warmup budget: cannot exceed time until the next
+            # due action deadline. Absent a next deadline, cap at CORE_WARMUP_SPIN_US.
+            next_action_us = self.coordinator.next_authored_us(lead_for_batch=self._down_lead_for_batch)
+            remaining_budget = (next_action_us - now_us) if next_action_us is not None else CORE_WARMUP_SPIN_US
+            if remaining_budget > 0:
+                max_spin = min(CORE_WARMUP_SPIN_US, remaining_budget)
+                self.core_warmup_hook(max_spin)
+
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
             result = self._dispatch_pending_releases(pending, state, lead_up=lead_up)
@@ -1222,6 +1305,8 @@ class DispatchLoop:
                 {
                     **self.telemetry.runtime_options,
                     "send_diagnostics": send_diag,
+                    # Phase H: mid-song reprobe telemetry (empty list if reprobe never ran).
+                    "reprobe_applied_thresholds": self._reprobe_applied_thresholds,
                 }
             )
             if send_diag.get("partial_send_events") and self.diagnostics_log is not None:

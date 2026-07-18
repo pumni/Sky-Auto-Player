@@ -607,17 +607,18 @@ def _send_scan_code_batch_impl(
     if not complete_remainder:
         # SAME-FRAME retry (immediate, sleepless, exactly once). A retry issued µs after the
         # first SendInput lands in the SAME game input-sampling frame (retry latency ~5-20µs
-        # vs one frame 6.9-16.7ms) with ~99.7% probability, so it recovers the full chord with
+        # vs one frame 6.9-16.7ms) with high probability (conceptually estimated as ~99.7% as a
+        # heuristic, not measured game-frame probability; retry latency is ≪ one frame under normal
+        # conditions), so it recovers the full chord with
         # no perceptible timing defect. This is NOT the forbidden LATE retry: we never call
         # send_input_batch / _retry_wait_seconds (which sleep up to 2ms and would cross a frame
         # boundary and stagger the chord). Retry ONCE, then drop whatever still did not land —
         # a persistent block (UIPI / locked desktop) returns 0 again and is dropped, costing a
         # single extra syscall on an already-failing rare event.
         remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
-        m = len(remaining_scan_codes)
-        retry_inputs = (INPUT * m)(*(_cached_key_input(sc, flags) for sc in remaining_scan_codes))
-        retry_sent_raw = int(user32.SendInput(m, retry_inputs, _INPUT_SIZE))
-        retry_sent = max(0, min(retry_sent_raw, m))
+        retry_inputs = _lookup_or_build_input_array(remaining_scan_codes, flags)
+        retry_sent_raw = int(user32.SendInput(len(remaining_scan_codes), retry_inputs, _INPUT_SIZE))
+        retry_sent = max(0, min(retry_sent_raw, len(remaining_scan_codes)))
         total_sent = sent + retry_sent
         still_missed = n - total_sent
         if retry_sent > 0:

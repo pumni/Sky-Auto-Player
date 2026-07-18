@@ -635,3 +635,58 @@ def test_full_send_does_not_count_as_partial_note_on():
     assert summary.get("partial_note_on_count", 0) == 0, (
         "full chord sends must not inflate the partial_note_on_count"
     )
+
+
+class _InitiallyUnfocusedGuard:
+    """Focus starts inactive, becomes active after ``activate_after`` polls."""
+    def __init__(self, activate_after: int = 3) -> None:
+        self._calls = 0
+        self._active = False
+        self._activate_after = activate_after
+
+    def is_active(self) -> bool:
+        self._calls += 1
+        if self._calls >= self._activate_after:
+            self._active = True
+        return self._active
+
+    def focus(self) -> bool:
+        self._active = True
+        return True
+
+
+def test_unfocused_start_blocks_down_calls():
+    """G.2 regression: require_focus + initially unfocused → zero backend
+    down calls until focus becomes active.
+
+    The engine's pre-start focus loop must not proceed past the coordinator
+    construction until the guard returns True. No key_down should reach the
+    backend during the blocked window.
+    """
+    clock = FakeClock()
+    backend = TimedBackend(clock, send_duration_us=0)
+    guard = _InitiallyUnfocusedGuard(activate_after=3)
+    engine = _engine(
+        clock, backend, guard,
+        actions=(
+            action(0, "down", 21),
+            action(10_000, "up", 21),
+        ),
+    )
+    engine.play()
+
+    downs = [c for c in backend.calls if c.kind == "down"]
+    assert len(downs) == 1, (
+        f"expected exactly 1 down after focus gained, got {len(downs)}"
+    )
+    assert downs[0].scan_codes == (21,)
+    # Every down must have fired after focus became active (t > 3ms of polls).
+    assert downs[0].started_us > 0, (
+        f"down dispatched at t={downs[0].started_us}, expected after focus window (not at t=0)"
+    )
+    # The pre-start focus loop held the timeline until the guard activated
+    # (after several poll cycles). Without it the down would have fired at t=0.
+    # Exact drift depends on poll_s * number of guard checks.
+    assert downs[0].started_us < 10_000, (
+        f"down at t={downs[0].started_us} is unreasonably late"
+    )

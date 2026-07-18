@@ -1129,3 +1129,38 @@ match outcome {
 | Rust edition | **2024** (stable) | Modern Rust, `impl Trait`, `let-else` |
 | Test determinism | **`ManualWaitStrategy` with fake QPC** | All Rust tests are deterministic; Python tests use `RustBridge` with manual strategy fixture. |
 | Error mapping | **`thiserror` → `PyOSError`** | Every Rust error path maps 1:1 to Python `OSError` or subclass; same error messages as ctypes version. |
+
+---
+
+## E. Python→Rust Handoff Checklist (Phase K.3, 2026-07-18 overhaul)
+
+Any native port of the dispatch hot path **must** preserve all invariants below. This list is a
+binding cross-reference to `2026-07-18_core-send-accuracy-full-overhaul-plan.md §1`.
+
+| # | Invariant | Where enforced (Python) |
+|---|-----------|------------------------|
+| I1 | `SendInput` only — no PostMessage/driver/hook/game-memory | `inputs.py` (platform layer) |
+| I2 | Scan-code path default: `KEYEVENTF_SCANCODE`, `wVk=0`, `time=0` | `inputs.py` |
+| I3 | Musical note-on partial: exactly one immediate sleepless retry; then drop; never call `_retry_wait_seconds` on the note-on path | `inputs.py` `_send_scan_code_batch_impl` |
+| I4 | Note-off / panic / release_all: always complete remainder | `inputs.py`, `_abort_input_safe` |
+| I5 | Completion-anchor: `release_not_before = down_dispatch_completed_us + min_hold_us`; floor always wins | `coordinator.py` `activate_sent_downs` |
+| I6 | No-early-conflict: never pop a down batch before its authored time while any scan code is active or pending release | `coordinator.py` `pop_due_authored` |
+| I7 | Dispatch thread owns all backend sends; supervisor never calls key_down/key_up/release_all during live dispatch | `playback_supervisor.py` threading contract |
+| I8 | No process priority class boost; MMCSS / `TIME_CRITICAL` / EcoQoS opt-out only | `rt_priority.py` |
+| I9 | Configured FPS honoured exactly; only advise when mismatch risk exists | `scheduler.py` |
+| I10 | Core boundary: `sky_music.orchestration.core` must not import platform/ui/focus | `test_core_boundary.py` (enforced) |
+| I11 | Single-writer diagnostics: dispatch thread is sole mutator of send diagnostics during playback | `inputs.py` `_DIAG` |
+| I12 | Accuracy > default CPU thrift: do not lower default `spin_floor_us` (700), do not add yields inside the final pure spin, do not replace busy-spin with coarse sleep near deadline | `loop.py`, `engine.py` |
+
+**Additional accuracy improvements the native port must carry:**
+
+- **Lead EMA cache (Phase D):** cross-session warm-start via `.cache/lead_estimator.json`;
+  import on play start, export on teardown. Corrupt cache: silently ignore, never raise.
+- **Idle-gap core warmup (Phase E):** ≤ 50 µs spin before drain after ≥ 20 ms idle gap;
+  skip if already past deadline; hook injectable for tests.
+- **Mid-song spin re-probe (Phase H):** 8 × 2 ms probes in gaps ≥ 0.5 s, at most once per
+  30 s; apply with ±50 µs hysteresis; kill switch `enable_spin_reprobe`.
+- **`min_hold_margin_us` device cache (Phase F):** margin from `.cache/input_latency.json`
+  when present and valid; `source` field in `runtime_options`.
+- **`timing_semantics` in telemetry (Phase B):** `onset_definition = "sendinput_return"`,
+  `game_observed.available = false` by default.

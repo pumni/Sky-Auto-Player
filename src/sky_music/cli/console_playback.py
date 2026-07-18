@@ -334,6 +334,12 @@ def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     text.append(f"Risky same-key repeats      : {sched_meta.risky_same_key_repeats}\n", style=muted)
     text.append(f"Duplicate same-key slots    : {sched_meta.duplicate_note_count}\n", style=muted)
 
+    warnings_list = getattr(sched_meta, "warnings", None) or ()
+    if warnings_list:
+        text.append("\n", style=muted)
+        for warn in warnings_list:
+            text.append(f"  [!] {warn}\n", style=warning)
+
     _console.print()
     _console.print(Panel(text, title="Schedule Summary", border_style=accent))
     _console.print()
@@ -542,6 +548,19 @@ def play_selected_song(
     # Print Schedule Summary
     print_schedule_summary(actions, sched_meta)
 
+    # Phase C: FPS assumption advisory — non-blocking notice when short notes exist under
+    # high configured FPS. Printed once at play-start so the user has the information
+    # before the countdown; never shown at 60 fps or below (I9 — never clamp fps).
+    _fps_for_advisory = getattr(active_policy, "fps", None)
+    _short_notes = getattr(sched_meta, "sub_60fps_frame_notes", 0)
+    if _fps_for_advisory is not None and _fps_for_advisory > 60 and _short_notes > 0:
+        print(
+            f"\n[Advisory] Profile assumes {_fps_for_advisory} fps. "
+            f"{_short_notes} note(s) are shorter than one 60 fps frame (~16.7 ms); "
+            "if the game runs below the configured fps they may not register. "
+            "Lower fps in the profile or use a safer profile."
+        )
+
     # Preflight check and window readiness
     if not _mini_preflight(is_dry_run, profile=current_profile, tempo=current_tempo, controls=controls):
         return PLAYBACK_QUIT
@@ -609,6 +628,9 @@ def play_selected_song(
         enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
         rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
+        # Phase F.3: margin transparency
+        min_hold_margin_us=int(getattr(active_policy, "min_hold_margin_us", 0)),
+        min_hold_margin_source=getattr(active_policy, "min_hold_margin_source", "default_500"),
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 
@@ -623,6 +645,7 @@ def play_selected_song(
             theme_name=_active_theme_name,
             song_name=song.name,
             total_us=sched_meta.playback_duration_us,
+            warnings=sched_meta.warnings,
         )
     else:
         result = engine.play()

@@ -83,6 +83,10 @@ class TimingPolicy:
     # only sender-side mechanism that can SHORTEN the game-observed hold. 0 restores the pure
     # ratio model bit-for-bit. See docs/timing-principles.md §2 and the round-2 overhaul plan.
     min_hold_margin_us: Microseconds = Microseconds(500)
+    # Phase F.3: origin of min_hold_margin_us — traceable into runtime_options telemetry.
+    # "profile_override" = explicitly set in profile dict; "device_cache" = from .cache/input_latency.json;
+    # "default_500" = fallback constant (no cache, no explicit override).
+    min_hold_margin_source: str = "default_500"
 
     @classmethod
     def from_dict(cls, p_dict: dict, **kwargs) -> TimingPolicy:
@@ -153,9 +157,15 @@ class TimingPolicy:
         
         if "min_hold_margin_us" in p_dict:
             min_hold_margin_us = max(0, int(p_dict["min_hold_margin_us"]))
+            min_hold_margin_source = "profile_override"
         else:
             calibrated = get_calibrated_margin_recommendation()
-            min_hold_margin_us = calibrated if calibrated is not None else 500
+            if calibrated is not None:
+                min_hold_margin_us = calibrated
+                min_hold_margin_source = "device_cache"
+            else:
+                min_hold_margin_us = 500
+                min_hold_margin_source = "default_500"
 
 
 
@@ -165,6 +175,7 @@ class TimingPolicy:
             chord_stagger_us=Microseconds(chord_stagger_us),
             chord_stagger_max_us=Microseconds(chord_stagger_max_us),
             min_hold_margin_us=Microseconds(min_hold_margin_us),
+            min_hold_margin_source=min_hold_margin_source,
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
@@ -221,6 +232,8 @@ class FrameTimingPolicy:
     # Recorded on the resolved policy so telemetry/diagnostics can state what was added; 0 when
     # the frame model was inactive or the value came from an explicit override.
     min_hold_margin_us: Microseconds = Microseconds(0)
+    # Phase F.3: source label carried from TimingPolicy (for telemetry runtime_options).
+    min_hold_margin_source: str = "default_500"
 
     @staticmethod
     def materialise_frame_us(frames: float, frame_us: int) -> Microseconds:
@@ -290,6 +303,7 @@ class FrameTimingPolicy:
             chord_stagger_us=policy.chord_stagger_us,
             chord_stagger_max_us=policy.chord_stagger_max_us,
             min_hold_margin_us=Microseconds(applied_margin_us),
+            min_hold_margin_source=getattr(policy, "min_hold_margin_source", "default_500"),
         )
 
     @classmethod
