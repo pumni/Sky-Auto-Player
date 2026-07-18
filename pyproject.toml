@@ -27,7 +27,7 @@ where = ["src"]
 include = ["sky_music*"]
 
 [tool.setuptools]
-py-modules = ["main", "build_app", "simulate_update"]
+py-modules = ["main", "build_app"]
 
 [dependency-groups]
 dev = [
@@ -43,7 +43,6 @@ dev = [
 [project.scripts]
 play = "main:main"
 build-app = "build_app:main"
-test-update = "simulate_update:main"
 
 [tool.pyright]
 # ── Analysis scope ──────────────────────────────────────────────────────

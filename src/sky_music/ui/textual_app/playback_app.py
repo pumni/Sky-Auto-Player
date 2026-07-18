@@ -848,16 +848,17 @@ class PlaybackApp(App[str]):
 
         self.run_engine()
         self.set_interval(0.1, self._poll)
-        # Silent update check — never interrupts playback. Only persists a
-        # pending marker so the next picker launch surfaces the modal.
+        # Silent update check — never interrupts playback. Notify-only:
+        # it writes no config state; the picker surfaces the banner on next launch.
         self._check_for_updates_silent(user_cfg)
 
     @work(thread=True)
     def _check_for_updates_silent(self, cfg: Any) -> None:
-        """Background check that records ``pending_update_version`` if newer.
+        """Background check that toasts a notice if a newer version exists.
 
-        No modal, no auto-apply — playback is short-lived and the user must
-        not be prompted mid-song. The picker (next launch) presents the modal.
+        No modal, no auto-apply, no config writes — playback is short-lived and
+        the user must not be prompted mid-song. Notify-only; the picker surfaces
+        the banner on next launch.
         """
         try:
             # Honors --no-update consistently with the picker worker.

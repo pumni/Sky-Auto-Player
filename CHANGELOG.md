@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **In-app auto-update is removed.** Sky Player now notifies you when a new version is
   available; applying it is done by running the new `updater.bat` in the install folder, then
-  reopening `Sky-Player.exe`. This mirrors the mpv portable-distribution model and removes
+  reopening `Sky-Player.exe`. This moves Sky Player to a portable-distribution model and removes
   in-place file-replacement logic from the running app. The previous "Auto-apply without
   asking" toggle is removed from Update Settings.
 - "Check for Update" in the picker now surfaces a banner modal with three actions: Open

@@ -4,7 +4,7 @@ File Path: `file:///V:/Sky%20Player/docs/2026-07-18_distribution-mpv-pattern-pla
 
 # Plan: Distribution & Update Model — mpv Pattern (portable + external updater + optional installer)
 
-> **Status:** Ready to execute (amended 2026-07-18 after design review). Not yet implemented.
+> **Status:** Implemented — Phases 0, 1, 2, 3, 5, 6, 8 shipped in 2.4.0 (2026-07-18). Phases 4 (optional installer) and 7 (winget community channel) remain deferred. This document is now a historical record of the as-built design; normative behavior lives in `docs/distribution-and-update.md` and the `installer/updater.ps1` header comment.
 > **Author source:** Deep review of the mpv updater/installer pattern applied to Sky Player;
 > cross-checked against the real codebase; amended for portable-user-data preservation,
 > config-schema alignment, tag/version lock, channel wiring, transactional copy-rollback,
@@ -20,12 +20,12 @@ File Path: `file:///V:/Sky%20Player/docs/2026-07-18_distribution-mpv-pattern-pla
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Inventory + plan doc | 📝 This document |
-| 1 | Cut in-app auto-apply (notify-only minimal) | 🔲 Pending |
-| 2 | External `updater.bat` + `installer/updater.ps1` | 🔲 Pending |
-| 3 | Wire updater + MANIFEST into `build_app` | 🔲 Pending |
-| 5 | In-app notify banner widget (UI surface) | 🔲 Pending |
-| 6 | Release workflow on tag (`.github/workflows/release.yml`) | 🔲 Pending |
-| 8 | Docs & UX text + CHANGELOG | 🔲 Pending |
+| 1 | Cut in-app auto-apply (notify-only minimal) | ✅ Shipped (2.4.0) |
+| 2 | External `updater.bat` + `installer/updater.ps1` | ✅ Shipped (2.4.0) |
+| 3 | Wire updater + MANIFEST into `build_app` | ✅ Shipped (2.4.0) |
+| 5 | In-app notify banner widget (UI surface) | ✅ Shipped (2.4.0) |
+| 6 | Release workflow on tag (`.github/workflows/release.yml`) | ✅ Shipped (2.4.0) |
+| 8 | Docs & UX text + CHANGELOG | ✅ Shipped (2.4.0) |
 | 4 | Optional installer for `.skysheet` association + Start Menu shortcut | 🔲 Deferred (after 6) |
 | 7 | winget community channel | 🔲 Optional / low priority |
 

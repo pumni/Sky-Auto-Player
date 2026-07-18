@@ -402,9 +402,10 @@ class UpdateSettingsModal(PickerModal[str | None]):
     Layout (top to bottom):
 
       1. Header ``#update-settings-info``: cadence + last check summary.
-      2. Two ``CheckBoxSquare`` rows for ``auto_check`` and ``auto_apply``.
-         Each renders ``[✓]`` (checked) / ``[  ]`` (unchecked) and fires the
-         persistence callback on every toggle via ``Checkbox.Changed``.
+      2. Two ``CheckBoxSquare`` rows for ``auto_check`` and the ``beta``
+         update channel. Each renders ``[✓]`` (checked) / ``[  ]`` (unchecked)
+         and fires the persistence callback on every toggle via
+         ``Checkbox.Changed``.
       3. A ``Rule.horizontal()`` separator between the toggles and the
          action buttons.
       4. ``Button`` widgets for "Check for Update now" and, when a
