@@ -207,8 +207,8 @@ def test_fetch_latest_release_beta_channel_list(
         {**_make_release("v2.6.0"), "draft": True},
     ]
     
-    def fake_opener(req: Any, timeout: Any = None) -> _StubResponse:
-        assert "releases?per_page=10" in req.full_url
+    def fake_opener(url: Any, *, timeout: Any = None) -> _StubResponse:
+        assert "releases?per_page=10" in url.full_url
         return _StubResponse(json.dumps(payload).encode("utf-8"))
 
     result = fetch_latest_release(

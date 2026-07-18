@@ -44,7 +44,7 @@ def test_pyproject_version_is_pep440() -> None:
 def test_version_module_matches_pyproject() -> None:
     """``_version.py`` is auto-generated from ``pyproject.toml`` — keep in
     sync so frozen builds stamp the canonical version on the Windows exe."""
-    from sky_music import _version
+    from sky_music import _version  # type: ignore[import-not-found]
 
     assert _version.__version__ == _pyproject_version()
 

@@ -636,6 +636,6 @@ class UpdateBannerModal(PickerModal[str | None]):
         options = self.query_one("#update-banner-options", OptionList)
         idx = options.highlighted
         if idx is not None and 0 <= idx < len(self.options):
-            self.dismiss(self.options[idx].value)
+            self.dismiss(str(self.options[idx].value))
         else:
             self.dismiss(None)

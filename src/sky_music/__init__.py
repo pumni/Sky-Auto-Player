@@ -24,7 +24,7 @@ _DEV_SENTINEL = "0.0.0-dev"
 
 def _resolve_version() -> str:
     try:
-        from sky_music._version import __version__ as _v
+        from sky_music._version import __version__ as _v  # type: ignore[import-not-found]
         if isinstance(_v, str) and _v:
             return _v
     except ImportError:
