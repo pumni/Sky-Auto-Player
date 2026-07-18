@@ -126,7 +126,7 @@
       }
     </script>
 
-    <link rel="preload" as="image" href="../assets/preview.png" />
+    <link rel="preload" as="image" href="../assets/preview.webp" />
 
     <style>
       :root {
@@ -879,7 +879,11 @@
               <span class="window-title">Sky Player</span>
             </div>
             <div class="player-preview">
-              <img src="../assets/preview.png" alt="Giao diện dòng lệnh Sky Player hiển thị trình chọn bài hát với tiêu đề, thời gian, số nốt, độ khó và profile timing gợi ý cho từng bài" width="1376" height="768" loading="lazy" decoding="async" />
+              <picture>
+                <source srcset="../assets/preview.avif" type="image/avif" />
+                <source srcset="../assets/preview.webp" type="image/webp" />
+                <img src="../assets/preview.png" alt="Giao diện dòng lệnh Sky Player hiển thị trình chọn bài hát với tiêu đề, thời gian, số nốt, độ khó và profile timing gợi ý cho từng bài" width="1376" height="768" loading="lazy" decoding="async" />
+              </picture>
               <div class="stats" aria-label="Điểm nổi bật Sky Player">
                 <div class="stat"><strong>Rảnh tay</strong><span>Tự động nốt, hợp âm & ngân</span></div>
                 <div class="stat"><strong>Portable</strong><span>Không cài đặt · ~100 MB RAM</span></div>
