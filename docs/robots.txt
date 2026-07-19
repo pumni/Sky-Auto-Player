@@ -1,0 +1,35 @@
+# robots.txt for Sky Player landing site (https://pumni.github.io/Sky-Player/)
+# Crawlers indexed: Google, Bing, and AI answer-engine crawlers (GPTBot, ClaudeBot,
+# PerplexityBot, Google-Extended, CCBot, Bytespider, Applebot-Extended). All are welcome to
+# fetch public marketing and documentation pages.
+
+User-agent: *
+Allow: /
+Disallow: /assets/lighthouse-report.html
+Disallow: /google40b614dcfbf81da7.html
+
+# AI answer-engine crawlers - explicitly allow. Some site operators block these by default;
+# we explicitly opt in because being correctly cited by LLM answers is part of discoverability.
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+Sitemap: https://pumni.github.io/Sky-Player/sitemap.xml

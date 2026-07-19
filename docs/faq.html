@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sky Player - FAQ: Auto Music Player for Sky: Children of the Light</title>
+    <meta name="description" content="Frequently asked questions about Sky Player, the free and open-source Windows tool that plays Sky: Children of the Light music sheets hands-free via the public Windows SendInput API." />
+    <meta name="author" content="pumni" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <link rel="canonical" href="https://pumni.github.io/Sky-Player/faq.html" />
+    <link rel="alternate" hreflang="en" href="https://pumni.github.io/Sky-Player/faq.html" />
+    <link rel="alternate" hreflang="vi" href="https://pumni.github.io/Sky-Player/vi/" />
+    <link rel="alternate" hreflang="x-default" href="https://pumni.github.io/Sky-Player/faq.html" />
+    <meta name="theme-color" content="#07111f" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='8' y1='8' x2='56' y2='56' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Cpath d='M40 12v27.4a8.9 8.9 0 1 1-4.2-7.6V18h16v-6H40Z' fill='url(%23a)'/%3E%3C/svg%3E" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="Sky Player" />
+    <meta property="og:title" content="Sky Player - FAQ" />
+    <meta property="og:description" content="Frequently asked questions about Sky Player - input mechanism, safety, sheet formats, updates, and troubleshooting." />
+    <meta property="og:url" content="https://pumni.github.io/Sky-Player/faq.html" />
+    <meta property="og:image" content="https://pumni.github.io/Sky-Player/assets/og-banner.jpg" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Sky Player - FAQ" />
+    <meta name="twitter:description" content="Frequently asked questions about Sky Player for Sky: Children of the Light on Windows." />
+    <meta name="twitter:image" content="https://pumni.github.io/Sky-Player/assets/og-banner.jpg" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "FAQPage",
+            "@id": "https://pumni.github.io/Sky-Player/faq.html#faq",
+            "name": "Sky Player FAQ",
+            "inLanguage": "en",
+            "mainEntity": [
+              { "@type": "Question", "name": "Is Sky Player free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Sky Player is 100% free and open source under the GNU GPL v3.0 license. Download the latest packaged release from GitHub Releases - no signup, no ads, no telemetry." } },
+              { "@type": "Question", "name": "Will I get banned for using Sky Player with Sky: Children of the Light?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player stays completely outside the game. It only sends standard keystrokes through the public Windows SendInput API - the same thing any keyboard macro does - and never reads game memory, injects code, hooks processes, attaches debuggers, or touches game files. Note that automated music playback may still go against Sky's Terms of Service, so use it responsibly and at your own risk." } },
+              { "@type": "Question", "name": "What file formats does Sky Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player plays JSON (.json), skysheet (.skysheet), and JSON-compatible TXT (.txt) sheets exported from the Sky Music web editor (specy/skyMusic). Drop them in the songs folder and they play with notes, chords, holds, and tempo changes intact." } },
+              { "@type": "Question", "name": "Which Windows versions does Sky Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player runs on Windows 10 and Windows 11 (64-bit). It is a portable application - no installer, no admin rights, no background services. Windows 7 and 8 are not supported." } },
+              { "@type": "Question", "name": "Where can I download Sky Player?", "acceptedAnswer": { "@type": "Answer", "text": "Download Sky Player from the GitHub Releases page at https://github.com/pumni/Sky-Player/releases/latest. Every release ships with a SHA256 sidecar so you can verify the download before running it." } },
+              { "@type": "Question", "name": "Does Sky Player work on Mac or Linux?", "acceptedAnswer": { "@type": "Answer", "text": "No. Sky Player relies on Windows-specific APIs - SendInput for input simulation and MMCSS for real-time thread scheduling. Mac and Linux are not on the roadmap." } },
+              { "@type": "Question", "name": "What is the difference between JSON, skysheet, and TXT sheet files?", "acceptedAnswer": { "@type": "Answer", "text": "All three encodings describe the same set of notes, chords, and holds. JSON (.json) is the canonical structured form. Skysheet (.skysheet) is the Sky Music web editor's compact export format. TXT (.txt) files that contain JSON are also accepted for users who keep sheets in plain-text workflows. Sky Player auto-detects the format from the payload, not the extension." } },
+              { "@type": "Question", "name": "How does Sky Player update itself?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player never overwrites its own binaries while running. It only notifies you when a new release is available. Applying the update is one explicit step: close the app and run updater.bat in the install folder. The updater verifies the SHA256 of the downloaded zip against its sidecar before touching any file, stages the download in TEMP, copies binaries transactionally with rollback, and never replaces config.json or the songs/ folder." } },
+              { "@type": "Question", "name": "Why are some notes dropped during playback?", "acceptedAnswer": { "@type": "Answer", "text": "Dropped notes are usually network packet loss between your PC and Sky's servers, not a Sky Player timing bug - the keypresses leave your machine on time, but a few never reach the game server. Installing the free Cloudflare WARP (1.1.1.1) client and switching it to Traffic and DNS (UDP) mode routes game traffic over Cloudflare's backbone and usually fixes the problem." } },
+              { "@type": "Question", "name": "Can I tune Sky Player for a weak PC?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Run Sky Player with the --doctor flag to check your GIL state, MMCSS availability, and key mapping. Then pick a preset from docs/tuning-presets.md - including the free-threaded python3.14t interpreter, balanced, and audience_safe profiles." } },
+              { "@type": "Question", "name": "Can I build Sky Player from source?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Clone the repository and run uv sync to set up the Python 3.14 free-threaded environment. See docs/tuning-presets.md for non-standard environment presets and Sky-Player.spec for the PyInstaller build configuration." } },
+              { "@type": "Question", "name": "Does Sky Player need admin rights?", "acceptedAnswer": { "@type": "Answer", "text": "No. Sky Player is fully portable, runs from any folder, and writes no registry entries. Admin rights are never required for the app itself; only the external updater.bat may need write permission to its own install folder." } },
+              { "@type": "Question", "name": "Where are Sky Player's logs and config stored?", "acceptedAnswer": { "@type": "Answer", "text": "Config and songs live alongside Sky-Player.exe in the install folder (a portable config.json and a songs/ directory). The external updater writes one append-only line per run to %LOCALAPPDATA%\\Sky-Player\\updater.log. No personal information is logged." } },
+              { "@type": "Question", "name": "Is Sky Player related to the Sky Music web editor?", "acceptedAnswer": { "@type": "Answer", "text": "They are separate projects by separate authors, but they form a workflow pair. specy/skyMusic (https://specy.github.io/skyMusic/) is the web editor used to author and export song sheets. Sky Player is the desktop tool that plays those sheets inside Sky: Children of the Light on Windows." } }
+            ]
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://pumni.github.io/Sky-Player/faq.html#breadcrumb",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Sky Player", "item": "https://pumni.github.io/Sky-Player/" },
+              { "@type": "ListItem", "position": 2, "name": "FAQ", "item": "https://pumni.github.io/Sky-Player/faq.html" }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <style>
+      :root {
+        --bg: #020617;
+        --bg-2: #07111f;
+        --text: #f8fafc;
+        --muted: #cbd5e1;
+        --muted-2: #94a3b8;
+        --primary: #38bdf8;
+        --secondary: #a78bfa;
+        --panel: rgba(17, 24, 39, 0.7);
+        --line: rgba(148, 163, 184, 0.18);
+        --max: 820px;
+        --radius: 16px;
+        --font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 8% 0%, rgba(125, 211, 252, 0.20), transparent 34rem),
+          radial-gradient(circle at 92% 4%, rgba(192, 132, 252, 0.16), transparent 34rem),
+          linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 52%, var(--bg) 100%);
+        background-attachment: fixed;
+        color: var(--text);
+        font-family: var(--font);
+        line-height: 1.65;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        padding: 0 1.25rem 5rem;
+      }
+      header {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 3rem 0 1.5rem;
+      }
+      .crumbs {
+        color: var(--muted-2);
+        font-size: 0.875rem;
+        margin-bottom: 1.25rem;
+      }
+      .crumbs a { color: var(--muted); text-decoration: none; }
+      .crumbs a:hover { color: var(--primary); }
+      h1 {
+        font-size: clamp(2rem, 5vw, 2.75rem);
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .lede {
+        margin-top: 1rem;
+        color: var(--muted);
+        font-size: 1.0625rem;
+        max-width: 60ch;
+      }
+      main { max-width: var(--max); margin: 0 auto; }
+      details {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 1.25rem 1.5rem;
+        margin: 0.75rem 0;
+        backdrop-filter: blur(8px);
+      }
+      details[open] summary { color: var(--primary); }
+      summary {
+        font-weight: 600;
+        font-size: 1.0625rem;
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: baseline;
+        gap: 0.6rem;
+      }
+      summary::before {
+        content: "+";
+        color: var(--secondary);
+        font-weight: 700;
+        width: 1.25rem;
+        flex: none;
+      }
+      details[open] summary::before { content: "-"; }
+      details p {
+        margin-top: 0.85rem;
+        color: var(--muted);
+        max-width: 70ch;
+      }
+      details a { color: var(--primary); text-decoration: none; }
+      details a:hover { text-decoration: underline; }
+      details code {
+        background: rgba(148, 163, 184, 0.14);
+        padding: 0.1rem 0.35rem;
+        border-radius: 4px;
+        font-size: 0.9em;
+        font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+      }
+      footer {
+        max-width: var(--max);
+        margin: 3rem auto 0;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--line);
+        color: var(--muted-2);
+        font-size: 0.875rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        justify-content: space-between;
+        align-items: center;
+      }
+      footer nav a {
+        color: var(--muted);
+        text-decoration: none;
+        margin-left: 1rem;
+      }
+      footer nav a:first-child { margin-left: 0; }
+      footer nav a:hover { color: var(--primary); }
+      .cta {
+        margin-top: 2.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+      .cta a {
+        display: inline-block;
+        padding: 0.7rem 1.4rem;
+        border-radius: 999px;
+        font-weight: 600;
+        text-decoration: none;
+        border: 1px solid var(--line);
+        color: var(--text);
+        background: rgba(56, 189, 248, 0.08);
+      }
+      .cta a.primary {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        color: #020617;
+        border: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p class="crumbs">
+        <a href="https://pumni.github.io/Sky-Player/">Sky Player</a>
+        <span aria-hidden="true"> / </span>
+        <span>FAQ</span>
+      </p>
+      <h1>Frequently Asked Questions</h1>
+      <p class="lede">
+        Everything people ask about Sky Player - the free, open-source Windows tool that plays
+        <em>Sky: Children of the Light</em> music sheets hands-free through the public Windows
+        <code>SendInput</code> API.
+      </p>
+    </header>
+
+    <main>
+      <details open>
+        <summary>Is Sky Player free?</summary>
+        <p>
+          Yes. Sky Player is 100% free and open source under the GNU GPL v3.0 license. Download
+          the latest packaged release from
+          <a href="https://github.com/pumni/Sky-Player/releases/latest">GitHub Releases</a> -
+          no signup, no ads, no telemetry.
+        </p>
+      </details>
+
+      <details>
+        <summary>Will I get banned for using Sky Player with Sky: Children of the Light?</summary>
+        <p>
+          Sky Player stays completely outside the game. It only sends standard keystrokes through
+          the public Windows <code>SendInput</code> API - the same channel any keyboard macro
+          uses - and never reads game memory, injects code, hooks processes, attaches
+          debuggers, or modifies game files. Note that automated music playback may still go
+          against Sky's Terms of Service, so use it responsibly and at your own risk. See
+          <a href="https://github.com/pumni/Sky-Player/blob/main/SECURITY.md">SECURITY.md</a>
+          for the full mandate list.
+        </p>
+      </details>
+
+      <details>
+        <summary>What file formats does Sky Player support?</summary>
+        <p>
+          Sky Player plays <strong>JSON</strong> (<code>.json</code>),
+          <strong>skysheet</strong> (<code>.skysheet</code>), and JSON-compatible
+          <strong>TXT</strong> (<code>.txt</code>) sheets exported from the
+          <a href="https://specy.github.io/skyMusic/">Sky Music web editor (specy/skyMusic)</a>.
+          Drop them in the <code>songs/</code> folder next to <code>Sky-Player.exe</code> and
+          press <code>Ctrl+R</code> in the picker to reload the list.
+        </p>
+      </details>
+
+      <details>
+        <summary>Which Windows versions does Sky Player support?</summary>
+        <p>
+          Sky Player runs on Windows 10 and Windows 11 (64-bit). It is a portable application -
+          no installer, no admin rights, no background services. Windows 7 and Windows 8 are
+          not supported.
+        </p>
+      </details>
+
+      <details>
+        <summary>Where can I download Sky Player?</summary>
+        <p>
+          Download Sky Player from the
+          <a href="https://github.com/pumni/Sky-Player/releases/latest">GitHub Releases page</a>.
+          Every release ships with a SHA256 sidecar so you can verify the download before
+          running it.
+        </p>
+      </details>
+
+      <details>
+        <summary>Does Sky Player work on Mac or Linux?</summary>
+        <p>
+          No. Sky Player relies on Windows-specific APIs - <code>SendInput</code> for input
+          simulation and MMCSS for real-time thread scheduling. Mac and Linux are not on the
+          roadmap.
+        </p>
+      </details>
+
+      <details>
+        <summary>What is the difference between JSON, skysheet, and TXT sheet files?</summary>
+        <p>
+          All three encodings describe the same set of notes, chords, and holds. JSON
+          (<code>.json</code>) is the canonical structured form. Skysheet
+          (<code>.skysheet</code>) is the Sky Music web editor's compact export format. TXT
+          (<code>.txt</code>) files that contain a JSON payload are also accepted for users who
+          keep sheets in plain-text workflows. Sky Player auto-detects the format from the
+          payload content, not from the file extension.
+        </p>
+      </details>
+
+      <details>
+        <summary>How does Sky Player update itself?</summary>
+        <p>
+          Sky Player never overwrites its own binaries while running. It only notifies you when
+          a new release is available. Applying the update is one explicit step: close the app
+          and run <code>updater.bat</code> in the install folder. The updater verifies the
+          SHA256 of the downloaded zip against its sidecar before touching any file, stages the
+          download in <code>%TEMP%</code>, copies binaries transactionally with rollback, and
+          never replaces <code>config.json</code> or the <code>songs/</code> folder. The only
+          config keys it may patch are <code>update.last_check_ts</code> and
+          <code>update.last_notified_version</code>.
+        </p>
+      </details>
+
+      <details>
+        <summary>Why are some notes dropped during playback?</summary>
+        <p>
+          Dropped notes are usually network packet loss between your PC and Sky's servers, not
+          a Sky Player timing bug - the keypresses leave your machine on time, but a few never
+          reach the game server. Installing the free
+          <a href="https://1.1.1.1/">Cloudflare WARP (1.1.1.1)</a> client and switching it to
+          "Traffic and DNS (UDP)" mode routes game traffic over Cloudflare's backbone and
+          usually fixes the problem.
+        </p>
+      </details>
+
+      <details>
+        <summary>Can I tune Sky Player for a weak PC?</summary>
+        <p>
+          Yes. Run Sky Player with the <code>--doctor</code> flag to check your GIL state,
+          MMCSS availability, and key mapping. Then pick a preset from
+          <a href="https://github.com/pumni/Sky-Player/blob/main/docs/tuning-presets.md">docs/tuning-presets.md</a>
+          - including the free-threaded <code>python3.14t</code> interpreter, balanced, and
+          <code>audience_safe</code> profiles.
+        </p>
+      </details>
+
+      <details>
+        <summary>Can I build Sky Player from source?</summary>
+        <p>
+          Yes. Clone the <a href="https://github.com/pumni/Sky-Player">repository</a> and run
+          <code>uv sync</code> to set up the Python 3.14 free-threaded environment. See
+          <a href="https://github.com/pumni/Sky-Player/blob/main/docs/tuning-presets.md">docs/tuning-presets.md</a>
+          for non-standard environment presets and
+          <a href="https://github.com/pumni/Sky-Player/blob/main/Sky-Player.spec">Sky-Player.spec</a>
+          for the PyInstaller build configuration.
+        </p>
+      </details>
+
+      <details>
+        <summary>Does Sky Player need admin rights?</summary>
+        <p>
+          No. Sky Player is fully portable, runs from any folder, and writes no registry
+          entries. Admin rights are never required for the app itself; only the external
+          <code>updater.bat</code> may need write permission to its own install folder.
+        </p>
+      </details>
+
+      <details>
+        <summary>Where are Sky Player's logs and config stored?</summary>
+        <p>
+          Config and songs live alongside <code>Sky-Player.exe</code> in the install folder
+          (a portable <code>config.json</code> and a <code>songs/</code> directory). The
+          external updater writes one append-only line per run to
+          <code>%LOCALAPPDATA%\Sky-Player\updater.log</code>. No personal information is logged.
+        </p>
+      </details>
+
+      <details>
+        <summary>Is Sky Player related to the Sky Music web editor?</summary>
+        <p>
+          They are separate projects by separate authors, but they form a workflow pair.
+          <a href="https://specy.github.io/skyMusic/">specy/skyMusic</a> is the web editor used
+          to author and export song sheets. Sky Player is the desktop tool that plays those
+          sheets inside Sky: Children of the Light on Windows.
+        </p>
+      </details>
+
+      <div class="cta">
+        <a class="primary" href="https://github.com/pumni/Sky-Player/releases/latest">Download latest release</a>
+        <a href="https://github.com/pumni/Sky-Player">View source on GitHub</a>
+        <a href="https://pumni.github.io/Sky-Player/">Back to landing page</a>
+      </div>
+    </main>
+
+    <footer>
+      <p>&copy; 2026 Sky Player - GPL v3.0 - Built for the Sky: Children of the Light community.</p>
+      <nav>
+        <a href="https://pumni.github.io/Sky-Player/">Home</a>
+        <a href="https://github.com/pumni/Sky-Player">GitHub</a>
+        <a href="https://github.com/pumni/Sky-Player/releases/latest">Releases</a>
+        <a href="https://github.com/pumni/Sky-Player/blob/main/LICENSE">License</a>
+      </nav>
+    </footer>
+  </body>
+</html>

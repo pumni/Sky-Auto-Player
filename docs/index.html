@@ -47,7 +47,7 @@
             "@type": "WebSite",
             "@id": "https://pumni.github.io/Sky-Player/#website",
             "name": "Sky Player",
-            "alternateName": ["Sky-Player", "Sky COTL PC Music Player"],
+            "alternateName": ["Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
             "url": "https://pumni.github.io/Sky-Player/",
             "publisher": { "@id": "https://github.com/pumni#person" },
             "inLanguage": ["en", "vi"]
@@ -64,10 +64,29 @@
             "@id": "https://pumni.github.io/Sky-Player/#software",
             "name": "Sky Player",
             "license": "https://github.com/pumni/Sky-Player/LICENSE",
-            "alternateName": ["Sky-Player", "Sky COTL PC Music Player"],
+            "alternateName": ["Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
             "applicationCategory": "GameApplication",
             "operatingSystem": "Windows",
             "isAccessibleForFree": true,
+            "about": {
+              "@type": "VideoGame",
+              "name": "Sky: Children of the Light",
+              "alternateName": "Sky",
+              "publisher": {
+                "@type": "Organization",
+                "name": "thatgamecompany",
+                "url": "https://thatskygame.com"
+              },
+              "sameAs": [
+                "https://en.wikipedia.org/wiki/Sky:_Children_of_the_Light",
+                "https://www.wikidata.org/wiki/Q64547527",
+                "https://www.thatskygame.com/"
+              ]
+            },
+            "subjectOf": {
+              "@type": "FAQPage",
+              "@id": "https://pumni.github.io/Sky-Player/faq.html#faq"
+            },
             "description": "Sky Player is a free and open-source Windows tool that automatically plays Sky: Children of the Light music sheets. It supports JSON, skysheet, and TXT formats, using only the public Windows SendInput API for input simulation to remain anti-cheat-compatible.",
             "url": "https://pumni.github.io/Sky-Player/",
             "downloadUrl": "https://github.com/pumni/Sky-Player/releases/latest",

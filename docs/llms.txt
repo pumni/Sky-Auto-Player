@@ -1,0 +1,45 @@
+# Sky Player
+
+> Sky Player is a free, open-source Windows tool that plays music sheets in Sky: Children of the Light by simulating keyboard input through the public Windows SendInput API.
+
+Sky Player reads JSON, skysheet, or JSON-compatible TXT song files exported from the Sky Music web editor (specy/skyMusic) and plays them hands-free on Windows 10/11. It uses only the public Windows `SendInput` API for input simulation - no game memory access, no injection, no hooks, no anti-cheat bypass. Portable: no installer, no admin rights, no registry entries. Licensed under GNU GPL v3.0.
+
+## Who it is for
+
+PC players of *Sky: Children of the Light* who want to perform music sheets in-game without manually mashing keys. Useful for long songs, fast tempo passages, dense chords, and accessibility cases where manual input is impractical.
+
+## Key links
+
+- [Landing page (English)](https://pumni.github.io/Sky-Player/)
+- [Landing page (Tieng Viet)](https://pumni.github.io/Sky-Player/vi/)
+- [Dedicated FAQ page](https://pumni.github.io/Sky-Player/faq.html)
+- [GitHub repository](https://github.com/pumni/Sky-Player)
+- [Latest release download](https://github.com/pumni/Sky-Player/releases/latest)
+- [Issue tracker](https://github.com/pumni/Sky-Player/issues)
+
+## Documentation
+
+- [README - Quick start, features, FAQ, license](https://github.com/pumni/Sky-Player/blob/main/README.md)
+- [Configuration and tuning presets](https://github.com/pumni/Sky-Player/blob/main/docs/tuning-presets.md)
+- [Architecture overview](https://github.com/pumni/Sky-Player/blob/main/docs/architecture.md)
+- [Real-time dispatch architecture](https://github.com/pumni/Sky-Player/blob/main/docs/rt-dispatch-architecture.md)
+- [Timing principles](https://github.com/pumni/Sky-Player/blob/main/docs/timing-principles.md)
+- [Timing profile and frame model](https://github.com/pumni/Sky-Player/blob/main/docs/timing-profile-frame-model.md)
+- [Distribution and update model](https://github.com/pumni/Sky-Player/blob/main/docs/distribution-and-update.md)
+- [Security policy](https://github.com/pumni/Sky-Player/blob/main/SECURITY.md)
+- [Changelog](https://github.com/pumni/Sky-Player/blob/main/CHANGELOG.md)
+
+## At a glance
+
+- Operating system: Windows 10 and Windows 11 (64-bit)
+- License: GNU GPL v3.0
+- Language: Python 3.14 (free-threaded build)
+- Input mechanism: Windows `SendInput` only - no game tampering
+- Sheet formats: JSON, skysheet, JSON-compatible TXT
+- Source sheet editor: specy/skyMusic (https://specy.github.io/skyMusic/)
+- Source code: https://github.com/pumni/Sky-Player
+- Download: https://github.com/pumni/Sky-Player/releases/latest
+
+## Safety and ethics
+
+Sky Player performs no game memory access, no DLL injection, no process hooking, no debugger attach, no anti-cheat evasion, and no game file modification. It only sends standard keyboard input through the public Windows `SendInput` API - the same channel any keyboard macro uses. Automated music playback may still conflict with Thatgamecompany's Terms of Service; use the tool responsibly and at your own risk.
