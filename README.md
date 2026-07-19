@@ -4,7 +4,6 @@
 
 *Auto-plays Sky music sheets on Windows, in time.*
 
-<a href="https://github.com/pumni/Sky-Player/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/pumni/Sky-Player/ci.yml?style=for-the-badge&label=CI&logo=github" alt="CI"></a>
 <a href="https://github.com/pumni/Sky-Player/releases/latest"><img src="https://img.shields.io/github/v/release/pumni/Sky-Player?style=for-the-badge&label=version&color=blue&logo=python" alt="Latest version"></a>
 <a href="https://github.com/pumni/Sky-Player/releases"><img src="https://img.shields.io/github/downloads/pumni/Sky-Player/total?style=for-the-badge&label=downloads&logo=github&color=success" alt="Downloads"></a>
 <a href="https://github.com/pumni/Sky-Player/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pumni/Sky-Player?style=for-the-badge&color=orange" alt="License"></a>

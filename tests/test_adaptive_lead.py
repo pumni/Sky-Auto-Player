@@ -675,6 +675,36 @@ def test_lead_export_import_round_trip() -> None:
     assert abs(est2.get_lead_us(ActionKind.UP) - lead_up_before) <= 1
 
 
+def test_lead_import_never_shrinks_song_sized_buckets() -> None:
+    """A cache from a lower-polyphony song must not collapse the current song's top buckets.
+
+    The engine sizes max_poly = max(6, max_chord of the CURRENT song) before importing the
+    cross-session cache; import must keep that sizing (padding cold buckets), so an 8-key
+    chord updates bucket 8 instead of being clamped into a blended bucket 6.
+    """
+    donor = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000, max_poly=6)
+    for _ in range(6):
+        donor.update(ActionKind.DOWN, 400, n_keys=1)
+        donor.update(ActionKind.DOWN, 900, n_keys=6)
+    state = donor.export_state()
+
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000, max_poly=8)
+    assert est.import_state(state)
+    assert est.max_poly == 8, "import must not shrink below the song-derived sizing"
+    # Cached buckets survive; the cold poly-8 bucket falls back to the nearest seeded one (6).
+    assert abs(est.get_lead_us(ActionKind.DOWN, 6) - donor.get_lead_us(ActionKind.DOWN, 6)) <= 1
+    assert abs(est.get_lead_us(ActionKind.DOWN, 8) - donor.get_lead_us(ActionKind.DOWN, 6)) <= 1
+    # Real 8-key samples seed bucket 8 itself — no clamp into bucket 6.
+    for _ in range(6):
+        est.update(ActionKind.DOWN, 1_400, n_keys=8)
+    assert abs(est.get_lead_us(ActionKind.DOWN, 8) - 1_400) <= 1
+    assert abs(est.get_lead_us(ActionKind.DOWN, 6) - donor.get_lead_us(ActionKind.DOWN, 6)) <= 1
+    # A larger cached sizing still grows the estimator (existing behavior preserved).
+    est_small = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000, max_poly=6)
+    assert est_small.import_state(est.export_state())
+    assert est_small.max_poly == 8
+
+
 def test_lead_import_poison_rejected() -> None:
     """Phase D: Corrupt or invalid import data is rejected without changing estimator."""
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)

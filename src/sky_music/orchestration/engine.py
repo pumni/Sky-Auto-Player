@@ -299,12 +299,19 @@ class SendLatencyEstimator:
                 val = data.get(key, 0)
                 if not isinstance(val, int) or val < 0:
                     return False
-            # All valid — apply
-            self.max_poly = max_poly
-            self._ema_down = [float(v) for v in ema_down]
-            self._warm_down = list(warm_down)
-            self._count_down = list(count_down)
-            self._sum_down = list(sum_down)
+            # All valid — apply. Never shrink below the constructed sizing: __init__ sizes
+            # max_poly against the CURRENT song (max(6, max_chord)) before this cache import
+            # runs, and a cache written after a lower-polyphony song must not collapse the
+            # current song's top chord buckets into a blended lower bucket. Pad the imported
+            # per-poly arrays with cold (unseeded) buckets up to the constructed size; the
+            # ≤-bucket fallback in get_lead_us covers them until they seed with real samples.
+            target_poly = max(self.max_poly, max_poly)
+            pad = target_poly - max_poly
+            self.max_poly = target_poly
+            self._ema_down = [float(v) for v in ema_down] + [0.0] * pad
+            self._warm_down = list(warm_down) + [False] * pad
+            self._count_down = list(count_down) + [0] * pad
+            self._sum_down = list(sum_down) + [0] * pad
             self._ema_down_total = float(ema_down_total)
             self._count_down_total = cast(int, data["count_down_total"])
             self._sum_down_total = cast(int, data.get("sum_down_total", 0))

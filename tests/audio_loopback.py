@@ -36,6 +36,19 @@ def get_default_loopback_device_name() -> str | None:
         return None
 
 
+def _keep_alive_loop(speaker, stop_event: threading.Event, samplerate: int) -> None:
+    """Play silence to keep WASAPI loopback from blocking when the system is quiet."""
+    if np is None:
+        return
+    try:
+        with speaker.player(samplerate=samplerate, channels=1) as sp:
+            zeros = np.zeros(max(1, int(samplerate * 0.1)), dtype=np.float32)
+            while not stop_event.is_set():
+                sp.play(zeros)
+    except Exception:
+        pass
+
+
 def capture_loopback_to_wav(
     out_path: Path,
     *,
@@ -72,6 +85,16 @@ def capture_loopback_to_wav(
     start_time = time.time()
     all_chunks = []
 
+    # Start a dummy playback thread to keep WASAPI loopback active during silence.
+    # Otherwise loopback will pause and drop silent frames, corrupting timestamps.
+    keep_alive_stop = threading.Event()
+    keep_alive_thread = threading.Thread(
+        target=_keep_alive_loop,
+        args=(speaker, keep_alive_stop, samplerate),
+        daemon=True,
+    )
+    keep_alive_thread.start()
+
     try:
         with mic.recorder(samplerate=samplerate, channels=channels) as recorder:
             while True:
@@ -100,6 +123,9 @@ def capture_loopback_to_wav(
                     break
     except Exception as e:
         raise RuntimeError(f"Error during audio loopback capture: {e}") from e
+    finally:
+        keep_alive_stop.set()
+        keep_alive_thread.join(timeout=0.2)
 
     if not all_chunks:
         raise RuntimeError("Capture completed but no audio samples were recorded.")
