@@ -17,7 +17,6 @@ from sky_music.domain.update_checker import (
     parse_release_payload,
     parse_version,
 )
-from sky_music.infrastructure.update_installer import parse_sha256_sidecar
 
 
 class _StubResponse:
@@ -341,34 +340,4 @@ def test_fetch_latest_release_skipped_version_returns_no_update() -> None:
     assert result.error is None
 
 
-# ── parse_sha256_sidecar ──────────────────────────────────────────────────────.
 
-
-def test_parse_sha256_sidecar_bare_hash() -> None:
-    h = "a" * 64
-    assert parse_sha256_sidecar(h) == h
-
-
-def test_parse_sha256_sidecar_with_filename() -> None:
-    h = "abcdef" * 11  # 66 chars (>64), trimmed to first whitespace token
-    h = "a" * 64
-    text = f"{h}  Sky-Player.zip"
-    assert parse_sha256_sidecar(text) == h
-
-
-def test_parse_sha256_sidecar_get_file_hash_format() -> None:
-    """``Get-FileHash`` writes ``<hash>  <path>`` style; same as Coreutils."""
-    h = "0" * 64
-    text = f"SHA256\n{h}  dist/Sky-Player.zip"
-    # First non-empty line should be ``SHA256`` — only 5 chars — rejected by
-    # bare-hash check. The regex should still catch the second line.
-    assert parse_sha256_sidecar(text) == h
-
-
-def test_parse_sha256_sidecar_empty_text() -> None:
-    assert parse_sha256_sidecar("") is None
-    assert parse_sha256_sidecar("\n  \n") is None
-
-
-def test_parse_sha256_sidecar_garbage() -> None:
-    assert parse_sha256_sidecar("garbage") is None

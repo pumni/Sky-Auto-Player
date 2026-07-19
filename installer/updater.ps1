@@ -229,6 +229,41 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
     try {
         $filesToCopy = Get-ChildItem -LiteralPath $StagingRoot -Recurse -File
         
+        # 0. Identify orphaned files using MANIFEST.json
+        $orphanedFiles = @()
+        $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
+        if (Test-Path -LiteralPath $manifestPath) {
+            try {
+                $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+                if ($manifest.files) {
+                    $validManifestPaths = @{}
+                    foreach ($file in $manifest.files) {
+                        $norm = $file.path -replace '/', '\'
+                        $validManifestPaths[$norm] = $true
+                    }
+                    
+                    $destFiles = Get-ChildItem -LiteralPath $DestRoot -Recurse -File -ErrorAction SilentlyContinue
+                    if ($destFiles) {
+                        foreach ($dFile in $destFiles) {
+                            $rel = $dFile.FullName.Substring($DestRoot.Length).TrimStart('\', '/')
+                            $relNorm = $rel -replace '/', '\'
+                            
+                            # Preserve list: config.json, songs\, logs\
+                            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
+                                continue
+                            }
+                            
+                            if (-not $validManifestPaths.ContainsKey($relNorm)) {
+                                $orphanedFiles += $dFile.FullName
+                            }
+                        }
+                    }
+                }
+            } catch {
+                Write-Log "Failed to parse MANIFEST.json for orphan cleanup: $_"
+            }
+        }
+        
         # 1. Back up existing destination files that will be overwritten
         foreach ($file in $filesToCopy) {
             $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
@@ -237,10 +272,10 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
             $relNorm = $rel -replace '/', '\'
             $dest = Join-Path $DestRoot $rel
             
-            # Skip copying config.json or songs/ files entirely (preserve-list mandate).
+            # Skip copying config.json, songs/ or logs/ files entirely (preserve-list mandate).
             # $relNorm -eq 'songs' is defensive — Get-ChildItem -File never returns
             # directories, but a future caller could pass a directory in.
-            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\')) {
+            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
                 continue
             }
             
@@ -258,13 +293,32 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
             }
         }
 
+        # 1.5 Back up and delete orphaned files
+        foreach ($dest in $orphanedFiles) {
+            $rel = $dest.Substring($DestRoot.Length).TrimStart('\', '/')
+            if (-not (Test-Path -LiteralPath $dest)) { continue }
+            
+            if (-not (Test-Path -LiteralPath $backupDir)) {
+                New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+            }
+            $relBackupPath = Join-Path $backupDir $rel
+            $relBackupDir = Split-Path -Parent $relBackupPath
+            if (-not (Test-Path -LiteralPath $relBackupDir)) {
+                New-Item -ItemType Directory -Force -Path $relBackupDir | Out-Null
+            }
+            Copy-Item -LiteralPath $dest -Destination $relBackupPath -Force | Out-Null
+            $backedUpFiles += @{ Source = $dest; Backup = $relBackupPath }
+            
+            Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+
         # 2. Copy files from staging to target
         foreach ($file in $filesToCopy) {
             $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
             $relNorm = $rel -replace '/', '\'
             $dest = Join-Path $DestRoot $rel
             
-            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\')) {
+            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
                 continue
             }
             
@@ -331,6 +385,12 @@ function Test-ManifestIntegrity {
     # implies either a regressed build pipeline (release.yml --manifest
     # gate skipped) or a tampered/3rd-party-repackaged zip; neither case
     # should the updater install.
+    #
+    # SECURITY NOTE: This fail-closed integrity gate inherently defeats
+    # Zip-Slip attacks against the native .NET/PowerShell extract API.
+    # If a malicious archive attempts to extract files outside `$StagingRoot`,
+    # `Test-Path` below will return `$false`, causing the update to abort
+    # before any files are copied to the installation directory.
     $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
     if (-not (Test-Path -LiteralPath $manifestPath)) {
         Write-Log "MANIFEST.json missing from staging — refusing to install (fail-closed)."

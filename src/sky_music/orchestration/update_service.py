@@ -3,7 +3,7 @@
 Glue layer that ties together the pure version-check domain logic
 (:mod:`sky_music.domain.update_checker`), the persistence layer
 (:mod:`sky_music.config` for skip-version / last-check timestamps), and the
-Windows-side installer (:mod:`sky_music.infrastructure.update_installer`).
+Windows-side installer (``updater.ps1``).
 
 The UI only needs to:
   1. Call :func:`should_auto_check` before launching the background check.
