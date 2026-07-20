@@ -41,7 +41,7 @@ An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape ha
 | `audience_safe` | 1.1 | 18000 | Audience-tested sharp profile |
 | `balanced` | 1.02 | 17000 | General default with more local-frame body |
 
-`dense_safe` was removed. Fast repeat or schedule-stress recommendations now select `local_precise` together with tempo reduction.
+`dense_safe` was removed. Schedule-stress recommendations (fast repeats / dense polyphony / infeasible same-key cycles without delivery-timing failure) select `local_precise` together with tempo reduction; severe delivery-timing failures (panic releases, p99 > 15 ms, late > 10 ms count > 5) select `audience_safe` instead, since the failure mode there is missed notes from short holds, not crowded cycles.
 
 ---
 

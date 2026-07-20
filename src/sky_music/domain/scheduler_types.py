@@ -43,6 +43,9 @@ def get_calibrated_margin_recommendation() -> int | None:
             return None
         if p99_down < 0 or p50_up < 0 or p99_down > 100_000 or p50_up > 100_000:
             return None
+        n = data.get("n")
+        if not isinstance(n, int) or isinstance(n, bool) or n < 50:
+            return None
         # Recommended formula: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
         # Put this comment for human review: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
         margin_rec = p99_down - p50_up + 100

@@ -117,7 +117,7 @@ def test_calibration_hold_matches_resolve_path():
     )
     rec = calibrate_profile(inp)
     eff = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_profile_name("local-precise"),
+        TimingPolicy.from_profile_name("balanced"),
         fps=30,
     )
     assert rec.hold_us == eff.hold_us

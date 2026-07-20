@@ -651,13 +651,13 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
         app.action_open_calibration()
         await pilot.pause()
         await pilot.press("enter")
-        assert app.profile_name == "local-precise"
+        assert app.profile_name == "audience-safe"
         assert app.fps == 30
         await pilot.press("escape")
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert persisted == [("local-precise", 0.88, 30)]
+    assert persisted == [("audience-safe", 0.88, 30)]
     assert FakeMetadataCoordinator.instances[0].closed is True
 
 

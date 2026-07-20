@@ -96,8 +96,15 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     # 2. Timing Profile and Tempo Scale calibration decision tree
     if inp.failed_release_count > 0 or inp.infeasible_same_key_repeats > 0 or p99 > 15000 or late_10ms > 5:
         severity = "severe"
-        rec_profile = "audience-safe" if inp.fps <= 30 and not schedule_stress else "local-precise"
-        rec_tempo = round(inp.tempo_scale * (0.88 if stress_rate > 0.03 else 0.90), 2)
+        timing_stress = (
+            inp.failed_release_count > 0 or p99 > 15000 or late_10ms > 5
+        )
+        if inp.infeasible_same_key_repeats > 0 and not timing_stress:
+            rec_profile = "local-precise"
+        else:
+            rec_profile = "audience-safe"
+        target_tempo = 0.88 if stress_rate > 0.03 else 0.90
+        rec_tempo = round(min(inp.tempo_scale, target_tempo), 2)
         reason = (
             f"Severe timing or schedule stress detected "
             f"(p99={p99/1000:.1f}ms, late >10ms count={late_10ms}, "
@@ -107,7 +114,7 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
     elif p99 > 8000 or late_10ms > 0 or schedule_stress or dense_polyphony:
         severity = "moderate"
         rec_profile = "local-precise" if schedule_stress else ("audience-safe" if dense_polyphony else "balanced")
-        rec_tempo = round(inp.tempo_scale * 0.95, 2)
+        rec_tempo = round(min(inp.tempo_scale, 0.95), 2)
         reason = (
             f"Moderate timing or density stress detected "
             f"(p99={p99/1000:.1f}ms, same-key compressed holds={inp.risky_same_key_repeats}, "
@@ -116,9 +123,12 @@ def calibrate_profile(inp: CalibrationInput) -> CalibrationRecommendation:
         )
     elif p99 < 3000:
         severity = "ok"
-        rec_profile = "local-precise"
+        rec_profile = inp.profile_name
         rec_tempo = inp.tempo_scale
-        reason = f"Excellent timing performance (p99={p99/1000:.1f}ms). High precision profiles can be safely used."
+        reason = (
+            f"Excellent timing performance (p99={p99/1000:.1f}ms). "
+            f"Current profile ({rec_profile}) is well-calibrated."
+        )
     else:
         severity = "ok"
         rec_profile = inp.profile_name

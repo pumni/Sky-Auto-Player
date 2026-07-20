@@ -331,7 +331,7 @@ def test_calibrate_advisory_severe_jitter():
     )
     rec = calibrate_profile(inp)
     assert rec.severity == "severe"
-    assert rec.profile_name == "local-precise"
+    assert rec.profile_name == "audience-safe"
     assert rec.tempo_scale == 0.90
 
 
@@ -396,9 +396,9 @@ def test_calibrate_hold_uses_frame_timing_policy():
         failed_release_count=0,
     )
     rec = calibrate_profile(inp)
-    assert rec.profile_name == "local-precise"
-    # local_precise @30: ceil(1e6/30) + 500us device-delivery margin
-    assert rec.hold_us == 33_834
+    assert rec.profile_name == "balanced"
+    # balanced @30: ceil(1.02 * 1e6/30) + 500us device-delivery margin
+    assert rec.hold_us == 34_501
 
 
 def test_frame_timing_defaults_from_config(tmp_path, monkeypatch):
@@ -447,7 +447,7 @@ def test_apply_calibration_loads_latest_summary(tmp_path, monkeypatch):
     res = apply_calibration_from_telemetry(AppConfig(), state)
     assert res.applied is True
     assert state.session is not None
-    assert state.timing_profile_name == "local-precise@60fps"
+    assert state.timing_profile_name == "balanced@60fps"
 
 
 def test_save_calibration_persists_profile_tempo_and_fps(tmp_path, monkeypatch):
@@ -547,6 +547,7 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "version": 1,
         "down_us": {"p50": 200, "p90": 300, "p99": 400},
         "up_us": {"p50": 100, "p90": 150, "p99": 200},
+        "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
     assert get_calibrated_margin_recommendation() == 400
@@ -563,6 +564,7 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "version": 1,
         "down_us": {"p50": 50, "p90": 80, "p99": 100},
         "up_us": {"p50": 300, "p90": 400, "p99": 500},
+        "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data_clamp_low), encoding="utf-8")
     assert get_calibrated_margin_recommendation() == 300
@@ -572,9 +574,29 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "version": 1,
         "down_us": {"p50": 2000, "p90": 2200, "p99": 2500},
         "up_us": {"p50": 100, "p90": 150, "p99": 200},
+        "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data_clamp_high), encoding="utf-8")
     assert get_calibrated_margin_recommendation() == 2000
+
+
+def test_calibrated_margin_rejects_low_sample_count(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache_dir = tmp_path / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / "input_latency.json"
+    cache_file.write_text(
+        json.dumps({
+            "version": 1,
+            "down_us": {"p50": 200, "p90": 300, "p99": 400},
+            "up_us": {"p50": 100, "p90": 150, "p99": 200},
+            "n": 10,
+        }),
+        encoding="utf-8",
+    )
+
+    from sky_music.domain.scheduler_types import get_calibrated_margin_recommendation
+    assert get_calibrated_margin_recommendation() is None
 
 
 def test_doctor_calibration_command_fails_if_sky_running(monkeypatch):
