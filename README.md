@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎵 Sky Player
+# 🎵 Sky Auto Player
 
 *Auto-plays Sky music sheets on Windows, in time.*
 
