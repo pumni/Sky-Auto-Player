@@ -1,4 +1,4 @@
-# robots.txt for Sky Player landing site (https://pumni.github.io/Sky-Player/)
+# robots.txt for Sky Auto Player landing site (https://pumni.github.io/Sky-Auto-Player/)
 # Crawlers indexed: Google, Bing, and AI answer-engine crawlers (GPTBot, ClaudeBot,
 # PerplexityBot, Google-Extended, CCBot, Bytespider, Applebot-Extended). All are welcome to
 # fetch public marketing and documentation pages.
@@ -32,4 +32,4 @@ Allow: /
 User-agent: Applebot-Extended
 Allow: /
 
-Sitemap: https://pumni.github.io/Sky-Player/sitemap.xml
+Sitemap: https://pumni.github.io/Sky-Auto-Player/sitemap.xml
