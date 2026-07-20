@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">Sky-Player
+<html lang="en">Sky-Auto-Player
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sky Player — Auto Music Player for Sky: Children of the Light (Windows)</title>
-    <meta name="description" content="Sky Player is a free, open-source auto music player for Sky: Children of the Light on Windows PC. It plays your JSON, skysheet, and TXT sheets hands-free — clean chords, fast songs, and long holds — using only standard Windows keyboard input, never touching the game." />
+    <title>Sky Auto Player — Auto Music Player for Sky: Children of the Light (Windows)</title>
+    <meta name="description" content="Sky Auto Player is a free, open-source auto music player for Sky: Children of the Light on Windows PC. It plays your JSON, skysheet, and TXT sheets hands-free — clean chords, fast songs, and long holds — using only standard Windows keyboard input, never touching the game." />
     <meta name="author" content="pumni" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <link rel="canonical" href="https://pumni.github.io/Sky-Auto-Player/" />
@@ -22,22 +22,22 @@
     
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Sky Player" />
-    <meta property="og:title" content="Sky Player — Auto Music Player for Sky: Children of the Light" />
+    <meta property="og:site_name" content="Sky Auto Player" />
+    <meta property="og:title" content="Sky Auto Player — Auto Music Player for Sky: Children of the Light" />
     <meta property="og:description" content="Let your Sky: Children of the Light songs play themselves on PC. Free & open source, portable, and it never touches the game — just standard keystrokes. JSON, skysheet, and TXT sheets supported." />
     <meta property="og:url" content="https://pumni.github.io/Sky-Auto-Player/" />
     <meta property="og:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg" />
     <meta property="og:image:type" content="image/jpeg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Sky Player - Sky: Children of the Light PC Music Sheet Player" />
+    <meta property="og:image:alt" content="Sky Auto Player - Sky: Children of the Light PC Music Sheet Player" />
     
     <!-- Twitter/X -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Sky Player — Auto Music Player for Sky: Children of the Light" />
+    <meta name="twitter:title" content="Sky Auto Player — Auto Music Player for Sky: Children of the Light" />
     <meta property="twitter:description" content="Let your Sky: COTL songs play themselves on Windows PC. Free & open source, portable, never touches the game. JSON, skysheet, TXT." />
     <meta name="twitter:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg" />
-    <meta name="twitter:image:alt" content="Sky Player interface preview" />
+    <meta name="twitter:image:alt" content="Sky Auto Player interface preview" />
 
     <script type="application/ld+json">
       {
@@ -46,7 +46,7 @@
           {
             "@type": "WebSite",
             "@id": "https://pumni.github.io/Sky-Auto-Player/#website",
-            "name": "Sky Player",
+            "name": "Sky Auto Player",
             "alternateName": ["Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
             "url": "https://pumni.github.io/Sky-Auto-Player/",
             "publisher": { "@id": "https://github.com/pumni#person" },
@@ -62,7 +62,7 @@
           {
             "@type": "SoftwareApplication",
             "@id": "https://pumni.github.io/Sky-Auto-Player/#software",
-            "name": "Sky Player",
+            "name": "Sky Auto Player",
             "license": "https://github.com/pumni/Sky-Auto-Player/LICENSE",
             "alternateName": ["Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
             "applicationCategory": "GameApplication",
@@ -87,18 +87,18 @@
               "@type": "FAQPage",
               "@id": "https://pumni.github.io/Sky-Auto-Player/faq.html#faq"
             },
-            "description": "Sky Player is a free and open-source Windows tool that automatically plays Sky: Children of the Light music sheets. It supports JSON, skysheet, and TXT formats, using only the public Windows SendInput API for input simulation to remain anti-cheat-compatible.",
+            "description": "Sky Auto Player is a free and open-source Windows tool that automatically plays Sky: Children of the Light music sheets. It supports JSON, skysheet, and TXT formats, using only the public Windows SendInput API for input simulation to remain anti-cheat-compatible.",
             "url": "https://pumni.github.io/Sky-Auto-Player/",
             "downloadUrl": "https://github.com/pumni/Sky-Auto-Player/releases/latest",
             "codeRepository": "https://github.com/pumni/Sky-Auto-Player",
             "creator": { "@id": "https://github.com/pumni#person" },
             "sourceOrganization": {
               "@type": "SoftwareSourceCode",
-              "name": "Sky Player Code Repository",
+              "name": "Sky Auto Player Code Repository",
               "codeRepository": "https://github.com/pumni/Sky-Auto-Player",
               "programmingLanguage": "Python",
               "runtimePlatform": "Windows",
-              "targetProduct": "Sky Player"
+              "targetProduct": "Sky Auto Player"
             },
             "offers": {
               "@type": "Offer",
@@ -112,24 +112,24 @@
             "@type": "FAQPage",
             "@id": "https://pumni.github.io/Sky-Auto-Player/#faq",
             "mainEntity": [
-              { "@type": "Question", "name": "Is Sky Player free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Sky Player is 100% free and open source under the GNU GPL v3.0 license. Download the latest packaged release from GitHub Releases — no signup, no ads, no telemetry." } },
-              { "@type": "Question", "name": "Will I get banned for using Sky Player with Sky: Children of the Light?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player stays completely outside the game. It only sends standard keystrokes through the public Windows SendInput API — the same thing any keyboard macro does — and never reads game memory, injects code, hooks processes, attaches debuggers, or touches game files. Note that automated music playback may still go against Sky's Terms of Service, so use it responsibly and at your own risk." } },
-              { "@type": "Question", "name": "What file formats does Sky Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player plays JSON (.json), skysheet (.skysheet), and JSON-compatible TXT (.txt) sheets exported from the Sky Music web editor (specy/skyMusic). Drop them in the songs folder and they play with notes, chords, holds, and tempo changes intact." } },
-              { "@type": "Question", "name": "Which Windows versions does Sky Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Player runs on Windows 10 and Windows 11 (64-bit). It is a portable application — no installer, no admin rights, no background services. Windows 7 and 8 are not supported." } },
-              { "@type": "Question", "name": "Where can I download Sky Player?", "acceptedAnswer": { "@type": "Answer", "text": "Download Sky Player from the GitHub Releases page at https://github.com/pumni/Sky-Auto-Player/releases/latest. Every release ships with a SHA256 sidecar so you can verify the download before running it." } },
-              { "@type": "Question", "name": "Does Sky Player work on Mac or Linux?", "acceptedAnswer": { "@type": "Answer", "text": "No. Sky Player relies on Windows-specific APIs — SendInput for input simulation and MMCSS for real-time thread scheduling. Mac and Linux are not on the roadmap." } }
+              { "@type": "Question", "name": "Is Sky Auto Player free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Sky Auto Player is 100% free and open source under the GNU GPL v3.0 license. Download the latest packaged release from GitHub Releases — no signup, no ads, no telemetry." } },
+              { "@type": "Question", "name": "Will I get banned for using Sky Auto Player with Sky: Children of the Light?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Auto Player stays completely outside the game. It only sends standard keystrokes through the public Windows SendInput API — the same thing any keyboard macro does — and never reads game memory, injects code, hooks processes, attaches debuggers, or touches game files. Note that automated music playback may still go against Sky's Terms of Service, so use it responsibly and at your own risk." } },
+              { "@type": "Question", "name": "What file formats does Sky Auto Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Auto Player plays JSON (.json), skysheet (.skysheet), and JSON-compatible TXT (.txt) sheets exported from the Sky Music web editor (specy/skyMusic). Drop them in the songs folder and they play with notes, chords, holds, and tempo changes intact." } },
+              { "@type": "Question", "name": "Which Windows versions does Sky Auto Player support?", "acceptedAnswer": { "@type": "Answer", "text": "Sky Auto Player runs on Windows 10 and Windows 11 (64-bit). It is a portable application — no installer, no admin rights, no background services. Windows 7 and 8 are not supported." } },
+              { "@type": "Question", "name": "Where can I download Sky Auto Player?", "acceptedAnswer": { "@type": "Answer", "text": "Download Sky Auto Player from the GitHub Releases page at https://github.com/pumni/Sky-Auto-Player/releases/latest. Every release ships with a SHA256 sidecar so you can verify the download before running it." } },
+              { "@type": "Question", "name": "Does Sky Auto Player work on Mac or Linux?", "acceptedAnswer": { "@type": "Answer", "text": "No. Sky Auto Player relies on Windows-specific APIs — SendInput for input simulation and MMCSS for real-time thread scheduling. Mac and Linux are not on the roadmap." } }
             ]
           },
           {
             "@type": "BreadcrumbList",
             "@id": "https://pumni.github.io/Sky-Auto-Player/#breadcrumb",
-            "itemListElement": [{ "@type": "ListItem", "position": 1, "name": "Sky Player", "item": "https://pumni.github.io/Sky-Auto-Player/" }]
+            "itemListElement": [{ "@type": "ListItem", "position": 1, "name": "Sky Auto Player", "item": "https://pumni.github.io/Sky-Auto-Player/" }]
           },
           {
             "@type": "HowTo",
             "@id": "https://pumni.github.io/Sky-Auto-Player/#howto",
-            "name": "Play your first Sky music sheet with Sky Player",
-            "description": "From download to your first automated song in under two minutes. Sky Player is a portable Windows app — no installer, no admin rights, no background services.",
+            "name": "Play your first Sky music sheet with Sky Auto Player",
+            "description": "From download to your first automated song in under two minutes. Sky Auto Player is a portable Windows app — no installer, no admin rights, no background services.",
             "totalTime": "PT2M",
             "tool": [{ "@type": "HowToTool", "name": "Windows 10 or 11 PC" }],
             "step": [
@@ -651,9 +651,9 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <div class="page">
       <header class="site-header" aria-label="Site header">
-        <a class="brand" href="./" aria-label="Sky Player home">
+        <a class="brand" href="./" aria-label="Sky Auto Player home">
           <svg class="brand-mark" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--primary);"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-          <span>Sky Player</span>
+          <span>Sky Auto Player</span>
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
           <a class="nav-link" href="#why">Why</a>
@@ -711,20 +711,20 @@
               <span><strong>Stays outside the game.</strong> Sends normal keystrokes through Windows — the same way any macro does. No memory reads, no injection, no game files touched.</span>
             </p>
           </div>
-          <aside class="preview-card" aria-label="Sky Player interface preview">
+          <aside class="preview-card" aria-label="Sky Auto Player interface preview">
             <div class="window-bar" aria-hidden="true">
               <span class="window-dot"></span>
               <span class="window-dot"></span>
               <span class="window-dot"></span>
-              <span class="window-title">Sky Player</span>
+              <span class="window-title">Sky Auto Player</span>
             </div>
             <div class="player-preview">
               <picture>
                 <source srcset="assets/preview.avif" type="image/avif" />
                 <source srcset="assets/preview.webp" type="image/webp" />
-                <img src="assets/preview.png" alt="Sky Player terminal interface showing the song picker with title, time, note count, risk, and suggested timing profile for each song" width="1376" height="768" loading="lazy" decoding="async" />
+                <img src="assets/preview.png" alt="Sky Auto Player terminal interface showing the song picker with title, time, note count, risk, and suggested timing profile for each song" width="1376" height="768" loading="lazy" decoding="async" />
               </picture>
-              <div class="stats" aria-label="Sky Player highlights">
+              <div class="stats" aria-label="Sky Auto Player highlights">
                 <div class="stat"><strong>Hands-free</strong><span>Plays notes, chords & holds</span></div>
                 <div class="stat"><strong>Portable</strong><span>No install · ~100 MB RAM</span></div>
                 <div class="stat"><strong>Free</strong><span>Open source · GPL v3</span></div>
@@ -742,7 +742,7 @@
           <article class="card">
             <div class="card-icon"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></div>
             <h3>Nothing touches the game</h3>
-            <p>Sky Player only sends keystrokes, exactly like a keyboard. It never reads memory, injects code, or edits game files — so there's nothing to detect or patch.</p>
+            <p>Sky Auto Player only sends keystrokes, exactly like a keyboard. It never reads memory, injects code, or edits game files — so there's nothing to detect or patch.</p>
           </article>
           <article class="card">
             <div class="card-icon"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg></div>
@@ -752,9 +752,9 @@
         </section>
 
         <section id="why" class="section" aria-labelledby="why-title">
-          <span class="section-kicker">Why Sky Player</span>
+          <span class="section-kicker">Why Sky Auto Player</span>
           <h2 id="why-title" class="section-title">Why not just any macro?</h2>
-          <p class="section-text">Playing a full song by hand is exhausting, and generic auto-clickers weren't built for music — they drift off-beat, mash chords into broken arpeggios, and cut long notes short. Sky Player is built specifically for <em>Sky</em>'s instrument, so what you hear is the song, not a stumble.</p>
+          <p class="section-text">Playing a full song by hand is exhausting, and generic auto-clickers weren't built for music — they drift off-beat, mash chords into broken arpeggios, and cut long notes short. Sky Auto Player is built specifically for <em>Sky</em>'s instrument, so what you hear is the song, not a stumble.</p>
           <div class="grid-3">
             <article class="card">
               <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></div>
@@ -778,7 +778,7 @@
           <header class="section-header">
             <span class="section-kicker">Reliable playback</span>
             <h2 id="perf-title" class="section-title">Steady, even when your PC isn't</h2>
-            <p class="section-text">Background downloads, antivirus scans, a loading spike in-game — the kind of things that make hand-played songs stumble. Sky Player is built to keep its timing through all of it.</p>
+            <p class="section-text">Background downloads, antivirus scans, a loading spike in-game — the kind of things that make hand-played songs stumble. Sky Auto Player is built to keep its timing through all of it.</p>
           </header>
           <div class="grid-3">
             <article class="card">
@@ -799,7 +799,7 @@
           </div>
           <div class="callout" style="margin-top:18px">
             <strong>Friends hearing dropped notes?</strong>
-            <p>That's usually network packet loss, not Sky Player — the keys leave on time, some just never reach Sky's servers. The free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client on "Traffic and DNS (UDP)" mode routes game traffic over a cleaner path and usually fixes it.</p>
+            <p>That's usually network packet loss, not Sky Auto Player — the keys leave on time, some just never reach Sky's servers. The free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client on "Traffic and DNS (UDP)" mode routes game traffic over a cleaner path and usually fixes it.</p>
           </div>
         </section>
 
@@ -807,13 +807,13 @@
           <header class="section-header">
             <span class="section-kicker">Safety & updates</span>
             <h2 id="security-title" class="section-title">Built to stay on the safe side</h2>
-            <p class="section-text">Sky Player works from the outside like any keyboard would, and it's open source — so you don't have to take our word for it. The security rules are even re-checked automatically before any change ships.</p>
+            <p class="section-text">Sky Auto Player works from the outside like any keyboard would, and it's open source — so you don't have to take our word for it. The security rules are even re-checked automatically before any change ships.</p>
           </header>
           <div class="grid-3">
             <article class="card">
               <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></div>
               <h3>Never touches the game</h3>
-              <p>No memory reads, no DLL injection, no debuggers, no edited game files. Sky Player runs entirely as its own separate program.</p>
+              <p>No memory reads, no DLL injection, no debuggers, no edited game files. Sky Auto Player runs entirely as its own separate program.</p>
             </article>
             <article class="card">
               <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg></div>
@@ -844,7 +844,7 @@
           <header class="section-header">
             <span class="section-kicker">Get started</span>
             <h2 id="quick-start-title" class="section-title">Play your first sheet in minutes</h2>
-            <p class="section-text">Sky Player is portable — no installer, no admin rights, no registry settings. Just extract and run.</p>
+            <p class="section-text">Sky Auto Player is portable — no installer, no admin rights, no registry settings. Just extract and run.</p>
           </header>
           <ol class="steps steps-grid">
               <li class="step"><div><h3>Download</h3><p>Grab the latest zip from <a href="https://github.com/pumni/Sky-Auto-Player/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a> and unzip it anywhere — Desktop, Documents, wherever.</p></div></li>
@@ -871,7 +871,7 @@
           <header class="section-header">
             <span class="section-kicker">Supported formats</span>
             <h2 id="formats-title" class="section-title">Load your sheets, your way</h2>
-            <p class="section-text">Sky Player accepts the three most common Sky sheet formats — no conversion needed. Sheets made in the popular <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor</a> (specy/skyMusic) work out of the box.</p>
+            <p class="section-text">Sky Auto Player accepts the three most common Sky sheet formats — no conversion needed. Sheets made in the popular <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor</a> (specy/skyMusic) work out of the box.</p>
           </header>
           <div class="format-grid">
             <article class="format-card"><span class="format-tag">JSON</span><h3>Standard JSON</h3><p>The de-facto community format. Supports notes, chords, holds, tempo changes, and metadata (title, author, BPM).</p></article>
@@ -882,7 +882,7 @@
 
         <section class="section" aria-labelledby="community-title">
           <div class="callout">
-            <strong id="community-title">Join the Sky Player community</strong>
+            <strong id="community-title">Join the Sky Auto Player community</strong>
             <p>Share sheets, request features, report bugs, or contribute code. Star the repo to support the project. <a href="https://github.com/pumni/Sky-Auto-Player/discussions" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> and <a href="https://github.com/pumni/Sky-Auto-Player/issues" target="_blank" rel="noopener noreferrer">Issues</a> are open. The security rules are audited in CI before any change lands.</p>
           </div>
         </section>
@@ -894,24 +894,24 @@
           </header>
           <div class="faq">
             <details>
-              <summary>Will I get banned for using Sky Player?</summary>
-              <p>Sky Player stays completely outside the game — it only sends standard keystrokes through the public Windows SendInput API, just like a keyboard macro or accessibility tool. It never reads game memory, hooks processes, injects DLLs, or modifies game files, so there's nothing for an anti-cheat to catch. That said, be honest with yourself: automated music playback may still go against Sky's Terms of Service. Use it responsibly and at your own risk.</p>
+              <summary>Will I get banned for using Sky Auto Player?</summary>
+              <p>Sky Auto Player stays completely outside the game — it only sends standard keystrokes through the public Windows SendInput API, just like a keyboard macro or accessibility tool. It never reads game memory, hooks processes, injects DLLs, or modifies game files, so there's nothing for an anti-cheat to catch. That said, be honest with yourself: automated music playback may still go against Sky's Terms of Service. Use it responsibly and at your own risk.</p>
             </details>
             <details>
               <summary>Where do I get song sheets?</summary>
-              <p>The <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor (specy/skyMusic)</a> is the main source — pick a song, export it as JSON, skysheet, or txt, and drop the file into your <code>songs</code> folder. The Sky Player <a href="https://github.com/pumni/Sky-Auto-Player/discussions/categories/sheets" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> also has community-shared sheets ready to download.</p>
+              <p>The <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor (specy/skyMusic)</a> is the main source — pick a song, export it as JSON, skysheet, or txt, and drop the file into your <code>songs</code> folder. The Sky Auto Player <a href="https://github.com/pumni/Sky-Auto-Player/discussions/categories/sheets" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> also has community-shared sheets ready to download.</p>
             </details>
             <details>
               <summary>Why do my friends hear dropped or stuttering notes?</summary>
-              <p>Usually it's not Sky Player — the keypresses leave your PC on time, but network packet loss between you and Sky's servers means some never arrive. Installing the free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client and setting it to "Traffic and DNS (UDP)" usually routes your game traffic over a cleaner path and fixes it.</p>
+              <p>Usually it's not Sky Auto Player — the keypresses leave your PC on time, but network packet loss between you and Sky's servers means some never arrive. Installing the free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client and setting it to "Traffic and DNS (UDP)" usually routes your game traffic over a cleaner path and fixes it.</p>
             </details>
             <details>
-              <summary>Is Sky Player free?</summary>
+              <summary>Is Sky Auto Player free?</summary>
               <p>Yes — 100% free and open source under the GNU GPL v3.0 license. No signups, no ads, no trackers. Download the latest build directly from GitHub Releases, verify the SHA256 sidecar if you like, and run it.</p>
             </details>
             <details>
               <summary>Which Windows versions are supported?</summary>
-              <p>Sky Player runs on 64-bit Windows 10 and Windows 11. It is a portable application that runs directly from its folder without requiring system installers, admin rights, or registering background services.</p>
+              <p>Sky Auto Player runs on 64-bit Windows 10 and Windows 11. It is a portable application that runs directly from its folder without requiring system installers, admin rights, or registering background services.</p>
             </details>
             <details>
               <summary>What file formats can I load?</summary>
@@ -922,8 +922,8 @@
               <p>The application checks for new releases and shows a simple in-app notice when a version is available. To apply an update, close the app and run the <code>updater.bat</code> utility. The external script verifies SHA256 checksums before applying any files and preserves your <code>config.json</code> and custom <code>songs/</code> directories automatically.</p>
             </details>
             <details>
-              <summary>Does Sky Player work on Mac or Linux?</summary>
-              <p>No. Sky Player relies on Windows-only mechanisms — SendInput for keystrokes and MMCSS for precise timing — so macOS and Linux aren't supported and aren't on the roadmap.</p>
+              <summary>Does Sky Auto Player work on Mac or Linux?</summary>
+              <p>No. Sky Auto Player relies on Windows-only mechanisms — SendInput for keystrokes and MMCSS for precise timing — so macOS and Linux aren't supported and aren't on the roadmap.</p>
             </details>
           </div>
         </section>
@@ -931,7 +931,7 @@
       </main>
 
       <footer class="footer" role="contentinfo">
-        <p>&copy; 2026 Sky Player — GPL v3.0 — Built for the Sky: Children of the Light community</p>
+        <p>&copy; 2026 Sky Auto Player — GPL v3.0 — Built for the Sky: Children of the Light community</p>
         <nav class="footer-links" aria-label="Footer links">
           <a href="https://github.com/pumni/Sky-Auto-Player" target="_blank" rel="noopener noreferrer">GitHub</a>
           <a href="https://github.com/pumni/Sky-Auto-Player/releases" target="_blank" rel="noopener noreferrer">Releases</a>
