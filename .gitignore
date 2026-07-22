@@ -36,7 +36,7 @@ config.json
 build/
 dist/
 *.spec
-!Sky-Player.spec
+!Sky-Auto-Player.spec
 windows_version_info.txt
 
 # Packaging Metadata

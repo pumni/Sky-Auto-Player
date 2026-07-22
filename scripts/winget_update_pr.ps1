@@ -10,7 +10,7 @@ param (
 
 $ErrorActionPreference = "Stop"
 
-$ZipUrl = "https://github.com/pumni/Sky-Player/releases/download/v$Version/Sky-Player-v$Version.zip"
+$ZipUrl = "https://github.com/pumni/Sky-Auto-Player/releases/download/v$Version/Sky-Auto-Player-v$Version.zip"
 
 Write-Host "Triggering wingetcreate for pumni.SkyPlayer version $Version..."
 

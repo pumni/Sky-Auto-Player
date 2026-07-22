@@ -6,7 +6,7 @@ ROOT = Path(SPECPATH).resolve()
 
 # --- Configuration ---
 package_name = 'sky_music'
-app_name = 'Sky-Player'
+app_name = 'Sky-Auto-Player'
 entry_point = str(ROOT / 'src' / 'main.py')
 
 # We don't put songs/README in datas here to keep them in the ROOT of dist, not hidden in _internal

@@ -1,6 +1,6 @@
-# Sky Player — Tuning Presets
+# Sky Auto Player — Tuning Presets
 
-This document maps environment types to CLI flags for Sky Player.
+This document maps environment types to CLI flags for Sky Auto Player.
 **All flags listed here already exist in the codebase** (`src/main.py` argparse).
 No code changes are needed — simply pass the flags that match your environment.
 
@@ -53,7 +53,7 @@ AV risk themselves.
 
 ## Notes for free-threaded forkers (`python3.14t`)
 
-Sky Player works on free-threaded CPython without any flag changes.
+Sky Auto Player works on free-threaded CPython without any flag changes.
 The `--no-switch-interval-tuning` flag is a no-op in this case (the runtime skips
 `setswitchinterval` automatically when `sys._is_gil_enabled()` returns `False`).
 

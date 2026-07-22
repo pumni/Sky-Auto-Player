@@ -350,7 +350,7 @@ def _check_textual_support() -> str | None:
     if not sys.stdout.isatty():
         return (
             "stdout is not an interactive terminal (isatty = False). "
-            "Run Sky Player directly in a terminal window, "
+            "Run Sky Auto Player directly in a terminal window, "
             "not through a pipe or redirect."
         )
     if sys.platform != "win32":

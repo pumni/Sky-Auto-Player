@@ -313,7 +313,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     diag.add_argument(
         "--version",
         action="version",
-        version=f"sky-player {__version__}",
+        version=f"sky-auto-player {__version__}",
         help="print version and exit",
     )
     diag.add_argument(
@@ -646,7 +646,7 @@ def _run_check_update_command(cfg: AppConfig) -> int:
         return 1
     record_successful_check(cfg)
     if result.update is None:
-        print("Sky Player is up to date.")
+        print("Sky Auto Player is up to date.")
         return 0
     rel = result.update
     print(f"Update available: v{rel.latest_version}")
@@ -712,7 +712,7 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║          Sky Player — System requirements not met         ║\n"
+            "║        Sky Auto Player — System requirements not met        ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             f"║  {unsupported_reason[:62]:<62}║\n",
             file=sys.stderr,
@@ -744,7 +744,7 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║        Sky Player — Textual UI failed to load              ║\n"
+            "║        Sky Auto Player — Textual UI failed to load          ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             f"║  Missing module: {str(exc)[:44]:<44}            ║\n"
             "║  This is a packaging error. Please report this bug.       ║\n"
@@ -756,7 +756,7 @@ def prompt_song_selection(
         print(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║        Sky Player — Textual UI encountered a fatal error   ║\n"
+            "║    Sky Auto Player — Textual UI encountered a fatal error   ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             f"║  {str(exc)[:62]:<62}║\n"
             "╚══════════════════════════════════════════════════════════════╝\n",
@@ -1012,7 +1012,7 @@ if __name__ == '__main__':
     except SystemExit:
         raise
     except Exception as exc:
-        print(f"\n[CRITICAL] Sky Player crashed: {exc}", file=sys.stderr)
+        print(f"\n[CRITICAL] Sky Auto Player crashed: {exc}", file=sys.stderr)
         write_crash_log(exc)
         if getattr(sys, "frozen", False):
             _wait_key_and_exit(1)

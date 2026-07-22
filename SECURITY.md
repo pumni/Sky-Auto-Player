@@ -2,13 +2,13 @@
 
 ## Scope
 
-Sky Player is a Windows 11 desktop tool that reads JSON song files and simulates keyboard keypresses through the public Windows `SendInput` API so that users can play music sheets in [Sky: Children of the Light](https://www.thatskygame.com/) hands-free.
+Sky Auto Player is a Windows 11 desktop tool that reads JSON song files and simulates keyboard keypresses through the public Windows `SendInput` API so that users can play music sheets in [Sky: Children of the Light](https://www.thatskygame.com/) hands-free.
 
 **The entire system is built on three non-negotiable security mandates.** They live in [`AGENTS.md`](./AGENTS.md) as P0 rules and are enforced by `scripts/audit_security_mandates.py`.
 
 ### 1. NO GAME TAMPERING
 
-Sky Player **never**:
+Sky Auto Player **never**:
 
 - modifies or patches game files;
 - reads or writes any other process's memory;
@@ -39,7 +39,7 @@ uv run --env-file .env python scripts/audit_security_mandates.py
 
 ## Reporting a Vulnerability
 
-If you discover a way to bypass these mandates or abuse Sky Player in a way that violates the P0 rules (memory tampering, hooks, DLL injection, anti-cheat evasion, etc.):
+If you discover a way to bypass these mandates or abuse Sky Auto Player in a way that violates the P0 rules (memory tampering, hooks, DLL injection, anti-cheat evasion, etc.):
 
 - Email **pumni.dev@gmail.com** and encrypt sensitive material at the PGP key linked from the publisher profile.
 - Do **not** open a public issue for reproducer steps.
@@ -49,7 +49,7 @@ Reports are appreciated; coordinated disclosure is the norm.
 
 ## Out of Scope
 
-- Sky Player must never be used to violate Thatgamecompany's [Sky Terms of Service](https://www.thatskygame.com/terms-of-service/). Automated playback may itself be prohibited; the user assumes that risk.
+- Sky Auto Player must never be used to violate Thatgamecompany's [Sky Terms of Service](https://www.thatskygame.com/terms-of-service/). Automated playback may itself be prohibited; the user assumes that risk.
 - Behaviour caused by running the binary outside its intended environment (e.g. on Windows builds we don't support, with broken permissions, or with simulated anti-cheat) is out of scope.
 
 ## Recognition

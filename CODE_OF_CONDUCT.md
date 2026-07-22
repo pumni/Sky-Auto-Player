@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We as members, contributors, and leaders pledge to make participation in the Sky Player
+We as members, contributors, and leaders pledge to make participation in the Sky Auto Player
 community a harassment-free experience for everyone, regardless of age, body size, visible or
 invisible disability, ethnicity, sex characteristics, gender identity and expression, level of
 experience, education, socio-economic status, nationality, personal appearance, race,
@@ -38,7 +38,7 @@ they deem inappropriate, threatening, offensive, or harmful.
 
 ## Scope
 
-This Code of Conduct applies within all community spaces of the Sky Player project - GitHub
+This Code of Conduct applies within all community spaces of the Sky Auto Player project - GitHub
 issues and pull requests, Discussions, the project's landing page repo issues, and any other
 official venue operated by the project - and also applies when an individual is officially
 representing the community in public spaces.

@@ -317,7 +317,7 @@ def test_update_banner_modal_renders(monkeypatch: pytest.MonkeyPatch) -> None:
         banner = modal.query_one("#update-banner-info").render()
         assert banner is not None
         banner_text = str(banner)
-        assert "Sky Player v2.0.1 is now available." in banner_text
+        assert "Sky Auto Player v2.0.1 is now available." in banner_text
         assert "Line 1" in banner_text
         assert "Line 11" not in banner_text
         assert "... (see GitHub for full notes)" in banner_text

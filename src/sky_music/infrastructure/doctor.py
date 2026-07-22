@@ -48,7 +48,7 @@ def check_sky_window() -> dict:
     # Phase G.3: exact UIPI advisory text (plan §G.3).
     if not current_admin:
         msg_parts.append(
-            "If Sky runs elevated (Admin) and Sky Player does not, SendInput may return 0 (UIPI). "
+            "If Sky runs elevated (Admin) and Sky Auto Player does not, SendInput may return 0 (UIPI). "
             "Run both elevated or both not elevated."
         )
     else:

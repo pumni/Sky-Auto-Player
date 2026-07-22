@@ -9,7 +9,7 @@ from __future__ import annotations
 FPS_MODAL_INFO: str = (
     "[b]Match the FPS you set in Sky[/b]\n"
     "\n"
-    "Sky Player schedules note holds from this FPS. It does [b]not[/b] read the game\n"
+    "Sky Auto Player schedules note holds from this FPS. It does [b]not[/b] read the game\n"
     "or auto-detect frame rate (by design — no game-process access).\n"
     "\n"
     "[b]If this value is higher than the game's real FPS[/b], short notes may never\n"

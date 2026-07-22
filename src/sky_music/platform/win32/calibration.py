@@ -376,7 +376,7 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
             
             # Simple text rendering
             text = (
-                "Sky Player Latency Calibration\n\n"
+                "Sky Auto Player Latency Calibration\n\n"
                 "Measuring input delivery latency...\n"
                 "Please keep this window focused.\n\n"
                 f"Progress: {len(harness.down_latencies_ns)} / 200"
@@ -426,7 +426,7 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
             hwnd = user32.CreateWindowExW(
                 0,
                 class_name,
-                "Sky Player Input Latency Calibration",
+                "Sky Auto Player Input Latency Calibration",
                 WS_OVERLAPPEDWINDOW,
                 100, 100, 400, 300,
                 0, 0, h_inst, None

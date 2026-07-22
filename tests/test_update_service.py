@@ -49,17 +49,17 @@ def _make_release_payload(
 ) -> dict[str, Any]:
     return {
         "tag_name": tag,
-        "html_url": "https://github.com/pumni/Sky-Player/releases/tag/" + tag,
+        "html_url": "https://github.com/pumni/Sky-Auto-Player/releases/tag/" + tag,
         "published_at": "2024-01-01T00:00:00Z",
         "body": "Update notes",
         "assets": assets
         or [
             {
-                "name": "Sky-Player-v2.4.0.zip",
+                "name": "Sky-Auto-Player-v2.4.0.zip",
                 "browser_download_url": "https://example.com/x.zip",
             },
             {
-                "name": "Sky-Player-v2.4.0.zip.sha256",
+                "name": "Sky-Auto-Player-v2.4.0.zip.sha256",
                 "browser_download_url": "https://example.com/x.zip.sha256",
             },
         ],
@@ -342,7 +342,7 @@ def test_format_update_banner_no_notes() -> None:
         published_at="time"
     )
     banner = format_update_banner(update, current_version="2.0.0")
-    assert "Sky Player v2.0.1 is now available." in banner
+    assert "Sky Auto Player v2.0.1 is now available." in banner
     assert "You are running v2.0.0." in banner
     assert "(no release notes)" in banner
 

@@ -1,5 +1,5 @@
-# License: GPL-3.0 (Sky Player project). No code ported from mpv; structural reference only.
-# Sky Player external updater. See docs/2026-07-18_distribution-mpv-pattern-plan.md §Phase 2.
+# License: GPL-3.0 (Sky Auto Player project). No code ported from mpv; structural reference only.
+# Sky Auto Player external updater. See docs/2026-07-18_distribution-mpv-pattern-plan.md §Phase 2.
 #
 # Behaviour contract:
 #   1. Set TLS 1.2/1.3 protocol bindings.
@@ -10,7 +10,7 @@
 #   6. Same-or-older -> "Already up to date", exit 0.
 #   7. Newer -> download zip + .sha256 (HTTPS allow-list only).
 #   8. Verify SHA256; mismatch aborts before any install mutation.
-#   9. If Sky-Player.exe is running from this folder: exit 4 unless -ForceClose.
+#   9. If Sky-Auto-Player.exe is running from this folder: exit 4 unless -ForceClose.
 #  10. Expand-Archive to TEMP staging.
 #  11. Verify MANIFEST.json per-file integrity (MANDATORY — fail-closed if
 #       MANIFEST.json is absent; aborts before any install mutation).
@@ -73,10 +73,10 @@ function Initialize-Paths {
         $global:FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
         $global:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
         $global:InstallRoot = Split-Path -Parent $global:ScriptDir
-        $global:ExePath     = Join-Path $global:InstallRoot 'Sky-Player.exe'
+        $global:ExePath     = Join-Path $global:InstallRoot 'Sky-Auto-Player.exe'
         $global:ConfigPath  = Join-Path $global:InstallRoot 'config.json'
     }
-    $global:LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Player'
+    $global:LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Auto-Player'
     $global:LogFile = Join-Path $global:LogDir 'updater.log'
 }
 
@@ -205,11 +205,11 @@ function Get-RunningVersion {
 }
 
 function Compare-Version([string]$Current, [string]$Latest) {
-    # Delegate to Sky-Player.exe --compare-versions for PEP 440 compliance.
+    # Delegate to Sky-Auto-Player.exe --compare-versions for PEP 440 compliance.
     # Exit codes: 0=equal, 1=latest>current, 2=latest<current, 3=parse error.
     $exe = Get-ExePath
     if (-not (Test-Path -LiteralPath $exe)) {
-        throw "Sky-Player.exe not found at $exe; cannot compare versions"
+        throw "Sky-Auto-Player.exe not found at $exe; cannot compare versions"
     }
     & $exe --compare-versions $Current $Latest
     $exitCode = $LASTEXITCODE
@@ -397,7 +397,7 @@ function Test-ManifestIntegrity {
         Write-Host "MANIFEST.json is missing from the update zip. Per the release contract,"
         Write-Host "every official release ships with MANIFEST.json. The updater refuses to"
         Write-Host "install a zip that bypasses the per-file integrity invariant."
-        Write-Host "Re-download from https://github.com/pumni/Sky-Player/releases and try again."
+        Write-Host "Re-download from https://github.com/pumni/Sky-Auto-Player/releases and try again."
         return $false
     }
     try {
@@ -470,8 +470,8 @@ $runningVersion = Get-RunningVersion
 
 # --- GitHub / fake root ---
 $owner = 'pumni'
-$repo  = 'Sky-Player'
-$headers = @{ 'User-Agent' = 'sky-player-updater'; 'Accept' = 'application/vnd.github.v3+json' }
+$repo  = 'Sky-Auto-Player'
+$headers = @{ 'User-Agent' = 'sky-auto-player-updater'; 'Accept' = 'application/vnd.github.v3+json' }
 
 try {
     if ($FakeRoot) {
@@ -519,8 +519,8 @@ if ((Compare-Version -Current $runningVersion -Latest $latestVersion) -le 0) {
 }
 
 # --- Asset selection ---
-$zipName = "Sky-Player-v$latestVersion.zip"
-$shaName = "Sky-Player-v$latestVersion.zip.sha256"
+$zipName = "Sky-Auto-Player-v$latestVersion.zip"
+$shaName = "Sky-Auto-Player-v$latestVersion.zip.sha256"
 if ($FakeRoot) {
     $zipUrl = ($FakeRoot.TrimEnd('/') + '/' + $zipName)
     $shaUrl = ($FakeRoot.TrimEnd('/') + '/' + $shaName)
@@ -581,7 +581,7 @@ if ($DryRun) {
 }
 
 # --- Process gate (G19) ---
-$runningProcesses = Get-Process -Name 'Sky-Player' -ErrorAction SilentlyContinue
+$runningProcesses = Get-Process -Name 'Sky-Auto-Player' -ErrorAction SilentlyContinue
 $targetProcess = $null
 if ($runningProcesses) {
     foreach ($p in $runningProcesses) {
@@ -596,17 +596,17 @@ if ($runningProcesses) {
 
 if ($targetProcess) {
     if (-not $ForceClose) {
-        Write-Log 'Sky-Player.exe still running; refuse update'
-        Write-Host 'Sky-Player.exe is still running in this directory. Close it, then re-run updater.bat.'
+        Write-Log 'Sky-Auto-Player.exe still running; refuse update'
+        Write-Host 'Sky-Auto-Player.exe is still running in this directory. Close it, then re-run updater.bat.'
         Write-Host '(Advanced: updater.bat -ForceClose)'
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 4
     }
-    Write-Host 'Stopping Sky-Player.exe (-ForceClose)...'
+    Write-Host 'Stopping Sky-Auto-Player.exe (-ForceClose)...'
     $targetProcess | Stop-Process -Force
     Start-Sleep -Seconds 2
     
-    $runningAgain = Get-Process -Name 'Sky-Player' -ErrorAction SilentlyContinue
+    $runningAgain = Get-Process -Name 'Sky-Auto-Player' -ErrorAction SilentlyContinue
     $stillRunning = $false
     if ($runningAgain) {
         foreach ($p in $runningAgain) {
@@ -619,8 +619,8 @@ if ($targetProcess) {
         }
     }
     if ($stillRunning) {
-        Write-Log 'Sky-Player.exe still locked after ForceClose'
-        Write-Host 'Could not stop Sky-Player.exe. Aborting.'
+        Write-Log 'Sky-Auto-Player.exe still locked after ForceClose'
+        Write-Host 'Could not stop Sky-Auto-Player.exe. Aborting.'
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 4
     }
@@ -642,14 +642,14 @@ try {
 }
 
 $StagingRoot = $extractDir
-$exeInExtract = Join-Path $extractDir 'Sky-Player.exe'
+$exeInExtract = Join-Path $extractDir 'Sky-Auto-Player.exe'
 if (-not (Test-Path -LiteralPath $exeInExtract)) {
     $child = Get-ChildItem -LiteralPath $extractDir -Directory | Select-Object -First 1
-    if ($child -and (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Player.exe'))) {
+    if ($child -and (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Auto-Player.exe'))) {
         $StagingRoot = $child.FullName
     } else {
-        Write-Log 'staging layout missing Sky-Player.exe'
-        Write-Host "Update zip layout is unexpected (no Sky-Player.exe). Aborting."
+        Write-Log 'staging layout missing Sky-Auto-Player.exe'
+        Write-Host "Update zip layout is unexpected (no Sky-Auto-Player.exe). Aborting."
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 5
     }
@@ -691,15 +691,15 @@ try {
 Write-Log "updated $runningVersion -> $latestVersion"
 Write-Host "DONE: updated to v$latestVersion."
 if ($Restart) {
-    Write-Host "Starting Sky-Player.exe (-Restart)..."
+    Write-Host "Starting Sky-Auto-Player.exe (-Restart)..."
     try {
         Start-Process -FilePath $ExePath -WorkingDirectory $InstallRoot
     } catch {
         Write-Log "restart failed: $_"
-        Write-Host "Restart failed (binaries updated successfully). Reopen Sky-Player.exe manually."
+        Write-Host "Restart failed (binaries updated successfully). Reopen Sky-Auto-Player.exe manually."
     }
 } else {
-    Write-Host "Reopen Sky-Player.exe to start the new version."
+    Write-Host "Reopen Sky-Auto-Player.exe to start the new version."
 }
 Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 exit 0

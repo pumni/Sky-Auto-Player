@@ -1,4 +1,4 @@
-# Sky Player — AI Agent Instructions
+# Sky Auto Player — AI Agent Instructions
 
 Windows 11 Sky music playback helper — reads song files and simulates keyboard
 input through Windows `SendInput` only. Python 3.14 (free-threaded) Textual TUI.
@@ -20,7 +20,7 @@ audit details, and disclosure contacts. `CLAUDE.md` is a thin `@AGENTS.md` shim.
 If instructions conflict, follow the lower priority number. P3 cannot override P0–P2.
 
 - **P0 Security:** `<SECURITY_MANDATES>` above. Immutable. Enforced by `scripts/audit_security_mandates.py` as a CI gate.
-- **P1 Enforced Config:** `pyproject.toml`, `.python-version`, `Sky-Player.spec`, CI commands.
+- **P1 Enforced Config:** `pyproject.toml`, `.python-version`, `Sky-Auto-Player.spec`, CI commands.
 - **P2 Architecture & conventions:** `docs/architecture.md`, `docs/rt-dispatch-architecture.md`, `docs/timing-principles.md`, `docs/timing-profile-frame-model.md`, `docs/distribution-and-update.md`. `docs/INDEX.md` defines the hierarchy of truth.
 - **P3 Local Evidence:** Nearby production code, tests, and feature patterns.
 - **P4 Task Intent:** The user prompt or bug report.
@@ -72,8 +72,8 @@ compaction or resume**, since this app touches anti-cheat-adjacent surfaces.
 - `installer/updater.ps1` — external updater (mpv-pattern) invoked by `updater.bat`. Security-sensitive: HTTPS host allow-list, SHA256-verify-before-mutate, transactional rollback, preserve-list (`config.json` + `songs/`).
 - `updater.bat` — repo-root launcher that calls `installer/updater.ps1`; copied into `dist/<release>/` by `build_app`.
 - `manifests/` — packaging manifests (winget community channel).
-- `.github/workflows/release.yml` — tag-triggered release pipeline; runs free-threaded + security audits, builds with `--manifest`, attests, uploads `Sky-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`.
-- `Sky-Player.spec` — PyInstaller `onedir` spec; see Build Environment step 3.
+- `.github/workflows/release.yml` — tag-triggered release pipeline; runs free-threaded + security audits, builds with `--manifest`, attests, uploads `Sky-Auto-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`.
+- `Sky-Auto-Player.spec` — PyInstaller `onedir` spec; see Build Environment step 3.
 - `songs/`, `config.json`, `.env`, `.env.example` — runtime data, not source.
 
 ### Navigation Map
@@ -89,7 +89,7 @@ Read the matching row **before** touching the area.
 | Overall architecture / layering | `docs/architecture.md` | 4-layer DDD; do not leak platform into domain. |
 | Distribution / updater | `docs/distribution-and-update.md` | Updater must not touch `config.json` or `songs/`. |
 | External updater (`installer/updater.ps1`) | `docs/distribution-and-update.md`, `installer/updater.ps1` header comment | Security-sensitive: HTTPS allow-list, SHA256-verify-before-mutate, preserve-list. Verify changes directly. |
-| PyInstaller build | `Sky-Player.spec`, `src/build_app.py` | Do not extend `excludes` without grepping `src/` for transitive use. Release build needs `--manifest`. |
+| PyInstaller build | `Sky-Auto-Player.spec`, `src/build_app.py` | Do not extend `excludes` without grepping `src/` for transitive use. Release build needs `--manifest`. |
 | `pyproject.toml` / `.python-version` | Both must stay in sync (see Architecture Invariants). | |
 | Security-sensitive surfaces | `SECURITY.md`, `scripts/audit_security_mandates.py` | Verify directly — do not delegate to a subagent summary. |
 | A new `docs/*-plan.md` | `docs/INDEX.md` | Mark as proposal; normative docs win. |
@@ -100,11 +100,11 @@ Read the matching row **before** touching the area.
 - **Scheduler is pure.** `src/sky_music/orchestration/` and `src/sky_music/domain/` must not import `ctypes`, `SendInput`, wall-clock, or any Windows-specific module. Timing edges are unit-tested against a controlled clock. Canonical: `docs/rt-dispatch-architecture.md`, `docs/timing-principles.md`.
 - **Windows backend is isolated behind an interface.** `src/sky_music/platform/` is the only place Win32 / `SendInput` / `ctypes` may live. `src/sky_music/infrastructure/` may import `platform/` (it is the platform-adjacent glue: focus, hotkeys, real-time sleeper, MMCSS, wait strategy) but must not be imported by `domain/` or `orchestration/`. The scheduler depends on the interface, never on concrete Win32 types. Canonical: `docs/architecture.md`, `docs/rt-dispatch-architecture.md`.
 - **SendInput is the only input mechanism.** No `python-keyboard`, `pynput`, `SetWindowsHookEx`, or hooks on any process. Enforced by `scripts/audit_security_mandates.py` in CI. Canonical: `SECURITY.md`.
-- **Migrations of `Sky-Player.spec` `excludes` are guarded.** Do not add to the `excludes` list without first grepping `src/` for transitive use of the stdlib module. Canonical: `Sky-Player.spec`.
+- **Migrations of `Sky-Auto-Player.spec` `excludes` are guarded.** Do not add to the `excludes` list without first grepping `src/` for transitive use of the stdlib module. Canonical: `Sky-Auto-Player.spec`.
 - **Committed `docs/*-plan.md` and `perf-baselines/*` are history.** They record what was tried, not what is currently enforced. Normative docs (P2) win. Canonical: `docs/INDEX.md` §0 Hierarchy of Truth.
 - **Updater never touches `config.json` or `songs/`.** Only `update.last_check_ts` and `update.last_notified_version` may be patched. Canonical: `docs/distribution-and-update.md`.
-- **In-app update path is notify-only; the external `updater.bat` + `installer/updater.ps1` apply the swap.** The running app never overwrites its own binaries. The external updater enforces an HTTPS host allow-list (`api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), SHA256-verify-before-mutate, transactional copy with rollback, and a process guard that refuses to run while `Sky-Player.exe` is locked. Canonical: `docs/distribution-and-update.md`, `installer/updater.ps1` header comment.
-- **Release artifacts are a triple.** Every tag-triggered release produces `Sky-Player-v<ver>.zip` + `Sky-Player-v<ver>.zip.sha256` + `MANIFEST.json`. The git tag version must equal `pyproject.toml` `[project].version` (without the leading `v`); `build_app --manifest` emits the manifest and `release.yml` enforces the lock. Canonical: `docs/distribution-and-update.md`, `.github/workflows/release.yml`.
+- **In-app update path is notify-only; the external `updater.bat` + `installer/updater.ps1` apply the swap.** The running app never overwrites its own binaries. The external updater enforces an HTTPS host allow-list (`api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), SHA256-verify-before-mutate, transactional copy with rollback, and a process guard that refuses to run while `Sky-Auto-Player.exe` is locked. Canonical: `docs/distribution-and-update.md`, `installer/updater.ps1` header comment.
+- **Release artifacts are a triple.** Every tag-triggered release produces `Sky-Auto-Player-v<ver>.zip` + `Sky-Auto-Player-v<ver>.zip.sha256` + `MANIFEST.json`. The git tag version must equal `pyproject.toml` `[project].version` (without the leading `v`); `build_app --manifest` emits the manifest and `release.yml` enforces the lock. Canonical: `docs/distribution-and-update.md`, `.github/workflows/release.yml`.
 
 ## Coding Rules
 
@@ -143,8 +143,8 @@ The release pipeline chains every step below; each gate must pass before the nex
 
 1. **`uv` cache lives on the same volume as the workspace.** Copy `.env.example` to `.env` (gitignored). `UV_CACHE_DIR=.uv-cache` pins cache inside the repo so Windows hardlinks do not cross-volume and trigger `uv`'s "failed to hardlink, falling back to full copy" warning. The default cache location (`%LOCALAPPDATA%\uv`) sits on `C:` while this project lives on `V:` — leave the env var in place.
 2. **Free-threaded interpreter is mandatory.** `.python-version` is `3.14+freethreaded`. Before building, run `uv run --env-file .env python scripts/audit_free_threaded_wheels.py` — it verifies the interpreter has the GIL disabled at runtime, that each runtime dep satisfies its PEP 440 specifier (mirrored from `pyproject.toml`), and (for native deps) still imports under no-GIL (which implies a true `cp314t` wheel).
-3. **Build app** with `uv run --env-file .env python -m build_app`. PyInstaller uses `Sky-Player.spec` (`onedir` COLLECT strategy). The spec strips a few unused stdlib modules from the bundle (`xmlrpc`, `pydoc`) — do not extend the `excludes` list without first grepping `src/` for transitive use. Release builds **must** pass `--manifest` so `MANIFEST.json` (with SHA256 of every asset) is emitted alongside the zip; `.github/workflows/release.yml` enforces this and the tag↔`pyproject.toml` version lock.
-4. **Smoke test is gate, not extra.** `build_app` runs `<dist>/Sky-Player.exe --selftest-textual` before declaring success. A green build implies a green smoke test; if you bypass with `--skip-test`, you accept responsibility for runtime breakage.
+3. **Build app** with `uv run --env-file .env python -m build_app`. PyInstaller uses `Sky-Auto-Player.spec` (`onedir` COLLECT strategy). The spec strips a few unused stdlib modules from the bundle (`xmlrpc`, `pydoc`) — do not extend the `excludes` list without first grepping `src/` for transitive use. Release builds **must** pass `--manifest` so `MANIFEST.json` (with SHA256 of every asset) is emitted alongside the zip; `.github/workflows/release.yml` enforces this and the tag↔`pyproject.toml` version lock.
+4. **Smoke test is gate, not extra.** `build_app` runs `<dist>/Sky-Auto-Player.exe --selftest-textual` before declaring success. A green build implies a green smoke test; if you bypass with `--skip-test`, you accept responsibility for runtime breakage.
 
 ## Validation (altitude table)
 
@@ -175,7 +175,7 @@ For Windows backend changes: keep platform code isolated, validate inputs strict
 **Ask first**
 
 - Changing `.python-version` or `pyproject.toml` `requires-python` (must move as a pair — see Architecture Invariants).
-- Editing `Sky-Player.spec` `excludes` or any `onedir`/`collect_*` strategy in the spec.
+- Editing `Sky-Auto-Player.spec` `excludes` or any `onedir`/`collect_*` strategy in the spec.
 - Editing `scripts/audit_security_mandates.py` or `.config/security_audit_baseline.json`.
 - Editing `installer/updater.ps1` (security-sensitive: HTTPS allow-list, SHA256-verify-before-mutate, preserve-list, process guard).
 - Database-like immutable artifacts: `tests/golden_schedules/`, `perf-baselines/*`, committed `docs/*-plan.md`.

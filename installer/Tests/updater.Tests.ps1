@@ -23,8 +23,8 @@ Describe "updater.ps1" {
         $script:TestConfigDir = Join-Path $env:TEMP ('sky-updater-test-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $script:TestConfigDir | Out-Null
         $script:TestConfigPath = Join-Path $script:TestConfigDir 'config.json'
-        $script:ExeStubPath    = Join-Path $script:TestConfigDir 'Sky-Player.exe'
-        $script:LogDir         = Join-Path $env:TEMP 'Sky-Player-Test'
+        $script:ExeStubPath    = Join-Path $script:TestConfigDir 'Sky-Auto-Player.exe'
+        $script:LogDir         = Join-Path $env:TEMP 'Sky-Auto-Player-Test'
         $script:LogFile        = Join-Path $script:LogDir 'updater.log'
         New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
         New-Item -ItemType File     -Force -Path $script:ExeStubPath | Out-Null
@@ -55,7 +55,7 @@ Describe "updater.ps1" {
         }
         function script:Write-TestManifest([array]$fileEntries) {
             $manifest = @{
-                app = "Sky-Player"
+                app = "Sky-Auto-Player"
                 version = "9.9.9-test"
                 files = @(
                     foreach ($entry in $fileEntries) {
@@ -236,7 +236,7 @@ Describe "updater.ps1" {
     }
 
     Describe "Compare-Version error path" {
-        # The actual PEP 440 comparison is delegated to Sky-Player.exe
+        # The actual PEP 440 comparison is delegated to Sky-Auto-Player.exe
         # --compare-versions and is integration-tested by build_app's smoke
         # gate. Pester cannot meaningfully mock a binary that does not exist
         # in this repo's test environment, so we cover only the not-found

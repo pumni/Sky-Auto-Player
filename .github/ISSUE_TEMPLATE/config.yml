@@ -1,10 +1,10 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Sky Player docs
-    url: https://github.com/pumni/Sky-Player/tree/main/docs
+  - name: Sky Auto Player docs
+    url: https://github.com/pumni/Sky-Auto-Player/tree/main/docs
     about: Architecture, timing, tuning presets, porting guide.
-  - name: Sky Player releases
-    url: https://github.com/pumni/Sky-Player/releases
+  - name: Sky Auto Player releases
+    url: https://github.com/pumni/Sky-Auto-Player/releases
     about: Stable builds, change logs, Windows binaries.
   - name: Security disclosure (private)
     url: mailto:security@pumni.dev

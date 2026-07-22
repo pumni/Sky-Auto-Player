@@ -1,10 +1,37 @@
 # Changelog
 
-All notable changes to Sky Player are documented here.
+All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed — branding
+
+- **Renamed from "Sky Player" to "Sky Auto Player".** The executable, build
+  artifacts, release zip names, external updater URLs, in-app update checker,
+  log directory, and user-facing strings all switched from
+  `Sky-Player` / `sky-player` to `Sky-Auto-Player` / `sky-auto-player` to
+  match the renamed GitHub repository (`pumni/Sky-Auto-Player`).
+  - Executable: `Sky-Player.exe` -> `Sky-Auto-Player.exe`.
+  - Release zip: `Sky-Player-v<ver>.zip` -> `Sky-Auto-Player-v<ver>.zip`
+    (and the `.sha256` sidecar accordingly).
+  - External updater log dir: `%LOCALAPPDATA%\Sky-Player` ->
+    `%LOCALAPPDATA%\Sky-Auto-Player` (a new file is created on next update;
+    the old log is left in place untouched).
+  - `pyproject.toml` project name: `sky-player` -> `sky-auto-player`.
+  - In-app update checker default repo: `Sky-Player` -> `Sky-Auto-Player`
+    (queries `api.github.com/repos/pumni/Sky-Auto-Player`).
+  - `Sky-Player.spec` renamed to `Sky-Auto-Player.spec`.
+  - JSON-LD `alternateName` on the landing site still includes the legacy
+    names (`Sky-Player`, `Sky Player`) so existing search traffic finds the
+    renamed project; the canonical `name` is now `Sky Auto Player`.
+
+> Users running a pre-rename build who manually delete the old folder and
+> download the new zip get a clean install. Updater-assisted migrations from
+> a `Sky-Player.exe` install are not supported — the external updater now
+> looks for `Sky-Auto-Player.exe` and will exit 1 from `updater.bat`. Treat
+> the rename as a fresh install.
 
 ## [2.4.0] - 2026-07-18
 

@@ -9,8 +9,8 @@ New-Item -ItemType Directory -Force -Path $script:TestConfigDir | Out-Null
 $script:TestConfigPath = Join-Path $script:TestConfigDir 'config.json'
 $script:ConfigPath = $script:TestConfigPath
 $script:InstallRoot = $script:TestConfigDir
-$script:ExePath = Join-Path $script:TestConfigDir 'Sky-Player.exe'
-$script:LogDir = Join-Path $env:TEMP 'Sky-Player-Test'
+$script:ExePath = Join-Path $script:TestConfigDir 'Sky-Auto-Player.exe'
+$script:LogDir = Join-Path $env:TEMP 'Sky-Auto-Player-Test'
 $script:LogFile = Join-Path $script:LogDir 'updater.log'
 New-Item -ItemType File -Force -Path $script:ExePath | Out-Null
 

@@ -1,6 +1,6 @@
 # Active Timing & Infrastructure Experiments
 
-This document records the open experiments and calibration procedures for Sky Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](archive/2026-06_timing-experiments.md).
+This document records the open experiments and calibration procedures for Sky Auto Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](archive/2026-06_timing-experiments.md).
 
 ---
 

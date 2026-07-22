@@ -15,7 +15,7 @@ defaults:
 
 jobs:
   validate:
-    name: Sky Player — full altitude gate
+    name: Sky Auto Player — full altitude gate
     runs-on: windows-latest
     timeout-minutes: 25
 

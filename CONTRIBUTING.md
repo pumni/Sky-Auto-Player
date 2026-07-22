@@ -1,6 +1,6 @@
-# Contributing to Sky Player
+# Contributing to Sky Auto Player
 
-Thanks for considering a contribution to Sky Player. This document explains the
+Thanks for considering a contribution to Sky Auto Player. This document explains the
 expectations, the architecture boundaries you must respect, and how to get a change merged.
 
 ## Read these first
@@ -30,7 +30,7 @@ itself is wrong, open an issue first - do not fix it silently in a code PR.
 
 - Anything on the P0 never-list: game tampering, memory reads, hooks, injection, debugger
   attach, anti-cheat evasion, or any input mechanism other than Windows `SendInput`.
-- Ports to macOS or Linux. Sky Player is Windows-only by design.
+- Ports to macOS or Linux. Sky Auto Player is Windows-only by design.
 - Dependencies on `python-keyboard`, `pynput`, `SetWindowsHookEx`, or any third-party keyboard
   module. The security audit (`scripts/audit_security_mandates.py`) will fail any such PR.
 - Broad rewrites without tests. Keep diffs focused and reviewable.

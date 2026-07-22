@@ -1,6 +1,6 @@
-# Sky Player Documentation Map
+# Sky Auto Player Documentation Map
 
-This index defines the structure and hierarchy of truth for the Sky Player project documentation.
+This index defines the structure and hierarchy of truth for the Sky Auto Player project documentation.
 
 ## 0. Hierarchy of Truth (Evidence Hierarchy)
 1. **Observed Game Behavior** (onsets/audio captured in-game) — wins over everything.
@@ -20,7 +20,7 @@ These files represent the current system state and contracts:
 * [architecture.md](architecture.md) — Explains the 4-layer DDD codebase design, playback dispatch pipeline (MMCSS + waitable timer + timer-guard), and input hardening.
 * [timing-profile-frame-model.md](timing-profile-frame-model.md) — Pure frame-relative formulas and default profiles (`local_precise`, `balanced`, `audience_safe`).
 * [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
-* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Player 2.4.0.
+* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Auto Player 2.4.0.
 
 ---
 

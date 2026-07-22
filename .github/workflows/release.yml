@@ -117,11 +117,11 @@ jobs:
         id: stage
         run: |
           $ver = "${{ steps.verlock.outputs.version }}"
-          $rel = "dist\Sky-Player-v$ver"
+          $rel = "dist\Sky-Auto-Player-v$ver"
           if (-not (Test-Path $rel)) { throw "Missing release dir: $rel" }
-          Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Player-v$ver.zip" -Force
-          $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Player-v$ver.zip").Hash
-          "$h  Sky-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Player-v$ver.zip.sha256" -Encoding ASCII
+          Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip" -Force
+          $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip").Hash
+          "$h  Sky-Auto-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256" -Encoding ASCII
           Copy-Item "$rel\MANIFEST.json" "$env:RUNNER_TEMP\MANIFEST.json"
           "version=$ver" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
 
@@ -129,16 +129,16 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
-            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
-            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
           generate_release_notes: true
           draft: false

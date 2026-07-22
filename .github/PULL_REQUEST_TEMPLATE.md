@@ -11,7 +11,7 @@ Apply the narrowest gate that matches your change scope per `AGENTS.md` §Valida
 - [ ] `uv run pytest -m "<markers>"`
 - [ ] `uv run --env-file .env python scripts/audit_security_mandates.py`
 - [ ] `uv run --env-file .env python scripts/audit_free_threaded_wheels.py`
-- [ ] `uv run --env-file .env python -m build_app` (only if `Sky-Player.spec` / `src/build_app.py` changed)
+- [ ] `uv run --env-file .env python -m build_app` (only if `Sky-Auto-Player.spec` / `src/build_app.py` changed)
 
 ## AGENTS.md priority stack
 

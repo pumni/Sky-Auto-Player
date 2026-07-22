@@ -1,4 +1,4 @@
-# Sky Player — Editor settings
+# Sky Auto Player — Editor settings
 # Pin formatting once at the editor level so no one wastes a commit on CR/LF drift.
 
 root = true

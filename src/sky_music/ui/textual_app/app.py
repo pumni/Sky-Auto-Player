@@ -1,4 +1,4 @@
-"""Sky Player App container — orchestration hub for Textual picker and playback."""
+"""Sky Auto Player App container — orchestration hub for Textual picker and playback."""
 
 from __future__ import annotations
 
@@ -1127,7 +1127,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         elif result.error is None and force:
             self.call_from_thread(
                 self.notify,
-                f"Sky Player v{VERSION} is up to date.",
+                f"Sky Auto Player v{VERSION} is up to date.",
                 severity="information",
                 timeout=4,
             )

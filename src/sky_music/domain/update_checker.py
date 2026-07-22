@@ -25,10 +25,10 @@ from sky_music.domain.update_policy import get_policy
 AssetPredicate = Callable[[dict[str, Any]], bool]
 
 DEFAULT_OWNER: str = "pumni"
-DEFAULT_REPO: str = "Sky-Player"
+DEFAULT_REPO: str = "Sky-Auto-Player"
 GITHUB_API: str = "https://api.github.com/repos"
 FETCH_TIMEOUT_S: float = 5.0
-USER_AGENT: str = "sky-player-update-checker"
+USER_AGENT: str = "sky-auto-player-update-checker"
 
 
 @dataclass(frozen=True, slots=True)

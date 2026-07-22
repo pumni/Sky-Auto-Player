@@ -1,7 +1,7 @@
 [project]
-name = "sky-player"
+name = "sky-auto-player"
 version = "2.4.1"
-description = "Sky Music Player"
+description = "Sky Auto Player - Auto Music Sheet Player"
 readme = "README.md"
 # The dispatch loop tight-spins on `time.perf_counter_ns` for up to ~800 us per action, and a
 # parallel Textual live-dashboard thread runs alongside it. Under CPython's standard GIL the spin

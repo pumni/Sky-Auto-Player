@@ -13,18 +13,18 @@ from pathlib import Path
 
 def find_project_root(start: Path) -> Path:
     for candidate in [start, *start.parents]:
-        if (candidate / "pyproject.toml").exists() and (candidate / "Sky-Player.spec").exists():
+        if (candidate / "pyproject.toml").exists() and (candidate / "Sky-Auto-Player.spec").exists():
             return candidate
     raise RuntimeError("Cannot locate project root. Run build-app from the source checkout.")
 
 PROJECT_ROOT = find_project_root(Path(__file__).resolve())
 
-SPEC_FILE = PROJECT_ROOT / "Sky-Player.spec"
+SPEC_FILE = PROJECT_ROOT / "Sky-Auto-Player.spec"
 VERSION_FILE = PROJECT_ROOT / "windows_version_info.txt"
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 
-APP_NAME = "Sky-Player"
+APP_NAME = "Sky-Auto-Player"
 REQUIRED_ASSETS = ("config.json", "songs")
 REQUIRED_UPDATER_ASSETS = ("updater.bat", "installer")
 OPTIONAL_ASSETS = ("README.md",)
@@ -84,13 +84,13 @@ VSVersionInfo(
       StringTable(
         '040904B0',
         [
-          StringStruct('CompanyName', 'Sky Player Team'),
-          StringStruct('FileDescription', 'Sky Music Player for Windows'),
+          StringStruct('CompanyName', 'Sky Auto Player Team'),
+          StringStruct('FileDescription', 'Sky Auto Player - Music Sheet Player for Windows'),
           StringStruct('FileVersion', '{v_str}'),
           StringStruct('InternalName', '{APP_NAME}'),
           StringStruct('LegalCopyright', 'Copyright (c) {year}'),
           StringStruct('OriginalFilename', '{APP_NAME}.exe'),
-          StringStruct('ProductName', 'Sky Player'),
+          StringStruct('ProductName', 'Sky Auto Player'),
           StringStruct('ProductVersion', '{v_str}')
         ]
       )
@@ -241,7 +241,7 @@ def main() -> None:
     args = parser.parse_args()
 
     version = get_project_version()
-    print(f"=== Sky Player Build Pipeline v{version} ===")
+    print(f"=== Sky Auto Player Build Pipeline v{version} ===")
 
     generate_version_py(version)
     generate_version_info(version)

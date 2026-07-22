@@ -2,19 +2,19 @@ PackageIdentifier: pumni.SkyPlayer
 PackageVersion: 2.4.0
 PackageLocale: en-US
 Publisher: pumni
-PackageName: Sky Player
-ShortDescription: Sky music playback helper for Windows 11.
+PackageName: Sky Auto Player
+ShortDescription: Sky music auto-play helper for Windows 10/11.
 License: GPL-3.0-only
-LicenseUrl: https://github.com/pumni/Sky-Player/blob/main/LICENSE
-PackageUrl: https://github.com/pumni/Sky-Player
+LicenseUrl: https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE
+PackageUrl: https://github.com/pumni/Sky-Auto-Player
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/pumni/Sky-Player/releases/download/v2.4.0/Sky-Player-v2.4.0.zip
+    InstallerUrl: https://github.com/pumni/Sky-Auto-Player/releases/download/v2.4.0/Sky-Auto-Player-v2.4.0.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
     InstallerType: zip
     NestedInstallerType: portable
     NestedInstallerFiles:
-      - RelativeFilePath: Sky-Player.exe
-        PortableCommandAlias: Sky-Player
+      - RelativeFilePath: Sky-Auto-Player.exe
+        PortableCommandAlias: Sky-Auto-Player
 ManifestType: singleton
 ManifestVersion: 1.6.0

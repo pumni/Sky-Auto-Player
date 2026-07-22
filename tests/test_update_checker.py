@@ -89,7 +89,7 @@ def test_is_newer_strict() -> None:
 def _make_release(tag: str, *, assets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "tag_name": tag,
-        "html_url": f"https://github.com/pumni/Sky-Player/releases/tag/{tag}",
+        "html_url": f"https://github.com/pumni/Sky-Auto-Player/releases/tag/{tag}",
         "published_at": "2024-01-01T00:00:00Z",
         "body": "Release notes body",
         "assets": assets or [],
@@ -100,8 +100,8 @@ def test_parse_release_payload_newer_version_pick_zip() -> None:
     payload = _make_release(
         "v2.4.0",
         assets=[
-            {"name": "Sky-Player-v2.4.0.zip", "browser_download_url": "https://x/y.zip"},
-            {"name": "Sky-Player-v2.4.0.zip.sha256", "browser_download_url": "https://x/y.zip.sha256"},
+            {"name": "Sky-Auto-Player-v2.4.0.zip", "browser_download_url": "https://x/y.zip"},
+            {"name": "Sky-Auto-Player-v2.4.0.zip.sha256", "browser_download_url": "https://x/y.zip.sha256"},
         ],
     )
     result = parse_release_payload(payload, current_version="2.3.0")
@@ -235,7 +235,7 @@ def test_parse_release_payload_missing_tag_name_is_error() -> None:
 def test_parse_release_payload_no_zip_falls_back_to_first_asset() -> None:
     payload = _make_release(
         "v2.4.0",
-        assets=[{"name": "Sky-Player-v2.4.0.tar.gz", "browser_download_url": "https://x/y.tar.gz"}],
+        assets=[{"name": "Sky-Auto-Player-v2.4.0.tar.gz", "browser_download_url": "https://x/y.tar.gz"}],
     )
     result = parse_release_payload(payload, current_version="2.3.0")
     assert result.update is not None
@@ -255,8 +255,8 @@ def test_parse_release_payload_asset_predicate_overrides_zip_heuristic() -> None
     payload = _make_release(
         "v2.4.0",
         assets=[
-            {"name": "Sky-Player-v2.4.0.zip", "browser_download_url": "https://x/zip"},
-            {"name": "Sky-Player-v2.4.0-x64.zip", "browser_download_url": "https://x/zip-x64"},
+            {"name": "Sky-Auto-Player-v2.4.0.zip", "browser_download_url": "https://x/zip"},
+            {"name": "Sky-Auto-Player-v2.4.0-x64.zip", "browser_download_url": "https://x/zip-x64"},
         ],
     )
 

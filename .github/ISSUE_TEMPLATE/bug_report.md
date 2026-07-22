@@ -25,7 +25,7 @@ If applicable, paste from `logs/` or `git diff` snippets.
 
 **Environment**
 
-- Sky Player version (`--version` or `git describe --tags`):
+- Sky Auto Player version (`--version` or `git describe --tags`):
 - Windows build (`winver`):
 - Terminal (Windows Terminal / cmd / VS Code):
 - Python interpreter (`.python-version`):

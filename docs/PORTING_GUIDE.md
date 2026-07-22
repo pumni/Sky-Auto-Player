@@ -1,8 +1,8 @@
 # `PORTING_GUIDE.md` — Python → Rust Core Engine Conversion Standard
 
-> **Purpose.** Define the technical standard, architectural layout, and translation matrix for the incremental migration of CPU-heavy modules from Python into a Rust Core Engine exposed through PyO3/Maturin. This guide is the reference rulebook for engineers and Multi-Agent AI workflows when restructuring Sky Player for performance, without crossing any security boundary.
+> **Purpose.** Define the technical standard, architectural layout, and translation matrix for the incremental migration of CPU-heavy modules from Python into a Rust Core Engine exposed through PyO3/Maturin. This guide is the reference rulebook for engineers and Multi-Agent AI workflows when restructuring Sky Auto Player for performance, without crossing any security boundary.
 
-This document is independent of `AGENTS.md`. Where instructions conflict, `AGENTS.md` wins (Priority Stack P0–P2). See §6 for the Sky Player-specific constraints that bind this guide.
+This document is independent of `AGENTS.md`. Where instructions conflict, `AGENTS.md` wins (Priority Stack P0–P2). See §6 for the Sky Auto Player-specific constraints that bind this guide.
 
 ---
 
@@ -181,7 +181,7 @@ When dispatching a porting task to an AI Agent (Claude Code / Cursor / Windsurf)
 
 ---
 
-## 6. Sky Player Specific Boundaries
+## 6. Sky Auto Player Specific Boundaries
 
 This section binds the abstract guidance above to the concrete constraints of this repository. Where a rule conflicts with `AGENTS.md`, **`AGENTS.md` wins** (Priority Stack: P0 Security → P1 enforced config → P2 local evidence → P3 task intent).
 

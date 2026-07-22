@@ -1,4 +1,4 @@
-"""Audit Sky Player's source tree for AGENTS.md P0 security-mandate violations.
+"""Audit Sky Auto Player's source tree for AGENTS.md P0 security-mandate violations.
 
 Mirrors the static guard `scripts/audit_free_threaded_wheels.py` plays for the
 build pre-check. Walks ``src/`` with a single ``ast`` pass per file and flags
@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-NAME: str = "Sky Player"
+NAME: str = "Sky Auto Player"
 SOURCE_ROOT: Path = Path("src")
 BASELINE_PATH: Path = Path(".config") / "security_audit_baseline.json"
 

@@ -413,7 +413,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def compose(self) -> ComposeResult:
         with Container(id="root"):
-            yield GradientHeader("\u266a Sky Player", "precision music player", id="appbar")
+            yield GradientHeader("\u266a Sky Auto Player", "precision music player", id="appbar")
             search = SearchInput(placeholder="Search songs\u2026", id="search")
             search.border_title = "Search"
             yield search
@@ -1124,7 +1124,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
         self.app.push_screen(
             InfoModal(
-                "Sky Player Keyboard Shortcuts",
+                "Sky Auto Player Keyboard Shortcuts",
                 content,
                 theme_name=self.active_theme,
             )

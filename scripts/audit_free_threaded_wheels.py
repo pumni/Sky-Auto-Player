@@ -1,4 +1,4 @@
-"""Audit the free-threaded (cp314t) readiness of Sky Player's environment.
+"""Audit the free-threaded (cp314t) readiness of Sky Auto Player's environment.
 
 Run before ``python -m build_app`` to catch a GIL-disabled regression or a
 wheel downgrade in any native runtime dependency. Exits non-zero on any
@@ -6,7 +6,7 @@ failure so it can be used as a CI gate.
 
 Why this matters
 ----------------
-Sky Player pins ``.python-version`` to ``3.14+freethreaded`` so the dispatch
+Sky Auto Player pins ``.python-version`` to ``3.14+freethreaded`` so the dispatch
 spinner and the Textual UI thread run truly in parallel. Native deps must
 ship ``cp314t`` wheels — a standard ``cp314`` wheel will fail to import under
 a free-threaded interpreter (different ABI), so the runtime import check is
@@ -23,7 +23,7 @@ from importlib.metadata import PackageNotFoundError
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-NAME: str = "Sky Player"
+NAME: str = "Sky Auto Player"
 # Mirror pyproject.toml pins. Both `name` (import key) and `version_spec`
 # (PEP 440 specifier) are checked at runtime.
 RUNTIME_MIN_VERSION: dict[str, str] = {

@@ -38,9 +38,9 @@ def format_update_banner(update: UpdateInfo, current_version: str) -> str:
     latest = update.latest_version
     
     lines = [
-        f"Sky Player v{latest} is now available.",
+        f"Sky Auto Player v{latest} is now available.",
         f"You are running v{current_version}.",
-        "To update: close Sky Player, run updater.bat, reopen.",
+        "To update: close Sky Auto Player, run updater.bat, reopen.",
         ""
     ]
     
@@ -124,7 +124,7 @@ def check_for_update(
     current_version: str,
     skip_version: str | None = None,
     owner: str = "pumni",
-    repo: str = "Sky-Player",
+    repo: str = "Sky-Auto-Player",
     timeout: float = 5.0,
     channel: str | None = None,
 ) -> UpdateCheckResult:
