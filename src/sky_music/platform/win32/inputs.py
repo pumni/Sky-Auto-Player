@@ -149,6 +149,15 @@ kernel32.SetWaitableTimer.argtypes = (
 kernel32.SetWaitableTimer.restype = wintypes.BOOL
 kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
 kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+kernel32.CreateEventW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR)
+kernel32.CreateEventW.restype = wintypes.HANDLE
+
+kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
+kernel32.SetEvent.restype = wintypes.BOOL
+
+kernel32.WaitForMultipleObjects.argtypes = (wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE), wintypes.BOOL, wintypes.DWORD)
+kernel32.WaitForMultipleObjects.restype = wintypes.DWORD
 kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
 if sys.platform == "win32":
@@ -329,10 +338,7 @@ def close_handle(handle: int) -> None:
 def create_auto_reset_event() -> int | None:
     if sys.platform != "win32":
         return 9999  # Mock handle
-    create_event = getattr(kernel32, "CreateEventW", None)
-    if create_event is None:
-        return None
-    handle = create_event(None, False, False, None)
+    handle = kernel32.CreateEventW(None, False, False, None)
     if not handle:
         return None
     return int(handle)
@@ -340,17 +346,11 @@ def create_auto_reset_event() -> int | None:
 def set_event(handle: int) -> bool:
     if sys.platform != "win32":
         return True
-    set_event_fn = getattr(kernel32, "SetEvent", None)
-    if set_event_fn is None:
-        return False
-    return bool(set_event_fn(wintypes.HANDLE(handle)))
+    return bool(kernel32.SetEvent(wintypes.HANDLE(handle)))
 
 def wait_for_multiple_objects(handles: tuple[int, ...], timeout_ms: int) -> int | None:
     if sys.platform != "win32":
         return WAIT_OBJECT_0
-    wait_fn = getattr(kernel32, "WaitForMultipleObjects", None)
-    if wait_fn is None:
-        return None
     
     count = len(handles)
     if count == 0:
@@ -359,12 +359,14 @@ def wait_for_multiple_objects(handles: tuple[int, ...], timeout_ms: int) -> int 
     handle_array_type = wintypes.HANDLE * count
     handle_array = handle_array_type(*(wintypes.HANDLE(h) for h in handles))
     
-    res = wait_fn(
+    res = kernel32.WaitForMultipleObjects(
         wintypes.DWORD(count),
         handle_array,
         wintypes.BOOL(False),
         wintypes.DWORD(timeout_ms)
     )
+    if res == WAIT_FAILED:
+        return None
     return int(res)
 
 def _retry_wait_seconds(seconds: float) -> None:

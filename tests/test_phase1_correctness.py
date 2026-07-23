@@ -204,7 +204,6 @@ def test_pre_down_gate_records_blocked_unfocused() -> None:
     # Simulate run() entry wiring (the bug was overwriting this with None).
     inactive = InactiveFocusSignal()
     loop._runtime_focus_signal = inactive
-    loop._first_down_dispatched = True
 
     batch = loop.coordinator.schedule.batches[1]  # second down
     state = PlaybackState(start_perf=0)
@@ -236,7 +235,6 @@ def test_runtime_focus_signal_used_by_pre_down_gate() -> None:
     loop = _build_loop(clock=clock, backend=backend, actions=actions)
     signal = ActiveFocusSignal()
     loop._runtime_focus_signal = signal
-    loop._first_down_dispatched = True
 
     batch = loop.coordinator.schedule.batches[2]  # second down
     state = PlaybackState(start_perf=0)
@@ -267,7 +265,6 @@ def test_pre_down_gate_uses_fresh_foreground_probe_when_signal_is_stale() -> Non
     stale_active = ActiveFocusSignal()
     loop._runtime_focus_signal = stale_active
     loop.cheap_foreground_probe = lambda: False
-    loop._first_down_dispatched = True
 
     batch = loop.coordinator.schedule.batches[1]  # second down
     state = PlaybackState(start_perf=0)
@@ -296,7 +293,6 @@ def test_pre_down_gate_proceeds_when_probe_confirms_foreground() -> None:
     loop = _build_loop(clock=clock, backend=backend, actions=actions)
     loop._runtime_focus_signal = ActiveFocusSignal()
     loop.cheap_foreground_probe = lambda: True
-    loop._first_down_dispatched = True
 
     batch = loop.coordinator.schedule.batches[2]  # second down
     state = PlaybackState(start_perf=0)
