@@ -574,8 +574,7 @@ class DispatchLoop:
         # ``_abort_input_safe`` to clear held keys, and let the polled gate take over the
         # visible "focus_lost" status + pause anchor on the next iteration.
         if (
-            self._first_down_dispatched
-            and self.health_monitor.require_focus
+            self.health_monitor.require_focus
             and self._runtime_focus_signal is not None
             and (
                 not self._runtime_focus_signal.is_active()

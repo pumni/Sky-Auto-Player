@@ -411,6 +411,58 @@ class FocusSignalToggleAfterFirstDown:
         return True
 
 
+def test_first_down_blocked_when_focus_lost_before_send():
+    """Phase 1: First key-down never injects after focus is already lost.
+    
+    The supervisor starts the SharedFocusSignal at True. If focus is lost
+    after the engine's pre-start check but before the very first down's SendInput,
+    the gate must block it. The old _first_down_dispatched gate bypassed this check.
+    """
+    clock = FakeClock()
+    backend = TimedBackend(clock, send_duration_us=0)
+    
+    class RaceGuard:
+        def __init__(self, clock_ref):
+            self.clock = clock_ref
+            self.calls = 0
+        def is_active(self) -> bool:
+            self.calls += 1
+            if self.calls == 1:
+                return True # Pass pre-start check
+            # For the first down gate check, fail it.
+            # Then resume later so the song can finish.
+            return self.clock.time_us >= 50_000
+        def focus(self) -> bool:
+            return True
+            
+    focus = RaceGuard(clock)
+    engine = _engine_with_runtime_focus_signal(
+        clock, backend, focus,
+        actions=(
+            action(0, "down", 21),
+            action(10_000, "up", 21),
+            action(60_000, "down", 22),
+            action(70_000, "up", 22),
+        ),
+        focus_restore_grace_us=0,
+    )
+    
+    engine.play()
+    
+    downs = [c for c in backend.calls if c.kind == "down"]
+    # The first down (scan code 21) must NOT fire.
+    assert not any(c.scan_codes == (21,) for c in downs), (
+        "first down must be blocked by the Phase 1 gate when focus is lost before send"
+    )
+    # The recovery down (scan code 22) will fire.
+    assert any(c.scan_codes == (22,) for c in downs)
+    summary = engine.telemetry.get_summary()
+    assert summary is not None
+    aborted = summary.get("abort_counts_by_reason", {})
+    assert aborted.get("focus_lost", 0) >= 1
+
+
+
 def test_pre_down_focus_gate_blocks_after_first_down():
     """CRITICAL Phase 2 invariant: focus flips False between deadline-wake and SendInput
     → NO ``key_down`` in backend history for the second down bout, and abort recorded.
