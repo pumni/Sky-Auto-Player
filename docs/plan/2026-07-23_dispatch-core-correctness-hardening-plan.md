@@ -1,6 +1,6 @@
 # Plan: Dispatch Core Correctness Hardening (post 2026-07-22 audit)
 
-> **Status:** Proposed — not started.  
+> **Status:** Implemented (Phases 0-9 shipped).
 > **Date:** 2026-07-23  
 > **Baseline commit (anchors):** `fd35f24` — all `file:line` references are pins from this tree.
 > If lines drift, locate by **quoted symbol / comment text**, never by line number alone.  
@@ -23,13 +23,13 @@
 | 0 | Baseline freeze + regression harness | ✅ Complete |
 | 1 | H1 first-down focus gate | ✅ Complete |
 | 2 | H5 Win32 event ctypes prototypes + WAIT_FAILED | ✅ Complete |
-| 3 | H6 strict boundary validation | ⬜ Pending |
-| 4 | H4 supervisor structured shutdown | ⬜ Pending |
-| 5 | H3 degraded wait observes command_event / polls | ⬜ Pending |
-| 6 | M1 warmup budget uses effective deadline | ⬜ Pending |
-| 7 | M2 lead snapshot honesty | ⬜ Pending |
-| 8 | M4/M5 + early-return cleanup (resource/wiring) | ⬜ Pending |
-| 9 | Docs graduation + INDEX | ⬜ Pending |
+| 3 | H6 strict boundary validation | ✅ 2026-07-23 |
+| 4 | H4 supervisor structured shutdown | ✅ 2026-07-23 |
+| 5 | H3 degraded wait observes command_event / polls | ✅ 2026-07-23 |
+| 6 | M1 warmup budget uses effective deadline | ✅ 2026-07-23 |
+| 7 | M2 lead snapshot honesty | ✅ 2026-07-23 |
+| 8 | M4/M5 + early-return cleanup (resource/wiring) | ✅ 2026-07-23 |
+| 9 | Docs graduation + INDEX | ✅ 2026-07-23 |
 
 **Default ship path:** Phases **0 → 9** in order.  
 **Do not start phase N+1 until phase N’s gate and behavioral exit criteria pass.**
@@ -463,6 +463,17 @@ uv run --env-file .env python scripts/audit_security_mandates.py
 
 ### 3.0 Defects (accepted subset)
 
+### Phase 3: Boundary validation logic (Strict types) [x]
+- **Target:** `AppConfig` boundaries (`config.py`), `AppUpdateSettings`, and `validation.py` + `inputs.py` edge entries.
+- **Defect list:**
+  - `EXPECTED_PROCESS_NAMES`: Reject empty strings immediately on setter (`ValueError`), rather than failing later on a `psutil` match.
+  - Bools fed to numeric fields: `bool` subclasses `int`; config must explicitly reject bool types where numeric is required.
+  - Timing fields: NaN/Inf/out-of-range -> `math.isfinite` + documented bounds (min hold >= 1.0, etc.).
+  - Scan codes: Reject non-int / out-of-range before `SendInput` (Win32 will cast blindly).
+- **Gate:** `pytest tests/test_phase3_boundaries.py`
+
+### Phase 4: Wait strategy refactor (Pure CPU wait decoupling) (IMPLEMENTATION) [ ]
+
 | Seam | Problem | Required behaviour |
 |------|---------|-------------------|
 | `set_expected_process_names` | `","` → empty allow-list | Reject empty after normalize; keep previous allow-list or raise `ValueError` |
@@ -805,7 +816,8 @@ uv run ruff check . && uv run pyright && uv run pytest
    **every** down including first (if Phase 1 shipped).
 2. Update `docs/rt-dispatch-architecture.md` wait section: degraded path still observes
    commands (if Phase 5 shipped).
-3. If validation contracts changed, note in `docs/architecture.md` or config-related prose
+3. `late_pulse_drop_threshold_us` is deferred. Do not implement new behaviour yet.
+4. If validation contracts changed, note in `docs/architecture.md` or config-related prose
    only where a canonical home already exists — do not create parallel truth docs.
 4. Mark this plan’s phase table statuses ✅ with ship dates.
 5. Update `docs/INDEX.md` Active References entry for this plan.
@@ -879,16 +891,16 @@ Doc-only phase may skip security audit if no `src/` changes.
 
 | Phase | Landed (commit) | Notes / divergences |
 |-------|-----------------|---------------------|
-| 0 | | |
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
-| 6 | | |
-| 7 | | |
-| 8 | | |
-| 9 | | |
+| 0 | `9c1fb8c` | Baseline freeze + regression harness |
+| 1 | `9c1fb8c` | H1 focus gate |
+| 2 | `e39d969` | H5 Win32 event ctypes prototypes |
+| 3 | | H6 strict boundary validation |
+| 4 | | H4 supervisor structured shutdown |
+| 5 | | H3 degraded wait observes command_event / polls |
+| 6 | | M1 warmup budget uses effective deadline |
+| 7 | | M2 lead snapshot honesty |
+| 8 | | M4/M5 + early-return cleanup (resource/wiring). Includes deferral of late_pulse_drop_threshold_us. |
+| 9 | | Docs graduation + INDEX |
 
 Fill this table only when shipping; record intentional divergences with rationale.
 

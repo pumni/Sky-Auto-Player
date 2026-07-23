@@ -599,6 +599,9 @@ def play_selected_song(
     # output from _mini_preflight would otherwise remain visible above the HUD.
     clear_terminal()
 
+    spin_floor_val = getattr(RUNTIME_STATE, "spin_floor_us", None)
+    spin_floor_us = spin_floor_val if spin_floor_val is not None else 700
+
     engine = PlaybackEngine(
         song=song,
         actions=actions,
@@ -626,6 +629,8 @@ def play_selected_song(
         enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
         rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
         dispatch_lead_us=dispatch_lead_us,
+        spin_floor_us=spin_floor_us,
+        lead_cache_path=".cache/lead_estimator.json",
         # Phase F.3: margin transparency
         min_hold_margin_us=int(getattr(active_policy, "min_hold_margin_us", 0)),
         min_hold_margin_source=getattr(active_policy, "min_hold_margin_source", "default_500"),

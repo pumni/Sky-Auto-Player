@@ -66,7 +66,7 @@ tear).
 | Caller | Check | Cadence |
 |---|---|---|
 | Supervisor periodic sample; polled pause gate; `run()`-entry; `engine.play()` pre-start wait | **Full** `FocusGuard.is_active()` — `GetForegroundWindow` + `GetWindowThreadProcessId` + `OpenProcess` + process-name validation | 20–50 ms (human-facing) |
-| `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) **plus**, in threaded mode, a fresh injected cheap HWND-only recheck (`is_foreground_cached_hwnd`: `GetForegroundWindow()==sky`, no `OpenProcess`) | per down batch |
+| `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) **plus**, in threaded mode, a fresh injected cheap HWND-only recheck (`is_foreground_cached_hwnd`: `GetForegroundWindow()==sky`, no `OpenProcess`) | every down batch (including the first note) |
 | `DispatchHealthMonitor.focus_is_active` (post-send diagnostic) | runtime `FocusSignal` if set, else injected cheap HWND-only probe (`is_foreground_cached_hwnd`) — no process lookup | 2 ms TTL |
 
 The dispatch thread never issues the full process-name check; a live HWND cannot change the process
@@ -116,7 +116,7 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
      `remaining − guard` and block in `WaitForMultipleObjects(timer, command_event)` — zero
      polling; commands/focus transitions wake the thread instantly; then spin the guard.
    - polled mode: 2 ms-capped sleeps towards `target − guard` so the loop can poll between steps.
-3. Fallback ladder (RealSleeper): coarse (≤20 ms, −5 ms buffer) → 1 ms ticks → yield → spin.
+3. Fallback ladder (RealSleeper): coarse (≤20 ms, −5 ms buffer) → 1 ms ticks → yield → spin. (In event mode, the degraded 2ms polled sleep still monitors the command event to ensure prompt wake).
 
 Polling is governed by the *presence* of the command event, not a flag: the supervisor creates the
 event before the dispatch thread starts (so no early command can lose its wake-up) and signals it

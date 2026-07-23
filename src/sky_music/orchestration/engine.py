@@ -703,68 +703,78 @@ class PlaybackEngine:
         if self.runtime_schedule is None:
             self.runtime_schedule = compile_runtime_intents(self.actions)
 
-        # Re-resolve the live game window per run
-        if self.require_focus:
-            try:
-                from sky_music.platform.win32 import inputs
-
-                inputs.reset_window_cache()
-                if getattr(inputs, "PLAYBACK_DEBUG", False):
-                    inputs.debug_log(
-                        f"[play] start {self.song.name!r}: {inputs.describe_input_target()}, "
-                        f"min_hold_us={self.min_hold_us}"
-                    )
-            except Exception:
-                pass
-
-        self._record_thread_census()
-
-        if self._should_use_dispatch_thread():
-            try:
-                from sky_music.platform.win32 import inputs
-
-                shapes_to_prewarm: set[tuple[tuple[int, ...], bool]] = set()
-                for batch in self.runtime_schedule.batches:
-                    if batch.kind == "down":
-                        shapes_to_prewarm.add((tuple(i.scan_code for i in batch.intents), False))
-                distinct_keys = set()
-                for action in self.actions:
-                    distinct_keys.update(action.scan_codes)
-                for sc in distinct_keys:
-                    shapes_to_prewarm.add(((sc,), True))
-
-                inputs.prewarm_input_arrays(shapes_to_prewarm)
-            except Exception:
-                pass
-
-        # Wait for initial focus if required to prevent "Focus lost" showing immediately at start
-        if self.require_focus and not self.focus_guard.is_active():
-            self._release_all_and_cancel_runtime()
-            if self.renderer:
-                self.renderer.render(0.0, 0.001, self.song.name, status="waiting_for_focus", force=True)
-            while self.require_focus and not self.focus_guard.is_active():
-                command = self.controls.poll() if self.controls is not None else None
-                if command == "quit":
-                    if self.renderer:
-                        self.renderer.finish(f"Stopped: {self.song.name}")
-                    return PLAYBACK_QUIT
-                if command == "refocus":
-                    self.focus_guard.focus()
-                if command == "panic":
-                    self._release_all_and_cancel_runtime()
-                self.sleeper.sleep(self.sleep_policy.poll_s)
-
-        coordinator = RuntimeDispatchCoordinator(self.runtime_schedule, self.min_hold_us)
-        self._runtime_coordinator = coordinator
-
-        use_dispatch_thread = self._should_use_dispatch_thread()
-        realtime_sleeper = (
-            create_realtime_sleeper(self.sleeper)
-            if (self.enable_waitable_timer and use_dispatch_thread)
-            else self.sleeper
-        )
-
+        realtime_sleeper: Sleeper | None = self.sleeper
+        
         try:
+            # Re-resolve the live game window per run
+            if self.require_focus:
+                try:
+                    from sky_music.platform.win32 import inputs
+    
+                    inputs.reset_window_cache()
+                    if getattr(inputs, "PLAYBACK_DEBUG", False):
+                        inputs.debug_log(
+                            f"[play] start {self.song.name!r}: {inputs.describe_input_target()}, "
+                            f"min_hold_us={self.min_hold_us}"
+                        )
+                except Exception:
+                    pass
+    
+            self._record_thread_census()
+    
+            if self._should_use_dispatch_thread():
+                try:
+                    from sky_music.platform.win32 import inputs
+    
+                    shapes_to_prewarm: set[tuple[tuple[int, ...], bool]] = set()
+                    # Phase 8 (M4): Prewarm both down shapes and exact multi-key up shapes
+                    # from the schedule. (Document cap: win32 inputs.py caps at _ARRAY_CACHE_MAX = 8192).
+                    for batch in self.runtime_schedule.batches:
+                        if len(shapes_to_prewarm) >= 8192:
+                            break
+                        shape = tuple(i.scan_code for i in batch.intents)
+                        is_up = batch.kind == "up"
+                        shapes_to_prewarm.add((shape, is_up))
+                    
+                    distinct_keys = set()
+                    for action in self.actions:
+                        distinct_keys.update(action.scan_codes)
+                    for sc in distinct_keys:
+                        if len(shapes_to_prewarm) >= 8192:
+                            break
+                        shapes_to_prewarm.add(((sc,), True))
+    
+                    inputs.prewarm_input_arrays(shapes_to_prewarm)
+                except Exception:
+                    pass
+    
+            # Wait for initial focus if required to prevent "Focus lost" showing immediately at start
+            if self.require_focus and not self.focus_guard.is_active():
+                self._release_all_and_cancel_runtime()
+                if self.renderer:
+                    self.renderer.render(0.0, 0.001, self.song.name, status="waiting_for_focus", force=True)
+                while self.require_focus and not self.focus_guard.is_active():
+                    command = self.controls.poll() if self.controls is not None else None
+                    if command == "quit":
+                        if self.renderer:
+                            self.renderer.finish(f"Stopped: {self.song.name}")
+                        return PLAYBACK_QUIT
+                    if command == "refocus":
+                        self.focus_guard.focus()
+                    if command == "panic":
+                        self._release_all_and_cancel_runtime()
+                    self.sleeper.sleep(self.sleep_policy.poll_s)
+    
+            coordinator = RuntimeDispatchCoordinator(self.runtime_schedule, self.min_hold_us)
+            self._runtime_coordinator = coordinator
+    
+            use_dispatch_thread = self._should_use_dispatch_thread()
+            realtime_sleeper = (
+                create_realtime_sleeper(self.sleeper)
+                if (self.enable_waitable_timer and use_dispatch_thread)
+                else self.sleeper
+            )
+    
             if self.enable_adaptive_spin:
                 self._probe_timer_wake_error(realtime_sleeper)
             else:

@@ -7,6 +7,7 @@ setting in the UI.
 
 import contextlib
 import json
+import math
 import os
 import threading
 from dataclasses import dataclass, field
@@ -22,6 +23,33 @@ SCHEMA_VERSION: int = 2
 DEFAULT_GAME_FPS: int = 60
 VALID_FPS: tuple[int, ...] = (30, 60, 90, 120, 144, 165, 240)
 CONFIG_PATH: Path = Path(__file__).resolve().parents[2] / "config.json"
+
+
+def _parse_bool(val: Any, default: bool) -> bool:
+    if isinstance(val, bool):
+        return val
+    return default
+
+
+def _parse_float(val: Any, default: float) -> float:
+    if isinstance(val, bool):
+        return default
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_int(val: Any, default: int) -> int:
+    if isinstance(val, bool):
+        return default
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 
 @dataclass(frozen=True)
@@ -51,16 +79,9 @@ class FrameTimingDefaults:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> FrameTimingDefaults:
-        def ratio(key: str, default: float) -> float:
-            val = raw.get(key, default)
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                return default
-
         return cls(
-            min_visible_hold_frames=ratio("min_visible_hold_frames", 1.25),
-            min_hold_min_frame_ratio=ratio("min_hold_min_frame_ratio", 1.25),
+            min_visible_hold_frames=_parse_float(raw.get("min_visible_hold_frames"), 1.25),
+            min_hold_min_frame_ratio=_parse_float(raw.get("min_hold_min_frame_ratio"), 1.25),
         )
 
     def as_policy_kwargs(self) -> dict[str, float | int]:
@@ -293,8 +314,10 @@ def sky_process_names_csv(cfg: AppConfig | None = None) -> str:
 
 
 def resolve_game_fps(value: int | None) -> int:
-    """Return the effective game FPS; never returns 0/None."""
+    """Return the effective game FPS; never returns 0/None. Rejects unknown FPS."""
     if value is None or value <= 0:
+        return DEFAULT_GAME_FPS
+    if value not in VALID_FPS:
         return DEFAULT_GAME_FPS
     return value
 
@@ -410,8 +433,8 @@ def _build_config_from_disk() -> AppConfig:
     )
 
     safety = SafetyDefaults(
-        prompt_on_medium_risk = bool(sf_raw.get("prompt_on_medium_risk", SafetyDefaults.prompt_on_medium_risk)),
-        prompt_on_high_risk   = bool(sf_raw.get("prompt_on_high_risk",   SafetyDefaults.prompt_on_high_risk)),
+        prompt_on_medium_risk = _parse_bool(sf_raw.get("prompt_on_medium_risk"), SafetyDefaults.prompt_on_medium_risk),
+        prompt_on_high_risk   = _parse_bool(sf_raw.get("prompt_on_high_risk"),   SafetyDefaults.prompt_on_high_risk),
     )
 
     frame_timing = FrameTimingDefaults.from_dict(ft_raw)
@@ -439,25 +462,25 @@ def _build_config_from_disk() -> AppConfig:
         theme                        = str(raw.get("theme", AppConfig.theme)),
         ui_background_mode           = str(raw.get("ui_background_mode", AppConfig.ui_background_mode)),
         default_timing_profile       = default_timing_profile,
-        default_tempo_scale          = float(raw.get("default_tempo_scale", AppConfig.default_tempo_scale)),
-        game_fps                     = resolve_game_fps(raw.get("game_fps", AppConfig.game_fps)),
-        telemetry_enabled_by_default = bool(raw.get("telemetry_enabled_by_default", AppConfig.telemetry_enabled_by_default)),
-        verbose_hud                  = bool(raw.get("verbose_hud", AppConfig.verbose_hud)),
-        use_dispatch_thread          = bool(raw.get("use_dispatch_thread", AppConfig.use_dispatch_thread)),
-        input_path_warn_us           = max(0, int(raw.get("input_path_warn_us", AppConfig.input_path_warn_us))),
+        default_tempo_scale          = _parse_float(raw.get("default_tempo_scale"), AppConfig.default_tempo_scale),
+        game_fps                     = resolve_game_fps(_parse_int(raw.get("game_fps"), AppConfig.game_fps)),
+        telemetry_enabled_by_default = _parse_bool(raw.get("telemetry_enabled_by_default"), AppConfig.telemetry_enabled_by_default),
+        verbose_hud                  = _parse_bool(raw.get("verbose_hud"), AppConfig.verbose_hud),
+        use_dispatch_thread          = _parse_bool(raw.get("use_dispatch_thread"), AppConfig.use_dispatch_thread),
+        input_path_warn_us           = max(0, _parse_int(raw.get("input_path_warn_us"), AppConfig.input_path_warn_us)),
         # The legacy rt_time_critical flag was DEAD config (never wired to anything), so its value
         # carries no user intent and must not pin the new ladder off: it is ignored entirely and
         # dropped on the next save. Only an explicit rt_priority_mode key overrides the default.
         rt_priority_mode             = cast(RtPriorityMode, str(raw.get("rt_priority_mode", AppConfig.rt_priority_mode))),
-        enable_adaptive_lead         = bool(raw.get("enable_adaptive_lead", AppConfig.enable_adaptive_lead)),
-        enable_adaptive_spin         = bool(raw.get("enable_adaptive_spin", AppConfig.enable_adaptive_spin)),
+        enable_adaptive_lead         = _parse_bool(raw.get("enable_adaptive_lead"), AppConfig.enable_adaptive_lead),
+        enable_adaptive_spin         = _parse_bool(raw.get("enable_adaptive_spin"), AppConfig.enable_adaptive_spin),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
         timing_profiles              = timing_profiles,
         songs_dir                    = str(raw.get("songs_dir", AppConfig.songs_dir)),
         sky_process_names            = sky_process_names,
-        allow_title_fallback         = bool(raw.get("allow_title_fallback", AppConfig.allow_title_fallback)),
+        allow_title_fallback         = _parse_bool(raw.get("allow_title_fallback"), AppConfig.allow_title_fallback),
         update                       = update_settings,
     )
 

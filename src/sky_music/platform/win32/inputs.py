@@ -204,7 +204,10 @@ def set_expected_process_names(names: Iterable[str]) -> None:
     at startup on the main thread before the dispatch thread reads the set.
     """
     global EXPECTED_PROCESS_NAMES
-    EXPECTED_PROCESS_NAMES = {name.strip() for name in names if name.strip()}
+    normalized = {name.strip() for name in names if name.strip()}
+    if not normalized:
+        raise ValueError("Expected process names cannot be empty")
+    EXPECTED_PROCESS_NAMES = normalized
 PLAYBACK_DEBUG: bool = False
 REJECTED_WINDOW_WARNINGS: set[int] = set()
 _REJECTED_WINDOW_WARNINGS_MAX = 256
@@ -513,6 +516,10 @@ def set_schedule_diagnostics(min_gap: int | None, impossible_repeats: int) -> No
     _DIAG.impossible_same_key_repeats = impossible_repeats
 
 def _cached_key_input(scan_code: int, flags: int) -> INPUT:
+    if type(scan_code) is not int:
+        raise TypeError("scan_code must be a strict int")
+    if not (0 <= scan_code <= 0xFFFF):
+        raise ValueError("scan_code out of bounds")
     cache_key = (scan_code, flags)
     # Unlocked hit: after prewarm the dispatch thread is the sole reader/writer of the
     # INPUT cache during playback. Lock only on miss so the SendInput hot path avoids
