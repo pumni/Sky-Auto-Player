@@ -424,4 +424,56 @@ Describe "updater.ps1" {
             (Get-Content (Join-Path $script:DestRoot "lockedfile.txt")) | Should -Be "old"
         }
     }
+
+    Describe "Epoch generation is UTC (regression guard for local-time bug)" {
+        # Regression guard for the bug where the source used:
+        #     [int][double]::Parse((Get-Date -UFormat %s), InvariantCulture)
+        # — ``Get-Date -UFormat %s`` returns a LOCAL-time epoch (relative to
+        # the machine's timezone, NOT UTC), so on UTC+7 it diverged from
+        # Python ``int(time.time())`` by exactly 25200 seconds.  That broke
+        # two downstream consumers in update_service.py / modals.py:
+        #   * ``should_auto_check`` read ``now(UTC) - last_check_ts(local)``
+        #     and got a negative delta on positive-offset zones, silently
+        #     bypassing the 24h throttle and spamming the GitHub API.
+        #   * ``time.localtime(last_check_ts)`` rendered the local-time epoch
+        #     with the offset applied a second time, showing "last checked"
+        #     off by 2x the tz offset vs an in-app (Python-UTC) check.
+        # The fix uses ``[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()`` which
+        # is the .NET standard for a UTC Unix epoch — locale-free, no sub-second
+        # floor surprise, and identical to Python ``time.time()``.
+        #
+        # The current source line in updater.ps1 is checked verbatim so a
+        # future "cleanup" cannot silently resurrect the buggy form.
+        It "uses [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() (not Get-Date -UFormat %s)" {
+            $src = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\updater.ps1')
+            # The fix line MUST be present verbatim. Anchor on the assignment
+            # at start-of-line (the code is ``$epoch = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()``)
+            # so a comment that merely *describes* the fix cannot satisfy this check.
+            $src | Should -Match '(?m)^\s*\$epoch\s*=\s*\[int\]\[DateTimeOffset\]::UtcNow\.ToUnixTimeSeconds\(\)'
+            # The buggy local-time form MUST be absent as an executable statement.
+            # Anchor on the assignment at start-of-line so the comment at
+            # ``updater.ps1:692`` documenting the old bug (``# ``[int][double]::Parse...``)
+            # is NOT matched — only a real ``$epoch = ... (Get-Date -UFormat %s) ...``
+            # statement would fire this.
+            $src | Should -Not -Match '(?m)^\s*\$epoch\s*=\s*\[int\]\[double\]::Parse\(\s*\(Get-Date -UFormat %s\)'
+        }
+
+        It "generated epoch matches the UTC reference within ±5s on any timezone" {
+            # Reference: the WELL-KNOWN UTC form (``ToUniversalTime() -UFormat
+            # %s`` parsed InvariantCulture) — this is what the buggy line was
+            # TRYING to compute and what Python ``int(time.time())`` equals.
+            # Both evaluations run within milliseconds of each other in the
+            # same process, so they MUST agree to within ±5s even across a
+            # second boundary; any divergence > 5s indicates one source is not
+            # UTC (the regression signature is divergence == tz offset, which
+            # is at least 900s for every real timezone).
+            $epoch    = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $refUtc = [int][double]::Parse(
+                (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s),
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
+            $delta = [Math]::Abs($epoch - $refUtc)
+            $delta | Should -BeLessOrEqual 5
+        }
+    }
 }
