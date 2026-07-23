@@ -307,7 +307,7 @@ class DispatchLoop:
         # policy. Before that the polled focus-pause gate handles the pre-start unfocused
         # window (publishing "waiting_for_focus" via the renderer) — see the long comment in
         # ``_dispatch_down_batch``. Reset per ``run()`` invocation.
-        self._first_down_dispatched = False
+        # Note: _first_down_dispatched was removed in Phase 2.
         # Runtime FocusSignal for the Phase 2 pre-down gate. Ownership: set at ``run()``
         # entry from the supervisor (SharedFocusSignal under threaded dispatch, DirectFocusSignal
         # in direct mode); dispatch-thread single-writer for the reference; reads of
@@ -566,10 +566,9 @@ class DispatchLoop:
         # so reading it does NOT block the dispatch thread's hot note-on path with a slow
         # GetForegroundWindow. In direct mode the signal wraps ``focus_guard.is_active()``
         # directly, which is what the plan §2.1 "force refresh" intention captures. The gate
-        # only fires after the first down batch has actually been dispatched (see the
-        # ``_first_down_dispatched`` flag) — before that the polled ``_process_wait_states``
-        # gate handles the pre-start unfocused window (publishing "waiting_for_focus" via
-        # the renderer, which existing tests rely on). Subsequent race-window slips mid-song
+        # applies to all downs (Phase 1): the polled ``_process_wait_states`` gate handles
+        # the pre-start unfocused window, but a check-vs-send race after that gate passes
+        # is caught here. We DROP the down (mark every gen ``blocked_unfocused``), call
         # are caught here: we DROP the down (mark every gen ``blocked_unfocused``), call
         # ``_abort_input_safe`` to clear held keys, and let the polled gate take over the
         # visible "focus_lost" status + pause anchor on the next iteration.
@@ -666,7 +665,7 @@ class DispatchLoop:
         # the flag on the FIRST *attempted* down send, not the first successful one, so a
         # cold-start that loses focus between t=0 dispatch and the next dispatch still
         # benefits from the gate. The flag is reset on each new run() invocation above.
-        self._first_down_dispatched = True
+        # End of down batch dispatch.
         return result
 
     def _dispatch_pending_releases(
@@ -1216,7 +1215,7 @@ class DispatchLoop:
         # never calls focus_guard / OpenProcess from the dispatch thread.
         self.health_monitor.set_runtime_signal(focus_signal)
         # Per-run reset of the Phase 2 pre-down gate arming flag.
-        self._first_down_dispatched = False
+        # Note: _first_down_dispatched was removed in Phase 2.
 
         def observe_result(exec_result: ExecutionResult | None) -> None:
             if exec_result is None:
