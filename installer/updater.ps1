@@ -1,4 +1,4 @@
-# License: GPL-3.0 (Sky Auto Player project). No code ported from mpv; structural reference only.
+﻿# License: GPL-3.0 (Sky Auto Player project). No code ported from mpv; structural reference only.
 # Sky Auto Player external updater. See docs/2026-07-18_distribution-mpv-pattern-plan.md §Phase 2.
 #
 # Behaviour contract:
@@ -438,6 +438,14 @@ function Test-ManifestIntegrity {
 # --- MAIN EXECUTION GUARD ---
 # Only run the update logic when executed directly, not when dot-sourced for testing.
 # When dot-sourced, $MyInvocation.InvocationName is '.' (a single dot).
+#
+# Probe 2026-07-22 across {pwsh -File, pwsh -Command "& 'path'", powershell 5.1 -File,
+# pwsh -Command iex, pwsh -c, Import-Module} confirms this guard never misses a real
+# user-invoked path: only intentional dot-source (e.g. ``. '...updater.ps1'`` from
+# ``installer/Tests/updater.Tests.ps1`` BeforeAll) sets ``InvocationName`` to ``.`` —
+# every other invocation form leaves it set to the script path, ``&``, or empty. If
+# you strengthen this guard, re-run the probe and add a regression test that covers
+# the six invocation forms above plus the dot-source path.
 if ($MyInvocation.InvocationName -eq '.') {
     Write-Host "DEBUG updater.ps1: Dot-sourced, skipping main execution"
     return
@@ -676,11 +684,27 @@ try {
     exit 5
 }
 
-# Unix epoch seconds as int (matches Python last_check_ts)
-$epoch = [int][double]::Parse(
-    (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s),
-    [System.Globalization.CultureInfo]::InvariantCulture
-)
+# Unix epoch seconds as int (matches Python ``int(time.time())`` which is
+# what ``orchestration/update_service.py:current_unix_ts`` writes to
+# ``config.json`` under ``update.last_check_ts``).
+#
+# IMPORTANT: must be a *UTC* epoch.  The earlier form
+# ``[int][double]::Parse((Get-Date -UFormat %s), InvariantCulture)`` returned
+# a LOCAL-time epoch — ``Get-Date -UFormat %s`` is relative to the machine's
+# timezone, not UTC — and diverged from Python by exactly the timezone offset
+# (e.g. +25200s on UTC+7).  That divergence broke both downstream consumers:
+#   * ``should_auto_check`` in update_service.py reads ``now - last_check_ts``
+#     with ``now`` in UTC; a local-time ``last_check_ts`` makes the delta
+#     negative on positive-offset zones, silently bypassing the 24h throttle
+#     and spamming the unauthenticated GitHub releases API.
+#   * ``modals.py`` renders ``time.localtime(last_check_ts)``; a local epoch
+#     gets the offset applied a second time, showing "last checked" off by
+#     2x the tz offset vs. an in-app (Python-UTC) check.
+# ``[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()`` is the .NET standard for the
+# Unix epoch in UTC: locale-free, no sub-second floor surprise, and identical
+# definition to Python ``time.time()``.  This is also PS 5.1-safe — the cast
+# to ``[int]`` truncates toward zero (matches Python ``int()`` on positives).
+$epoch = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 try {
     Write-UpdateFields -LastCheckTs $epoch -LastNotifiedVersion $latestVersion
 } catch {
