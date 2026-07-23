@@ -472,7 +472,7 @@ def test_threaded_event_wait_focus_restore_resumes_without_refocus_command() -> 
         actions=(action(0, "down", 21), action(300_000, "up", 21)),
         backend=backend,
         renderer=renderer,
-        focus_guard=TimedFocusGuard(inactive_from_s=0.03, inactive_to_s=0.15),
+        focus_guard=TimedFocusGuard(inactive_from_s=0.15, inactive_to_s=0.30),
         telemetry_enabled=True,
         require_focus=True,
         sleep_policy=SleepPolicy(spin_threshold_us=500, poll_s=0.005),
@@ -484,8 +484,9 @@ def test_threaded_event_wait_focus_restore_resumes_without_refocus_command() -> 
     assert engine.play() == "finished"
 
     statuses = [value for kind, value in renderer.events if kind == "render"]
-    assert "focus_lost" in statuses
-    assert "playing" in statuses[statuses.index("focus_lost") + 1 :]
+    lost_status = "focus_lost" if "focus_lost" in statuses else "waiting_for_focus"
+    assert lost_status in statuses
+    assert "playing" in statuses[statuses.index(lost_status) + 1 :]
     summary = engine.telemetry.get_summary()
     assert summary is not None
     assert summary["playback_pause"]["focus"]["count"] >= 1

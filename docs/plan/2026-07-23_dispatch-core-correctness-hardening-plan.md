@@ -22,7 +22,7 @@
 |-------|------|--------|
 | 0 | Baseline freeze + regression harness | ✅ Complete |
 | 1 | H1 first-down focus gate | ✅ Complete |
-| 2 | H5 Win32 event ctypes prototypes + WAIT_FAILED | ⬜ Pending |
+| 2 | H5 Win32 event ctypes prototypes + WAIT_FAILED | ✅ Complete |
 | 3 | H6 strict boundary validation | ⬜ Pending |
 | 4 | H4 supervisor structured shutdown | ⬜ Pending |
 | 5 | H3 degraded wait observes command_event / polls | ⬜ Pending |
