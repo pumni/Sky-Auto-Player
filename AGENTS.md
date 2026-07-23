@@ -61,7 +61,7 @@ compaction or resume**, since this app touches anti-cheat-adjacent surfaces.
 - `src/build_app.py` — PyInstaller build driver; runs the smoke-test gate itself.
 - `src/sky_music/domain/` — pure domain models (schedules, profiles, timing frames). Must stay Windows- and I/O-free.
 - `src/sky_music/orchestration/` — scheduler/coordinator logic; must remain pure and unit-testable (no wall-clock, no `SendInput`).
-- `src/sky_music/infrastructure/` — bridging code between orchestration and platform (focus tracking, hotkey listeners, real-time sleeper, MMCSS registration, wait strategy, **in-app update check helpers** — `download_zip` / `verify_sha256` / `extract_zip` / `fetch_sha256_sidecar` for the notify-only checker). May import `platform/` but must not be imported by `domain/`.
+- `src/sky_music/infrastructure/` — bridging code between orchestration and platform (focus tracking, hotkey listeners, real-time sleeper, MMCSS registration, wait strategy). The in-app update checker is **not** in this layer — it lives under `domain/update_checker.py` (pure version logic) and `orchestration/update_service.py` (glue); the apply side lives entirely outside Python in `installer/updater.ps1` (notify-only by design, see Architecture Invariants below). May import `platform/` but must not be imported by `domain/`.
 - `src/sky_music/platform/` — Windows backend behind an interface (`SendInput`, waitable timer, MMCSS, focus). The only place Win32 ctypes may live.
 - `src/sky_music/ui/` — Textual TUI (picker, HUD, command palette, update modals).
 - `src/sky_music/cli/` — argparse/CLI plumbing, validators.

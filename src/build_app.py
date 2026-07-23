@@ -185,7 +185,13 @@ def write_release_manifest(release_dir: Path, version: str, exe_name: str, git_h
         },
         "platform": sys.platform,
         "git_head": git_head,
-        "build_time_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        # Emit RFC-3339 UTC with explicit 'Z' suffix. The previous form
+        # ``datetime.now(UTC).isoformat(...)`` serializes as ``+00:00``, which is
+        # standards-compliant but ambiguous when downstream loggrep treats the
+        # `Z` suffix as the canonical UTC marker (GitHub-Releases-style). The
+        # ``Z`` form is widely supported by every ISO/RFC 3339 parser we
+        # consume (Python's ``datetime.fromisoformat`` accepts it on 3.11+).
+        "build_time_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": files,
     }
     out = release_dir / "MANIFEST.json"
