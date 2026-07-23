@@ -894,13 +894,13 @@ Doc-only phase may skip security audit if no `src/` changes.
 | 0 | `9c1fb8c` | Baseline freeze + regression harness |
 | 1 | `9c1fb8c` | H1 focus gate |
 | 2 | `e39d969` | H5 Win32 event ctypes prototypes |
-| 3 | | H6 strict boundary validation |
-| 4 | | H4 supervisor structured shutdown |
-| 5 | | H3 degraded wait observes command_event / polls |
-| 6 | | M1 warmup budget uses effective deadline |
-| 7 | | M2 lead snapshot honesty |
-| 8 | | M4/M5 + early-return cleanup (resource/wiring). Includes deferral of late_pulse_drop_threshold_us. |
-| 9 | | Docs graduation + INDEX |
+| 3 | `3cda370` | H6 strict boundary validation |
+| 4 | `3cda370` | H4 supervisor structured shutdown |
+| 5 | `3cda370` | H3 degraded wait observes command_event / polls |
+| 6 | `3cda370` | M1 warmup budget uses effective deadline |
+| 7 | `3cda370` | M2 lead snapshot honesty |
+| 8 | `36ebc19` | M4/M5 + early-return cleanup (resource/wiring). Includes deferral of late_pulse_drop_threshold_us. |
+| 9 | `36ebc19` | Docs graduation + INDEX |
 
 Fill this table only when shipping; record intentional divergences with rationale.
 
