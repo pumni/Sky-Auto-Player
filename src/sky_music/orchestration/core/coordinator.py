@@ -265,8 +265,8 @@ class RuntimeDispatchCoordinator:
         dispatch_lead_us: int = 0,
         *,
         lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
-    ) -> tuple[RuntimeActionBatch, ...]:
-        due: list[RuntimeActionBatch] = []
+    ) -> tuple[tuple[RuntimeActionBatch, int], ...]:
+        due: list[tuple[RuntimeActionBatch, int]] = []
         while self.cursor < len(self.schedule.batches):
             batch = self.schedule.batches[self.cursor]
             lead = dispatch_lead_us
@@ -280,7 +280,7 @@ class RuntimeDispatchCoordinator:
                 # split_down_intents then applies as before lead existed).
                 break
 
-            due.append(batch)
+            due.append((batch, lead))
             self.cursor += 1
         return tuple(due)
 

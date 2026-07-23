@@ -166,7 +166,7 @@ def test_no_early_conflict_guard() -> None:
     coordinator = RuntimeDispatchCoordinator(schedule, min_hold_us=0)
     
     # At now_us = 0, first down is due
-    due = coordinator.pop_due_authored(now_us=0, dispatch_lead_us=0)
+    due = tuple(b for b, _ in coordinator.pop_due_authored(now_us=0, dispatch_lead_us=0))
     assert len(due) == 1
     assert due[0].kind == "down"
     
@@ -180,7 +180,7 @@ def test_no_early_conflict_guard() -> None:
     # BUT, scan code 1 is active (no release requested yet).
     # So the second down should NOT pop early.
     # The first_up batch is at 100 <= 150, so it will pop early.
-    due_early = coordinator.pop_due_authored(now_us=20, dispatch_lead_us=130)
+    due_early = tuple(b for b, _ in coordinator.pop_due_authored(now_us=20, dispatch_lead_us=130))
     assert len(due_early) == 1
     assert due_early[0].kind == "up"
     assert due_early[0].scheduled_us == 100
@@ -191,7 +191,7 @@ def test_no_early_conflict_guard() -> None:
     # Now scan code 1 is pending release (in coordinator.pending_by_generation).
     # At now_us = 100, with dispatch_lead_us = 50, the second down action is at 150 (due soon).
     # It still should not pop early because the release has not completed.
-    due_early2 = coordinator.pop_due_authored(now_us=100, dispatch_lead_us=50)
+    due_early2 = tuple(b for b, _ in coordinator.pop_due_authored(now_us=100, dispatch_lead_us=50))
     assert len(due_early2) == 0
     
     # Now complete release at now_us = 105
@@ -201,16 +201,16 @@ def test_no_early_conflict_guard() -> None:
     
     # Now that the key is released, it is safe to pop the next down early.
     # At now_us = 110, with dispatch_lead_us = 45, second down is at 150 <= 110 + 45 = 155.
-    due_early3 = coordinator.pop_due_authored(now_us=110, dispatch_lead_us=45)
+    due_early3 = tuple(b for b, _ in coordinator.pop_due_authored(now_us=110, dispatch_lead_us=45))
     assert len(due_early3) == 1
     assert due_early3[0].kind == "down"
 
 
 def test_adaptive_lead_integration() -> None:
     # Test integration with PlaybackEngine and adaptive lead
-    # Create actions that will trigger 6 down dispatches and 6 up dispatches
+    # Create actions that will trigger 7 down dispatches and 7 up dispatches
     actions = []
-    for i in range(1, 7):
+    for i in range(1, 8):
         actions.append(KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000), reason=f"d{i}"))
         actions.append(KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(i),), at_us=Microseconds(i * 1000 + 500), reason=f"u{i}"))
     
@@ -242,11 +242,11 @@ def test_adaptive_lead_integration() -> None:
     res = engine.play()
     assert res == PLAYBACK_FINISHED
     
-    # Estimator counts should be 6 for down (bucket 1) and 6 for up
-    assert engine.estimator._count_down[1] == 6
-    assert engine.estimator._count_up == 6
+    # Estimator counts should be 7 for down (bucket 1) and 7 for up
+    assert engine.estimator._count_down[1] == 7
+    assert engine.estimator._count_up == 7
     
-    # Seed value was 800, 6th value updated: 0.2 * 800 + 0.8 * 800 = 800
+    # Seed value was 800, 7th value updated: 0.2 * 800 + 0.8 * 800 = 800
     assert engine.estimator.get_lead_us(ActionKind.DOWN) == 800
     assert engine.estimator.get_lead_us(ActionKind.UP) == 800
     
@@ -254,17 +254,16 @@ def test_adaptive_lead_integration() -> None:
     records = engine.telemetry.records
     assert len(records) > 0
     
-    # For the first 5 downs, applied_lead_us should be 0 because estimator count was < 5
-    # The 6th down should have applied_lead_us = 800 because estimator count is 5 (seeded) when we query it
     down_records = [r for r in records if r.kind == "down"]
-    assert len(down_records) == 6
+    assert len(down_records) == 7
     
-    # First 5 downs: lead_down retrieved when count was 0, 1, 2, 3, 4
-    for r in down_records[:5]:
+    # First 6 downs pop early due to falling behind (d5 and d6 pop together when count was 4).
+    # d7 is scheduled far enough ahead that it pops in a separate batch AFTER count reached 5+.
+    for r in down_records[:6]:
         assert r.applied_lead_us == 0
         
-    # 6th down: lead_down retrieved when count was 5
-    assert down_records[5].applied_lead_us == 800
+    # 7th down: lead_down retrieved when count was >= 5
+    assert down_records[6].applied_lead_us == 800
 
 
 # ---------------------------------------------------------------------------
@@ -535,13 +534,13 @@ def test_coordinator_per_batch_lead_scales_with_polyphony() -> None:
     # Single note (1 key) -> lead 100 -> poppable from t=9_900.
     assert coord.next_authored_us(lead_for_batch=lead_fn) == 9_900
     assert coord.pop_due_authored(9_899, lead_for_batch=lead_fn) == ()
-    popped = coord.pop_due_authored(9_900, lead_for_batch=lead_fn)
+    popped = tuple(b for b, _ in coord.pop_due_authored(9_900, lead_for_batch=lead_fn))
     assert len(popped) == 1 and len(popped[0].intents) == 1
 
     # Chord (4 keys) -> lead 400 -> poppable from t=19_600 (4x earlier relative to its schedule).
     assert coord.next_authored_us(lead_for_batch=lead_fn) == 19_600
     assert coord.pop_due_authored(19_599, lead_for_batch=lead_fn) == ()
-    popped2 = coord.pop_due_authored(19_600, lead_for_batch=lead_fn)
+    popped2 = tuple(b for b, _ in coord.pop_due_authored(19_600, lead_for_batch=lead_fn))
     assert len(popped2) == 1 and len(popped2[0].intents) == 4
 
 

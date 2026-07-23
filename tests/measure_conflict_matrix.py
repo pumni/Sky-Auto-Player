@@ -61,7 +61,7 @@ def simulate(coord: RuntimeDispatchCoordinator, send_us: int) -> None:
         pending = coord.pop_due_pending(now)
         now = _dispatch_releases(coord, pending, now, send_us)
 
-        for batch in coord.pop_due_authored(now):
+        for batch, _ in coord.pop_due_authored(now):
             if batch.kind == "up":
                 coord.request_releases(batch.intents)
                 newly_due = coord.pop_due_pending(now)

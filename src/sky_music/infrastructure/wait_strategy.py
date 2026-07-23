@@ -111,6 +111,22 @@ class HybridWaitStrategy:
                 sleeper.sleep(sleep_us / 1_000_000.0)
             return False
 
+        # Degraded mode event wait: High-resolution timer unavailable, but event wait is enabled.
+        # Fall back to a 2 ms sleep ladder using WaitForMultipleObjects on the command event.
+        if self.enable_event_wait and command_event is not None:
+            guard = spin_threshold_us
+            remaining_to_sleep = remaining_us - guard
+            if remaining_to_sleep > 0:
+                from sky_music.platform.win32 import inputs
+                sleep_us = min(remaining_to_sleep, 2_000)
+                timeout_ms = max(1, int(sleep_us / 1000.0))
+                res = inputs.wait_for_multiple_objects((command_event,), timeout_ms)
+                if res == inputs.WAIT_OBJECT_0:
+                    return True
+            else:
+                self.spin_until_us(target_system_us, clock)
+            return False
+
         # Fallback standard sleep ladder
         if remaining_us > policy.coarse_sleep_max_us:
             sleep_duration = min(policy.coarse_sleep_max_us, remaining_us - policy.coarse_sleep_threshold_us)

@@ -259,17 +259,26 @@ def validate_hold_ordering(profile: dict[str, int]) -> None:
 def validate_timing_profile(profile: dict[str, int], *, fps: int = 60) -> None:
     frame_us = 1_000_000 / fps
 
-    validate_hold_ordering(profile)
-
     hold_frames = profile.get("hold_frames")
     min_hold_frames = profile.get("min_hold_frames")
-    if hold_frames is not None and float(hold_frames) <= 0:
-        raise ValueError("hold_frames must be > 0")
+    
+    if hold_frames is not None:
+        if isinstance(hold_frames, bool):
+            raise ValueError("hold_frames must be numeric")
+        f_hold = float(hold_frames)
+        if not math.isfinite(f_hold) or f_hold <= 0:
+            raise ValueError("hold_frames must be > 0 and finite")
+            
     if min_hold_frames is not None:
-        if float(min_hold_frames) < 1.0:
-            raise ValueError("min_hold_frames must be >= 1.0")
-        if hold_frames is not None and float(min_hold_frames) > float(hold_frames):
+        if isinstance(min_hold_frames, bool):
+            raise ValueError("min_hold_frames must be numeric")
+        f_min = float(min_hold_frames)
+        if not math.isfinite(f_min) or f_min < 1.0:
+            raise ValueError("min_hold_frames must be >= 1.0 and finite")
+        if hold_frames is not None and f_min > float(hold_frames):
             raise ValueError("min_hold_frames must be <= hold_frames")
+
+    validate_hold_ordering(profile)
 
     min_hold_us = _min_hold_us(profile, fps=fps)
     if min_hold_us is None:

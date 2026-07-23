@@ -41,7 +41,7 @@ def _max_observed(coord: RuntimeDispatchCoordinator, *, send_us: int = 0) -> int
                 sent = tuple(r.scan_code for r in pending)
                 coord.complete_releases(pending, sent, ())
 
-        for batch in coord.pop_due_authored(now):
+        for batch, _ in coord.pop_due_authored(now):
             if batch.kind == "up":
                 coord.request_releases(batch.intents)
                 newly = coord.pop_due_pending(now)
@@ -91,7 +91,7 @@ def test_only_non_terminal_statuses() -> None:
     deadline = coord2.next_deadline_us()
     assert deadline is not None
     now = deadline
-    for batch in coord2.pop_due_authored(now):
+    for batch, _ in coord2.pop_due_authored(now):
         playable, _ = coord2.split_down_intents(batch.intents)
         if playable:
             coord2.activate_sent_downs(
@@ -120,7 +120,7 @@ def test_S_equals_active_union_pending() -> None:
     coord2 = RuntimeDispatchCoordinator(sched2, min_hold_us=100)
 
     now = 0
-    for batch in coord2.pop_due_authored(now):
+    for batch, _ in coord2.pop_due_authored(now):
         playable, _ = coord2.split_down_intents(batch.intents)
         if playable:
             coord2.activate_sent_downs(
@@ -128,7 +128,7 @@ def test_S_equals_active_union_pending() -> None:
                 dispatch_started_us=now, dispatch_completed_us=now,
             )
     now = 50
-    for batch in coord2.pop_due_authored(now):
+    for batch, _ in coord2.pop_due_authored(now):
         if batch.kind == "up":
             coord2.request_releases(batch.intents)
 
@@ -147,7 +147,7 @@ def test_pending_ids_present_in_active() -> None:
     coord = RuntimeDispatchCoordinator(sched, min_hold_us=1_000)
 
     now = 0
-    for batch in coord.pop_due_authored(now):
+    for batch, _ in coord.pop_due_authored(now):
         playable, _ = coord.split_down_intents(batch.intents)
         if playable:
             coord.activate_sent_downs(
@@ -155,7 +155,7 @@ def test_pending_ids_present_in_active() -> None:
                 dispatch_started_us=now, dispatch_completed_us=now,
             )
     now = 50_000
-    for batch in coord.pop_due_authored(now):
+    for batch, _ in coord.pop_due_authored(now):
         if batch.kind == "up":
             coord.request_releases(batch.intents)
 
@@ -270,7 +270,7 @@ def test_sum_counts_equals_generation_count() -> None:
                 sent = tuple(r.scan_code for r in pending)
                 coord.complete_releases(pending, sent, ())
 
-        for batch in coord.pop_due_authored(now):
+        for batch, _ in coord.pop_due_authored(now):
             if batch.kind == "up":
                 coord.request_releases(batch.intents)
                 newly = coord.pop_due_pending(now)

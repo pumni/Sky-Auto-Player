@@ -421,6 +421,7 @@ class PlaybackSupervisor:
         progress_publish_s = 0.033
 
         last_active_state = True
+        control_exc: BaseException | None = None
 
         try:
             while dispatch_thread.is_alive():
@@ -493,7 +494,18 @@ class PlaybackSupervisor:
                 time.sleep(control_sleep_s)
 
             dispatch_thread.join()
+        except BaseException as exc:
+            control_exc = exc
         finally:
+            if dispatch_thread.is_alive():
+                # Phase 4: Structured shutdown — request stop and join with bounded timeout
+                # before releasing any handles that the dispatch loop relies on.
+                command_queue.put("quit")
+                if command_event_handle is not None:
+                    with contextlib.suppress(Exception):
+                        inputs.set_event(command_event_handle)
+                dispatch_thread.join(timeout=5.0)
+
             # Always close: a stuck dispatcher after join timeout must not leak the event handle.
             if command_event_handle is not None:
                 with contextlib.suppress(Exception):
@@ -512,6 +524,11 @@ class PlaybackSupervisor:
             progress_sink,
             last_snapshot_version,
         )
+
+        if control_exc is not None:
+            if dispatch_result.error is not None:
+                raise control_exc from dispatch_result.error
+            raise control_exc
 
         if dispatch_result.error is not None:
             raise dispatch_result.error

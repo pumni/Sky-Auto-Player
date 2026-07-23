@@ -569,7 +569,6 @@ class DispatchLoop:
         # applies to all downs (Phase 1): the polled ``_process_wait_states`` gate handles
         # the pre-start unfocused window, but a check-vs-send race after that gate passes
         # is caught here. We DROP the down (mark every gen ``blocked_unfocused``), call
-        # are caught here: we DROP the down (mark every gen ``blocked_unfocused``), call
         # ``_abort_input_safe`` to clear held keys, and let the polled gate take over the
         # visible "focus_lost" status + pause anchor on the next iteration.
         if (
@@ -1165,7 +1164,9 @@ class DispatchLoop:
         if self.core_warmup_hook is not None and now_us - self._last_send_completed_us > SEND_COLD_THRESHOLD_US:
             # Compute safe warmup budget: cannot exceed time until the next
             # due action deadline. Absent a next deadline, cap at CORE_WARMUP_SPIN_US.
-            next_action_us = self.coordinator.next_authored_us(lead_for_batch=self._down_lead_for_batch)
+            next_action_us = self.coordinator.next_deadline_us(
+                0, lead_up, lead_for_batch=self._down_lead_for_batch
+            )
             remaining_budget = (next_action_us - now_us) if next_action_us is not None else CORE_WARMUP_SPIN_US
             if remaining_budget > 0:
                 max_spin = min(CORE_WARMUP_SPIN_US, CORE_WARMUP_SPIN_MAX_US, remaining_budget)
@@ -1177,7 +1178,7 @@ class DispatchLoop:
             if observe is not None:
                 observe(result)  # type: ignore[operator]
 
-        for batch in self.coordinator.pop_due_authored(
+        for batch, pop_lead in self.coordinator.pop_due_authored(
             now_us, lead_for_batch=self._down_lead_for_batch
         ):
             if batch.kind == "up":
@@ -1185,13 +1186,7 @@ class DispatchLoop:
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)
                 result = self._dispatch_pending_releases(newly_due, state, lead_up=lead_up)
             else:
-                # Lead is recomputed here intentionally (plan Phase 2 / Finding B — deliberately
-                # deferred): `pop_due_authored` above already reads `self._down_lead_for_batch`
-                # for the dueness test; no estimator.update runs between, so the value is
-                # identical. Re-reading is ~10 ops/note and cleaner than contorting
-                # `pop_due_authored` to yield (batch, lead) tuples. Do not "fix" this.
-                down_lead = self._down_lead_for_batch(batch)
-                result = self._dispatch_down_batch(batch, state, lead_down=down_lead, now_us=now_us)
+                result = self._dispatch_down_batch(batch, state, lead_down=pop_lead, now_us=now_us)
             if observe is not None:
                 observe(result)  # type: ignore[operator]
 
