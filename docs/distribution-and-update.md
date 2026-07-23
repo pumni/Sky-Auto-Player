@@ -1,6 +1,6 @@
 # Distribution and Update Model
 
-This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player as of version 2.4.0. It is a reference for contributors handling packaging or update logic.
+This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player. It tracks the `pyproject.toml` `[project].version` (currently 2.4.1) and is the reference for contributors handling packaging or update logic. Update this header whenever the release version bumps — the rules below apply to every shipped release, not a specific point release.
 
 ## 1. Model Overview
 
@@ -30,6 +30,10 @@ The external updater (`updater.bat` delegating to `installer/updater.ps1`) enfor
 - **Transactional Copy & Rollback:** Binaries are copied over in a transactional sequence. If any part of the operation fails, a rollback routine automatically reverts to the backup state.
 - **Preserve-list (Data Safety):** The updater explicitly skips modifying `config.json` (except for allowed patch fields) and completely ignores the `songs/` folder. User profiles and song libraries are never touched.
 - **Process Guard:** The updater refuses to run if it detects `Sky-Auto-Player.exe` is currently running, avoiding file locking issues.
+
+### 3.1. `installer/updater.ps1` encoding invariant
+
+The script **MUST start with a UTF-8 BOM** (`EF BB BF`).  `updater.bat` falls back to `powershell.exe` (Windows PowerShell 5.1, the inbox shell on every Windows machine) when `pwsh` is not installed.  PS 5.1 reads BOM-less `.ps1` files with the system ANSI codepage (Windows-1252 on en-US hosts), so any non-ASCII byte — em-dash `—` (`E2 80 94`), `§` (`C2 A7`), smart quotes — gets mis-decoded as `â€"` / `Â§` and breaks the parser, fail-closing the entire external update path.
 
 ## 4. Channel Switching
 
