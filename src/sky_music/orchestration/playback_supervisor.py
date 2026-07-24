@@ -30,6 +30,9 @@ from sky_music.orchestration.core.ports import (
     PLAYBACK_QUIT as PLAYBACK_QUIT,
 )
 from sky_music.orchestration.core.ports import (
+    PLAYBACK_SHUTDOWN_TIMEOUT as PLAYBACK_SHUTDOWN_TIMEOUT,
+)
+from sky_music.orchestration.core.ports import (
     PLAYBACK_SKIPPED as PLAYBACK_SKIPPED,
 )
 from sky_music.orchestration.core.ports import (
@@ -506,8 +509,7 @@ class PlaybackSupervisor:
                         inputs.set_event(command_event_handle)
                 dispatch_thread.join(timeout=5.0)
 
-            # Always close: a stuck dispatcher after join timeout must not leak the event handle.
-            if command_event_handle is not None:
+            if not dispatch_thread.is_alive() and command_event_handle is not None:
                 with contextlib.suppress(Exception):
                     inputs.close_handle(command_event_handle)
                 command_event_handle = None
@@ -529,6 +531,9 @@ class PlaybackSupervisor:
             if dispatch_result.error is not None:
                 raise control_exc from dispatch_result.error
             raise control_exc
+
+        if dispatch_thread.is_alive():
+            return PLAYBACK_SHUTDOWN_TIMEOUT
 
         if dispatch_result.error is not None:
             raise dispatch_result.error

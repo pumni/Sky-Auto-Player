@@ -157,6 +157,9 @@ user32.ShowWindow.restype = wintypes.BOOL
 user32.UpdateWindow.argtypes = (wintypes.HWND,)
 user32.UpdateWindow.restype = wintypes.BOOL
 
+user32.InvalidateRect.argtypes = (wintypes.HWND, wintypes.LPRECT, wintypes.BOOL)
+user32.InvalidateRect.restype = wintypes.BOOL
+
 user32.GetMessageW.argtypes = (ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT)
 user32.GetMessageW.restype = wintypes.BOOL
 
@@ -214,8 +217,8 @@ class CalibrationHarness:
         self.scancode = scancode
         self.hwnd: Any = None
         self.injections_done = threading.Event()
-        self.down_latencies_ns: list[float] = []
-        self.up_latencies_ns: list[float] = []
+        self.down_latencies_us: list[float] = []
+        self.up_latencies_us: list[float] = []
         self.last_send_time_ns: int = 0
         self.last_send_type: str | None = None
         self.input_event = threading.Event()
@@ -359,13 +362,17 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
                         if kb.MakeCode == harness.scancode:
                             is_up = bool(kb.Flags & 1)
                             if is_up and harness.last_send_type == "up":
+                                # ns delta / 1000 → microseconds
                                 latency = float(t_recv - harness.last_send_time_ns) / 1000.0
-                                harness.up_latencies_ns.append(latency)
+                                harness.up_latencies_us.append(latency)
                                 harness.input_event.set()
                             elif not is_up and harness.last_send_type == "down":
                                 latency = float(t_recv - harness.last_send_time_ns) / 1000.0
-                                harness.down_latencies_ns.append(latency)
+                                harness.down_latencies_us.append(latency)
                                 harness.input_event.set()
+                                # Progress text is only drawn on WM_PAINT; without this the
+                                # window stays at "0 / 200" until a resize/uncover forces paint.
+                                user32.InvalidateRect(hwnd, None, True)
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
         if msg == WM_PAINT:
@@ -379,7 +386,7 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
                 "Sky Auto Player Latency Calibration\n\n"
                 "Measuring input delivery latency...\n"
                 "Please keep this window focused.\n\n"
-                f"Progress: {len(harness.down_latencies_ns)} / 200"
+                f"Progress: {len(harness.down_latencies_us)} / 200"
             )
             user32.DrawTextW(hdc, text, -1, ctypes.byref(rect), DT_CENTER | DT_VCENTER | DT_WORDBREAK)
             user32.EndPaint(hwnd, ctypes.byref(ps))
@@ -481,8 +488,8 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
         raise RuntimeError(f"Calibration aborted: {harness.abort_reason}")
 
     # Compute latency stats (microseconds)
-    down_lat = harness.down_latencies_ns
-    up_lat = harness.up_latencies_ns
+    down_lat = harness.down_latencies_us
+    up_lat = harness.up_latencies_us
 
     result = {
         "version": 1,

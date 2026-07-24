@@ -87,15 +87,26 @@ class HybridWaitStrategy:
                     from sky_music.platform.win32 import inputs
 
                     if inputs.set_waitable_timer_relative_us(timer_handle, remaining_to_sleep):
-                        res = inputs.wait_for_multiple_objects(
-                            (timer_handle, command_event),
-                            inputs.INFINITE,
-                        )
-                        # Woken by command event (WAIT_OBJECT_0 + 1)
-                        if res == inputs.WAIT_OBJECT_0 + 1:
-                            return True
+                        try:
+                            res = inputs.wait_for_multiple_objects(
+                                (timer_handle, command_event),
+                                inputs.INFINITE,
+                            )
+                            # Woken by command event (WAIT_OBJECT_0 + 1)
+                            if res == inputs.WAIT_OBJECT_0 + 1:
+                                return True
+                            if res is None:
+                                sleep_us = min(remaining_to_sleep, 2_000)
+                                sleeper.sleep(sleep_us / 1_000_000.0)
+                                return False
+                        except Exception:
+                            sleep_us = min(remaining_to_sleep, 2_000)
+                            sleeper.sleep(sleep_us / 1_000_000.0)
+                            return False
                     else:
-                        sleeper.sleep(remaining_to_sleep / 1_000_000.0)
+                        sleep_us = min(remaining_to_sleep, 2_000)
+                        sleeper.sleep(sleep_us / 1_000_000.0)
+                        return False
 
                 # Spin remainder
                 self.spin_until_us(target_system_us, clock)
@@ -120,9 +131,14 @@ class HybridWaitStrategy:
                 from sky_music.platform.win32 import inputs
                 sleep_us = min(remaining_to_sleep, 2_000)
                 timeout_ms = max(1, int(sleep_us / 1000.0))
-                res = inputs.wait_for_multiple_objects((command_event,), timeout_ms)
-                if res == inputs.WAIT_OBJECT_0:
-                    return True
+                try:
+                    res = inputs.wait_for_multiple_objects((command_event,), timeout_ms)
+                    if res == inputs.WAIT_OBJECT_0:
+                        return True
+                    if res is None:
+                        sleeper.sleep(sleep_us / 1_000_000.0)
+                except Exception:
+                    sleeper.sleep(sleep_us / 1_000_000.0)
             else:
                 self.spin_until_us(target_system_us, clock)
             return False

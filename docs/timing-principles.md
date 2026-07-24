@@ -83,7 +83,7 @@ The project defines three built-in profiles in [config.py](../src/sky_music/conf
 (`DEFAULT_TIMING_PROFILES`, mirrored here 2026-07 — see [the source](../src/sky_music/config.py)
 for the authoritative values):
 
-* **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0` (zero margin). It represents the absolute physical floor of the game.
+* **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0`. Like every built-in frame-model profile it also receives the constant 500 µs `min_hold_margin_us` (kernel device-delivery latency, see §2); setting that margin to 0 restores the pure frame-ratio floor for this profile. It represents the absolute physical floor of the game.
 * **`balanced`:** The general default profile. Uses `min_hold_frames = 1.02`, adding a small buffer over the host frame boundary to prevent edge-case misses.
 * **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.5` — a half-frame cushion that survives lost / late remote frames better than the 1.0–1.05 range that drifts under load. Earlier docs claimed `1.1`; that value was retired in favour of the more conservative `1.5` after remote-room stutter evidence.
 

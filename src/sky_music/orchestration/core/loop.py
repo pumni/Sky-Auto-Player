@@ -259,6 +259,7 @@ class DispatchLoop:
         unfocused_send_hook: Callable[[], None] | None = None,
         diagnostics_log: Callable[[str], None] | None = None,
         cheap_foreground_probe: Callable[[], bool] | None = None,
+        core_warmup_budget_us: int = 500,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -290,6 +291,7 @@ class DispatchLoop:
         # Phase E: injected hook for idle-gap core warmup. Called with max_us
         # when the gap since last send exceeds SEND_COLD_THRESHOLD_US.
         self.core_warmup_hook: Callable[[int], None] | None = None
+        self.core_warmup_budget_us: int = max(0, core_warmup_budget_us)
         # Phase H: kill switch for mid-song reprobe (disabled when adaptive_spin is off).
         self.enable_spin_reprobe: bool = True
         # Spin floor for clamp during reprobe (mirrors engine.spin_floor_us).
@@ -1027,6 +1029,7 @@ class DispatchLoop:
         # acknowledgement latency — commands are human-rate (≈200 ms reaction floor),
         # so 2 ms is well below the noise floor of any user interaction.
         poll_interval_us = 2_000
+        warmup_run = False
 
         while True:
             if state.is_paused():
@@ -1080,6 +1083,15 @@ class DispatchLoop:
                 self._run_mid_song_reprobe(elapsed_us)
                 # Re-read elapsed in case probe took ~16 ms wall time; remaining stays valid
                 # for the outer iteration — the loop will recompute on the next pass.
+
+            # Phase E: idle-gap core warmup.
+            now_us = self.clock.now_us()
+            if not warmup_run and self.core_warmup_hook is not None and now_us - self._last_send_completed_us > SEND_COLD_THRESHOLD_US:
+                remaining_budget = (target_elapsed_us - elapsed_us) - self.spin_threshold_us
+                if remaining_budget > 0:
+                    max_spin = min(self.core_warmup_budget_us, CORE_WARMUP_SPIN_MAX_US, remaining_budget)
+                    self.core_warmup_hook(max_spin)
+                warmup_run = True
 
             # Event-mode spin happens inside wait_until_us; record the nominal spin start so
             # pre_send_spin_us reflects the guard spin (the high-res sleeper wakes within the guard
@@ -1157,21 +1169,6 @@ class DispatchLoop:
         The per-batch down lead comes solely from lead_for_batch (_down_lead_for_batch);
         a scalar down lead would be overridden inside pop_due_authored anyway.
         """
-        # Phase E: idle-gap core warmup. If the gap since last send exceeds
-        # threshold and the core warmup hook is set, spin briefly to wake the
-        # core before issuing the first send. Skip if already late (deadline
-        # passed) so warmup never adds lateness.
-        if self.core_warmup_hook is not None and now_us - self._last_send_completed_us > SEND_COLD_THRESHOLD_US:
-            # Compute safe warmup budget: cannot exceed time until the next
-            # due action deadline. Absent a next deadline, cap at CORE_WARMUP_SPIN_US.
-            next_action_us = self.coordinator.next_deadline_us(
-                0, lead_up, lead_for_batch=self._down_lead_for_batch
-            )
-            remaining_budget = (next_action_us - now_us) if next_action_us is not None else CORE_WARMUP_SPIN_US
-            if remaining_budget > 0:
-                max_spin = min(CORE_WARMUP_SPIN_US, CORE_WARMUP_SPIN_MAX_US, remaining_budget)
-                self.core_warmup_hook(max_spin)
-
         pending = self.coordinator.pop_due_pending(now_us, lead_up)
         if pending:
             result = self._dispatch_pending_releases(pending, state, lead_up=lead_up)

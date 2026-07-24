@@ -797,3 +797,68 @@ def test_lead_cache_default_path_not_written(tmp_path: Path) -> None:
     # No default cache path set — ensure no stray file created
     assert not Path(nonexistent).exists()
 
+
+# --- Phase 0 Cache Residual Tests ---
+
+def test_cache_negative_residual_export_import_roundtrip():
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 500, n_keys=1)
+    
+    # Introduce a negative residual
+    for _ in range(5):
+        est.update_completion_error(ActionKind.DOWN, -100)
+        
+    state = est.export_state()
+    est2 = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    assert est2.import_state(state)
+    assert est2.get_lead_us(ActionKind.DOWN, 1) == est.get_lead_us(ActionKind.DOWN, 1)
+
+def test_cache_import_rejects_invalid_types_and_leaves_estimator_unchanged():
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 500, n_keys=1)
+        
+    original_lead = est.get_lead_us(ActionKind.DOWN, 1)
+    
+    state_valid = est.export_state()
+    
+    # string
+    state_str = state_valid.copy()
+    ema_down = state_valid["ema_down"]
+    assert isinstance(ema_down, list)
+    state_str["ema_down"] = [0.0 if i != 1 else "500.0" for i in range(len(ema_down))]
+    assert not est.import_state(state_str)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == original_lead
+    
+    # bool
+    state_bool = state_valid.copy()
+    state_bool["ema_down"] = [(i == 1) for i in range(len(ema_down))]
+    assert not est.import_state(state_bool)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == original_lead
+
+    # NaN
+    state_nan = state_valid.copy()
+    state_nan["ema_down"] = [0.0 if i != 1 else float('nan') for i in range(len(ema_down))]
+    assert not est.import_state(state_nan)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == original_lead
+    
+    # string in count_down
+    state_count_str = state_valid.copy()
+    count_down = state_valid["count_down"]
+    assert isinstance(count_down, list)
+    state_count_str["count_down"] = [0 if i != 1 else "x" for i in range(len(count_down))]
+    assert not est.import_state(state_count_str)
+    assert est.get_lead_us(ActionKind.DOWN, 1) == original_lead
+    
+def test_cache_successfully_imported_state_can_execute_one_update_without_exception():
+    est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    for _ in range(5):
+        est.update(ActionKind.DOWN, 500, n_keys=1)
+    state = est.export_state()
+    
+    est2 = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
+    assert est2.import_state(state)
+    # Should not raise
+    est2.update(ActionKind.DOWN, 600, n_keys=1)
+

@@ -59,6 +59,9 @@ from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_QUIT as PLAYBACK_QUIT,
 )
 from sky_music.orchestration.playback_supervisor import (
+    PLAYBACK_SHUTDOWN_TIMEOUT as PLAYBACK_SHUTDOWN_TIMEOUT,
+)
+from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_SKIPPED as PLAYBACK_SKIPPED,
 )
 from sky_music.orchestration.playback_supervisor import (
@@ -270,7 +273,7 @@ class SendLatencyEstimator:
             if not isinstance(ema_down, list) or len(ema_down) != max_poly + 1:
                 return False
             for v in ema_down:
-                if not isinstance(v, (int, float)) or not (0 <= v <= self._max_lead_us):
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 <= v <= self._max_lead_us):
                     return False
             warm_down = data.get("warm_down", [])
             if not isinstance(warm_down, list) or len(warm_down) != max_poly + 1:
@@ -280,25 +283,38 @@ class SendLatencyEstimator:
             count_down = data.get("count_down", [])
             if not isinstance(count_down, list) or len(count_down) != max_poly + 1:
                 return False
+            for v in count_down:
+                if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                    return False
             sum_down = data.get("sum_down", [])
             if not isinstance(sum_down, list) or len(sum_down) != max_poly + 1:
                 return False
+            for v in sum_down:
+                if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                    return False
             ema_down_total = data.get("ema_down_total", 0.0)
-            if not isinstance(ema_down_total, (int, float)) or not (0 <= ema_down_total <= self._max_lead_us):
+            if isinstance(ema_down_total, bool) or not isinstance(ema_down_total, (int, float)) or not (0 <= ema_down_total <= self._max_lead_us):
                 return False
             ema_up = data.get("ema_up", 0.0)
-            if not isinstance(ema_up, (int, float)) or not (0 <= ema_up <= self._max_lead_us):
+            if isinstance(ema_up, bool) or not isinstance(ema_up, (int, float)) or not (0 <= ema_up <= self._max_lead_us):
                 return False
             ema_residual = data.get("ema_residual", 0.0)
-            if not isinstance(ema_residual, (int, float)) or not (0 <= ema_residual <= self._MAX_RESIDUAL_US):
+            if isinstance(ema_residual, bool) or not isinstance(ema_residual, (int, float)) or not (-self._MAX_RESIDUAL_US <= ema_residual <= self._MAX_RESIDUAL_US * 2):
                 return False
             for key in ("warm_down_total", "warm_up", "warm_residual"):
                 if not isinstance(data.get(key), bool):
                     return False
             for key in ("count_down_total", "count_up", "count_residual"):
                 val = data.get(key, 0)
-                if not isinstance(val, int) or val < 0:
+                if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                     return False
+            for key in ("sum_down_total", "sum_up"):
+                val = data.get(key, 0)
+                if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                    return False
+            val = data.get("sum_residual", 0)
+            if isinstance(val, bool) or not isinstance(val, int):
+                return False
             # All valid — apply. Never shrink below the constructed sizing: __init__ sizes
             # max_poly against the CURRENT song (max(6, max_chord)) before this cache import
             # runs, and a cache written after a lower-polyphony song must not collapse the
@@ -704,6 +720,7 @@ class PlaybackEngine:
             self.runtime_schedule = compile_runtime_intents(self.actions)
 
         realtime_sleeper: Sleeper | None = self.sleeper
+        supervisor = None
         
         try:
             # Re-resolve the live game window per run
@@ -833,12 +850,14 @@ class PlaybackEngine:
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
-            # Partial-send diagnostics are logged from DispatchLoop.run's finally block (where the
-            # dispatch thread reads its own counters — no data race). This block was intentionally
-            # removed from here in the race-fix refactor; do not reintroduce a reader of the module-
-            # level send-diagnostic counters from the main thread while the dispatcher may still be
-            # writing them under free-threaded Python.
-            if realtime_sleeper is not self.sleeper:
+            
+            dispatch_thread_stuck = False
+            if supervisor is not None:
+                thread = getattr(supervisor, "dispatch_thread", None)
+                if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                    dispatch_thread_stuck = True
+                    
+            if not dispatch_thread_stuck and realtime_sleeper is not self.sleeper:
                 close = getattr(realtime_sleeper, "close", None)
                 if close is not None:
                     close()
@@ -858,10 +877,11 @@ class PlaybackEngine:
             # this finally); the next play() rebuilds the cache from prewarm_input_arrays before
             # the dispatch thread starts. _INPUT_CACHE (per-key structs) is intentionally kept
             # by clear_array_cache. Best-effort; non-Windows/test platforms must not abort teardown.
-            with contextlib.suppress(Exception):
-                from sky_music.platform.win32 import inputs as _inputs_cleanup
+            if not dispatch_thread_stuck:
+                with contextlib.suppress(Exception):
+                    from sky_music.platform.win32 import inputs as _inputs_cleanup
 
-                _inputs_cleanup.clear_array_cache()
+                    _inputs_cleanup.clear_array_cache()
             # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
             # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
             # the dispatch thread allocated during playback (ExecutionResult, batch tuples,

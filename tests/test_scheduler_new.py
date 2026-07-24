@@ -666,7 +666,7 @@ def test_chord_stagger_caps_total_spread():
     assert total_keys == 8
 
 
-def test_chord_stagger_leaves_single_notes_and_releases_untouched():
+def test_chord_stagger_leaves_single_notes_untouched_and_shifts_releases():
     song = _chord_song("OneNote", ("Key0",))
     policy = _policy({"chord_stagger_us": 2000})
     res = build_key_actions(song, policy=policy)
@@ -674,12 +674,11 @@ def test_chord_stagger_leaves_single_notes_and_releases_untouched():
     ups = [a for a in res.actions if a.kind == "up"]
     assert len(downs) == 1
     assert downs[0].at_us == 1_000_000
-    # A chord's releases are not split by the stagger.
+    # A chord's releases are now shifted by the stagger, matching their shifted downs.
     chord = _chord_song("Chord", ("Key0", "Key1", "Key2"))
     res2 = build_key_actions(chord, policy=policy)
     ups2 = [a for a in res2.actions if a.kind == "up"]
-    assert len(ups2) == 1
-    assert len(ups2[0].scan_codes) == 3
+    assert len(ups2) == 3
     assert len(ups) == 1
 
 
@@ -690,3 +689,94 @@ def test_chord_stagger_propagates_from_profile_dict_through_frame_policy():
     )
     assert policy.chord_stagger_us == 2500
     assert policy.chord_stagger_max_us == 12000
+
+
+# --- Phase 0 Residual Tests (Chord Stagger Lifecycle) ---
+
+def test_chord_stagger_never_places_release_before_shifted_down():
+    song = _chord_song("BigChord", ("Key0", "Key1", "Key2", "Key3", "Key4", "Key5", "Key6", "Key7"), time_ms=1000)
+    # Stagger offset > effective hold
+    policy = _policy({"chord_stagger_us": 25_000, "chord_stagger_max_us": 200_000, "hold_us": 20_000, "min_hold_us": 10_000})
+    res = build_key_actions(song, policy=policy)
+    
+    down_times = {sc: a.at_us for a in res.actions if a.kind == "down" for sc in a.scan_codes}
+    up_times = {sc: a.at_us for a in res.actions if a.kind == "up" for sc in a.scan_codes}
+    
+    for sc, down_us in down_times.items():
+        assert sc in up_times
+        # Baseline assertion: matching_up_us >= matching_down_us + policy.min_hold_us
+        assert up_times[sc] >= down_us + policy.min_hold_us
+
+
+def test_chord_stagger_preserves_min_hold_per_key_at_144fps():
+    song = _chord_song("BigChord", ("Key0", "Key1", "Key2", "Key3", "Key4", "Key5", "Key6", "Key7"), time_ms=1000)
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"chord_stagger_us": 5_000, "chord_stagger_max_us": 50_000}),
+        fps=144,
+    )
+    res = build_key_actions(song, policy=policy)
+    
+    down_times = {sc: a.at_us for a in res.actions if a.kind == "down" for sc in a.scan_codes}
+    up_times = {sc: a.at_us for a in res.actions if a.kind == "up" for sc in a.scan_codes}
+    
+    for sc, down_us in down_times.items():
+        assert up_times[sc] >= down_us + policy.min_hold_us
+
+
+def test_chord_stagger_preserves_min_hold_per_key_at_240fps():
+    song = _chord_song("BigChord", ("Key0", "Key1", "Key2", "Key3", "Key4", "Key5", "Key6", "Key7"), time_ms=1000)
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({"chord_stagger_us": 5_000, "chord_stagger_max_us": 50_000}),
+        fps=240,
+    )
+    res = build_key_actions(song, policy=policy)
+    
+    down_times = {sc: a.at_us for a in res.actions if a.kind == "down" for sc in a.scan_codes}
+    up_times = {sc: a.at_us for a in res.actions if a.kind == "up" for sc in a.scan_codes}
+    
+    for sc, down_us in down_times.items():
+        assert up_times[sc] >= down_us + policy.min_hold_us
+
+
+# --- Phase 0 Freeze Tests ---
+
+def test_freeze_non_chord_melody_identical_without_stagger():
+    song = Song(
+        name="Melody",
+        notes=(
+            Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1500), key=NoteKey("Key1")),
+        ),
+    )
+    policy1 = _policy({})
+    policy2 = _policy({"chord_stagger_us": 5000, "chord_stagger_max_us": 15000})
+    
+    res1 = build_key_actions(song, policy=policy1)
+    res2 = build_key_actions(song, policy=policy2)
+    
+    assert [(a.kind, a.at_us, a.scan_codes) for a in res1.actions] == [(a.kind, a.at_us, a.scan_codes) for a in res2.actions]
+
+
+def test_freeze_chord_stagger_default_is_no_op_and_batches_intact():
+    song = _chord_song("Chord", ("Key0", "Key1", "Key2"))
+    res = build_key_actions(song, policy=_policy()) # Default policy
+    
+    downs = [a for a in res.actions if a.kind == "down"]
+    assert len(downs) == 1
+    assert len(downs[0].scan_codes) == 3
+
+
+def test_freeze_h2_equality_degraded_behavior_unchanged():
+    song = Song(
+        name="H2",
+        notes=(
+            Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+            Note(time_ms=Millis(1001), key=NoteKey("Key0")),
+        ),
+    )
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({}), same_key_conflict_policy="degraded"
+    )
+    res = build_key_actions(song, policy=policy)
+    assert res.impossible_same_key_repeats == 1
+

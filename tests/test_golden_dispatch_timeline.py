@@ -13,11 +13,52 @@ import json
 from pathlib import Path
 
 from sky_music.domain import Song
-from sky_music.domain.scheduler import apply_chord_stagger
-from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+from sky_music.domain.scheduler_types import (
+    ActionKind,
+    KeyAction,
+    Microseconds,
+    ScanCode,
+)
 from sky_music.infrastructure.backend import DryRunBackend
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
+
+
+def apply_chord_stagger(
+    actions: list[KeyAction], min_stagger_us: int, stagger_cap_us: int
+) -> list[KeyAction]:
+    """Shim for the golden test to statically stagger chords, matching the old v1 behavior."""
+    from collections import defaultdict
+    by_time = defaultdict(list)
+    for a in actions:
+        by_time[a.at_us].append(a)
+    
+    out = []
+    for at_us in sorted(by_time):
+        group = by_time[at_us]
+        down_actions = [a for a in group if a.kind == "down"]
+        up_actions = [a for a in group if a.kind == "up"]
+        
+        # Flatten all down scan codes
+        flat_downs: list[tuple[int, str]] = []
+        flat_downs.extend(
+            (sc, a.reason)
+            for a in down_actions
+            for sc in a.scan_codes
+        )
+
+        for i, (sc, reason) in enumerate(flat_downs):
+            shift = min(stagger_cap_us, i * min_stagger_us)
+            out.append(KeyAction(
+                kind=ActionKind.DOWN,
+                scan_codes=(ScanCode(sc),),
+                at_us=Microseconds(at_us + shift),
+                reason=reason
+            ))
+
+        out.extend(up_actions)
+    
+    return sorted(out, key=lambda a: a.at_us)
 
 GOLDEN_PATH = Path(__file__).parent / "golden_schedules" / "dispatch_timeline_v1.json"
 

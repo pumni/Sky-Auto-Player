@@ -120,52 +120,7 @@ def plan_same_key_hold(
     )
 
 
-def apply_chord_stagger(
-    actions: list[KeyAction],
-    step_us: int,
-    max_us: int,
-) -> list[KeyAction]:
-    """Spread each chord's key-downs across time so each note gets its own game tick.
-
-    A single ``SendInput`` per chord is optimal for *local* latency, but lands every note-on in the
-    same game frame — exactly the burst that Sky's network note-event channel coalesces/drops for
-    *remote* listeners (worse the larger the chord). This onset-only transform gives each key its own
-    instant: the first key keeps the authored onset (never shifted earlier) and each subsequent key
-    is pushed forward by ``step_us``, capped so the total spread never exceeds ``max_us``. Keys that
-    pile at the cap (very large chords) share one tick — still fewer per tick than the unstaggered
-    burst. Releases are untouched: a missed note-off is harmless; only onsets need separating, and
-    per-key release floors in the coordinator already follow each staggered down.
-
-    ``step_us <= 0`` returns the input unchanged (the local-optimal default). Chords are handled in
-    isolation (no cross-chord regrouping), so this never merges notes from neighbouring events.
-    """
-    if step_us <= 0:
-        return actions
-    if not any(a.kind == ActionKind.DOWN and len(a.scan_codes) > 1 for a in actions):
-        return actions
-
-    staggered: list[KeyAction] = []
-    for action in actions:
-        if action.kind != ActionKind.DOWN or len(action.scan_codes) <= 1:
-            staggered.append(action)
-            continue
-        by_offset: dict[int, list[int]] = {}
-        for i, scan_code in enumerate(action.scan_codes):
-            offset = min(i * step_us, max_us)
-            by_offset.setdefault(offset, []).append(scan_code)
-        for offset, scan_codes in by_offset.items():
-            staggered.append(
-                KeyAction(
-                    kind=ActionKind.DOWN,
-                    scan_codes=tuple(scan_codes),  # type: ignore[arg-type]
-                    at_us=Microseconds(int(action.at_us) + offset),
-                    reason=action.reason,
-                )
-            )
-
-    # Same key ordering as Stage 4: up-before-down at equal timestamps (False < True).
-    staggered.sort(key=lambda a: (a.at_us, a.kind == "down"))
-    return staggered
+# apply_chord_stagger is removed as per Phase 1
 
 
 def build_key_actions(
@@ -248,13 +203,63 @@ def build_key_actions(
     deduplicated_note_count = len(drafts)
     duplicate_note_count = raw_draft_count - deduplicated_note_count
     
+    # Stage 1.5: calculate chord stagger offsets and produce shifted drafts.
+    chord_stagger_us = int(policy.chord_stagger_us) if hasattr(policy, "chord_stagger_us") else 0
+    chord_stagger_max_us = int(policy.chord_stagger_max_us) if hasattr(policy, "chord_stagger_max_us") else 0
+    
+    stagger_offset_by_source_index: dict[int, int] = {}
+    grouped_drafts: dict[int, list[ScheduledNoteDraft]] = {}
+    
+    # drafts is a tuple now because of normalise_note_drafts
+    for draft in drafts: # type: ignore
+        grouped_drafts.setdefault(draft.at_us, []).append(draft)
+        
+    shifted_drafts_list: list[ScheduledNoteDraft] = []
+    
+    for group in grouped_drafts.values():
+        if chord_stagger_us > 0 and len(group) > 1:
+            unique_scs = []
+            seen_scs = set()
+            for d in group:
+                if d.scan_code not in seen_scs:
+                    seen_scs.add(d.scan_code)
+                    unique_scs.append(d.scan_code)
+            
+            if len(unique_scs) > 1:
+                sc_to_offset = {}
+                for i, sc in enumerate(unique_scs):
+                    sc_to_offset[sc] = min(i * chord_stagger_us, chord_stagger_max_us)
+                
+                for d in group:
+                    offset = sc_to_offset[d.scan_code]
+                    stagger_offset_by_source_index[d.source_index] = offset
+                    shifted_drafts_list.append(ScheduledNoteDraft(
+                        at_us=d.at_us + offset,
+                        note_key=d.note_key,
+                        scan_code=d.scan_code,
+                        source_index=d.source_index
+                    ))
+            else:
+                for d in group:
+                    stagger_offset_by_source_index[d.source_index] = 0
+                    shifted_drafts_list.append(d)
+        else:
+            for d in group:
+                stagger_offset_by_source_index[d.source_index] = 0
+                shifted_drafts_list.append(d)
+                
+    shifted_drafts_list.sort(key=lambda d: d.at_us)
+    drafts = tuple(shifted_drafts_list) # type: ignore
+    
     # Stage 2: plan each physical-key lane and emit typed raw key events.
     next_same_key_time = next_same_key_times(drafts)  # type: ignore[arg-type]
 
     raw_events: list[RawKeyEvent] = []
     diagnostics: list[ScheduleDiagnostic] = []
+    
+    logical_bounds: list[tuple[int, int, int]] = [] # (time, kind(0=down, 1=up), scan_code)
 
-    for draft in drafts:
+    for draft in drafts: # type: ignore
         next_same_info = next_same_key_time[draft.source_index]
         sc = draft.scan_code
         down_at_us = draft.at_us
@@ -343,6 +348,10 @@ def build_key_actions(
             kind=ActionKind.UP,
             reason="repeat_release" if next_same_info is not None else "release",
         ))
+        
+        offset = stagger_offset_by_source_index[draft.source_index]
+        logical_bounds.append((down_at_us - offset, 0, sc)) # 0 for down
+        logical_bounds.append((up_at_us - offset, 1, sc))   # 1 for up
 
     # Stage 3: group simultaneous events by (time, kind).  Reason is dropped from the key so
     # releases with different origins (e.g. "release" vs "repeat_release") at the same
@@ -371,15 +380,16 @@ def build_key_actions(
     key_actions_list.sort(key=lambda a: (a.at_us, a.kind == "down"))
     
     # Stage 5: derive metrics from the executable timeline.
-    active_keys: set[int] = set()
+    # To keep logical chord size stable, use the pre-stagger logical bounds.
+    logical_bounds.sort(key=lambda b: (b[0], b[1]))
+    logical_active: set[int] = set()
     max_polyphony = 0
-    for action in key_actions_list:
-        if action.kind == "down":
-            active_keys.update(action.scan_codes)
-            max_polyphony = max(max_polyphony, len(active_keys))
+    for _t, kind, sc in logical_bounds:
+        if kind == 0:
+            logical_active.add(sc)
+            max_polyphony = max(max_polyphony, len(logical_active))
         else:
-            for sc in action.scan_codes:
-                active_keys.discard(sc)
+            logical_active.discard(sc)
             
     warnings = []
     if impossible_same_key_repeats > 0:
@@ -407,20 +417,14 @@ def build_key_actions(
             "consider lowering the tempo scale or accepting probabilistic repeat registration."
         )
 
-    # Stage 6: onset-only intra-chord micro-stagger (remote-reliability knob; no-op when disabled).
-    # Applied AFTER metrics so max_polyphony reflects the authored (logical) chord size, not the
-    # post-split single-key downs. Onsets are only ever pushed forward, never earlier.
-    key_actions_list = apply_chord_stagger(
-        key_actions_list,
-        int(policy.chord_stagger_us),
-        int(policy.chord_stagger_max_us),
-    )
+    # Stage 6 was removed (onset-only intra-chord micro-stagger is now handled in Stage 1.5).
 
     duration_us = Microseconds(key_actions_list[-1].at_us) if key_actions_list else Microseconds(0)
     # playback_duration_us is a Phase-5 compatibility alias of duration_us (telemetry/calibration
     # read it by that name). Keep both in sync; do not "dedupe" without updating consumers.
     playback_duration_us = duration_us
-    source_duration_us = Microseconds(max((d.at_us for d in drafts), default=0) + policy.hold_us)
+    # Use unshifted drafts to compute source duration
+    source_duration_us = Microseconds(max((d.at_us - stagger_offset_by_source_index[d.source_index] for d in drafts), default=0) + policy.hold_us)
 
     rec_tempo_scale = None
     rec_profile = None

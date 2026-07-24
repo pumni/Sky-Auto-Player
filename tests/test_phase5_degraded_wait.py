@@ -145,3 +145,51 @@ def test_quit_honoured_when_high_res_timer_unavailable(monkeypatch):
     
     assert result == PLAYBACK_QUIT
     assert t1 - t0 < 4.0, "Loop blocked for full duration instead of waking early on quit!"
+
+class HighResSleeper(DegradedSleeper):
+    is_high_resolution = True
+    handle = 999
+
+def test_wait_failed_degrades_gracefully(monkeypatch):
+
+    import sky_music.platform.win32.inputs as inputs
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.infrastructure.wait_strategy import HybridWaitStrategy
+    
+    clock = MockClock()
+    sleeper = HighResSleeper(clock)
+    strategy = HybridWaitStrategy(enable_event_wait=True)
+    
+    # Force platform wait to return None (WAIT_FAILED)
+    monkeypatch.setattr(inputs, "wait_for_multiple_objects", lambda *args, **kwargs: None)
+    monkeypatch.setattr(inputs, "set_waitable_timer_relative_us", lambda *args, **kwargs: True)
+    
+    spin_remaining_at_call = []
+    def mock_spin(self_obj, target, clock):
+        spin_remaining_at_call.append(target - clock.now_us())
+        clock.advance(target - clock.now_us())
+        
+    monkeypatch.setattr(HybridWaitStrategy, "spin_until_us", mock_spin)
+    
+    target = 5_000_000
+    
+    # wait_until_us should return early without full gap spin
+    woken = strategy.wait_until_us(
+        target_system_us=target,
+        clock=clock,
+        sleeper=sleeper,
+        spin_threshold_us=700,
+        policy=SleepPolicy(),
+        command_event=123, # fake handle
+    )
+    
+    # Control should return (woken=False meaning time elapsed or degraded poll loop returned control)
+    assert woken is False
+    
+    # Should bounded sleep, not full gap!
+    assert len(sleeper.sleeps) > 0
+    assert sleeper.sleeps[0] <= 0.002
+    
+    if spin_remaining_at_call:
+        assert spin_remaining_at_call[0] <= 700
+

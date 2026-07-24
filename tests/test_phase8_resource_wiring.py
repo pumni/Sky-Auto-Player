@@ -1,16 +1,16 @@
-import json
 from unittest.mock import MagicMock, patch
-from pathlib import Path
-import pytest
-from sky_music.orchestration.engine import PlaybackEngine, PLAYBACK_QUIT
-from sky_music.domain.scheduler_types import KeyAction, ActionKind
+
+from sky_music.domain.domain import Microseconds, ScanCode
+from sky_music.domain.scheduler_types import ActionKind, KeyAction
 from sky_music.infrastructure.timing import SleepPolicy
+from sky_music.orchestration.engine import PLAYBACK_QUIT, PlaybackEngine
+
 
 # 1. Test spin_floor_us=0 not coerced to 700
 def test_spin_floor_us_zero_not_coerced():
     engine = PlaybackEngine(
         song=MagicMock(name="TestSong"),
-        actions=[],
+        actions=(),
         backend=MagicMock(),
         controls=None,
         sleep_policy=SleepPolicy(poll_s=0.01),
@@ -22,10 +22,10 @@ def test_spin_floor_us_zero_not_coerced():
 # 2. Test multi-key up prewarm populates cache
 @patch("sky_music.platform.win32.inputs.prewarm_input_arrays")
 def test_multi_key_up_prewarm(mock_prewarm):
-    actions = [
-        KeyAction(kind=ActionKind.DOWN, scan_codes=(16, 17, 18), at_us=0),
-        KeyAction(kind=ActionKind.UP, scan_codes=(16, 17, 18), at_us=100_000),
-    ]
+    actions = (
+        KeyAction(kind=ActionKind.DOWN, scan_codes=(ScanCode(16), ScanCode(17), ScanCode(18)), at_us=Microseconds(0)),
+        KeyAction(kind=ActionKind.UP, scan_codes=(ScanCode(16), ScanCode(17), ScanCode(18)), at_us=Microseconds(100_000)),
+    )
     engine = PlaybackEngine(
         song=MagicMock(name="TestSong"),
         actions=actions,
@@ -61,18 +61,19 @@ def test_multi_key_up_prewarm(mock_prewarm):
 
 # 3. Test early-quit clears schedule/cache
 def test_early_quit_cleans_resources():
+    controls = MagicMock()
     engine = PlaybackEngine(
         song=MagicMock(name="TestSong"),
-        actions=[],
+        actions=(),
         backend=MagicMock(),
-        controls=MagicMock(),
+        controls=controls,
         sleep_policy=SleepPolicy(poll_s=0.01),
         min_hold_us=50_000,
     )
     engine.require_focus = True
     engine.focus_guard = MagicMock()
     engine.focus_guard.is_active.return_value = False
-    engine.controls.poll.return_value = "quit"
+    controls.poll.return_value = "quit"
     
     with patch("sky_music.platform.win32.inputs.clear_array_cache") as mock_clear:
         result = engine.play()

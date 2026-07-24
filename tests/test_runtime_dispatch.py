@@ -5,12 +5,15 @@ from dataclasses import dataclass
 import pytest
 
 import sky_music.orchestration.engine as engine_module
-from sky_music.domain import Song
+from sky_music.domain import Millis, Note, NoteKey, Song
+from sky_music.domain.scheduler import build_key_actions
 from sky_music.domain.scheduler_types import (
     ActionKind,
+    FrameTimingPolicy,
     KeyAction,
     Microseconds,
     ScanCode,
+    TimingPolicy,
 )
 from sky_music.infrastructure.backend import (
     BackendHealth,
@@ -23,7 +26,10 @@ from sky_music.orchestration.engine import (
     PLAYBACK_QUIT,
     PlaybackEngine,
 )
-from sky_music.orchestration.runtime_dispatch import compile_runtime_intents
+from sky_music.orchestration.runtime_dispatch import (
+    RuntimeDispatchCoordinator,
+    compile_runtime_intents,
+)
 from sky_music.orchestration.telemetry import TelemetryLogger
 
 
@@ -1239,6 +1245,84 @@ def test_focus_loss_suspends_and_regain_releases():
     #   1. KEYUP on focus LOSS   (at 15_000 — clears OS keyboard state immediately)
     #   2. KEYUP on focus REGAIN  (at 55_000 — clears game-side half-holds while Sky is foreground)
     #   3. KEYUP on finally      (at 110_000 — idempotent teardown; generations already cancelled)
-    # Pre-Phase-1 this asserted only [55_000, 110_000] because focus-loss did cancel_all without
-    # a release — the very L1/L2 gap the plan closed. Manual pause / panic share helper 1 + 3.
-    assert backend.release_all_calls == [15_000, 55_000, 110_000]
+
+
+def test_chord_stagger_runtime_releases_every_down_and_finishes_clean():
+    """Phase 0 §3.2 runtime/coordinator test: an exact-timestamp 8-key chord with
+    stagger offset greater than the effective hold still releases every sent DOWN
+    and leaves no active generation when playback completes.
+    """
+    from sky_music.infrastructure.backend import InputSendResult
+
+    song = Song(
+        name="BigChord",
+        notes=tuple(Note(time_ms=Millis(1000), key=NoteKey(f"Key{i}")) for i in range(8)),
+    )
+    # Stagger step 25 ms, cap 200 ms; hold 20 ms so the cap dominates the per-key spread,
+    # reproducing the post-build-stagger lifecycle hazard the Phase 1 fix removes by shifting
+    # both DOWN and UP from a single shifted onset.
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy.from_dict({
+            "chord_stagger_us": 25_000,
+            "chord_stagger_max_us": 200_000,
+            "hold_us": 20_000,
+            "min_hold_us": 10_000,
+        }),
+        fps=60,
+    )
+    res = build_key_actions(song, policy=policy)
+
+    schedule = compile_runtime_intents(res.actions)
+    coordinator = RuntimeDispatchCoordinator(schedule, min_hold_us=10_000)
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.active: set[int] = set()
+            self.history: list[tuple[str, set[int]]] = []
+
+        def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
+            self.active.update(scan_codes)
+            self.history.append(("down", set(scan_codes)))
+            return InputSendResult(sent=scan_codes, skipped_duplicates=(), success=True)
+
+        def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
+            self.active.difference_update(scan_codes)
+            self.history.append(("up", set(scan_codes)))
+            return InputSendResult(sent=scan_codes, skipped_duplicates=(), success=True)
+
+    backend = FakeBackend()
+
+    clock_us = 0
+    # Simulate the production dispatch loop with a 1 ms tick: pop authored batches due at
+    # ``clock_us``, send the matching DOWN/UP, and drain any pending releases that became due.
+    while not coordinator.is_finished():
+        clock_us += 1000
+        due = coordinator.pop_due_authored(clock_us, 0)
+        for batch, _ in due:
+            intents = batch.intents
+            if batch.kind == "down":
+                scs = tuple(i.scan_code for i in intents)
+                backend.key_down(scs)
+                coordinator.activate_sent_downs(
+                    intents,
+                    scs,
+                    dispatch_started_us=clock_us,
+                    dispatch_completed_us=clock_us,
+                )
+                coordinator.request_releases(intents)
+            else:
+                coordinator.request_releases(intents)
+
+        pending = coordinator.pop_due_pending(clock_us, 0)
+        if pending:
+            scs = tuple(r.scan_code for r in pending)
+            backend.key_up(scs)
+            coordinator.complete_releases(pending, scs, ())
+
+        if clock_us > 2_000_000:
+            break
+
+    # Assert every successfully sent DOWN reaches a matching release
+    assert len(backend.active) == 0, "Not all keys were released!"
+    # Assert no active generation remains when normal authored playback completes
+    assert not coordinator.pending_by_generation

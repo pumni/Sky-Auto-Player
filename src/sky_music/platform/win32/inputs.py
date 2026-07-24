@@ -352,6 +352,11 @@ def set_event(handle: int) -> bool:
     return bool(kernel32.SetEvent(wintypes.HANDLE(handle)))
 
 def wait_for_multiple_objects(handles: tuple[int, ...], timeout_ms: int) -> int | None:
+    """Wait for Windows synchronization objects.
+    
+    Returns the wait result (e.g. WAIT_OBJECT_0) or None if the wait failed (e.g. WAIT_FAILED)
+    to allow the caller to safely degrade instead of spinning aggressively.
+    """
     if sys.platform != "win32":
         return WAIT_OBJECT_0
     
@@ -437,9 +442,9 @@ _CACHE_LOCK = threading.RLock()
 # a SECOND SendInput for the remainder would split the chord across two events with a timing gap —
 # the one sender-side place musical atomicity breaks (late/ghost notes, remote desync).
 #
-# Musical policy (note-on / key_up=False): NEVER complete the remainder. Report the prefix that
-# actually landed; the backend/coordinator drop the unsent keys (DROPPED_BACKEND) instead of
-# injecting them late. Incomplete chord > staggered wrong notes.
+# Musical policy (note-on / key_up=False): allows a single immediate same-frame retry for leftovers,
+# then drops any remaining unsent keys (DROPPED_BACKEND) to preserve timing. 
+# Incomplete chord > staggered wrong notes spanning multiple frames.
 #
 # Safety policy (note-off / release_all / key_up=True): still complete the remainder so keys
 # cannot stick. A split release is inaudible compared with a stuck key in-game.
@@ -590,9 +595,10 @@ def _send_scan_code_batch_impl(
     """Inject scan codes via one SendInput; return how many keys from the prefix landed.
 
     ``complete_remainder``:
-      - False (musical note-on): never open a second SendInput for leftovers — report the
-        atomic prefix only so late/ghost notes cannot appear.
-      - True (note-off / panic release): finish remaining keys so held keys cannot stick.
+      - False (musical note-on): allows a single immediate same-frame retry for leftovers, 
+        then drops any remaining unsent keys to preserve timing.
+      - True (note-off / panic release): finish remaining keys (potentially spanning multiple 
+        frames) so held keys cannot stick.
     """
     n = len(scan_codes_tuple)
     if n == 0:
@@ -675,7 +681,7 @@ def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool =
     return _send_scan_code_batch_impl(scan_codes_tuple, flags, complete_remainder=True)
 
 def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> int:
-    """Hot-path send. Note-on never retries partial; note-off completes remainder. Returns keys landed."""
+    """Hot-path send. Note-on allows a single immediate same-frame retry for partials; note-off completes remainder. Returns keys landed."""
     if not scan_codes:
         return 0
     if len(scan_codes) != len(set(scan_codes)):
