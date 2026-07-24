@@ -1,16 +1,39 @@
-# robots.txt for Sky Auto Player landing site (https://pumni.github.io/Sky-Auto-Player/)
-# Crawlers indexed: Google, Bing, and AI answer-engine crawlers (GPTBot, ClaudeBot,
-# PerplexityBot, Google-Extended, CCBot, Bytespider, Applebot-Extended). All are welcome to
-# fetch public marketing and documentation pages.
+# Sky Auto Player marketing site — https://pumni.github.io/Sky-Auto-Player/
+# Indexable surface: /, /vi/, /faq.html, /vi/faq.html
+# Technical markdown and working notes under /docs are published by GitHub Pages
+# as a side effect of the repo layout; they are not marketing content.
 
 User-agent: *
-Allow: /
-Disallow: /assets/lighthouse-report.html
-Disallow: /google40b614dcfbf81da7.html
+Allow: /$
+Allow: /index.html
+Allow: /vi/
+Allow: /vi/index.html
+Allow: /faq.html
+Allow: /vi/faq.html
+Allow: /assets/
+Allow: /llms.txt
+Allow: /sitemap.xml
+Allow: /robots.txt
 
-# AI answer-engine crawlers - explicitly allow. Some site operators block these by default;
-# we explicitly opt in because being correctly cited by LLM answers is part of discoverability.
+# GSC verification must remain fetchable; leave allowed so re-verification never breaks.
+Allow: /google40b614dcfbf81da7.html
 
+Disallow: /lighthouse-report.html
+Disallow: /architecture.md
+Disallow: /INDEX.md
+Disallow: /PORTING_GUIDE.md
+Disallow: /rt-dispatch-architecture.md
+Disallow: /timing-
+Disallow: /tuning-presets.md
+Disallow: /distribution-and-update.md
+Disallow: /rust-migration-plan.md
+Disallow: /dispatch-
+Disallow: /plan/
+Disallow: /archive/
+Disallow: /perf-baselines/
+Disallow: /*.md$
+
+# AI answer-engine crawlers — opt in for public marketing pages only.
 User-agent: GPTBot
 Allow: /
 
