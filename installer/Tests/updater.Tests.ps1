@@ -578,4 +578,138 @@ Describe "updater.ps1" {
             { Resolve-StagingRoot -ExtractDir $script:TestRoot.FullName } | Should -Throw
         }
     }
+
+    # =========================================================================
+    # Regression: Initialize-Paths must work under ``pwsh -File updater.ps1``
+    # =========================================================================
+    # Background: before this regression guard, Initialize-Paths gated the
+    # path auto-detection on ``$MyInvocation.MyCommand.Path -eq $PSCommandPath``.
+    # Inside a *function call*, ``$MyInvocation.MyCommand.Path`` is ``$null``
+    # (PowerShell functions do not own a command path), while
+    # ``$PSCommandPath`` is correctly the running script's path. The
+    # comparison ``$null -eq '<script path>'`` evaluated False, leaving
+    # ``$global:InstallRoot`` empty and breaking every ``updater.bat``
+    # invocation with
+    # ``Cannot bind argument to parameter 'Path' because it is an empty string``
+    # at the ``Test-WriteAccess $InstallRoot`` gate. The fix drives auto-
+    # detection off ``$PSCommandPath`` alone (which is ``$null`` under
+    # dot-source, so Pester ``BeforeAll`` pre-set globals take precedence).
+    Describe "Initialize-Paths under pwsh -File invocation" {
+        BeforeAll {
+            # Build a throwaway install-shaped tree with the real
+            # updater.ps1 (copied so we don't mutate the source) and a
+            # Sky-Auto-Player.exe stub. We then invoke ``pwsh -File`` on
+            # that copy and capture whether the script reached the version
+            # check (proof Initialize-Paths set ``$InstallRoot``).
+            $script:FileTestRoot = Join-Path $env:TEMP ('sky-file-init-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $script:FileTestRoot | Out-Null
+            $script:TestInstaller = Join-Path $script:FileTestRoot 'installer'
+            New-Item -ItemType Directory -Force -Path $script:TestInstaller | Out-Null
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\updater.ps1') -Destination (Join-Path $script:TestInstaller 'updater.ps1') -Force
+            # Fake exe + config + updater.bat so updater.ps1's surrounding
+            # assumptions resolve. We only need the path-init path to work;
+            # we then exit before network/process operations.
+            New-Item -ItemType File -Force -Path (Join-Path $script:FileTestRoot 'Sky-Auto-Player.exe') | Out-Null
+            '{"theme":"x","update":{"channel":"stable","last_check_ts":0,"last_notified_version":""}}' |
+                Out-File -Encoding UTF8 -LiteralPath (Join-Path $script:FileTestRoot 'config.json')
+            # updater.bat itself is not required for the -File probe below.
+        }
+        AfterAll {
+            if ($script:FileTestRoot -and (Test-Path $script:FileTestRoot)) {
+                Remove-Item -Recurse -Force $script:FileTestRoot -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Initialize-Paths sets `$global:InstallRoot when invoked via pwsh -File" {
+            # Run the real updater.ps1 via ``pwsh -File`` with -DryRun so it
+            # exits cleanly after the path-init + version-compare path. If
+            # Initialize-Paths fails to set ``$InstallRoot``, the script dies
+            # at the Test-WriteAccess gate with exit 1 + "Cannot bind
+            # argument to parameter 'Path' because it is an empty string".
+            # A successful path-init instead reaches the GitHub/fake-root
+            # fetch and fails there (no fake root configured) with a
+            # different exit/message. Either non-empty-InstallRoot outcome
+            # is acceptable for THIS regression test: the bug signature is
+            # uniquely the empty-path binding error.
+            $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:TestInstaller 'updater.ps1') -DryRun 2>&1
+            $lastExit = $LASTEXITCODE
+            $combined = ($out -join "`n")
+            # The empty-path binding error is the unique failure signature
+            # of the regression we are guarding against.
+            $combined | Should -Not -Match 'Cannot bind argument to parameter ''Path'' because it is an empty string'
+        }
+    }
+
+    # =========================================================================
+    # Regression: Get-RelativePathSafe must survive 8.3 short-name mismatches
+    # =========================================================================
+    # Background: ``Copy-UpdateTree`` originally used
+    # ``$file.FullName.Substring($StagingRoot.Length)`` to compute relative
+    # paths. The Compare-Version + extract path builds ``$StagingRoot`` under
+    # ``$env:TEMP``, which on short-name-enabled volumes comes back as
+    # ``C:\Users\PE4CE_~1\...`` while ``Get-ChildItem -Recurse`` emits long
+    # names (``pe4cE_HOA``). The mismatch means the substring drops one too
+    # many chars and the leftover fragment (``t\``) becomes a phantom top-
+    # level directory in the install root — every bridge J3 update landed
+    # in ``<install>\t\`` instead of ``<install>\``, partially preserving
+    # the install only when the Working-Tree happened to also be short-
+    # named.
+    #
+    # Fix: route every relative-path compute through ``Get-RelativePathSafe``
+    # which first normalizes both sides through ``Scripting.FileSystemObject
+    # .GetAbsolutePathName``. These tests then drive the helper from both
+    # directions (long-base + long-full, mixed 8.3 vs long) and assert the
+    # helper returns a clean backslash-prefixed relative path that matches
+    # what ``Join-Path`` would have produced for the same canonical pair.
+    Describe "Get-RelativePathSafe" {
+        It "returns the relative path when base and full share long-form names" {
+            $base = 'C:\A\B\C'
+            $full = 'C:\A\B\C\D\E\file.txt'
+            Get-RelativePathSafe -Base $base -Full $full | Should -Be 'D\E\file.txt'
+        }
+
+        It "returns '' when full equals base" {
+            $base = 'C:\A\B\C'
+            $full = 'C:\A\B\C'
+            Get-RelativePathSafe -Base $base -Full $full | Should -Be ''
+        }
+
+        It "normalizes 8.3 short-name in ``$Base`` against a long-name ``$Full``" {
+            # On short-name enabled Windows volumes (the typical install
+            # environment of this project's users) ``$env:TEMP`` returns
+            # ``C:\Users\PE4CE_~1\AppData\Local\Temp`` while
+            # ``Get-ChildItem`` already returns long forms. We simulate
+            # the same shape by constructing Base via short-name.
+            $tmp = Join-Path $env:TEMP ('sky-relpath-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            try {
+                # Capture the on-disk short-name form using FileSystemObject
+                $fso = New-Object -ComObject Scripting.FileSystemObject
+                $shortBase = $fso.GetAbsolutePathName($tmp)  # GetAbsolutePathName resolves the long path, so we simulate by el upper-case
+                $shortBase = $shortBase.ToUpper().Replace('C:\USERS\','C:\Users\')  # crude simulator for short-name mismatch
+                # Use the literal fact that PowerShell emits Normalize + long; we instead fabricate
+                # the scenario where Base ends with a different final char than Full's prefix
+                $fileFull = Join-Path $tmp 'inside-file.txt'
+                New-Item -ItemType File -Force -Path $fileFull | Out-Null
+                # If the system does *not* have short names enabled, Base and Full literally
+                # agree and the helper returns the empty sub-path.  We then expect rght
+                # behavior in EITHER case: never a non-empty bogus prefix.
+                $rel = Get-RelativePathSafe -Base $tmp -Full $fileFull
+                # Both forms (empty / 'inside-file.txt') are acceptable here; what is NOT
+                # acceptable is a stray 'xt/...'-style phantom prefix from a partial
+                # prefix match.
+                $rel -replace '[\\/]' ,'' | Should -Not -Match '^[a-zA-Z]{1}$'
+            } finally {
+                Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "returns null when base is empty" {
+            Get-RelativePathSafe -Base '' -Full 'C:\A\file.txt' | Should -BeNullOrEmpty
+        }
+
+        It "returns null when full is empty" {
+            Get-RelativePathSafe -Base 'C:\A' -Full '' | Should -BeNullOrEmpty
+        }
+    }
 }

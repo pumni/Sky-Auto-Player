@@ -67,11 +67,27 @@ function Initialize-Paths {
     if ($global:InstallRoot -and $global:ExePath -and $global:ConfigPath) {
         return  # already initialized
     }
-    # Only auto-detect if we're running directly (not dot-sourced for testing)
-    # When dot-sourced, $MyInvocation.MyCommand.Path points to the caller's script
-    if ($MyInvocation.MyCommand.Path -eq $PSCommandPath) {
-        $global:FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
-        $global:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+    # Auto-detect paths only when this script is invoked as a script (``pwsh -File
+    # updater.ps1``), not when dot-sourced for testing. Two reliable signals:
+    #   * ``$PSCommandPath`` — set to the running script's full path under
+    #     ``-File`` and ``-Command "& 'path'"`` invocation; ``$null`` when
+    #     dot-sourced from a Pester test (the dot operator runs in the
+    #     caller's scope, so ``$PSCommandPath`` belongs to the caller).
+    #   * ``$MyInvocation.MyCommand.Path`` — set at *script body* scope, but
+    #     ``$null`` inside a *function call* (PowerShell functions do not
+    #     own a command path). The previous guard
+    #     ``$MyInvocation.MyCommand.Path -eq $PSCommandPath`` always
+    #     compared ``$null`` (inside this function) against the real path
+    #     and never matched, leaving ``$global:InstallRoot`` empty and
+    #     breaking every ``updater.bat`` invocation with
+    #     ``Cannot bind argument to parameter 'Path' because it is an empty
+    #     string`` at the ``Test-WriteAccess $InstallRoot`` gate.
+    # Fix: drive auto-detection off ``$PSCommandPath`` only, which is the
+    # reliable ``-File`` marker and is ``$null`` under dot-source (so the
+    # Pester ``BeforeAll`` pre-set globals take precedence as designed).
+    if ($PSCommandPath) {
+        $global:FakeRoot  = $env:SKY_UPDATER_FAKE_ROOT
+        $global:ScriptDir   = Split-Path -Parent $PSCommandPath
         $global:InstallRoot = Split-Path -Parent $global:ScriptDir
         try {
             $global:ExePath = Resolve-PrimaryExe -Root $global:InstallRoot
@@ -122,6 +138,41 @@ function Select-ReleaseAssets($Assets, [string]$Version) {
     }
 
     throw "Select-ReleaseAssets: missing zip or sha256 for version $Version"
+}
+# Compute a path relative to `$Base`, robust against 8.3 short-name path
+# normalization mismatches between `$env:TEMP` (often returned as
+# ``C:\\Users\\PE4CE_~1\\...`` under short-name-enabled volumes) and the long
+# names that ``Get-ChildItem -Recurse`` emits (e.g. ``pe4cE_HOA``).
+#
+# ``.Substring($Base.Length)`` is **unsafe** under that mismatch: it
+# truncates a *long* fullname using a *short* base length, leaving a leading
+# fragment (we observed ``t\\`` showing up as a phantom top-level directory
+# in the install root, which is exactly the leftover char of ``...\\extract``
+# minus ``$Base.Length``). The bug here would otherwise let the v2.4.2
+# cutover brick every install whose ``%TEMP%`` is short-named.
+#
+# Use FileSystemObject absolute-path normalization + case-insensitive prefix
+# comparison; fall back to ``GetRelativePath`` for the residual edge cases.
+function Get-RelativePathSafe([string]$Base, [string]$Full) {
+    if ([string]::IsNullOrEmpty($Base) -or [string]::IsNullOrEmpty($Full)) { return $null }
+    $baseFull = (New-Object -ComObject Scripting.FileSystemObject).GetAbsolutePathName($Base)
+    $fullNorm = (New-Object -ComObject Scripting.FileSystemObject).GetAbsolutePathName($Full)
+    # The 32-bit full path can be very long on Windows (MAX_PATH is 260 for
+    # the legacy Win32 APIs but FileSystemObject happily returns up to
+    # ~32k). Trim to MAX_PATH to keep arithmetic conservative.
+    if ($baseFull.Length -gt 260) { $baseFull = $baseFull.Substring(0, 260) }
+    if ($fullNorm.Length -gt 260) { $fullNorm = $fullNorm.Substring(0, 260) }
+    if ($fullNorm.Length -ge $baseFull.Length -and
+        $fullNorm.Substring(0, $baseFull.Length).Equals($baseFull, [StringComparison]::OrdinalIgnoreCase)) {
+        return $fullNorm.Substring($baseFull.Length).TrimStart('\', '/')
+    }
+    try {
+        $rel = [System.IO.Path]::GetRelativePath($Base, $Full)
+    } catch {
+        return $null
+    }
+    if ($rel -eq '.' -or $rel -eq $Base) { return '' }
+    return ($rel -replace '^[\\]?', '')
 }
 function Resolve-StagingRoot([string]$ExtractDir) {
     if (Test-Path -LiteralPath (Join-Path $ExtractDir 'Sky-Auto-Player.exe')) { return $ExtractDir }
@@ -293,7 +344,7 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
                     $destFiles = Get-ChildItem -LiteralPath $DestRoot -Recurse -File -ErrorAction SilentlyContinue
                     if ($destFiles) {
                         foreach ($dFile in $destFiles) {
-                            $rel = $dFile.FullName.Substring($DestRoot.Length).TrimStart('\', '/')
+                            $rel = Get-RelativePathSafe -Base $DestRoot -Full $dFile.FullName
                             $relNorm = $rel -replace '/', '\'
                             
                             # Preserve list: config.json, songs\, logs\
@@ -314,7 +365,7 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
         
         # 1. Back up existing destination files that will be overwritten
         foreach ($file in $filesToCopy) {
-            $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            $rel = Get-RelativePathSafe -Base $StagingRoot -Full $file.FullName
             # Normalize path separators to backslash so preserve-list comparisons
             # work regardless of whether Get-ChildItem -Recurse emitted '\' or '/'.
             $relNorm = $rel -replace '/', '\'
@@ -343,7 +394,7 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
 
         # 1.5 Back up and delete orphaned files
         foreach ($dest in $orphanedFiles) {
-            $rel = $dest.Substring($DestRoot.Length).TrimStart('\', '/')
+            $rel = Get-RelativePathSafe -Base $DestRoot -Full $dest
             if (-not (Test-Path -LiteralPath $dest)) { continue }
             
             if (-not (Test-Path -LiteralPath $backupDir)) {
@@ -362,7 +413,7 @@ function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
 
         # 2. Copy files from staging to target
         foreach ($file in $filesToCopy) {
-            $rel = $file.FullName.Substring($StagingRoot.Length).TrimStart('\', '/')
+            $rel = Get-RelativePathSafe -Base $StagingRoot -Full $file.FullName
             $relNorm = $rel -replace '/', '\'
             $dest = Join-Path $DestRoot $rel
             
