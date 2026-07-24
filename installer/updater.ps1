@@ -73,7 +73,11 @@ function Initialize-Paths {
         $global:FakeRoot = $env:SKY_UPDATER_FAKE_ROOT
         $global:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
         $global:InstallRoot = Split-Path -Parent $global:ScriptDir
-        $global:ExePath     = Join-Path $global:InstallRoot 'Sky-Auto-Player.exe'
+        try {
+            $global:ExePath = Resolve-PrimaryExe -Root $global:InstallRoot
+        } catch {
+            $global:ExePath = Join-Path $global:InstallRoot 'Sky-Auto-Player.exe'
+        }
         $global:ConfigPath  = Join-Path $global:InstallRoot 'config.json'
     }
     $global:LogDir  = Join-Path $env:LOCALAPPDATA 'Sky-Auto-Player'
@@ -88,6 +92,50 @@ function Get-ConfigPath {
     if (-not $global:ConfigPath) { Initialize-Paths }
     return $global:ConfigPath
 }
+
+function Resolve-PrimaryExe([string]$Root) {
+    $auto = Join-Path $Root 'Sky-Auto-Player.exe'
+    $legacy = Join-Path $Root 'Sky-Player.exe'
+    if (Test-Path -LiteralPath $auto) { return $auto }
+    if (Test-Path -LiteralPath $legacy) { return $legacy }
+    throw "Resolve-PrimaryExe: Neither Sky-Auto-Player.exe nor Sky-Player.exe found in $Root"
+}
+function Resolve-ProcessNames {
+    return @('Sky-Auto-Player', 'Sky-Player')
+}
+function Select-ReleaseAssets($Assets, [string]$Version) {
+    $autoZip = "Sky-Auto-Player-v$Version.zip"
+    $autoSha = "Sky-Auto-Player-v$Version.zip.sha256"
+    $legacyZip = "Sky-Player-v$Version.zip"
+    $legacySha = "Sky-Player-v$Version.zip.sha256"
+
+    $hasAutoZip = $Assets | Where-Object { $_.name -eq $autoZip } | Select-Object -First 1
+    $hasAutoSha = $Assets | Where-Object { $_.name -eq $autoSha } | Select-Object -First 1
+    if ($hasAutoZip -and $hasAutoSha) {
+        return @{ ZipAsset = $hasAutoZip; ShaAsset = $hasAutoSha }
+    }
+
+    $hasLegacyZip = $Assets | Where-Object { $_.name -eq $legacyZip } | Select-Object -First 1
+    $hasLegacySha = $Assets | Where-Object { $_.name -eq $legacySha } | Select-Object -First 1
+    if ($hasLegacyZip -and $hasLegacySha) {
+        return @{ ZipAsset = $hasLegacyZip; ShaAsset = $hasLegacySha }
+    }
+
+    throw "Select-ReleaseAssets: missing zip or sha256 for version $Version"
+}
+function Resolve-StagingRoot([string]$ExtractDir) {
+    if (Test-Path -LiteralPath (Join-Path $ExtractDir 'Sky-Auto-Player.exe')) { return $ExtractDir }
+    if (Test-Path -LiteralPath (Join-Path $ExtractDir 'Sky-Player.exe')) { return $ExtractDir }
+    
+    $child = Get-ChildItem -LiteralPath $ExtractDir -Directory | Select-Object -First 1
+    if ($child) {
+        if (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Auto-Player.exe')) { return $child.FullName }
+        if (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Player.exe')) { return $child.FullName }
+    }
+    
+    throw "Resolve-StagingRoot: Update zip layout is unexpected (no Sky-Auto-Player.exe or Sky-Player.exe found in staging)."
+}
+
 function Get-InstallRoot {
     if (-not $global:InstallRoot) { Initialize-Paths }
     return $global:InstallRoot
@@ -447,11 +495,11 @@ function Test-ManifestIntegrity {
 # you strengthen this guard, re-run the probe and add a regression test that covers
 # the six invocation forms above plus the dot-source path.
 if ($MyInvocation.InvocationName -eq '.') {
-    Write-Host "DEBUG updater.ps1: Dot-sourced, skipping main execution"
+    if ($env:SKY_UPDATER_DEBUG -eq '1') { Write-Host "DEBUG updater.ps1: Dot-sourced, skipping main execution" }
     return
 }
 
-Write-Host "DEBUG updater.ps1: Running main execution"
+if ($env:SKY_UPDATER_DEBUG -eq '1') { Write-Host "DEBUG updater.ps1: Running main execution" }
 Initialize-Paths
 
 # --- Check Write Permissions ---
@@ -527,25 +575,24 @@ if ((Compare-Version -Current $runningVersion -Latest $latestVersion) -le 0) {
 }
 
 # --- Asset selection ---
-$zipName = "Sky-Auto-Player-v$latestVersion.zip"
-$shaName = "Sky-Auto-Player-v$latestVersion.zip.sha256"
-if ($FakeRoot) {
-    $zipUrl = ($FakeRoot.TrimEnd('/') + '/' + $zipName)
-    $shaUrl = ($FakeRoot.TrimEnd('/') + '/' + $shaName)
-    Assert-HttpsUrl $zipUrl
-    Assert-HttpsUrl $shaUrl
-} else {
-    $zipAsset = $candidate.assets | Where-Object { $_.name -eq $zipName } | Select-Object -First 1
-    $shaAsset = $candidate.assets | Where-Object { $_.name -eq $shaName } | Select-Object -First 1
-    if (-not $zipAsset -or -not $shaAsset) {
-        Write-Log "missing zip or sha256 asset for $latestVersion"
-        Write-Host "Release v$latestVersion is missing the zip or sha256 sidecar. Aborting."
-        exit 2
+try {
+    $selected = Select-ReleaseAssets -Assets $candidate.assets -Version $latestVersion
+    $zipName = $selected.ZipAsset.name
+    $shaName = $selected.ShaAsset.name
+    
+    if ($FakeRoot) {
+        $zipUrl = ($FakeRoot.TrimEnd('/') + '/' + $zipName)
+        $shaUrl = ($FakeRoot.TrimEnd('/') + '/' + $shaName)
+    } else {
+        $zipUrl = [string]$selected.ZipAsset.browser_download_url
+        $shaUrl = [string]$selected.ShaAsset.browser_download_url
     }
-    $zipUrl = [string]$zipAsset.browser_download_url
-    $shaUrl = [string]$shaAsset.browser_download_url
     Assert-HttpsUrl $zipUrl
     Assert-HttpsUrl $shaUrl
+} catch {
+    Write-Log "missing zip or sha256 asset for $latestVersion"
+    Write-Host "Release v$latestVersion is missing the zip or sha256 sidecar. Aborting."
+    exit 2
 }
 
 $tmpDir = Join-Path $env:TEMP ('sky-update-' + [guid]::NewGuid().ToString('N'))
@@ -589,7 +636,11 @@ if ($DryRun) {
 }
 
 # --- Process gate (G19) ---
-$runningProcesses = Get-Process -Name 'Sky-Auto-Player' -ErrorAction SilentlyContinue
+$runningProcesses = @()
+foreach ($name in (Resolve-ProcessNames)) {
+    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+    if ($procs) { $runningProcesses += $procs }
+}
 $targetProcess = $null
 if ($runningProcesses) {
     foreach ($p in $runningProcesses) {
@@ -604,8 +655,8 @@ if ($runningProcesses) {
 
 if ($targetProcess) {
     if (-not $ForceClose) {
-        Write-Log 'Sky-Auto-Player.exe still running; refuse update'
-        Write-Host 'Sky-Auto-Player.exe is still running in this directory. Close it, then re-run updater.bat.'
+        Write-Log "$($targetProcess.ProcessName).exe still running; refuse update"
+        Write-Host "$($targetProcess.ProcessName).exe is still running in this directory. Close it, then re-run updater.bat."
         Write-Host '(Advanced: updater.bat -ForceClose)'
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 4
@@ -614,7 +665,11 @@ if ($targetProcess) {
     $targetProcess | Stop-Process -Force
     Start-Sleep -Seconds 2
     
-    $runningAgain = Get-Process -Name 'Sky-Auto-Player' -ErrorAction SilentlyContinue
+    $runningAgain = @()
+    foreach ($name in (Resolve-ProcessNames)) {
+        $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+        if ($procs) { $runningAgain += $procs }
+    }
     $stillRunning = $false
     if ($runningAgain) {
         foreach ($p in $runningAgain) {
@@ -627,8 +682,8 @@ if ($targetProcess) {
         }
     }
     if ($stillRunning) {
-        Write-Log 'Sky-Auto-Player.exe still locked after ForceClose'
-        Write-Host 'Could not stop Sky-Auto-Player.exe. Aborting.'
+        Write-Log "$($targetProcess.ProcessName).exe still locked after ForceClose"
+        Write-Host "Could not stop $($targetProcess.ProcessName).exe. Aborting."
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         exit 4
     }
@@ -649,18 +704,13 @@ try {
     }
 }
 
-$StagingRoot = $extractDir
-$exeInExtract = Join-Path $extractDir 'Sky-Auto-Player.exe'
-if (-not (Test-Path -LiteralPath $exeInExtract)) {
-    $child = Get-ChildItem -LiteralPath $extractDir -Directory | Select-Object -First 1
-    if ($child -and (Test-Path -LiteralPath (Join-Path $child.FullName 'Sky-Auto-Player.exe'))) {
-        $StagingRoot = $child.FullName
-    } else {
-        Write-Log 'staging layout missing Sky-Auto-Player.exe'
-        Write-Host "Update zip layout is unexpected (no Sky-Auto-Player.exe). Aborting."
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        exit 5
-    }
+try {
+    $StagingRoot = Resolve-StagingRoot -ExtractDir $extractDir
+} catch {
+    Write-Log "staging layout missing exe: $_"
+    Write-Host "Update zip layout is unexpected (missing exe). Aborting."
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    exit 5
 }
 
 # --- Verify MANIFEST.json integrity (mandatory; fail-closed if absent) ---
@@ -715,15 +765,17 @@ try {
 Write-Log "updated $runningVersion -> $latestVersion"
 Write-Host "DONE: updated to v$latestVersion."
 if ($Restart) {
-    Write-Host "Starting Sky-Auto-Player.exe (-Restart)..."
+    $newAuto = Join-Path $InstallRoot 'Sky-Auto-Player.exe'
+    if (Test-Path -LiteralPath $newAuto) { $startExe = $newAuto } else { $startExe = $ExePath }
+    Write-Host "Starting $(Split-Path -Leaf $startExe) (-Restart)..."
     try {
-        Start-Process -FilePath $ExePath -WorkingDirectory $InstallRoot
+        Start-Process -FilePath $startExe -WorkingDirectory $InstallRoot
     } catch {
         Write-Log "restart failed: $_"
-        Write-Host "Restart failed (binaries updated successfully). Reopen Sky-Auto-Player.exe manually."
+        Write-Host "Restart failed (binaries updated successfully). Reopen Sky Auto Player manually."
     }
 } else {
-    Write-Host "Reopen Sky-Auto-Player.exe to start the new version."
+    Write-Host "Reopen Sky Auto Player to start the new version."
 }
 Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 exit 0

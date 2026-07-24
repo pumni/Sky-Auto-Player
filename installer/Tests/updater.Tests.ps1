@@ -476,4 +476,106 @@ Describe "updater.ps1" {
             $delta | Should -BeLessOrEqual 5
         }
     }
+
+    # =========================================================================
+    # Phase 0 tests: Bridge / rename logic (failing until Phase 1)
+    # =========================================================================
+
+    Describe "Resolve-PrimaryExe" {
+        BeforeEach {
+            $script:TestRoot = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("sky-resolve-exe-" + [guid]::NewGuid()))
+        }
+        AfterEach {
+            if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
+                Remove-Item -Recurse -Force $script:TestRoot -ErrorAction SilentlyContinue
+            }
+        }
+        
+        It "Resolve-PrimaryExe prefers Sky-Auto-Player.exe" {
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "Sky-Auto-Player.exe") | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "Sky-Player.exe") | Out-Null
+            
+            $result = Resolve-PrimaryExe -Root $script:TestRoot.FullName
+            $result | Should -Be (Join-Path $script:TestRoot.FullName "Sky-Auto-Player.exe")
+        }
+
+        It "Resolve-PrimaryExe falls back to Sky-Player.exe" {
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "Sky-Player.exe") | Out-Null
+            
+            $result = Resolve-PrimaryExe -Root $script:TestRoot.FullName
+            $result | Should -Be (Join-Path $script:TestRoot.FullName "Sky-Player.exe")
+        }
+
+        It "Resolve-PrimaryExe fails when neither exists" {
+            { Resolve-PrimaryExe -Root $script:TestRoot.FullName } | Should -Throw
+        }
+    }
+
+    Describe "Select-ReleaseAssets" {
+        It "Select-ReleaseAssets prefers canonical pair" {
+            $assets = @(
+                @{ name = "Sky-Auto-Player-v2.4.2.zip"; browser_download_url = "http://a/zip" },
+                @{ name = "Sky-Auto-Player-v2.4.2.zip.sha256"; browser_download_url = "http://a/sha" },
+                @{ name = "Sky-Player-v2.4.2.zip"; browser_download_url = "http://b/zip" },
+                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+            )
+            $result = Select-ReleaseAssets -Assets $assets -Version "2.4.2"
+            $result.ZipAsset.name | Should -Be "Sky-Auto-Player-v2.4.2.zip"
+            $result.ShaAsset.name | Should -Be "Sky-Auto-Player-v2.4.2.zip.sha256"
+        }
+
+        It "Select-ReleaseAssets falls back to legacy pair" {
+            $assets = @(
+                @{ name = "Sky-Player-v2.4.2.zip"; browser_download_url = "http://b/zip" },
+                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+            )
+            $result = Select-ReleaseAssets -Assets $assets -Version "2.4.2"
+            $result.ZipAsset.name | Should -Be "Sky-Player-v2.4.2.zip"
+            $result.ShaAsset.name | Should -Be "Sky-Player-v2.4.2.zip.sha256"
+        }
+
+        It "Select-ReleaseAssets refuses mixed pairs" {
+            $assets = @(
+                @{ name = "Sky-Auto-Player-v2.4.2.zip"; browser_download_url = "http://a/zip" },
+                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+            )
+            { Select-ReleaseAssets -Assets $assets -Version "2.4.2" } | Should -Throw
+        }
+    }
+
+    Describe "Process guard logic" {
+        It "Resolve-ProcessNames includes both Sky-Auto-Player and Sky-Player" {
+            $names = Resolve-ProcessNames
+            $names | Should -Contain "Sky-Auto-Player"
+            $names | Should -Contain "Sky-Player"
+        }
+    }
+
+    Describe "Resolve-StagingRoot" {
+        BeforeEach {
+            $script:TestRoot = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("sky-staging-root-" + [guid]::NewGuid()))
+        }
+        AfterEach {
+            if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
+                Remove-Item -Recurse -Force $script:TestRoot -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Staging accepts Sky-Player.exe-only layout" {
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "Sky-Player.exe") | Out-Null
+            $result = Resolve-StagingRoot -ExtractDir $script:TestRoot.FullName
+            $result | Should -Be $script:TestRoot.FullName
+        }
+
+        It "Staging accepts Sky-Auto-Player.exe-only layout" {
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "Sky-Auto-Player.exe") | Out-Null
+            $result = Resolve-StagingRoot -ExtractDir $script:TestRoot.FullName
+            $result | Should -Be $script:TestRoot.FullName
+        }
+        
+        It "Staging fails if neither exists" {
+            New-Item -ItemType File -Force -Path (Join-Path $script:TestRoot "other.exe") | Out-Null
+            { Resolve-StagingRoot -ExtractDir $script:TestRoot.FullName } | Should -Throw
+        }
+    }
 }
