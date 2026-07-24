@@ -151,7 +151,12 @@ jobs:
           "$h  Sky-Auto-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256" -Encoding ASCII
           Copy-Item "$rel\MANIFEST.json" "$env:RUNNER_TEMP\MANIFEST.json"
           
-          # Legacy bridge
+          # Legacy bridge — temporary dual-publish to migrate pre-2.4.2
+          # "Sky-Player" installs onto the new "Sky Auto Player" brand.
+          # See docs/plan/2026-07-24_rename-update-cutover-v2.4.2-plan.md §3 D3:
+          # remove dual-publish no earlier than the first 2.5.0 release, and
+          # only after CHANGELOG + distribution doc announce the sunset
+          # (>= 30 days notice preferred).
           $bridge = "dist\Sky-Player-v$ver-bridge"
           if (-not (Test-Path $bridge)) { throw "Missing bridge release dir: $bridge" }
           Compress-Archive -Path (Join-Path $bridge '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Player-v$ver.zip" -Force
