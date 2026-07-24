@@ -4,6 +4,12 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] - 2026-07-25
+
+### Fixed
+
+- Made the Windows PowerShell 5.1 release compatibility gate ASCII-safe and explicit about the updater BOM.
+
 ## [2.4.3] - 2026-07-25
 
 ### Fixed

@@ -76,27 +76,30 @@ jobs:
       - name: Parse installer/updater.ps1 on Windows PowerShell 5.1
         shell: powershell
         run: |
-          # ``updater.bat`` falls back to ``powershell.exe`` (Windows PowerShell
-          # 5.1) when ``pwsh`` is not installed on the user's machine.  PS 5.1
-          # reads no-BOM ``.ps1`` files with the system ANSI codepage
-          # (Windows-1252 on en-US hosts), so non-ASCII bytes (em-dash ``--``,
-          # ``§``) get decoded as ``â€“`` / ``Â§`` and break the parser.  This
-          # step fails-fast if the file cannot be parsed by PS 5.1, preventing
-          # a regression of the bug that closed 2.4.1 (file carried non-ASCII
-          # comments without a UTF-8 BOM, broke external updates on installs
-          # without PS7).  Runs on the GitHub Windows runner which always has
-          # PS 5.1 available side-by-side with pwsh.
-          $errs = $null; $tokens = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            "$PWD\installer\updater.ps1", [ref]$tokens, [ref]$errs)
+          # Keep this inline script ASCII-only: Windows PowerShell 5.1 can
+          # misread a UTF-8 workflow temp script without a BOM.
+          $ps1 = Join-Path -Path (Get-Location).Path -ChildPath 'installer\updater.ps1'
+          if (-not (Test-Path -LiteralPath $ps1)) {
+            Write-Host "::error::Missing updater script: $ps1"
+            exit 1
+          }
+          $bytes = [System.IO.File]::ReadAllBytes($ps1)
+          if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+            Write-Host "::error::installer/updater.ps1 must start with a UTF-8 BOM for the Windows PowerShell 5.1 fallback."
+            exit 1
+          }
+          $errs = $null
+          $tokens = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1, [ref]$tokens, [ref]$errs)
           if ($errs -and $errs.Count -gt 0) {
-            Write-Host "::error::installer/updater.ps1 fails to parse on Windows PowerShell 5.1 ($($errs.Count) error(s)). updater.bat falls back to PS 5.1 when pwsh is absent; the external update path is broken. Likely cause: file lacks UTF-8 BOM and contains non-ASCII characters decoded wrong by the system ANSI codepage."
+            Write-Host "::error::installer/updater.ps1 failed to parse on Windows PowerShell 5.1."
             $errs | ForEach-Object {
               Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnPosition, $_.Message)
             }
             exit 1
           }
-          Write-Host "PS 5.1 parse OK — external updater remains compatible with updater.bat's PS 5.1 fallback."
+          Write-Host "Windows PowerShell 5.1 parser OK."
+
 
       - name: Rust wheel precheck (only when rust/ exists)
         run: |

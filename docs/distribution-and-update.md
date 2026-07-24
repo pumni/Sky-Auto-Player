@@ -1,6 +1,6 @@
 # Distribution and Update Model
 
-This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player. It tracks the `pyproject.toml` `[project].version` (currently 2.4.3) and is the reference for contributors handling packaging or update logic. Update this header whenever the release version bumps — the rules below apply to every shipped release, not a specific point release.
+This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player. It tracks the `pyproject.toml` `[project].version` (currently 2.4.4) and is the reference for contributors handling packaging or update logic. Update this header whenever the release version bumps — the rules below apply to every shipped release, not a specific point release.
 
 ## 1. Model Overview
 
