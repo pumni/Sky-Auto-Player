@@ -144,11 +144,38 @@ jobs:
           $ver = "${{ steps.verlock.outputs.version }}"
           $rel = "dist\Sky-Auto-Player-v$ver"
           if (-not (Test-Path $rel)) { throw "Missing release dir: $rel" }
+          
+          # Canonical
           Compress-Archive -Path (Join-Path $rel '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip" -Force
           $h = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip").Hash
           "$h  Sky-Auto-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Auto-Player-v$ver.zip.sha256" -Encoding ASCII
           Copy-Item "$rel\MANIFEST.json" "$env:RUNNER_TEMP\MANIFEST.json"
+          
+          # Legacy bridge
+          $bridge = "dist\Sky-Player-v$ver-bridge"
+          if (-not (Test-Path $bridge)) { throw "Missing bridge release dir: $bridge" }
+          Compress-Archive -Path (Join-Path $bridge '*') -DestinationPath "$env:RUNNER_TEMP\Sky-Player-v$ver.zip" -Force
+          $hBridge = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\Sky-Player-v$ver.zip").Hash
+          "$hBridge  Sky-Player-v$ver.zip" | Set-Content "$env:RUNNER_TEMP\Sky-Player-v$ver.zip.sha256" -Encoding ASCII
+          
           "version=$ver" | Set-Content $env:GITHUB_OUTPUT -Encoding ASCII
+
+      - name: Assert all assets exist
+        run: |
+          $ver = "${{ steps.stage.outputs.version }}"
+          $required = @(
+            "Sky-Auto-Player-v$ver.zip",
+            "Sky-Auto-Player-v$ver.zip.sha256",
+            "Sky-Player-v$ver.zip",
+            "Sky-Player-v$ver.zip.sha256",
+            "MANIFEST.json"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path "$env:RUNNER_TEMP\$file")) {
+              throw "Missing required release asset: $file"
+            }
+          }
+          Write-Host "All required assets exist in RUNNER_TEMP."
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -156,6 +183,8 @@ jobs:
           subject-path: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
 
       - name: Create or update GitHub Release
@@ -164,6 +193,8 @@ jobs:
           files: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip
+            ${{ runner.temp }}/Sky-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
           generate_release_notes: true
           draft: false
