@@ -226,6 +226,30 @@ def kill_hanging_selftest(release_dir: Path) -> None:
     except Exception:
         pass
 
+
+def build_legacy_bridge_dir(canonical_dir: Path, version: str) -> Path:
+    bridge_dir = canonical_dir.with_name(f"Sky-Player-v{version}-bridge")
+    if bridge_dir.exists():
+        shutil.rmtree(bridge_dir)
+    shutil.copytree(canonical_dir, bridge_dir)
+    
+    auto_exe = bridge_dir / "Sky-Auto-Player.exe"
+    if not auto_exe.exists():
+        raise RuntimeError(f"Canonical dir missing Sky-Auto-Player.exe: {auto_exe}")
+    
+    player_exe = bridge_dir / "Sky-Player.exe"
+    shutil.copy2(auto_exe, player_exe)
+    
+    manifest_path = bridge_dir / "MANIFEST.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        git_head = manifest.get("git_head", "")
+    else:
+        git_head = ""
+    
+    write_release_manifest(bridge_dir, version, "Sky-Player.exe", git_head)
+    return bridge_dir
+
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("[!] Error: This project only supports building on Windows.")
@@ -320,6 +344,11 @@ def main() -> None:
             cwd=str(PROJECT_ROOT),
         ).stdout.strip()
         write_release_manifest(release_dir, version, f"{APP_NAME}.exe", git_head)
+        
+        print("[+] Building legacy bridge directory...")
+        bridge_dir = build_legacy_bridge_dir(release_dir, version)
+        print(f"[v] Bridge directory: {bridge_dir.resolve()}")
+        
     print(f"[v] DONE: {release_dir.resolve()}")
 
 if __name__ == "__main__":
