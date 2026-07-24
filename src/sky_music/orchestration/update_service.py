@@ -18,7 +18,10 @@ operations in their own worker.
 
 from __future__ import annotations
 
+import json
 import time
+from typing import Any, Protocol
+from urllib.request import Request, urlopen
 
 from sky_music.config import (
     AppConfig,
@@ -27,10 +30,105 @@ from sky_music.config import (
     persist_update_skip_version,
 )
 from sky_music.domain.update_checker import (
+    AssetPredicate,
     UpdateCheckResult,
     UpdateInfo,
-    fetch_latest_release,
+    parse_release_payload,
+    parse_version,
 )
+from sky_music.domain.update_policy import get_policy
+
+DEFAULT_OWNER: str = "pumni"
+DEFAULT_REPO: str = "Sky-Auto-Player"
+GITHUB_API: str = "https://api.github.com/repos"
+FETCH_TIMEOUT_S: float = 5.0
+USER_AGENT: str = "sky-auto-player-update-checker"
+
+
+class _Opener(Protocol):
+    def __call__(self, url: str | Request, *, timeout: float = ...) -> Any: ...
+
+
+def fetch_latest_release(
+    *,
+    owner: str = DEFAULT_OWNER,
+    repo: str = DEFAULT_REPO,
+    current_version: str,
+    skip_version: str | None = None,
+    timeout: float = FETCH_TIMEOUT_S,
+    opener: _Opener | None = None,
+    asset_predicate: AssetPredicate | None = None,
+    channel: str = "stable",
+) -> UpdateCheckResult:
+    """Fetch GitHub release metadata and feed it into the pure parser."""
+    policy = get_policy(channel)
+    url = f"{GITHUB_API}/{owner}/{repo}{policy.github_api_path}"
+    req = Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github.v3+json",
+        },
+    )
+    open_with = opener or urlopen
+    try:
+        with open_with(req, timeout=timeout) as response:  # type: ignore[arg-type]
+            raw = response.read()
+    except Exception as exc:
+        return UpdateCheckResult(
+            update=None,
+            current_version=current_version,
+            error=str(exc),
+        )
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return UpdateCheckResult(
+            update=None,
+            current_version=current_version,
+            error=str(exc),
+        )
+
+    if policy.include_prerelease and isinstance(payload, list):
+        best_release: dict[str, Any] | None = None
+        best_version = None
+        for release in payload:
+            if not isinstance(release, dict) or release.get("draft"):
+                continue
+            tag = release.get("tag_name")
+            if not isinstance(tag, str) or not tag:
+                continue
+            normalized_tag = tag.strip()
+            if normalized_tag[:1].lower() == "v":
+                normalized_tag = normalized_tag[1:]
+            candidate_version = parse_version(normalized_tag)
+            if candidate_version is None:
+                continue
+            if best_version is None or candidate_version > best_version:
+                best_version = candidate_version
+                best_release = release
+        if best_release is None:
+            return UpdateCheckResult(
+                update=None,
+                current_version=current_version,
+                error="no valid releases found",
+            )
+        payload = best_release
+
+    if not isinstance(payload, dict):
+        return UpdateCheckResult(
+            update=None,
+            current_version=current_version,
+            error="unexpected non-object payload",
+        )
+    return parse_release_payload(
+        payload,
+        current_version=current_version,
+        skip_version=skip_version,
+        asset_predicate=asset_predicate,
+        include_prerelease=policy.include_prerelease,
+    )
 
 
 def format_update_banner(update: UpdateInfo, current_version: str) -> str:
@@ -129,7 +227,7 @@ def check_for_update(
     timeout: float = 5.0,
     channel: str | None = None,
 ) -> UpdateCheckResult:
-    """Wrap :func:`sky_music.domain.update_checker.fetch_latest_release` with
+    """Wrap :func:`fetch_latest_release` with
     config-driven defaults. Does NOT persist the check timestamp — callers
     must call :func:`record_successful_check` after a non-erroring fetch.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any, cast
 
 from textual.widgets import Static
 
@@ -201,7 +202,6 @@ def test_unified_cancel_while_playing_requests_engine_quit() -> None:
 
 def test_unified_workflow_integration(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -325,7 +325,6 @@ def test_unified_workflow_integration(monkeypatch) -> None:
 
 def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -441,7 +440,6 @@ def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
 
 def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -563,7 +561,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
 
 def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -697,7 +694,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
 
 def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -829,7 +825,6 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
 
 def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -1003,7 +998,6 @@ def test_timing_line_no_bare_na() -> None:
 
 def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -1136,7 +1130,6 @@ def test_config_path_is_cwd_independent(tmp_path, monkeypatch) -> None:
 
 def test_header_fps_matches_policy_fps(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -1256,7 +1249,6 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
 
 def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -1397,7 +1389,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
 
 def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.ui.textual_app import app as app_module
@@ -1466,7 +1457,6 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
 
 def test_unified_workflow_risk_decisions(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.domain import Song
@@ -1668,7 +1658,6 @@ def test_debug_stats_calculation() -> None:
 
 def test_playback_screen_toggle_debug(monkeypatch) -> None:
     from pathlib import Path
-    from typing import Any
 
     from sky_music.config import AppConfig
     from sky_music.ui.textual_app import app as app_module
@@ -1830,7 +1819,6 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
     """PlaybackScreen(debug_mode=True/False) sets the attribute correctly;
     and when verbose_hud is True in SkyPickerApp, the panel is visible on mount."""
     from pathlib import Path
-    from typing import Any
 
     # --- Part 1: pure attribute check (no Textual runtime needed) ---
     from unittest.mock import MagicMock
@@ -2087,3 +2075,68 @@ def test_debug_stats_throttled(monkeypatch) -> None:
         card._playing_body(80)
         
     assert stats_calls == 1 # Only called once due to 0.5s throttle
+
+
+def test_silent_update_persists_version_for_picker_handoff(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import main as main_module
+    from sky_music.config import AppConfig
+    from sky_music.domain.update_checker import UpdateCheckResult, UpdateInfo
+    from sky_music.orchestration import update_service
+    from sky_music.ui.textual_app import playback_app as playback_module
+
+    cfg = AppConfig()
+    result = UpdateCheckResult(
+        update=UpdateInfo(
+            latest_version="9.9.9",
+            download_url="",
+            release_notes="",
+            html_url="",
+            published_at="",
+        ),
+        current_version="2.4.4",
+    )
+    persisted: list[str] = []
+    notifications: list[str] = []
+
+    monkeypatch.setattr(main_module.RUNTIME_STATE, "update_disabled", False)
+    monkeypatch.setattr(update_service, "should_auto_check", lambda _cfg: True)
+    monkeypatch.setattr(
+        update_service,
+        "check_for_update",
+        lambda _cfg, *, current_version: result,
+    )
+    monkeypatch.setattr(update_service, "record_successful_check", lambda _cfg: None)
+    monkeypatch.setattr(
+        "sky_music.config.persist_update_last_notified",
+        lambda _cfg, version: persisted.append(version),
+    )
+
+    fake_app = SimpleNamespace(
+        notify=lambda message, **_kwargs: notifications.append(message),
+        call_from_thread=lambda callback, *args, **kwargs: callback(*args, **kwargs),
+    )
+    worker = cast(Any, playback_module.PlaybackApp._check_for_updates_silent).__wrapped__
+    worker(fake_app, cfg)
+
+    assert persisted == ["9.9.9"]
+    assert notifications and "9.9.9" in notifications[0]
+
+
+def test_restore_pending_update_ignores_stale_older_version(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sky_music.config import AppConfig, UpdateSettings
+    from sky_music.ui.textual_app import app as app_module
+
+    pushed: list[object] = []
+    fake_app = SimpleNamespace(
+        cfg=AppConfig(update=UpdateSettings(last_notified_version="2.3.0")),
+        _push_update_banner_modal=lambda update: pushed.append(update),
+    )
+    monkeypatch.setattr(app_module, "VERSION", "2.4.4")
+
+    cast(Any, app_module.SkyPickerApp._restore_pending_update_indicator)(fake_app)
+
+    assert pushed == []

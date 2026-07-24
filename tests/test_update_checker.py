@@ -1,6 +1,6 @@
 """Unit tests for ``sky_music.domain.update_checker``.
 
-The module is pure (no network I/O in tests) — we stub the opener with a
+Domain parsing is pure. Orchestration network tests stub the opener with a
 context-manager that returns an in-memory JSON payload.
 """
 
@@ -12,11 +12,34 @@ from typing import Any
 import pytest
 
 from sky_music.domain.update_checker import (
-    fetch_latest_release,
     is_newer,
     parse_release_payload,
     parse_version,
 )
+from sky_music.orchestration.update_service import fetch_latest_release
+
+
+def test_domain_update_checker_has_no_network_imports() -> None:
+    import ast
+    from pathlib import Path
+
+    import sky_music.domain.update_checker as checker_module
+
+    source = Path(checker_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported_roots = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported_roots.update(
+        node.module.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    )
+
+    assert "urllib" not in imported_roots
 
 
 class _StubResponse:

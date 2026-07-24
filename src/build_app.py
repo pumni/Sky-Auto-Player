@@ -159,25 +159,41 @@ def _hash_file(path: Path) -> str:
 
 
 def write_release_manifest(release_dir: Path, version: str, exe_name: str, git_head: str) -> None:
-    exclude = {"_smoke_test.log", exe_name, "MANIFEST.json"}
-    files = []
-    for p in sorted(release_dir.rglob("*")):
-        if p.is_file() and p.name not in exclude:
-            try:
-                rel = str(p.relative_to(release_dir)).replace("\\", "/")
-                files.append({
-                    "path": rel,
-                    "size": p.stat().st_size,
-                    "sha256": _hash_file(p),
-                })
-            except (OSError, ValueError):
-                pass
+    smoke_log = release_dir / "_smoke_test.log"
+    try:
+        smoke_log.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"Failed to remove temporary smoke-test log: {smoke_log}") from exc
+
+    executable = release_dir / exe_name
+    if not executable.is_file():
+        raise RuntimeError(f"Release executable is missing: {executable}")
+
+    exclude = {exe_name, "MANIFEST.json"}
+    files: list[dict[str, str | int]] = []
+    for path in sorted(release_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            relative = path.relative_to(release_dir).as_posix()
+            if relative in exclude:
+                continue
+            size = path.stat().st_size
+            sha256 = _hash_file(path)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Failed to hash release asset: {path}") from exc
+        files.append({"path": relative, "size": size, "sha256": sha256})
+
+    try:
+        executable_sha256 = _hash_file(executable)
+    except OSError as exc:
+        raise RuntimeError(f"Failed to hash release executable: {executable}") from exc
 
     manifest = {
         "app": APP_NAME,
         "version": version,
         "executable": exe_name,
-        "executable_sha256": _hash_file(release_dir / exe_name),
+        "executable_sha256": executable_sha256,
         "interpreter": {
             "implementation": sys.implementation.name,
             "version": sys.version.split()[0],
@@ -185,12 +201,7 @@ def write_release_manifest(release_dir: Path, version: str, exe_name: str, git_h
         },
         "platform": sys.platform,
         "git_head": git_head,
-        # Emit RFC-3339 UTC with explicit 'Z' suffix. The previous form
-        # ``datetime.now(UTC).isoformat(...)`` serializes as ``+00:00``, which is
-        # standards-compliant but ambiguous when downstream loggrep treats the
-        # `Z` suffix as the canonical UTC marker (GitHub-Releases-style). The
-        # ``Z`` form is widely supported by every ISO/RFC 3339 parser we
-        # consume (Python's ``datetime.fromisoformat`` accepts it on 3.11+).
+        # Emit RFC-3339 UTC with explicit Z suffix.
         "build_time_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": files,
     }

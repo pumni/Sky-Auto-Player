@@ -37,7 +37,6 @@ Describe "updater.ps1" {
         $global:ConfigPath  = $script:TestConfigPath
         $global:LogDir      = $script:LogDir
         $global:LogFile     = $script:LogFile
-        $global:FakeRoot    = $null
 
         # Helper functions for Test-ManifestIntegrity tests. Pester 5's scope
         # isolation means plain `function` definitions inside a Describe body
@@ -53,10 +52,19 @@ Describe "updater.ps1" {
             $content | Out-File -Encoding UTF8 -LiteralPath $full
             return $full
         }
-        function script:Write-TestManifest([array]$fileEntries) {
+        function script:Write-TestManifest(
+            [array]$fileEntries,
+            [string]$Version = "9.9.9-test"
+        ) {
+            $exePath = Join-Path $script:StagingRoot 'Sky-Auto-Player.exe'
+            if (-not (Test-Path -LiteralPath $exePath)) {
+                [System.IO.File]::WriteAllText($exePath, 'test executable')
+            }
             $manifest = @{
                 app = "Sky-Auto-Player"
-                version = "9.9.9-test"
+                version = $Version
+                executable = "Sky-Auto-Player.exe"
+                executable_sha256 = (Get-FileSha256 $exePath)
                 files = @(
                     foreach ($entry in $fileEntries) {
                         @{ path = $entry.path; sha256 = $entry.sha256 }
@@ -77,20 +85,14 @@ Describe "updater.ps1" {
         if ($script:LogDir -and (Test-Path $script:LogDir)) {
             Remove-Item -Recurse -Force $script:LogDir -ErrorAction SilentlyContinue
         }
-        Remove-Variable -Scope Global -Name InstallRoot, ExePath, ConfigPath, LogDir, LogFile, FakeRoot -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Global -Name InstallRoot, ExePath, ConfigPath, LogDir, LogFile -ErrorAction SilentlyContinue
     }
 
     BeforeEach {
         if ($script:TestConfigPath -and (Test-Path $script:TestConfigPath)) {
             Remove-Item -Force $script:TestConfigPath -ErrorAction SilentlyContinue
         }
-        # FakeRoot may have been set by a prior test — reset before each test
-        # to keep Assert-HttpsUrl tests isolated. We clear at both script and
-        # global scope because, in Pester 5, an unqualified `$FakeRoot = "..."`
-        # written inside an It-block propagates to both script and global
-        # scope (visible in the next probe), so we reset both here.
-        Remove-Variable -Scope Script -Name FakeRoot -ErrorAction SilentlyContinue
-        Remove-Variable -Scope Global -Name FakeRoot -ErrorAction SilentlyContinue
+
         Remove-Item Env:SKY_UPDATER_FAKE_ROOT -ErrorAction SilentlyContinue
     }
 
@@ -150,6 +152,22 @@ Describe "updater.ps1" {
             $result.custom_user_field | Should -Be "should survive"
         }
 
+        It "adds missing fields to an existing update object" {
+            $config = @{
+                update = @{
+                    channel = "stable"
+                }
+            } | ConvertTo-Json -Depth 10
+            $config | Out-File -FilePath $script:TestConfigPath -Encoding UTF8
+
+            Write-UpdateFields -LastCheckTs 321 -LastNotifiedVersion "3.0.0"
+
+            $result = Get-Content -Raw -LiteralPath $script:TestConfigPath | ConvertFrom-Json
+            $result.update.channel | Should -Be "stable"
+            $result.update.last_check_ts | Should -Be 321
+            $result.update.last_notified_version | Should -Be "3.0.0"
+        }
+
         It "writes UTF-8 without BOM" {
             $config = @{
                 update = @{
@@ -202,24 +220,42 @@ Describe "updater.ps1" {
             { Assert-HttpsUrl "https://evil.com/x/y" } | Should -Throw
         }
 
-        It "allows fake root for testing (localhost)" {
-            # Assert-HttpsUrl reads unqualified $FakeRoot. Pester 5's scope
-            # chain does NOT propagate $script: / $global: writes to the
-            # function's lookup (verified empirically). Only an unqualified
-            # assignment from inside the It-block reaches Assert-HttpsUrl —
-            # probably because the Pester container runs the It-block in a
-            # scope where unqualified writes propagate to the runspace's
-            # shared "outer" scope, which Assert-HttpsUrl can see.
-            $FakeRoot = "http://localhost:1234"
-            { Assert-HttpsUrl "http://localhost:1234/release.json" } | Should -Not -Throw
-        }
-
-        It "rejects fake root not on localhost" {
-            $FakeRoot = "http://evil.com:1234"
-            { Assert-HttpsUrl "http://evil.com:1234/release.json" } | Should -Throw
+        It "does not allow an environment variable to bypass HTTPS" {
+            $env:SKY_UPDATER_FAKE_ROOT = "http://localhost:1234"
+            { Assert-HttpsUrl "http://localhost:1234/release.json" } | Should -Throw
         }
     }
 
+    Describe "Read-Sha256Sidecar" {
+        BeforeEach {
+            $script:SidecarPath = Join-Path $env:TEMP ("sky-sidecar-" + [guid]::NewGuid() + ".sha256")
+        }
+
+        AfterEach {
+            Remove-Item -LiteralPath $script:SidecarPath -Force -ErrorAction SilentlyContinue
+        }
+
+        It "accepts the exact release filename" {
+            $hash = 'a' * 64
+            "$hash  Sky-Auto-Player-v2.4.4.zip" |
+                Out-File -Encoding ASCII -LiteralPath $script:SidecarPath
+
+            Read-Sha256Sidecar `
+                -SidecarPath $script:SidecarPath `
+                -ExpectedFileName 'Sky-Auto-Player-v2.4.4.zip' | Should -Be $hash
+        }
+
+        It "rejects a hash bound to a different filename" {
+            $hash = 'a' * 64
+            "$hash  other.zip" | Out-File -Encoding ASCII -LiteralPath $script:SidecarPath
+
+            {
+                Read-Sha256Sidecar `
+                    -SidecarPath $script:SidecarPath `
+                    -ExpectedFileName 'Sky-Auto-Player-v2.4.4.zip'
+            } | Should -Throw
+        }
+    }
     Describe "Test-WriteAccess" {
         It "returns true for writable directory" {
             $dir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("sky-test-write-" + [guid]::NewGuid()))
@@ -307,8 +343,89 @@ Describe "updater.ps1" {
             'not valid json {{{' | Out-File -Encoding UTF8 -LiteralPath (Join-Path $script:StagingRoot 'MANIFEST.json')
             Test-ManifestIntegrity -StagingRoot $script:StagingRoot.FullName | Should -Be $false
         }
+
+        It "returns false when executable_sha256 does not match" {
+            $f1 = Write-TestFile "data\foo.txt" "alpha"
+            Write-TestManifest @(
+                @{ path = "data/foo.txt"; sha256 = (Get-FileSha256 $f1) }
+            )
+            [System.IO.File]::WriteAllText(
+                (Join-Path $script:StagingRoot 'Sky-Auto-Player.exe'),
+                'tampered executable'
+            )
+
+            Test-ManifestIntegrity -StagingRoot $script:StagingRoot.FullName | Should -Be $false
+        }
+
+        It "returns false when staging contains an unmanifested extra file" {
+            $f1 = Write-TestFile "data\foo.txt" "alpha"
+            Write-TestManifest @(
+                @{ path = "data/foo.txt"; sha256 = (Get-FileSha256 $f1) }
+            )
+            Write-TestFile "extra.dll" "unlisted"
+
+            Test-ManifestIntegrity -StagingRoot $script:StagingRoot.FullName | Should -Be $false
+        }
+
+        It "returns false when a manifest path escapes staging" {
+            $outside = Join-Path (Split-Path -Parent $script:StagingRoot.FullName) 'outside.txt'
+            [System.IO.File]::WriteAllText($outside, 'outside')
+            try {
+                Write-TestManifest @(
+                    @{ path = "../outside.txt"; sha256 = (Get-FileSha256 $outside) }
+                )
+
+                Test-ManifestIntegrity -StagingRoot $script:StagingRoot.FullName | Should -Be $false
+            } finally {
+                Remove-Item -LiteralPath $outside -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "returns false when manifest version differs from the selected release" {
+            $f1 = Write-TestFile "data\foo.txt" "alpha"
+            Write-TestManifest @(
+                @{ path = "data/foo.txt"; sha256 = (Get-FileSha256 $f1) }
+            ) -Version "9.9.8"
+
+            Test-ManifestIntegrity `
+                -StagingRoot $script:StagingRoot.FullName `
+                -ExpectedVersion "9.9.9" | Should -Be $false
+        }
     }
 
+    Describe "Assert-ZipArchiveSafe" {
+        BeforeEach {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $script:ZipPath = Join-Path $env:TEMP ("sky-zip-test-" + [guid]::NewGuid() + ".zip")
+        }
+
+        AfterEach {
+            Remove-Item -LiteralPath $script:ZipPath -Force -ErrorAction SilentlyContinue
+        }
+
+        It "accepts a normal relative zip layout" {
+            $archive = [System.IO.Compression.ZipFile]::Open($script:ZipPath, 'Create')
+            try {
+                $null = $archive.CreateEntry('Sky-Auto-Player.exe')
+                $null = $archive.CreateEntry('data/file.bin')
+            } finally {
+                $archive.Dispose()
+            }
+
+            { Assert-ZipArchiveSafe -ZipPath $script:ZipPath } | Should -Not -Throw
+        }
+
+        It "rejects a zip entry that escapes the extraction root" {
+            $archive = [System.IO.Compression.ZipFile]::Open($script:ZipPath, 'Create')
+            try {
+                $null = $archive.CreateEntry('../escape.txt')
+            } finally {
+                $archive.Dispose()
+            }
+
+            { Assert-ZipArchiveSafe -ZipPath $script:ZipPath } | Should -Throw
+        }
+    }
     Describe "Copy-UpdateTree transactional copy" {
         BeforeEach {
             $script:StagingRoot = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("sky-stage-" + [guid]::NewGuid()))
@@ -359,6 +476,14 @@ Describe "updater.ps1" {
             Copy-UpdateTree -StagingRoot $script:StagingRoot.FullName -DestRoot $script:DestRoot.FullName
 
             (Get-Content (Join-Path $script:DestRoot "config.json")) | Should -Be "old config"
+        }
+
+        It "preserves a local .env file that is absent from the release" {
+            "LOCAL_TOKEN=keep-me" | Out-File (Join-Path $script:DestRoot ".env") -Encoding UTF8
+
+            Copy-UpdateTree -StagingRoot $script:StagingRoot.FullName -DestRoot $script:DestRoot.FullName
+
+            (Get-Content (Join-Path $script:DestRoot ".env")) | Should -Be "LOCAL_TOKEN=keep-me"
         }
 
         It "skips songs/ directory entirely (top-level preserve-list mandate)" {
@@ -422,6 +547,65 @@ Describe "updater.ps1" {
             }
 
             (Get-Content (Join-Path $script:DestRoot "lockedfile.txt")) | Should -Be "old"
+        }
+
+        It "removes the durable transaction directory after a successful copy" {
+            "new" | Out-File (Join-Path $script:StagingRoot "newfile.txt") -Encoding UTF8
+
+            Copy-UpdateTree -StagingRoot $script:StagingRoot.FullName -DestRoot $script:DestRoot.FullName
+
+            Test-Path (Join-Path $script:DestRoot '.sky-update-transaction') | Should -Be $false
+        }
+    }
+
+    Describe "Recover-InterruptedUpdate durable recovery" {
+        BeforeEach {
+            $script:DestRoot = New-Item -ItemType Directory -Force -Path (
+                Join-Path $env:TEMP ("sky-recover-dest-" + [guid]::NewGuid())
+            )
+        }
+
+        AfterEach {
+            if ($script:DestRoot -and (Test-Path $script:DestRoot)) {
+                Remove-Item -Recurse -Force $script:DestRoot -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "restores backups and removes files created by an interrupted update" {
+            $tx = Join-Path $script:DestRoot '.sky-update-transaction'
+            $backup = Join-Path $tx 'backup'
+            New-Item -ItemType Directory -Force -Path $backup | Out-Null
+            "old" | Out-File (Join-Path $backup 'existing.txt') -Encoding UTF8
+            "new" | Out-File (Join-Path $script:DestRoot 'existing.txt') -Encoding UTF8
+            "new-only" | Out-File (Join-Path $script:DestRoot 'newfile.txt') -Encoding UTF8
+            @{
+                schema_version = 1
+                state = "prepared"
+                backed_up = @("existing.txt")
+                new_files = @("newfile.txt", "not-created.txt")
+            } | ConvertTo-Json -Depth 10 |
+                Out-File -Encoding UTF8 -LiteralPath (Join-Path $tx 'journal.json')
+
+            Recover-InterruptedUpdate -DestRoot $script:DestRoot.FullName | Should -Be $true
+
+            Get-Content (Join-Path $script:DestRoot 'existing.txt') | Should -Be "old"
+            Test-Path (Join-Path $script:DestRoot 'newfile.txt') | Should -Be $false
+            Test-Path $tx | Should -Be $false
+        }
+
+        It "retains the transaction directory when a backup cannot be restored" {
+            $tx = Join-Path $script:DestRoot '.sky-update-transaction'
+            New-Item -ItemType Directory -Force -Path $tx | Out-Null
+            @{
+                schema_version = 1
+                state = "prepared"
+                backed_up = @("missing.txt")
+                new_files = @()
+            } | ConvertTo-Json -Depth 10 |
+                Out-File -Encoding UTF8 -LiteralPath (Join-Path $tx 'journal.json')
+
+            Recover-InterruptedUpdate -DestRoot $script:DestRoot.FullName | Should -Be $false
+            Test-Path $tx | Should -Be $true
         }
     }
 
@@ -702,6 +886,14 @@ Describe "updater.ps1" {
             } finally {
                 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
             }
+        }
+
+        It "does not truncate relative paths longer than MAX_PATH" {
+            $base = 'C:\base'
+            $expected = (('a' * 100) + '\' + ('b' * 100) + '\' + ('c' * 100) + '.bin')
+            $full = Join-Path $base $expected
+
+            Get-RelativePathSafe -Base $base -Full $full | Should -Be $expected
         }
 
         It "returns null when base is empty" {

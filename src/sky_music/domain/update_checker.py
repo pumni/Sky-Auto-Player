@@ -5,30 +5,20 @@ This module knows nothing about Windows, file I/O, or the running app. It only:
 - Compares PEP 440 versions via ``packaging.version``.
 - Returns typed ``UpdateInfo`` / check results.
 
-Network access is concentrated in ``fetch_latest_release`` which takes an
-injectable ``opener`` so tests can substitute a stub instead of hitting the
-network. Keep this module free of side effects.
+Network access belongs to ``orchestration.update_service``; this module stays
+side-effect-free.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
-from urllib.request import Request, urlopen
+from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from sky_music.domain.update_policy import get_policy
-
 AssetPredicate = Callable[[dict[str, Any]], bool]
 
-DEFAULT_OWNER: str = "pumni"
-DEFAULT_REPO: str = "Sky-Auto-Player"
-GITHUB_API: str = "https://api.github.com/repos"
-FETCH_TIMEOUT_S: float = 5.0
-USER_AGENT: str = "sky-auto-player-update-checker"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,16 +55,6 @@ class UpdateCheckResult:
     update: UpdateInfo | None
     current_version: str
     error: str | None = None
-
-
-class _Opener(Protocol):
-    """Subset of ``urllib.request.OpenerDirector`` used here.
-
-    Defining a minimal protocol keeps the surface narrow and lets tests pass
-    a callable that matches the call shape ``opener(url, timeout=...)``.
-    """
-
-    def __call__(self, url: str | Request, *, timeout: float = ...) -> Any: ...
 
 
 def parse_version(value: str) -> Version | None:
@@ -250,87 +230,4 @@ def parse_release_payload(
             sha256_url=sha256_url,
         ),
         current_version=current,
-    )
-
-
-def fetch_latest_release(
-    *,
-    owner: str = DEFAULT_OWNER,
-    repo: str = DEFAULT_REPO,
-    current_version: str,
-    skip_version: str | None = None,
-    timeout: float = FETCH_TIMEOUT_S,
-    opener: _Opener | None = None,
-    asset_predicate: AssetPredicate | None = None,
-    channel: str = "stable",
-) -> UpdateCheckResult:
-    """Fetch latest release from GitHub and return an update check result.
-
-    Network failures (DNS, HTTP 4xx/5xx, rate-limit, timeouts, malformed JSON)
-    are returned as an error result with ``update=None`` — they never raise.
-    The caller decides whether to surface errors to the user; auto-check ignores
-    them silently.
-
-    ``channel`` determines the update policy (stable vs beta). Defaults to stable.
-    """
-    policy = get_policy(channel)
-
-    # The stable/beta distinction is encoded entirely in ``policy.github_api_path``
-    # (``/releases/latest`` vs ``/releases?per_page=10``); we do not also need
-    # to branch on ``include_prerelease`` here. (Previous code had an if/else
-    # that produced the identical URL string on both arms — collapsed.)
-    url = f"{GITHUB_API}/{owner}/{repo}{policy.github_api_path}"
-    req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
-    open_with = opener or urlopen
-    try:
-        with open_with(req, timeout=timeout) as response:  # type: ignore[arg-type]
-            raw = response.read()
-    except Exception as exc:
-        return UpdateCheckResult(update=None, current_version=current_version, error=str(exc))
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return UpdateCheckResult(update=None, current_version=current_version, error=str(exc))
-    if policy.include_prerelease and isinstance(payload, list):
-        best_release = None
-        best_version = None
-        for release in payload:
-            if not isinstance(release, dict):
-                continue
-            if release.get("draft"):
-                continue
-            
-            tag = release.get("tag_name")
-            if not isinstance(tag, str) or not tag:
-                continue
-                
-            latest = _strip_leading_v(tag)
-            v = parse_version(latest)
-            if v is None:
-                continue
-                
-            if best_version is None or v > best_version:
-                best_version = v
-                best_release = release
-                
-        if best_release is None:
-            return UpdateCheckResult(
-                update=None,
-                current_version=current_version,
-                error="no valid releases found",
-            )
-        payload = best_release
-
-    if not isinstance(payload, dict):
-        return UpdateCheckResult(
-            update=None,
-            current_version=current_version,
-            error="unexpected non-object payload",
-        )
-    return parse_release_payload(
-        payload,
-        current_version=current_version,
-        skip_version=skip_version,
-        asset_predicate=asset_predicate,
-        include_prerelease=policy.include_prerelease,
     )

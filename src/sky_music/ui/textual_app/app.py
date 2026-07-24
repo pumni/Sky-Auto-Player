@@ -1161,8 +1161,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def _restore_pending_update_indicator(self) -> None:
         notified = self.cfg.update.last_notified_version
-        if notified and notified != VERSION:
-            from sky_music.domain.update_checker import UpdateInfo
+        from sky_music.domain.update_checker import UpdateInfo, is_newer
+        if notified and is_newer(notified, VERSION):
             mock_update = UpdateInfo(
                 latest_version=notified,
                 download_url="",
@@ -1189,10 +1189,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._open_update_url(release)
 
     def _open_update_url(self, release: Any) -> None:
-        url = getattr(release, "html_url", "") or ""
-        if not url:
-            self.notify("No release page available.", severity="error", timeout=4)
-            return
+        url = getattr(release, "html_url", "") or (
+            "https://github.com/pumni/Sky-Auto-Player/releases"
+        )
         import webbrowser
         webbrowser.open(url)
         self.notify(f"Download page opened in browser: {url}", timeout=8)

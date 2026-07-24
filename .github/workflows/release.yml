@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -59,10 +59,10 @@ jobs:
         run: |
           # Pester 5.x is required — the test file uses `BeforeAll`/`AfterAll`
           # at the top of a wrapper Describe block, and root-level setup is
-          # deprecated in Pester 6. Pin to 5.x to keep the syntax compatible.
-          Install-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99 `
-            -Force -Scope CurrentUser -SkipPublisherCheck -AcceptLicense
-          Import-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99 -ErrorAction Stop
+          # deprecated in Pester 6. Pin 5.9.0 exactly for reproducible CI.
+          Install-Module Pester -RequiredVersion 5.9.0 `
+            -Force -Scope CurrentUser -AcceptLicense
+          Import-Module Pester -RequiredVersion 5.9.0 -ErrorAction Stop
           $r = Invoke-Pester -Path .\installer\Tests\updater.Tests.ps1 -PassThru
           if ($r.FailedCount -gt 0) {
             Write-Host "::error::Pester failed: $($r.FailedCount) of $($r.TotalCount) tests"
@@ -186,7 +186,7 @@ jobs:
           Write-Host "All required assets exist in RUNNER_TEMP."
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
@@ -196,7 +196,7 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
 
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip

@@ -8,16 +8,17 @@
 #   4. Query GitHub Releases for that channel.
 #   5. Compare candidate to running version (MANIFEST.json, else ProductVersion).
 #   6. Same-or-older -> "Already up to date", exit 0.
-#   7. Newer -> download zip + .sha256 (HTTPS allow-list only).
-#   8. Verify SHA256; mismatch aborts before any install mutation.
-#   9. If Sky-Auto-Player.exe is running from this folder: exit 4 unless -ForceClose.
-#  10. Expand-Archive to TEMP staging.
-#  11. Verify MANIFEST.json per-file integrity (MANDATORY — fail-closed if
-#       MANIFEST.json is absent; aborts before any install mutation).
-#  12. Back up existing replaceable files.
-#  13. Copy staging -> install, preserving config.json and completely skipping songs/.
-#  14. On copy failure, roll back all backup files and clean up.
-#  15. Patch update.last_check_ts (Unix int) + update.last_notified_version (handles missing keys).
+#   7. If either app executable is running from this folder: exit 4 unless -ForceClose.
+#   8. Recover any durable `prepared` transaction before reading installed version.
+#   9. Newer -> download zip + .sha256 (HTTPS allow-list only, bounded timeout).
+#  10. Verify outer SHA256, then validate every zip entry before TEMP extraction.
+#  11. Verify exact staged file set, manifest version, executable SHA256, and every
+#       manifest-listed payload hash (mandatory, fail-closed before mutation).
+#  12. Atomically write a durable journal + complete backup under the install root.
+#  13. Copy the verified allow-list only; preserve config.json, .env, songs/, and logs/.
+#  14. Verify copied hashes; commit journal. On failure/interruption, roll back.
+#       Never delete the durable backup when any restore fails.
+#  15. Atomically patch update.last_check_ts + update.last_notified_version.
 #  16. Log one line; print DONE; do NOT relaunch unless -Restart (O3).
 #
 # Exit codes: 0 ok, 2 network/asset, 3 sha256, 4 process lock, 5 permission/extract/copy/manifest.
@@ -60,7 +61,6 @@ if ($script:InstallRoot -and $script:ExePath -and $script:ConfigPath) {
     $ConfigPath = $null
     $LogDir = $null
     $LogFile = $null
-    $FakeRoot = $null
 }
 
 function Initialize-Paths {
@@ -86,7 +86,7 @@ function Initialize-Paths {
     # reliable ``-File`` marker and is ``$null`` under dot-source (so the
     # Pester ``BeforeAll`` pre-set globals take precedence as designed).
     if ($PSCommandPath) {
-        $global:FakeRoot  = $env:SKY_UPDATER_FAKE_ROOT
+
         $global:ScriptDir   = Split-Path -Parent $PSCommandPath
         $global:InstallRoot = Split-Path -Parent $global:ScriptDir
         try {
@@ -157,11 +157,8 @@ function Get-RelativePathSafe([string]$Base, [string]$Full) {
     if ([string]::IsNullOrEmpty($Base) -or [string]::IsNullOrEmpty($Full)) { return $null }
     $baseFull = (New-Object -ComObject Scripting.FileSystemObject).GetAbsolutePathName($Base)
     $fullNorm = (New-Object -ComObject Scripting.FileSystemObject).GetAbsolutePathName($Full)
-    # The 32-bit full path can be very long on Windows (MAX_PATH is 260 for
-    # the legacy Win32 APIs but FileSystemObject happily returns up to
-    # ~32k). Trim to MAX_PATH to keep arithmetic conservative.
-    if ($baseFull.Length -gt 260) { $baseFull = $baseFull.Substring(0, 260) }
-    if ($fullNorm.Length -gt 260) { $fullNorm = $fullNorm.Substring(0, 260) }
+    # Preserve the full normalized strings. Truncating either side to legacy
+    # MAX_PATH changes the relative path and can redirect a copied file.
     if ($fullNorm.Length -ge $baseFull.Length -and
         $fullNorm.Substring(0, $baseFull.Length).Equals($baseFull, [StringComparison]::OrdinalIgnoreCase)) {
         return $fullNorm.Substring($baseFull.Length).TrimStart('\', '/')
@@ -214,12 +211,6 @@ function Write-Log([string]$msg) {
 }
 
 function Assert-HttpsUrl([string]$Url) {
-    if ($FakeRoot -and $Url.StartsWith($FakeRoot)) {
-        if ($Url -notmatch '^https?://(localhost|127\.0\.0\.1)(:\d+)?/') {
-            throw "Fake root must be localhost: $Url"
-        }
-        return
-    }
     if ($Url -notmatch '^https://') {
         throw "Refusing non-HTTPS URL: $Url"
     }
@@ -261,33 +252,67 @@ function Write-UpdateFields {
     )
     $cfgPath = Get-ConfigPath
     if (-not (Test-Path -LiteralPath $cfgPath)) { return }
-    
-    # Read and parse JSON properly
+
     $raw = Get-Content -Raw -LiteralPath $cfgPath -Encoding UTF8
     try {
-        $cfg = $raw | ConvertFrom-Json
+        $parsed = $raw | ConvertFrom-Json
     } catch {
         Write-Log "Failed to parse config.json: $_"
         throw
     }
-    
-    # Ensure update object exists - ConvertFrom-Json creates PSCustomObject which doesn't allow dynamic properties
-    # Convert to hashtable if needed
-    if ($cfg -is [System.Management.Automation.PSCustomObject]) {
-        $ht = @{}
-        $cfg.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }
-        $cfg = $ht
+
+    $cfg = @{}
+    if ($parsed -is [System.Management.Automation.PSCustomObject]) {
+        $parsed.PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
+    } elseif ($parsed -is [System.Collections.IDictionary]) {
+        foreach ($key in $parsed.Keys) { $cfg[$key] = $parsed[$key] }
+    } else {
+        throw 'config.json must contain a JSON object'
     }
-    
-    if (-not $cfg.update) { $cfg.update = @{} }
-    
-    # Update the fields
-    $cfg.update.last_check_ts = $LastCheckTs
-    $cfg.update.last_notified_version = $LastNotifiedVersion
-    
-    # Write back with preserved formatting (depth 10 to handle nested objects)
-    $json = $cfg | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+
+    $update = @{}
+    $existingUpdate = $cfg['update']
+    if ($existingUpdate -is [System.Management.Automation.PSCustomObject]) {
+        $existingUpdate.PSObject.Properties | ForEach-Object { $update[$_.Name] = $_.Value }
+    } elseif ($existingUpdate -is [System.Collections.IDictionary]) {
+        foreach ($key in $existingUpdate.Keys) { $update[$key] = $existingUpdate[$key] }
+    } elseif ($null -ne $existingUpdate) {
+        throw 'config.json update field must contain a JSON object'
+    }
+
+    $update['last_check_ts'] = $LastCheckTs
+    $update['last_notified_version'] = $LastNotifiedVersion
+    $cfg['update'] = $update
+
+    $json = $cfg | ConvertTo-Json -Depth 100
+    $token = [guid]::NewGuid().ToString('N')
+    $tmpPath = "$cfgPath.tmp-$token"
+    $replaceBackup = "$cfgPath.replace-backup-$token"
+    try {
+        [System.IO.File]::WriteAllText(
+            $tmpPath,
+            $json,
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+        [System.IO.File]::Replace($tmpPath, $cfgPath, $replaceBackup, $true)
+        Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+    } finally {
+        Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-Sha256Sidecar {
+    param(
+        [string]$SidecarPath,
+        [string]$ExpectedFileName
+    )
+    $sidecarText = (Get-Content -Raw -LiteralPath $SidecarPath -Encoding ASCII).Trim()
+    $pattern = '^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($ExpectedFileName) + '$'
+    $match = [regex]::Match($sidecarText, $pattern)
+    if (-not $match.Success) {
+        throw "SHA256 sidecar is not bound to expected asset $ExpectedFileName"
+    }
+    return $match.Groups[1].Value.ToLower()
 }
 
 function Get-RunningVersion {
@@ -320,216 +345,423 @@ function Compare-Version([string]$Current, [string]$Latest) {
     throw "Unexpected exit code $exitCode from --compare-versions"
 }
 
-function Copy-UpdateTree([string]$StagingRoot, [string]$DestRoot) {
-    $copiedFiles = @()
-    $backedUpFiles = @()
-    $backupDir = Join-Path $env:TEMP ('sky-backup-' + [guid]::NewGuid().ToString('N'))
+function ConvertTo-SafeRelativePath([string]$RelativePath) {
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) {
+        throw 'Relative path is empty.'
+    }
+    $normalized = $RelativePath.Replace('/', '\')
+    if ([System.IO.Path]::IsPathRooted($normalized) -or $normalized.Contains(':')) {
+        throw "Unsafe rooted or stream path: $RelativePath"
+    }
+    $segments = $normalized.Split('\')
+    foreach ($segment in $segments) {
+        if ([string]::IsNullOrWhiteSpace($segment) -or $segment -eq '.' -or $segment -eq '..') {
+            throw "Unsafe path segment in: $RelativePath"
+        }
+        if ($segment.EndsWith('.') -or $segment.EndsWith(' ')) {
+            throw "Ambiguous Windows path segment in: $RelativePath"
+        }
+    }
+    return [string]::Join('\', $segments)
+}
+
+function Resolve-SafeChildPath([string]$Base, [string]$RelativePath) {
+    $relative = ConvertTo-SafeRelativePath $RelativePath
+    $baseFull = [System.IO.Path]::GetFullPath($Base).TrimEnd('\') + '\'
+    $full = [System.IO.Path]::GetFullPath((Join-Path $Base $relative))
+    if (-not $full.StartsWith($baseFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path escapes base directory: $RelativePath"
+    }
+    return [pscustomobject]@{ Relative = $relative; FullPath = $full }
+}
+
+function Assert-ZipArchiveSafe([string]$ZipPath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $seen = @{}
+        foreach ($entry in $archive.Entries) {
+            $raw = [string]$entry.FullName
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                throw 'Zip contains an empty entry name.'
+            }
+            $trimmed = $raw.TrimEnd([char[]]@('/', '\'))
+            if ([string]::IsNullOrWhiteSpace($trimmed)) {
+                throw "Zip contains an invalid root entry: $raw"
+            }
+            $relative = ConvertTo-SafeRelativePath $trimmed
+            if ($seen.ContainsKey($relative)) {
+                throw "Zip contains a duplicate or case-colliding entry: $relative"
+            }
+            $seen[$relative] = $true
+
+            $unixFileType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixFileType -eq 0xA000) {
+                throw "Zip symbolic links are not allowed: $relative"
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
+
+function Test-PreservedRelativePath([string]$RelativePath) {
+    $rel = $RelativePath.Replace('/', '\')
+    return (
+        $rel -eq 'config.json' -or $rel -eq '.env' -or
+        $rel -eq 'songs' -or $rel.StartsWith('songs\', [StringComparison]::OrdinalIgnoreCase) -or
+        $rel -eq 'logs' -or $rel.StartsWith('logs\', [StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Write-TransactionJournal {
+    param(
+        [string]$TransactionDir,
+        [string]$State,
+        [string[]]$BackedUp,
+        [string[]]$NewFiles
+    )
+    $journalPath = Join-Path $TransactionDir 'journal.json'
+    $tmpPath = "$journalPath.tmp-$([guid]::NewGuid().ToString('N'))"
+    $payload = @{
+        schema_version = 1
+        state = $State
+        backed_up = @($BackedUp)
+        new_files = @($NewFiles)
+    } | ConvertTo-Json -Depth 10
+    try {
+        [System.IO.File]::WriteAllText(
+            $tmpPath,
+            $payload,
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+        if (Test-Path -LiteralPath $journalPath) {
+            $replaceBackup = "$journalPath.replace-backup-$([guid]::NewGuid().ToString('N'))"
+            [System.IO.File]::Replace($tmpPath, $journalPath, $replaceBackup, $true)
+            Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+        } else {
+            [System.IO.File]::Move($tmpPath, $journalPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Recover-InterruptedUpdate([string]$DestRoot) {
+    $transactionDir = Join-Path $DestRoot '.sky-update-transaction'
+    if (-not (Test-Path -LiteralPath $transactionDir)) { return $true }
+
+    $journalPath = Join-Path $transactionDir 'journal.json'
+    if (-not (Test-Path -LiteralPath $journalPath)) {
+        # Copy-UpdateTree never mutates the install before journal.json is
+        # atomically committed. A directory without a journal is preparation
+        # debris only and can be removed safely.
+        Remove-Item -LiteralPath $transactionDir -Recurse -Force -ErrorAction Stop
+        return $true
+    }
 
     try {
-        $filesToCopy = Get-ChildItem -LiteralPath $StagingRoot -Recurse -File
-        
-        # 0. Identify orphaned files using MANIFEST.json
-        $orphanedFiles = @()
-        $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
-        if (Test-Path -LiteralPath $manifestPath) {
-            try {
-                $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-                if ($manifest.files) {
-                    $validManifestPaths = @{}
-                    foreach ($file in $manifest.files) {
-                        $norm = $file.path -replace '/', '\'
-                        $validManifestPaths[$norm] = $true
-                    }
-                    
-                    $destFiles = Get-ChildItem -LiteralPath $DestRoot -Recurse -File -ErrorAction SilentlyContinue
-                    if ($destFiles) {
-                        foreach ($dFile in $destFiles) {
-                            $rel = Get-RelativePathSafe -Base $DestRoot -Full $dFile.FullName
-                            $relNorm = $rel -replace '/', '\'
-                            
-                            # Preserve list: config.json, songs\, logs\
-                            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
-                                continue
-                            }
-                            
-                            if (-not $validManifestPaths.ContainsKey($relNorm)) {
-                                $orphanedFiles += $dFile.FullName
-                            }
-                        }
-                    }
-                }
-            } catch {
-                Write-Log "Failed to parse MANIFEST.json for orphan cleanup: $_"
-            }
+        $journal = Get-Content -Raw -LiteralPath $journalPath -Encoding UTF8 | ConvertFrom-Json
+        if ($journal.schema_version -ne 1) { throw 'Unsupported update journal schema.' }
+        if ($journal.state -eq 'committed') {
+            Remove-Item -LiteralPath $transactionDir -Recurse -Force -ErrorAction Stop
+            return $true
         }
-        
-        # 1. Back up existing destination files that will be overwritten
-        foreach ($file in $filesToCopy) {
-            $rel = Get-RelativePathSafe -Base $StagingRoot -Full $file.FullName
-            # Normalize path separators to backslash so preserve-list comparisons
-            # work regardless of whether Get-ChildItem -Recurse emitted '\' or '/'.
-            $relNorm = $rel -replace '/', '\'
-            $dest = Join-Path $DestRoot $rel
-            
-            # Skip copying config.json, songs/ or logs/ files entirely (preserve-list mandate).
-            # $relNorm -eq 'songs' is defensive — Get-ChildItem -File never returns
-            # directories, but a future caller could pass a directory in.
-            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
-                continue
-            }
-            
-            if (Test-Path -LiteralPath $dest) {
-                if (-not (Test-Path -LiteralPath $backupDir)) {
-                    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-                }
-                $relBackupPath = Join-Path $backupDir $rel
-                $relBackupDir = Split-Path -Parent $relBackupPath
-                if (-not (Test-Path -LiteralPath $relBackupDir)) {
-                    New-Item -ItemType Directory -Force -Path $relBackupDir | Out-Null
-                }
-                Copy-Item -LiteralPath $dest -Destination $relBackupPath -Force | Out-Null
-                $backedUpFiles += @{ Source = $dest; Backup = $relBackupPath }
-            }
-        }
+        if ($journal.state -ne 'prepared') { throw 'Invalid update journal state.' }
 
-        # 1.5 Back up and delete orphaned files
-        foreach ($dest in $orphanedFiles) {
-            $rel = Get-RelativePathSafe -Base $DestRoot -Full $dest
-            if (-not (Test-Path -LiteralPath $dest)) { continue }
-            
-            if (-not (Test-Path -LiteralPath $backupDir)) {
-                New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+        $backupRoot = Join-Path $transactionDir 'backup'
+        foreach ($relativePath in @($journal.backed_up)) {
+            $destInfo = Resolve-SafeChildPath -Base $DestRoot -RelativePath ([string]$relativePath)
+            $backupInfo = Resolve-SafeChildPath -Base $backupRoot -RelativePath ([string]$relativePath)
+            if (-not (Test-Path -LiteralPath $backupInfo.FullPath -PathType Leaf)) {
+                throw "Backup is missing for $relativePath"
             }
-            $relBackupPath = Join-Path $backupDir $rel
-            $relBackupDir = Split-Path -Parent $relBackupPath
-            if (-not (Test-Path -LiteralPath $relBackupDir)) {
-                New-Item -ItemType Directory -Force -Path $relBackupDir | Out-Null
-            }
-            Copy-Item -LiteralPath $dest -Destination $relBackupPath -Force | Out-Null
-            $backedUpFiles += @{ Source = $dest; Backup = $relBackupPath }
-            
-            Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue | Out-Null
-        }
-
-        # 2. Copy files from staging to target
-        foreach ($file in $filesToCopy) {
-            $rel = Get-RelativePathSafe -Base $StagingRoot -Full $file.FullName
-            $relNorm = $rel -replace '/', '\'
-            $dest = Join-Path $DestRoot $rel
-            
-            if ($relNorm -eq 'config.json' -or $relNorm -eq 'songs' -or $relNorm.StartsWith('songs\') -or $relNorm -eq 'logs' -or $relNorm.StartsWith('logs\')) {
-                continue
-            }
-            
-            $destDir = Split-Path -Parent $dest
+            $destDir = Split-Path -Parent $destInfo.FullPath
             if (-not (Test-Path -LiteralPath $destDir)) {
                 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
             }
-            Copy-Item -LiteralPath $file.FullName -Destination $dest -Force | Out-Null
-            $copiedFiles += $dest
+            Copy-Item -LiteralPath $backupInfo.FullPath -Destination $destInfo.FullPath -Force -ErrorAction Stop
+            $backupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $backupInfo.FullPath).Hash
+            $restoredHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destInfo.FullPath).Hash
+            if ($backupHash -ne $restoredHash) {
+                throw "Restored file hash mismatch: $relativePath"
+            }
         }
 
-        # Clean up backups on complete success
-        if (Test-Path -LiteralPath $backupDir) {
-            Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
+        foreach ($relativePath in @($journal.new_files)) {
+            $destInfo = Resolve-SafeChildPath -Base $DestRoot -RelativePath ([string]$relativePath)
+            if (Test-Path -LiteralPath $destInfo.FullPath) {
+                Remove-Item -LiteralPath $destInfo.FullPath -Force -ErrorAction Stop
+            }
         }
+
+        Remove-Item -LiteralPath $transactionDir -Recurse -Force -ErrorAction Stop
+        Write-Log 'Recovered an interrupted update transaction.'
+        return $true
     } catch {
+        Write-Log "Interrupted update recovery failed; backup retained at $transactionDir : $_"
+        Write-Host "Recovery failed. Backup retained at: $transactionDir"
+        Write-Host "Resolve the file lock or permission error, then run updater.bat again. Details: $_"
+        return $false
+    }
+}
+
+function Copy-UpdateTree {
+    param(
+        [string]$StagingRoot,
+        [string]$DestRoot,
+        [string[]]$RelativePaths
+    )
+
+    $transactionDir = Join-Path $DestRoot '.sky-update-transaction'
+    if (Test-Path -LiteralPath $transactionDir) {
+        throw "Unresolved update transaction exists at $transactionDir"
+    }
+
+    $copyPaths = @($RelativePaths)
+    if (-not $copyPaths) {
+        $copyPaths = @(
+            Get-ChildItem -LiteralPath $StagingRoot -Recurse -File | ForEach-Object {
+                $relative = Get-RelativePathSafe -Base $StagingRoot -Full $_.FullName
+                if ([string]::IsNullOrWhiteSpace($relative)) {
+                    throw "Could not derive staging relative path for $($_.FullName)"
+                }
+                ConvertTo-SafeRelativePath $relative
+            }
+        )
+    }
+
+    $validPaths = @{}
+    $filesToCopy = @()
+    foreach ($relativePath in $copyPaths) {
+        $sourceInfo = Resolve-SafeChildPath -Base $StagingRoot -RelativePath $relativePath
+        if ($validPaths.ContainsKey($sourceInfo.Relative)) {
+            throw "Duplicate staging path: $($sourceInfo.Relative)"
+        }
+        if (-not (Test-Path -LiteralPath $sourceInfo.FullPath -PathType Leaf)) {
+            throw "Verified staging file is missing: $($sourceInfo.Relative)"
+        }
+        $validPaths[$sourceInfo.Relative] = $true
+        $destInfo = Resolve-SafeChildPath -Base $DestRoot -RelativePath $sourceInfo.Relative
+        $filesToCopy += [pscustomobject]@{
+            Relative = $sourceInfo.Relative
+            Source = $sourceInfo.FullPath
+            Destination = $destInfo.FullPath
+            Preserved = (Test-PreservedRelativePath $sourceInfo.Relative)
+            Existed = (Test-Path -LiteralPath $destInfo.FullPath -PathType Leaf)
+        }
+    }
+
+    $orphaned = @()
+    $destFiles = Get-ChildItem -LiteralPath $DestRoot -Recurse -File -ErrorAction Stop
+    foreach ($destFile in @($destFiles)) {
+        $relative = Get-RelativePathSafe -Base $DestRoot -Full $destFile.FullName
+        if ([string]::IsNullOrWhiteSpace($relative)) {
+            throw "Could not derive install relative path for $($destFile.FullName)"
+        }
+        $relative = ConvertTo-SafeRelativePath $relative
+        if ($relative.StartsWith('.sky-update-transaction\', [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        if (Test-PreservedRelativePath $relative) { continue }
+        if (-not $validPaths.ContainsKey($relative)) {
+            $orphaned += [pscustomobject]@{ Relative = $relative; FullPath = $destFile.FullName }
+        }
+    }
+
+    $backupRoot = Join-Path $transactionDir 'backup'
+    $backedUp = @()
+    $newFiles = @()
+    $backupSet = @{}
+    try {
+        New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+
+        foreach ($file in $filesToCopy) {
+            if ($file.Preserved) { continue }
+            if ($file.Existed) { $backupSet[$file.Relative] = $true } else { $newFiles += $file.Relative }
+        }
+        foreach ($orphan in $orphaned) { $backupSet[$orphan.Relative] = $true }
+
+        foreach ($relativePath in $backupSet.Keys) {
+            $sourceInfo = Resolve-SafeChildPath -Base $DestRoot -RelativePath $relativePath
+            $backupInfo = Resolve-SafeChildPath -Base $backupRoot -RelativePath $relativePath
+            $backupDir = Split-Path -Parent $backupInfo.FullPath
+            if (-not (Test-Path -LiteralPath $backupDir)) {
+                New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+            }
+            Copy-Item -LiteralPath $sourceInfo.FullPath -Destination $backupInfo.FullPath -Force -ErrorAction Stop
+            $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceInfo.FullPath).Hash
+            $backupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $backupInfo.FullPath).Hash
+            if ($sourceHash -ne $backupHash) {
+                throw "Backup hash mismatch: $relativePath"
+            }
+            $backedUp += $relativePath
+        }
+
+        Write-TransactionJournal `
+            -TransactionDir $transactionDir `
+            -State 'prepared' `
+            -BackedUp $backedUp `
+            -NewFiles $newFiles
+
+        foreach ($orphan in $orphaned) {
+            Remove-Item -LiteralPath $orphan.FullPath -Force -ErrorAction Stop
+        }
+
+        foreach ($file in $filesToCopy) {
+            if ($file.Preserved) { continue }
+            $destDir = Split-Path -Parent $file.Destination
+            if (-not (Test-Path -LiteralPath $destDir)) {
+                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            }
+            Copy-Item -LiteralPath $file.Source -Destination $file.Destination -Force -ErrorAction Stop
+            $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.Source).Hash
+            $destHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.Destination).Hash
+            if ($sourceHash -ne $destHash) {
+                throw "Post-copy hash mismatch: $($file.Relative)"
+            }
+        }
+
+        Write-TransactionJournal `
+            -TransactionDir $transactionDir `
+            -State 'committed' `
+            -BackedUp $backedUp `
+            -NewFiles $newFiles
+        Remove-Item -LiteralPath $transactionDir -Recurse -Force -ErrorAction Stop
+    } catch {
+        $originalError = $_
         Write-Log "Error during copy: $_. Rolling back..."
         Write-Host "Copy failed: $_. Rolling back files to pre-update state..."
-        
-        # Restore backed up original files
-        foreach ($backup in $backedUpFiles) {
-            try {
-                Copy-Item -LiteralPath $backup.Backup -Destination $backup.Source -Force | Out-Null
-            } catch {
-                Write-Log "Failed to restore backup for $($backup.Source): $_"
-            }
+        $recovered = Recover-InterruptedUpdate -DestRoot $DestRoot
+        if (-not $recovered) {
+            Write-Host "Automatic rollback was incomplete; the durable backup was NOT deleted."
         }
-        
-        # Clean up newly copied files
-        foreach ($copied in $copiedFiles) {
-            $wasBackup = $false
-            foreach ($backup in $backedUpFiles) {
-                if ($backup.Source -eq $copied) {
-                    $wasBackup = $true
-                    break
-                }
-            }
-            if (-not $wasBackup) {
-                Remove-Item -LiteralPath $copied -Force -ErrorAction SilentlyContinue | Out-Null
-            }
+        throw $originalError
+    }
+}
+
+function Get-VerifiedManifest {
+    param(
+        [string]$StagingRoot,
+        [string]$ExpectedVersion,
+        [string]$ExpectedExecutable
+    )
+
+    $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'MANIFEST.json is missing from staging.'
+    }
+
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath -Encoding UTF8 | ConvertFrom-Json
+    if ($manifest.app -ne 'Sky-Auto-Player') {
+        throw 'MANIFEST.json has an unexpected app identifier.'
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$manifest.version)) {
+        throw 'MANIFEST.json is missing version.'
+    }
+    if ($ExpectedVersion -and [string]$manifest.version -ne $ExpectedVersion) {
+        throw "MANIFEST version $($manifest.version) does not match selected release $ExpectedVersion."
+    }
+    if (-not $manifest.files) {
+        throw 'MANIFEST.json is missing a non-empty files array.'
+    }
+
+    $executable = [string]$manifest.executable
+    if ($executable -ne 'Sky-Auto-Player.exe' -and $executable -ne 'Sky-Player.exe') {
+        throw "Unexpected manifest executable: $executable"
+    }
+    if ($ExpectedExecutable -and $executable -ne $ExpectedExecutable) {
+        throw "MANIFEST executable $executable does not match asset contract $ExpectedExecutable."
+    }
+    $executableHash = [string]$manifest.executable_sha256
+    if ($executableHash -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'MANIFEST executable_sha256 is missing or invalid.'
+    }
+
+    $expectedPaths = @{}
+    $copyPaths = @()
+    $exeInfo = Resolve-SafeChildPath -Base $StagingRoot -RelativePath $executable
+    if (-not (Test-Path -LiteralPath $exeInfo.FullPath -PathType Leaf)) {
+        throw "Manifest executable is missing: $executable"
+    }
+    $actualExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exeInfo.FullPath).Hash.ToLower()
+    if ($actualExeHash -ne $executableHash.ToLower()) {
+        throw "Executable hash mismatch: $executable"
+    }
+    $expectedPaths[$exeInfo.Relative] = $true
+    $copyPaths += $exeInfo.Relative
+
+    foreach ($file in @($manifest.files)) {
+        $relativePath = [string]$file.path
+        $expectedHash = [string]$file.sha256
+        if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Invalid SHA256 for manifest path: $relativePath"
         }
-        
-        if (Test-Path -LiteralPath $backupDir) {
-            Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
+        $fileInfo = Resolve-SafeChildPath -Base $StagingRoot -RelativePath $relativePath
+        if ($expectedPaths.ContainsKey($fileInfo.Relative)) {
+            throw "Duplicate manifest path: $($fileInfo.Relative)"
         }
-        throw $_
+        if (-not (Test-Path -LiteralPath $fileInfo.FullPath -PathType Leaf)) {
+            throw "Manifest-listed file is missing: $($fileInfo.Relative)"
+        }
+        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $fileInfo.FullPath).Hash.ToLower()
+        if ($actualHash -ne $expectedHash.ToLower()) {
+            throw "Manifest hash mismatch: $($fileInfo.Relative)"
+        }
+        $expectedPaths[$fileInfo.Relative] = $true
+        $copyPaths += $fileInfo.Relative
+    }
+
+    $expectedPaths['MANIFEST.json'] = $true
+    $copyPaths += 'MANIFEST.json'
+
+    $actualPaths = @{}
+    foreach ($item in (Get-ChildItem -LiteralPath $StagingRoot -Recurse -File)) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Reparse-point file is not allowed in staging: $($item.FullName)"
+        }
+        $relative = Get-RelativePathSafe -Base $StagingRoot -Full $item.FullName
+        if ([string]::IsNullOrWhiteSpace($relative)) {
+            throw "Could not derive staging relative path for $($item.FullName)"
+        }
+        $relative = ConvertTo-SafeRelativePath $relative
+        if ($actualPaths.ContainsKey($relative)) {
+            throw "Case-colliding or duplicate staged path: $relative"
+        }
+        $actualPaths[$relative] = $true
+        if (-not $expectedPaths.ContainsKey($relative)) {
+            throw "Unmanifested staged file: $relative"
+        }
+    }
+    foreach ($relative in $expectedPaths.Keys) {
+        if (-not $actualPaths.ContainsKey($relative)) {
+            throw "Manifest path is absent from staged file set: $relative"
+        }
+    }
+
+    return [pscustomobject]@{
+        Manifest = $manifest
+        CopyPaths = [string[]]$copyPaths
     }
 }
 
 function Test-ManifestIntegrity {
-    param([string]$StagingRoot)
-
-    # Returns $true if MANIFEST.json exists at $StagingRoot AND its files[]
-    # array's per-file SHA256 hashes all match the staged files. Returns
-    # $false on: missing MANIFEST, missing files[] array, per-file hash
-    # mismatch, missing file, or JSON parse error.
-    #
-    # This is the fail-closed per-file integrity gate per
-    # docs/distribution-and-update.md §3 "Mandatory MANIFEST.json
-    # Verification". Callers MUST abort the install on $false.
-    #
-    # Per docs/distribution-and-update.md §1 release contract, every
-    # official release ships with MANIFEST.json — a missing MANIFEST
-    # implies either a regressed build pipeline (release.yml --manifest
-    # gate skipped) or a tampered/3rd-party-repackaged zip; neither case
-    # should the updater install.
-    #
-    # SECURITY NOTE: This fail-closed integrity gate inherently defeats
-    # Zip-Slip attacks against the native .NET/PowerShell extract API.
-    # If a malicious archive attempts to extract files outside `$StagingRoot`,
-    # `Test-Path` below will return `$false`, causing the update to abort
-    # before any files are copied to the installation directory.
-    $manifestPath = Join-Path $StagingRoot 'MANIFEST.json'
-    if (-not (Test-Path -LiteralPath $manifestPath)) {
-        Write-Log "MANIFEST.json missing from staging — refusing to install (fail-closed)."
-        Write-Host "MANIFEST.json is missing from the update zip. Per the release contract,"
-        Write-Host "every official release ships with MANIFEST.json. The updater refuses to"
-        Write-Host "install a zip that bypasses the per-file integrity invariant."
-        Write-Host "Re-download from https://github.com/pumni/Sky-Auto-Player/releases and try again."
-        return $false
-    }
+    param(
+        [string]$StagingRoot,
+        [string]$ExpectedVersion,
+        [string]$ExpectedExecutable
+    )
     try {
-        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-        if (-not $manifest.files) {
-            Write-Log "MANIFEST.json present but has no `"files`" array — refusing to install."
-            Write-Host "MANIFEST.json is missing its required `"files`" array. Aborting."
-            return $false
-        }
-        $failed = 0
-        foreach ($file in $manifest.files) {
-            $fullPath = Join-Path $StagingRoot $file.path
-            if (Test-Path -LiteralPath $fullPath) {
-                $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash.ToLower()
-                if ($actual -ne $file.sha256) {
-                    Write-Log "MANIFEST mismatch: $($file.path) expected $($file.sha256) got $actual"
-                    $failed++
-                }
-            } else {
-                Write-Log "MANIFEST missing file: $($file.path)"
-                $failed++
-            }
-        }
-        if ($failed -gt 0) {
-            Write-Log "MANIFEST verification failed: $failed file(s)"
-            Write-Host "MANIFEST verification failed: $failed file(s) mismatch. Aborting before any file mutation."
-            return $false
-        }
-        Write-Log "MANIFEST.json verification passed ($($manifest.files.Count) files)"
+        $null = Get-VerifiedManifest `
+            -StagingRoot $StagingRoot `
+            -ExpectedVersion $ExpectedVersion `
+            -ExpectedExecutable $ExpectedExecutable
+        Write-Log 'MANIFEST.json verification passed (exact file set and executable hash).'
         return $true
     } catch {
-        Write-Log "MANIFEST.json parse error: $_"
-        Write-Host "MANIFEST.json is corrupted or invalid. Aborting."
+        Write-Log "MANIFEST verification failed: $_"
+        Write-Host "MANIFEST verification failed: $_"
+        Write-Host 'Aborting before any install mutation.'
         return $false
     }
 }
@@ -561,6 +793,70 @@ if (-not (Test-WriteAccess $InstallRoot)) {
     exit 5
 }
 
+# --- Process gate (G19) ---
+$runningProcesses = @()
+foreach ($name in (Resolve-ProcessNames)) {
+    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+    if ($procs) { $runningProcesses += $procs }
+}
+$targetProcess = $null
+if ($runningProcesses) {
+    foreach ($p in $runningProcesses) {
+        try {
+            if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
+                $targetProcess = $p
+                break
+            }
+        } catch {}
+    }
+}
+
+if ($targetProcess) {
+    if (-not $ForceClose) {
+        Write-Log "$($targetProcess.ProcessName).exe still running; refuse update"
+        Write-Host "$($targetProcess.ProcessName).exe is still running in this directory. Close it, then re-run updater.bat."
+        Write-Host '(Advanced: updater.bat -ForceClose)'
+        exit 4
+    }
+    Write-Host 'Stopping Sky-Auto-Player.exe (-ForceClose)...'
+    $targetProcess | Stop-Process -Force
+    Start-Sleep -Seconds 2
+
+    $runningAgain = @()
+    foreach ($name in (Resolve-ProcessNames)) {
+        $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+        if ($procs) { $runningAgain += $procs }
+    }
+    $stillRunning = $false
+    if ($runningAgain) {
+        foreach ($p in $runningAgain) {
+            try {
+                if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
+                    $stillRunning = $true
+                    break
+                }
+            } catch {}
+        }
+    }
+    if ($stillRunning) {
+        Write-Log "$($targetProcess.ProcessName).exe still locked after ForceClose"
+        Write-Host "Could not stop $($targetProcess.ProcessName).exe. Aborting."
+        exit 4
+    }
+}
+
+# Recover a previous power-loss/process-kill transaction only after the app
+# process gate is clear, and before trusting the installed MANIFEST version.
+$pendingTransaction = Join-Path $InstallRoot '.sky-update-transaction'
+if ($DryRun -and (Test-Path -LiteralPath $pendingTransaction)) {
+    Write-Host "DryRun cannot validate an install with an unresolved transaction: $pendingTransaction"
+    Write-Host 'Run updater.bat normally once to perform recovery, then retry DryRun.'
+    exit 5
+}
+if (-not $DryRun -and -not (Recover-InterruptedUpdate -DestRoot $InstallRoot)) {
+    exit 5
+}
+
 # --- Channel ---
 $cfgObj = Read-ConfigObject
 $updateCfg = if ($cfgObj) { $cfgObj.update } else { $null }
@@ -575,17 +871,13 @@ if ($ch -ne 'stable' -and $ch -ne 'beta') { $ch = 'stable' }
 
 $runningVersion = Get-RunningVersion
 
-# --- GitHub / fake root ---
+# --- GitHub Releases ---
 $owner = 'pumni'
 $repo  = 'Sky-Auto-Player'
 $headers = @{ 'User-Agent' = 'sky-auto-player-updater'; 'Accept' = 'application/vnd.github.v3+json' }
 
 try {
-    if ($FakeRoot) {
-        $metaUrl = ($FakeRoot.TrimEnd('/') + '/release.json')
-        Assert-HttpsUrl $metaUrl
-        $candidate = Invoke-RestMethod -Uri $metaUrl -TimeoutSec 10
-    } elseif ($ch -eq 'beta') {
+    if ($ch -eq 'beta') {
         $apiBase = "https://api.github.com/repos/$owner/$repo/releases"
         Assert-HttpsUrl $apiBase
         $releases = Invoke-RestMethod -Uri $apiBase -Headers $headers -TimeoutSec 10
@@ -631,13 +923,8 @@ try {
     $zipName = $selected.ZipAsset.name
     $shaName = $selected.ShaAsset.name
     
-    if ($FakeRoot) {
-        $zipUrl = ($FakeRoot.TrimEnd('/') + '/' + $zipName)
-        $shaUrl = ($FakeRoot.TrimEnd('/') + '/' + $shaName)
-    } else {
-        $zipUrl = [string]$selected.ZipAsset.browser_download_url
-        $shaUrl = [string]$selected.ShaAsset.browser_download_url
-    }
+    $zipUrl = [string]$selected.ZipAsset.browser_download_url
+    $shaUrl = [string]$selected.ShaAsset.browser_download_url
     Assert-HttpsUrl $zipUrl
     Assert-HttpsUrl $shaUrl
 } catch {
@@ -654,8 +941,8 @@ $extractDir = Join-Path $tmpDir 'extract'
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 
 try {
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath -UseBasicParsing
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
+    Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath -UseBasicParsing -TimeoutSec 30
 } catch {
     Write-Log "download failed: $_"
     Write-Host "Download failed: $_"
@@ -663,12 +950,12 @@ try {
     exit 2
 }
 
-$sidecarText = Get-Content -Raw -LiteralPath $shaPath
-$expected = $null
-if ($sidecarText -match '([0-9a-fA-F]{64})') { $expected = $Matches[1].ToLower() }
-if (-not $expected) {
-    Write-Log 'sidecar unparseable'
-    Write-Host 'SHA256 sidecar could not be parsed. Aborting before any file mutation.'
+try {
+    $expected = Read-Sha256Sidecar -SidecarPath $shaPath -ExpectedFileName $zipName
+} catch {
+    Write-Log "sidecar validation failed: $_"
+    Write-Host "SHA256 sidecar is invalid: $_"
+    Write-Host 'Aborting before any file mutation.'
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 3
 }
@@ -680,64 +967,15 @@ if ($actual -ne $expected) {
     exit 3
 }
 
-if ($DryRun) {
-    Write-Host "DryRun passed: would update $runningVersion -> $latestVersion"
+
+# --- Validate every zip entry before extraction (Zip-Slip/symlink defense) ---
+try {
+    Assert-ZipArchiveSafe -ZipPath $zipPath
+} catch {
+    Write-Log "unsafe zip layout: $_"
+    Write-Host "Update zip contains an unsafe path or link: $_"
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-    exit 0
-}
-
-# --- Process gate (G19) ---
-$runningProcesses = @()
-foreach ($name in (Resolve-ProcessNames)) {
-    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
-    if ($procs) { $runningProcesses += $procs }
-}
-$targetProcess = $null
-if ($runningProcesses) {
-    foreach ($p in $runningProcesses) {
-        try {
-            if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
-                $targetProcess = $p
-                break
-            }
-        } catch {}
-    }
-}
-
-if ($targetProcess) {
-    if (-not $ForceClose) {
-        Write-Log "$($targetProcess.ProcessName).exe still running; refuse update"
-        Write-Host "$($targetProcess.ProcessName).exe is still running in this directory. Close it, then re-run updater.bat."
-        Write-Host '(Advanced: updater.bat -ForceClose)'
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        exit 4
-    }
-    Write-Host 'Stopping Sky-Auto-Player.exe (-ForceClose)...'
-    $targetProcess | Stop-Process -Force
-    Start-Sleep -Seconds 2
-    
-    $runningAgain = @()
-    foreach ($name in (Resolve-ProcessNames)) {
-        $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
-        if ($procs) { $runningAgain += $procs }
-    }
-    $stillRunning = $false
-    if ($runningAgain) {
-        foreach ($p in $runningAgain) {
-            try {
-                if ($p.Path -and (Split-Path -Parent $p.Path) -eq $InstallRoot) {
-                    $stillRunning = $true
-                    break
-                }
-            } catch {}
-        }
-    }
-    if ($stillRunning) {
-        Write-Log "$($targetProcess.ProcessName).exe still locked after ForceClose"
-        Write-Host "Could not stop $($targetProcess.ProcessName).exe. Aborting."
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        exit 4
-    }
+    exit 5
 }
 
 # --- Stage extract (never onto install root) ---
@@ -764,23 +1002,42 @@ try {
     exit 5
 }
 
-# --- Verify MANIFEST.json integrity (mandatory; fail-closed if absent) ---
-# Behavior contract step 11. Per docs/distribution-and-update.md §3, every
-# official release ships with MANIFEST.json. We delegate to
-# Test-ManifestIntegrity (returns $false on missing/corrupt/mismatching
-# manifest) and abort on $false — fail-closed per the per-file integrity
-# invariant.
-if (-not (Test-ManifestIntegrity -StagingRoot $StagingRoot)) {
+# --- Verify exact staged file set and executable integrity ---
+$expectedExecutable = if ($zipName -like 'Sky-Player-*') {
+    'Sky-Player.exe'
+} else {
+    'Sky-Auto-Player.exe'
+}
+try {
+    $verifiedManifest = Get-VerifiedManifest `
+        -StagingRoot $StagingRoot `
+        -ExpectedVersion $latestVersion `
+        -ExpectedExecutable $expectedExecutable
+    Write-Log 'MANIFEST.json verification passed (exact file set and executable hash).'
+} catch {
+    Write-Log "MANIFEST verification failed: $_"
+    Write-Host "MANIFEST verification failed: $_"
+    Write-Host 'Aborting before any install mutation.'
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 5
 }
 
+if ($DryRun) {
+    Write-Host "DryRun passed: download, process, extraction, and manifest checks succeeded for $runningVersion -> $latestVersion"
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    exit 0
+}
+
 # --- Copy with transactional fallback (I16, I21, I22) ---
 try {
-    Copy-UpdateTree -StagingRoot $StagingRoot -DestRoot $InstallRoot
+    Copy-UpdateTree `
+        -StagingRoot $StagingRoot `
+        -DestRoot $InstallRoot `
+        -RelativePaths $verifiedManifest.CopyPaths
 } catch {
     Write-Log "copy failed: $_"
-    Write-Host "Copy into install dir failed: $_. User config.json and songs directory were restored. Re-run after resolving the issue."
+    Write-Host "Copy into install dir failed: $_. config.json and songs were not replaced."
+    Write-Host 'If rollback was incomplete, the durable backup path was printed above; re-run after resolving the lock or permission issue.'
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     exit 5
 }

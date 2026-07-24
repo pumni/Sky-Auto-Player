@@ -848,17 +848,18 @@ class PlaybackApp(App[str]):
 
         self.run_engine()
         self.set_interval(0.1, self._poll)
-        # Silent update check — never interrupts playback. Notify-only:
-        # it writes no config state; the picker surfaces the banner on next launch.
+        # Silent update check — never interrupts playback. It persists only
+        # throttle/error state and the available version so the picker can
+        # restore the full update banner on next launch.
         self._check_for_updates_silent(user_cfg)
 
     @work(thread=True)
     def _check_for_updates_silent(self, cfg: Any) -> None:
         """Background check that toasts a notice if a newer version exists.
 
-        No modal, no auto-apply, no config writes — playback is short-lived and
-        the user must not be prompted mid-song. Notify-only; the picker surfaces
-        the banner on next launch.
+        No modal and no auto-apply: playback only persists check timestamps and
+        the available version marker. The picker restores the full banner on
+        the next launch.
         """
         try:
             # Honors --no-update consistently with the picker worker.
@@ -889,6 +890,8 @@ class PlaybackApp(App[str]):
                 from sky_music.domain.update_checker import is_newer
                 if not is_newer(result.update.latest_version, VERSION):
                     return
+                from sky_music.config import persist_update_last_notified
+                persist_update_last_notified(cfg, result.update.latest_version)
                 self.call_from_thread(
                     self.notify,
                     f"Update v{result.update.latest_version} available — "

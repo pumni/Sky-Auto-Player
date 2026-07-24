@@ -27,13 +27,15 @@ Our CI pipeline (defined in `.github/workflows/release.yml`) builds exactly five
 
 The external updater (`updater.bat` delegating to `installer/updater.ps1`) enforces a strict lifecycle to protect user data and ensure successful upgrades:
 
-- **Pre-mutation SHA256 Verification:** The updater downloads the zip and compares its hash against the sidecar *before* touching any files in the installation directory.
-- **TEMP Staging:** Updates are extracted to a temporary staging folder (`%TEMP%\SkyPlayerUpdate-*`).
-- **Write Permission Checks:** The updater validates it has write access to the target installation directory before attempting any copies.
-- **Mandatory MANIFEST.json Verification:** After staging, the updater reads `MANIFEST.json` from the zip and verifies every file's SHA256 against the manifest's per-file hashes. **A zip without `MANIFEST.json` (or with an empty `files` array, or with any mismatched hash) is refused before any install mutation** — this is a fail-closed defense-in-depth invariant. Every official release since the `release.yml --manifest` gate carries `MANIFEST.json`; an absent manifest implies either a regressed build pipeline or a stripped zip, neither of which the updater will install.
-- **Transactional Copy & Rollback:** Binaries are copied over in a transactional sequence. If any part of the operation fails, a rollback routine automatically reverts to the backup state.
-- **Preserve-list (Data Safety):** The updater explicitly skips modifying `config.json` (except for allowed patch fields) and completely ignores the `songs/` folder. User profiles and song libraries are never touched.
-- **Process Guard & Dual-Name Resolution:** The updater refuses to run if it detects either `Sky-Auto-Player.exe` or the legacy `Sky-Player.exe` is currently running, avoiding file locking issues. It also dynamically resolves the primary executable, preferring `Sky-Auto-Player.exe` but gracefully falling back to `Sky-Player.exe` for older installations.
+- **Pre-mutation SHA256 Verification:** The updater requires the sidecar to contain exactly one SHA256 bound to the selected zip filename, then compares the downloaded zip before touching any install file.
+- **TEMP Staging:** Updates are extracted only to `%TEMP%\sky-update-*`, never directly into the install directory. Before extraction, every zip entry is checked for rooted/traversal paths, case-colliding duplicates, alternate data streams, and symbolic links.
+- **Write Permission + Process Gates:** The updater validates write access and refuses to recover or mutate files while either `Sky-Auto-Player.exe` or legacy `Sky-Player.exe` is running from the target directory. `-ForceClose` must stop every matching target process before recovery continues.
+- **Exact MANIFEST.json Verification:** The embedded manifest is mandatory. Its app ID, selected release version, primary executable name/hash, every payload hash, and the exact staged file set must match. Unsafe paths, duplicate/case-colliding paths, missing files, executable mismatches, and unmanifested extra files all fail closed before install mutation.
+- **Durable Transaction Journal:** Before deleting or overwriting anything, the updater creates `<install>\.sky-update-transaction\journal.json` and a complete backup of every affected existing file. The journal is atomically committed before mutation. A later updater run automatically rolls back any `prepared` transaction left by process termination, power loss, or restart.
+- **Rollback Retention:** A failed restore never deletes the remaining backup. The updater reports the durable recovery directory and refuses a new transaction until recovery succeeds. A `committed` journal means all copied files passed a post-copy SHA256 check; it is safe to clean without rollback.
+- **Preserve-list (Data Safety):** `config.json`, `.env`, `songs/`, and `logs/` are never replaced or orphan-cleaned. After a successful binary transaction, only `update.last_check_ts` and `update.last_notified_version` are patched into `config.json` through a same-directory atomic replace.
+- **Dry-run Contract:** `-DryRun` performs release selection, asset download, outer SHA256, process gate, safe extraction, and exact manifest verification. It performs no install recovery or mutation; an unresolved transaction must first be recovered by a normal updater run.
+- **Dual-Name Resolution:** The updater prefers `Sky-Auto-Player.exe` and falls back to `Sky-Player.exe` for legacy installations; release asset and manifest executable names must agree.
 
 ### 3.1. `installer/updater.ps1` encoding invariant
 
@@ -62,8 +64,9 @@ The stable channel never surfaces rc/beta/alpha/dev tags; the beta channel inclu
 
 Because the update process is heavily guarded, recovery is straightforward:
 - **Corrupt Zip:** A downloaded zip with a mismatched SHA256 will never be extracted to the installation directory.
-- **Failed Copy:** If a file cannot be overwritten, the fallback rollback routine restores the previous binaries.
-- **Manual Retry:** If an update fails, the user simply runs `updater.bat` again, or safely downloads the latest zip manually from GitHub and extracts it over their folder (skipping `config.json` and `songs/`).
+- **Failed Copy:** The rollback routine restores the previous binaries from the durable journal. If any restore is blocked, the backup is retained under `.sky-update-transaction` and the next normal updater run retries recovery before checking versions.
+- **Interrupted Process / Power Loss:** A `prepared` journal is rolled back on the next normal run; a `committed` journal is cleaned without undoing the verified update.
+- **Manual Retry:** If an update fails, resolve the reported lock/permission problem and run `updater.bat` again. Do not manually delete `.sky-update-transaction`; it may contain the only recoverable copy of an old file. Manual zip extraction remains a last resort and must skip `config.json`, `.env`, `songs/`, and `logs/`.
 
 ## 6. Phase Contracts
 
