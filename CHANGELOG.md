@@ -4,7 +4,7 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.4.2] - 2026-07-24
 
 ### Changed — branding
 
@@ -27,11 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     names (`Sky-Player`, `Sky Player`) so existing search traffic finds the
     renamed project; the canonical `name` is now `Sky Auto Player`.
 
-> Users running a pre-rename build who manually delete the old folder and
-> download the new zip get a clean install. Updater-assisted migrations from
-> a `Sky-Player.exe` install are not supported — the external updater now
-> looks for `Sky-Auto-Player.exe` and will exit 1 from `updater.bat`. Treat
-> the rename as a fresh install.
+> Users running a pre-rename build (v2.4.1 or earlier) can seamlessly migrate 
+> using their existing `updater.bat` once v2.4.2 is published. This release 
+> publishes a temporary legacy bridge zip alongside the canonical one, which 
+> allows the old updater to download the new brand and the new updater 
+> scripts in one shot, preserving `config.json` and `songs/` unchanged.
+
+### Added
+
+- **Dual-Publish Bridge:** Added support for publishing a legacy bridge zip (`Sky-Player-v<ver>.zip`) alongside the canonical `Sky-Auto-Player-v<ver>.zip` to support seamless updater migrations from old versions.
+- **Dual-Name Updater:** `updater.bat` and `installer/updater.ps1` now support both `Sky-Auto-Player.exe` and `Sky-Player.exe` for process guard and identity resolution.
 
 ## [2.4.0] - 2026-07-18
 

@@ -1,5 +1,5 @@
 PackageIdentifier: pumni.SkyPlayer
-PackageVersion: 2.4.0
+PackageVersion: 2.4.2
 PackageLocale: en-US
 Publisher: pumni
 PackageName: Sky Auto Player
@@ -9,7 +9,7 @@ LicenseUrl: https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE
 PackageUrl: https://github.com/pumni/Sky-Auto-Player
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/pumni/Sky-Auto-Player/releases/download/v2.4.0/Sky-Auto-Player-v2.4.0.zip
+    InstallerUrl: https://github.com/pumni/Sky-Auto-Player/releases/download/v2.4.2/Sky-Auto-Player-v2.4.2.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
     InstallerType: zip
     NestedInstallerType: portable
