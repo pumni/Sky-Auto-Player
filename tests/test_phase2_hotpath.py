@@ -116,13 +116,13 @@ def test_record_does_not_soft_flush_25k_events_until_save(
 def test_pause_path_flush_fires_when_buffer_large(tmp_path: Path, monkeypatch: Any) -> None:
     """With a mid-song pause after soft-chunk events, pause-path flush runs."""
     flush_calls: list[str] = []
-    original_flush = TelemetryLogger._flush_records_to_csv
+    original_flush = TelemetryLogger.flush_if_large
 
-    def counting_flush(self: TelemetryLogger, *, clear: bool = True) -> None:
+    def counting_flush(self: TelemetryLogger) -> bool:
         flush_calls.append("flush")
-        return original_flush(self, clear=clear)
+        return original_flush(self)
 
-    monkeypatch.setattr(TelemetryLogger, "_flush_records_to_csv", counting_flush)
+    monkeypatch.setattr(TelemetryLogger, "flush_if_large", counting_flush)
 
     clock = FakeClock()
     tel = TelemetryLogger("pause-flush", enabled=True)
@@ -140,7 +140,7 @@ def test_pause_path_flush_fires_when_buffer_large(tmp_path: Path, monkeypatch: A
         )
     assert len(flush_calls) == 0, "record() must not soft-flush under hard cap"
     tel.record_pause("manual", 1_000)
-    assert len(flush_calls) >= 1, "record_pause must soft-flush when buffer large"
+    assert len(flush_calls) >= 1, "record_pause must call flush_if_large when buffer large"
 
     # Also exercise DispatchLoop paused branch flush_if_large via process_wait_states.
     state = PlaybackState(start_perf=0)

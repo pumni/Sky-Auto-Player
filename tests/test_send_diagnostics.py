@@ -15,7 +15,8 @@ def test_full_send_records_no_partial(monkeypatch):
     monkeypatch.setattr(inputs.user32, "SendInput", lambda count, array, size: count)
     monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
 
-    landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+    result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+    landed = result.inserted
 
     assert landed == 3
     diag = inputs.get_send_diagnostics()
@@ -50,7 +51,8 @@ def test_partial_note_on_same_frame_recovery(monkeypatch):
     monkeypatch.setattr(inputs.time, "sleep", fake_sleep)
     monkeypatch.setattr(inputs, "_retry_wait_seconds", fake_sleep)
 
-    landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+    result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+    landed = result.inserted
 
     assert landed == 3
     assert calls == [3, 1], "one initial send, one immediate retry"
@@ -77,7 +79,8 @@ def test_partial_note_off_completes_remainder(monkeypatch):
     monkeypatch.setattr(inputs.user32, "SendInput", fake_send_input)
     monkeypatch.setattr(inputs, "is_sky_active", lambda: True)
 
-    landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=True)
+    result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=True)
+    landed = result.inserted
 
     assert landed == 3
     assert len(calls) >= 2, "note-off must complete remainder"
@@ -103,7 +106,8 @@ def test_single_key_note_on_zero_progress_retries_once_then_drops(monkeypatch):
     monkeypatch.setattr(inputs.time, "sleep", fake_sleep)
     monkeypatch.setattr(inputs, "_retry_wait_seconds", fake_sleep)
 
-    landed = inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
+    result = inputs.send_scan_code_batch_trusted((0x15,), key_up=False)
+    landed = result.inserted
 
     assert landed == 0
     assert calls == [1, 1], "one initial send, exactly one immediate retry"

@@ -1149,7 +1149,9 @@ def test_send_scan_code_batch_cache_and_retry() -> None:
     win32_inputs.reset_send_diagnostics()
     with patch.object(win32_inputs.user32, "SendInput", side_effect=[1, 0]) as mock_send, \
          patch("sky_music.platform.win32.inputs.send_input_batch") as mock_send_batch:
-        assert win32_inputs.send_scan_code_batch_trusted(chord, key_up=False) == 1
+        result = win32_inputs.send_scan_code_batch_trusted(chord, key_up=False)
+        landed = result.inserted
+        assert landed == 1
         assert mock_send.call_count == 2
         assert mock_send_batch.call_count == 0
         diag = win32_inputs.get_send_diagnostics()

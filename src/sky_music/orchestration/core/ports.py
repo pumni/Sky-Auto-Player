@@ -20,6 +20,7 @@ where they are.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
@@ -143,11 +144,24 @@ class FocusController(Protocol):
     def focus(self) -> bool: ...
 
 
+
+
+@dataclass(slots=True, frozen=True)
+class ProgressCounters:
+    """Aggregated counters sent periodically from the dispatch thread to the UI."""
+    max_lateness_us: int
+    late_2ms: int
+    late_5ms: int
+    late_10ms: int
+    release_max_us: int
+    release_late_2ms: int
+    recent_latencies_us: tuple[int, ...]
+
 class ProgressSink(Protocol):
     """Display-side update port — receives elapsed/total + status + counters.
 
-    The implementation lives at the edge (Textual renderer, snapshot
-    puller for tests, …); the core only writes through this contract.
+    The implementation lives at the edge (Textual renderer, snapshot puller for tests, …); 
+    the core only writes through this contract.
     """
 
     def publish(
@@ -160,11 +174,10 @@ class ProgressSink(Protocol):
         health: BackendHealth | None = None,
         input_path_degraded: bool = False,
         force: bool = False,
+        counters: ProgressCounters | None = None,
     ) -> None: ...
 
     def finish(self, message: str) -> None: ...
-
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None: ...
 
 
 class LeadEstimator(Protocol):

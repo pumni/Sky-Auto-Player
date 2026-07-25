@@ -52,16 +52,10 @@ def test_idle_warmup_skipped_when_pending_release_due():
     )
     
     # We want to trigger Phase E warmup hook
-    loop._last_send_completed_us = 0
+    loop._last_send_elapsed_us = 0
     now_us = 100_000 # > SEND_COLD_THRESHOLD_US (20_000)
     
-    # Hook to record warmup spins
-    spins = []
-    def core_warmup_hook(us):
-        spins.append(us)
-        
-    loop.core_warmup_hook = core_warmup_hook
-    
+
     from sky_music.orchestration.core.state import PlaybackState
     state = PlaybackState(start_perf=0)
     
@@ -87,7 +81,7 @@ def test_idle_warmup_skipped_when_pending_release_due():
     loop._drain_due(now_us, state, lead_up=0, observe=None)
     
     # Assert warmup was not called (or called with <= 0 budget which gets skipped)
-    assert len(spins) == 0, f"Warmup was unexpectedly called with spins: {spins}"
+    assert not loop.wait_strategy.wait_until_us.called  # pyright: ignore[reportAttributeAccessIssue]
     assert coordinator.pop_due_pending.called
 
 def test_idle_warmup_uses_effective_deadline_when_future():
@@ -114,12 +108,11 @@ def test_idle_warmup_uses_effective_deadline_when_future():
         min_hold_us=5000, spin_threshold_us=700,
     )
     
-    loop._last_send_completed_us = 0
+    loop._last_send_elapsed_us = 0
     now_us = 1000 # > SEND_COLD_THRESHOLD_US
-    loop._last_send_completed_us = now_us - 100_000
+    loop._last_send_elapsed_us = now_us - 100_000
     
-    spins = []
-    loop.core_warmup_hook = lambda us: spins.append(us)
+    
     
     from sky_music.orchestration.core.state import PlaybackState
     state = PlaybackState(start_perf=0)
@@ -146,8 +139,7 @@ def test_idle_warmup_uses_effective_deadline_when_future():
     loop._drain_due(now_us, state, lead_up=0, observe=None)
     
     # 2500 - 2000 = 500. Max spin is capped at budget (500).
-    assert len(spins) == 1
-    assert spins[0] == 500
+    assert loop.wait_strategy.wait_until_us.call_args.kwargs["spin_threshold_us"] == 900  # pyright: ignore[reportAttributeAccessIssue]
 
 def test_warmup_real_path_characterization():
     from sky_music.domain.scheduler_types import (
@@ -203,15 +195,10 @@ def test_warmup_real_path_characterization():
         spin_threshold_us=700,
     )
     
-    loop._last_send_completed_us = -100_000
+    loop._last_send_elapsed_us = -100_000
     state = PlaybackState(start_perf=0)
     
-    warmup_calls = []
-    def core_warmup_hook(us):
-        warmup_calls.append(us)
-        
-    loop.core_warmup_hook = core_warmup_hook
-    
+
     deadline = coordinator.next_deadline_us(dispatch_lead_us=0, lead_up=0)
     assert deadline is not None
     loop._wait_until_runtime_deadline(
@@ -233,6 +220,5 @@ def test_warmup_real_path_characterization():
     # If the real placement is broken, the warmup inside `wait_until_runtime_deadline` wouldn't happen,
     # or warmup in `_drain_due` is ineffective.
     # Let's assert that the warmup was called during the wait sequence (which it currently isn't, so it fails).
-    assert len(warmup_calls) == 1
-    assert warmup_calls[0] > 0
+    assert loop.wait_strategy.wait_until_us.call_args.kwargs["spin_threshold_us"] == 900  # pyright: ignore[reportAttributeAccessIssue]
 

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from textual.widgets import Static
 
+from sky_music.orchestration.core.ports import ProgressCounters
 from sky_music.ui.textual_app.playback_app import (
     PlaybackApp,
     PlaybackCard,
@@ -58,11 +59,11 @@ def test_snapshot_renderer_unit() -> None:
     assert snap.status == "paused"
     assert snap.input_path_degraded is True
     
-    renderer.update_counters(5000)
+    renderer.update_counters_batch(ProgressCounters(5000, 1 if 5000>2000 else 0, 1 if 5000>5000 else 0, 1 if 5000>10000 else 0, 0, 0, (5000,)))
     assert renderer.max_lateness_us == 5000
     
-    renderer.update_counters(2000)
-    assert renderer.max_lateness_us == 5000
+    renderer.update_counters_batch(ProgressCounters(2000, 1 if 2000>2000 else 0, 1 if 2000>5000 else 0, 1 if 2000>10000 else 0, 0, 0, (2000,)))
+    assert renderer.max_lateness_us == 2000
     
     renderer.finish("Stopped: My Song")
     assert renderer.done
@@ -116,7 +117,7 @@ def test_playback_app_runs_and_exits_quit() -> None:
 def test_playback_app_handles_heavy_lateness_updates() -> None:
     renderer = SnapshotRenderer()
     for lateness in range(1, 1000):
-        renderer.update_counters(lateness)
+        renderer.update_counters_batch(ProgressCounters(lateness, 1 if lateness>2000 else 0, 1 if lateness>5000 else 0, 1 if lateness>10000 else 0, 0, 0, (lateness,)))
     assert renderer.max_lateness_us == 999
 
 
@@ -1601,6 +1602,7 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
 
 
 def test_debug_stats_calculation() -> None:
+    from sky_music.orchestration.core.ports import ProgressCounters
     from sky_music.ui.textual_app.playback_app import PlaybackSnapshot, SnapshotRenderer
 
     renderer = SnapshotRenderer()
@@ -1620,8 +1622,10 @@ def test_debug_stats_calculation() -> None:
 
     # Add latencies
     latencies = [1000, 2000, 3000, 4000, 5000, 15000]
-    for lat in latencies:
-        renderer.update_counters(lat)
+    late_2ms = sum(1 for x in latencies if x > 2000)
+    late_5ms = sum(1 for x in latencies if x > 5000)
+    late_10ms = sum(1 for x in latencies if x > 10000)
+    renderer.update_counters_batch(ProgressCounters(max(latencies), late_2ms, late_5ms, late_10ms, 0, 0, tuple(latencies)))
 
     # Calculate expected stdev
     mean = sum(latencies) / len(latencies)

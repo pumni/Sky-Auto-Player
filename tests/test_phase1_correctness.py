@@ -354,7 +354,7 @@ def test_winsendinput_backend_send_completed_us_uses_injected_clock(monkeypatch)
     clock = FakeClock(1_234_567)
 
     class _FakeInputs:
-        def send_scan_code_batch_trusted(self, scan_codes, *, key_up: bool) -> int:
+        def send_scan_code_batch_trusted(self, scan_codes, *, key_up: bool, **kwargs) -> int:
             return len(scan_codes)
 
         def get_send_diagnostics(self) -> dict[str, int]:

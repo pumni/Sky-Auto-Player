@@ -92,21 +92,11 @@ class ProgressRenderer:
         self.input_path_degraded: bool = False
         self.active_policy: FrameTimingPolicy | None = None
 
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        clamped = max(0, lateness_us)
-        if kind != "down":
-            return
-        if clamped > 10000:
-            self.late_10ms += 1
-            self.late_5ms += 1
-            self.late_2ms += 1
-        elif clamped > 5000:
-            self.late_5ms += 1
-            self.late_2ms += 1
-        elif clamped > 2000:
-            self.late_2ms += 1
-        if clamped > self.max_lateness_us:
-            self.max_lateness_us = clamped
+    def update_counters_batch(self, counters) -> None:
+        self.max_lateness_us = counters.max_lateness_us
+        self.late_2ms = counters.late_2ms
+        self.late_5ms = counters.late_5ms
+        self.late_10ms = counters.late_10ms
 
     def _build_controls_line(self, status: str, width: int) -> Text:
         key_style = self._styles["key"]

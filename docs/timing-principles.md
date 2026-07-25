@@ -109,9 +109,9 @@ Telemetry metrics are sender-side proxies, **not** game-onset ground truth:
 
 | Metric | Means | Does **not** mean |
 |--------|--------|---------|
-| `actual_us` | Timeline when backend call began | Game sampled the key |
-| `send_completed_us` / `dispatch_completed_us` | `perf_counter` after `SendInput` returned | Kernel delivered key; game polled |
-| `visible_lateness_us` | `send_completed_us − scheduled_us` (sender proxy) | Game-onset error |
+| `actual_us` | Timeline when backend call began (`T_call_entry`) | Game sampled the key (`T_game_observed`) |
+| `send_completed_us` / `dispatch_completed_us` | `perf_counter` after `SendInput` returned (`T_call_return`) | Kernel delivered key; game polled (`T_game_observed`) |
+| `visible_lateness_us` | `send_completed_us − scheduled_us` (sender-side completion error) | Game-onset error |
 | `observed_hold_us` | Completion-to-completion on sender timeline | Game-visible hold |
 
 The summary JSON includes `timing_semantics.onset_definition = "sendinput_return"` and
@@ -129,7 +129,7 @@ previous-session lead estimates rather than cold-starting at zero for `_SEED_SAM
 Corrupt or version-mismatched cache is silently ignored — never raises into play.
 
 ### Idle-gap core warmup (Phase E)
-After a gap of ≥ 20 ms since the last `SendInput`, the dispatch thread runs a short busy-spin
+After a gap of ≥ 20 ms since the last `SendInput`, the dispatch thread expands its final spin threshold by adding the `core_warmup_budget_us` (capped at `CORE_WARMUP_SPIN_MAX_US`).
 (≤ 200 µs) to warm the CPU core before the next send. The warmup is skipped if already past the
 note deadline. Controlled by `CORE_WARMUP_SPIN_US = 200` and `SEND_COLD_THRESHOLD_US = 20_000`
 in `core/loop.py`.

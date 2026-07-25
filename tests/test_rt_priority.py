@@ -53,13 +53,13 @@ def test_priority_ladder_auto_fallback_to_time_critical(mock_win32_platform, moc
     scope = DispatchThreadPriorityScope("auto")
     with scope:
         assert scope.outcome is not None
-        assert scope.outcome.acquired == "thread:time_critical"
+        assert scope.outcome.acquired == "thread:highest"
         assert scope.outcome.detail is None
         
         # Verify it tried MMCSSNames
         assert mock_inputs.av_set_mm_thread_characteristics.call_count == 4
-        # Verify it set thread priority to TIME_CRITICAL (15)
-        mock_inputs.set_thread_priority.assert_called_once_with(123, 15)
+        # Verify it set thread priority to HIGHEST (2)
+        mock_inputs.set_thread_priority.assert_called_once_with(123, 2)
 
     # Reverts thread priority to original on exit
     mock_inputs.set_thread_priority.assert_any_call(123, 4)
@@ -110,7 +110,7 @@ def test_priority_ladder_rung_fallback_on_exception(mock_win32_platform, mock_in
     scope = DispatchThreadPriorityScope("auto")
     with scope:
         assert scope.outcome is not None
-        assert scope.outcome.acquired == "thread:time_critical"
+        assert scope.outcome.acquired == "thread:highest"
 
 
 def test_priority_ladder_explicit_mode_mmcss_success(mock_win32_platform, mock_inputs) -> None:
@@ -153,7 +153,7 @@ def test_priority_ladder_explicit_mode_time_critical_failure(mock_win32_platform
     with scope:
         assert scope.outcome is not None
         assert scope.outcome.acquired == "off"
-        assert "TIME_CRITICAL failed" in (scope.outcome.detail or "")
+        assert "time_critical failed" in (scope.outcome.detail or "")
         # Should not fall back to highest
         mock_inputs.set_thread_priority.assert_called_once_with(mock_inputs.get_current_thread(), 15)
 

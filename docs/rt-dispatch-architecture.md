@@ -57,9 +57,7 @@ cheap foreground-HWND probe (`cheap_focus_probe`), a diagnostics `debug_log` hoo
 captures the anchor; a second concurrent reason does not move it; only the last exiting reason
 accumulates the interval into `pause_time_us` exactly once, attributed to the first reason that
 opened it. This replaced the old dual-anchor model that double-counted overlap and made elapsed run
-backwards. Cross-thread display reads go through `elapsed_snapshot_us()` — a single atomically
-reassigned `(epoch_us, pause_anchor, paused)` tuple (single-writer dispatch thread; readers never
-tear).
+Cross-thread display reads go through `elapsed_snapshot_us()` — protected by a documented synchronization primitive (threading.Lock) to ensure free-threaded safety without tearing.
 
 ### 2.2 Focus-check ownership (who calls what, at what cadence)
 
@@ -98,9 +96,10 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
   warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
   `runtime_options.lead_cache_loaded`.
-- **Idle-gap core warmup (Phase E):** When the gap since last `SendInput` ≥ 20 ms, the dispatch
-  thread runs ≤ 50 µs busy-spin before drain to warm the CPU core. Skipped when already past the
-  note deadline. Hook: `DispatchLoop.core_warmup_hook`.
+- **Idle-gap core warmup (Phase 1/6):** When the gap since last `SendInput` completion ≥ 20 ms, a
+  `core_warmup_budget_us` (default 200 µs, capped at 500 µs) is added directly to the
+  `effective_spin_threshold` for the final precision wait. This expands the busy-spin window right
+  before the deadline to warm the CPU core without adding a separate blocking sleep cycle.
 - **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
   since the last reprobe, the dispatch thread re-probes timer wake error (8 × 2 ms) and applies
   a new threshold with hysteresis (± 50 µs). Kill switch: `enable_spin_reprobe` (auto-off when
@@ -132,8 +131,8 @@ special-cases fake clocks.
 
 `DispatchThreadPriorityScope(mode)` applied on the dispatch thread, reverted on exit:
 `auto` tries MMCSS (`AvSetMmThreadCharacteristicsW`: "Pro Audio" → "Low Latency" → "Audio" →
-"Games", plus `AvSetMmThreadPriority(HIGH)`) then `SetThreadPriority` TIME_CRITICAL → HIGHEST →
-off. Explicit modes pin one rung. **Never a process priority class** (user mandate). The acquired
+"Games", plus `AvSetMmThreadPriority(HIGH)`) then `SetThreadPriority` HIGHEST →
+off. (`TIME_CRITICAL` is strictly an explicit expert mode, never an auto fallback). **Never a process priority class** (user mandate). The acquired
 tier is recorded in telemetry `runtime_options.rt_priority_acquired`.
 
 ## 6. Production defaults & kill switches
@@ -148,7 +147,7 @@ deterministic tests are unaffected):
 | Lead EMA cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
 | Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
-| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 200`, threshold 20 ms | `core_warmup_hook = None` |
+| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 200`, threshold 20 ms | `core_warmup_budget_us = 0` |
 | Device margin | `.cache/input_latency.json` → `min_hold_margin_us`; default 500 | profile override |
 | Event-driven waits | on (runtime) | `--no-event-wait` |
 | GIL switch interval 1 ms | on | `--no-switch-interval-tuning` |
@@ -173,3 +172,7 @@ needed deferral and the floor mechanism remained active — holds never dropped 
 Post-graduation validation (run 075636, full production stack incl. `mmcss:Pro Audio`, 84-note
 song): down-onset visible p50 **+16 µs**, zero drops, 8 floor-deferrals, send max 1.8 ms — the
 cleanest send tail of all runs.
+
+## 8. Telemetry and Memory Hygiene
+
+To guarantee real-time safety, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it triggers a `flush_if_large` operation which drops half of the oldest buffered records rather than blocking dispatch to perform a file write, incrementing a truncated count. Final CSV export is performed entirely off the dispatch hot path (typically during pause or stop lifecycle points).

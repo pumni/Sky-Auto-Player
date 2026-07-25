@@ -83,46 +83,54 @@ class TestTelemetryFlushChunk:
         return logger
 
     def test_flush_chunk_clears_records(self, tmp_path: Path) -> None:
-        """Soft flush is off the hot path: record() retains; flush_if_large clears."""
+        """Soft flush is off the hot path: record() retains; flush_if_large drops half."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
-
+    
         logger = self._make_logger(tmp_path, "flush_test")
-
+    
         for _ in range(_TELEMETRY_FLUSH_CHUNK + 1):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
-
-        # Phase 2 A3: soft chunk no longer flushes inside record().
+    
         assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
         assert logger.flush_if_large() is True
-        assert len(logger.records) <= 1
+        # It should drop half of the records
+        assert len(logger.records) == (_TELEMETRY_FLUSH_CHUNK + 1) - ((_TELEMETRY_FLUSH_CHUNK + 1) // 2)
 
     def test_retain_mode_preserves_records_past_flush(self, tmp_path: Path) -> None:
+        """If retain_all=True, flush_if_large does not truncate in memory."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
-
+    
         logger = self._make_logger(tmp_path, "retain_test", retain=True)
-
-        for _ in range(_TELEMETRY_FLUSH_CHUNK + 5):
+    
+        for _ in range(_TELEMETRY_FLUSH_CHUNK + 1):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
-        logger.flush_if_large()
-
-        assert len(logger.records) > 0
+    
+        assert logger.flush_if_large() is True
+        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
 
     def test_csv_written_incrementally(self, tmp_path: Path) -> None:
-        """flush_if_large (pause/wait path) writes the soft chunk to CSV."""
+        """flush_if_large no longer writes to CSV during runtime; save() writes all."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
-
+    
         csv_path = tmp_path / "incr_test.csv"
         logger = self._make_logger(tmp_path, "incr_test")
-
+    
         for _ in range(_TELEMETRY_FLUSH_CHUNK):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
         logger.record(1, "up", 1000, 1000, 0, 0, (), "test")
-        # Soft flush is explicit (off hot path), not automatic in record().
+        
+        # Soft flush does NOT write CSV during runtime
         logger.flush_if_large()
-
+        assert not csv_path.exists()
+        
+        # Save writes it
+        logger.save()
         assert csv_path.exists()
         data = csv_path.read_text(encoding="utf-8")
-        assert len(data.strip().splitlines()) >= _TELEMETRY_FLUSH_CHUNK + 1
+        # Since flush_if_large drops half the records, only the remaining are saved
+        expected_len = (_TELEMETRY_FLUSH_CHUNK + 1) - ((_TELEMETRY_FLUSH_CHUNK + 1) // 2)
+        # Plus 1 for header
+        assert len(data.strip().splitlines()) == expected_len + 1
 
     def test_save_closes_csv_file(self, tmp_path: Path) -> None:
         csv_path = tmp_path / "save_close_test.csv"

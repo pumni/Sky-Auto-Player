@@ -255,6 +255,7 @@ class TelemetryLogger:
         self._records_written_offset: int = 0
         # True once a mid-play flush cleared the in-memory list (disk becomes authoritative).
         self._cleared_mid_play: bool = False
+        self._dropped_count: int = 0
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
         self.input_path_degraded: bool = False
@@ -368,19 +369,21 @@ class TelemetryLogger:
             )
         )
         # Hot path: no mid-play flush at the soft chunk (A3). Only the hard cap
-        # may flush synchronously here — pathological >100k-event songs with zero pauses.
+        # may truncate synchronously here — pathological >100k-event songs with zero pauses.
         if len(self.records) >= _TELEMETRY_MAX_BUFFER:
-            self._flush_records_to_csv(clear=not self._retain_records_after_save)
+            drop_count = len(self.records) // 2
+            self.records = self.records[drop_count:]
+            self._dropped_count += drop_count
 
     def flush_if_large(self) -> bool:
-        """Flush to CSV when the in-memory buffer reaches the soft chunk size.
-
-        Call only from off-hot-path sites: paused/wait branches, ``record_pause``,
-        and ``save()`` (which always flushes). Returns True if a flush ran.
-        """
         if not self.enabled or len(self.records) < _TELEMETRY_FLUSH_CHUNK:
             return False
-        self._flush_records_to_csv(clear=not self._retain_records_after_save)
+        if self._retain_records_after_save:
+            return True
+        # Drop oldest records to prevent memory growth without blocking dispatch thread
+        drop_count = len(self.records) // 2
+        self.records = self.records[drop_count:]
+        self._dropped_count += drop_count
         return True
 
     def _ensure_csv_open(self) -> None:

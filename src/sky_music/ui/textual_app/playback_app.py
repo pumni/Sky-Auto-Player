@@ -127,28 +127,14 @@ class SnapshotRenderer:
                 backend_health=backend_health,
             )
 
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        """Called after each SendInput dispatch. Uses signed lateness_us; onset (down) only
-        updates the p50/p95/σ ring buffer. Threshold counters use max(0, ...) to avoid
-        counting early arrivals as 'late'."""
-        clamped = max(0, lateness_us)
-        if kind == "down":
-            if clamped > self.max_lateness_us:
-                self.max_lateness_us = clamped
-            if clamped > 2000:
-                self.late_2ms += 1
-            if clamped > 5000:
-                self.late_5ms += 1
-            if clamped > 10000:
-                self.late_10ms += 1
-            # Store signed latency for dispersion stats (early arrivals show as negative)
-            self._latencies.append(lateness_us)
-        else:
-            # Release — track separately for verbose/debug use
-            if clamped > self.release_max_us:
-                self.release_max_us = clamped
-            if clamped > 2000:
-                self.release_late_2ms += 1
+    def update_counters_batch(self, counters) -> None:
+        self.max_lateness_us = counters.max_lateness_us
+        self.late_2ms = counters.late_2ms
+        self.late_5ms = counters.late_5ms
+        self.late_10ms = counters.late_10ms
+        self.release_max_us = counters.release_max_us
+        self.release_late_2ms = counters.release_late_2ms
+        self._latencies.extend(counters.recent_latencies_us)
 
     @staticmethod
     def _snapshot_latencies(values: deque[int]) -> list[int]:

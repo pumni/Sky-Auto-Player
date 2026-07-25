@@ -66,7 +66,7 @@ def test_fault_injection_and_recovery():
             self.fail_up = False
             self.call_count = 0
             
-        def send_scan_code_batch(self, scan_codes, key_up=False):
+        def send_scan_code_batch(self, scan_codes, key_up=False, **kwargs):
             self.call_count += 1
             if not key_up and self.fail_down:
                 raise OSError("Inject KeyDown Failure")
@@ -110,7 +110,7 @@ def test_fault_injection_cleanup_fail_retry():
             self.fail_down = True
             self.fail_up = True
             
-        def send_scan_code_batch(self, scan_codes, key_up=False):
+        def send_scan_code_batch(self, scan_codes, key_up=False, **kwargs):
             if not key_up:
                 self.down_calls += 1
                 if self.fail_down:
@@ -135,7 +135,7 @@ def test_fault_injection_cleanup_fail_retry():
     
     # 2. Call release_all() where first 2 passes fail, but 3rd pass succeeds
     # Set mock inputs to succeed on the 3rd keyup attempt
-    def send_scan_code_batch_mock(scan_codes, key_up=False):
+    def send_scan_code_batch_mock(scan_codes, key_up=False, **kwargs):
         mock_inputs.up_calls += 1
         if mock_inputs.up_calls < 3:
             raise OSError(f"KeyUp Failed on pass {mock_inputs.up_calls}")

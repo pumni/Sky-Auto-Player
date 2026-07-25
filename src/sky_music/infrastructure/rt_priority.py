@@ -88,13 +88,13 @@ class DispatchThreadPriorityScope:
                 )
                 return self
 
-        # Ladder 2: THREAD_PRIORITY_TIME_CRITICAL
-        if self.mode in ("auto", "time_critical"):
+        # Ladder 2: thread_priority_time_critical
+        if self.mode == "time_critical":
             try:
                 h_thread = inputs.get_current_thread()
                 old_priority = inputs.get_thread_priority(h_thread)
                 if old_priority != 0x7fffffff: # THREAD_PRIORITY_ERROR_RETURN
-                    if inputs.set_thread_priority(h_thread, 15): # THREAD_PRIORITY_TIME_CRITICAL = 15
+                    if inputs.set_thread_priority(h_thread, 15): # thread_priority_time_critical = 15
                         self._thread_handle = h_thread
                         self._old_priority = old_priority
                         self.outcome = RtPriorityOutcome(
@@ -103,19 +103,20 @@ class DispatchThreadPriorityScope:
                             detail=None
                         )
                         return self
-                    errors.append("SetThreadPriority TIME_CRITICAL returned False")
+                    errors.append("SetThreadPriority time_critical returned False")
                 else:
                     errors.append("GetThreadPriority returned error code")
             except Exception as err:
-                errors.append(f"TIME_CRITICAL boost failed: {err}")
+                errors.append(f"time_critical boost failed: {err}")
 
             if self.mode == "time_critical":
                 self.outcome = RtPriorityOutcome(
                     requested_mode=self.mode,
                     acquired="off",
-                    detail=f"TIME_CRITICAL failed: {'; '.join(errors)}"
+                    detail=f"time_critical failed: {'; '.join(errors)}"
                 )
                 return self
+
 
         # Ladder 3: THREAD_PRIORITY_HIGHEST
         if self.mode in ("auto", "highest"):

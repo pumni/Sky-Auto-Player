@@ -438,9 +438,9 @@ _CACHE_LOCK = threading.RLock()
 
 # Partial-send diagnostics.
 #
-# SendInput is supposed to inject a chord's keys ATOMICALLY in one call. When it returns sent < n,
-# a SECOND SendInput for the remainder would split the chord across two events with a timing gap —
-# the one sender-side place musical atomicity breaks (late/ghost notes, remote desync).
+# SendInput is supposed to inject a chord's keys in one contiguous batch whose inserted events
+# are serial and not interspersed. When it returns sent < n, that guarantee breaks
+# (late/ghost notes, remote desync).
 #
 # Musical policy (note-on / key_up=False): allows a single immediate same-frame retry for leftovers,
 # then drops any remaining unsent keys (DROPPED_BACKEND) to preserve timing. 
@@ -586,13 +586,20 @@ def _lookup_or_build_input_array(
             _ARRAY_CACHE[cache_key] = input_array
     return input_array
 
+
+
 def _send_scan_code_batch_impl(
     scan_codes_tuple: tuple[int, ...],
     flags: int,
     *,
     complete_remainder: bool,
-) -> int:
-    """Inject scan codes via one SendInput; return how many keys from the prefix landed.
+    clock_now: Callable[[], int] | None = None,
+) -> tuple[int, int]:
+    """Inject scan codes via one SendInput; return (landed_keys, completion_us).
+    
+    If clock_now is provided, completion_us is sampled immediately after the FIRST
+    native SendInput returns, before any retry or logging, giving the most accurate
+    sender-side timestamp of the native boundary crossing.
 
     ``complete_remainder``:
       - False (musical note-on): allows a single immediate same-frame retry for leftovers, 
@@ -602,16 +609,18 @@ def _send_scan_code_batch_impl(
     """
     n = len(scan_codes_tuple)
     if n == 0:
-        return 0
+        return 0, (clock_now() if clock_now else 0)
     input_array = _lookup_or_build_input_array(scan_codes_tuple, flags)
 
     sent_raw = int(user32.SendInput(n, input_array, _INPUT_SIZE))
+    # Phase 2: Sample immediately after native return, before any Python wrapper logic
+    completed_us = clock_now() if clock_now else 0
     # Clamp: a hostile/misbehaving return must not index past the tuple.
     sent = max(0, min(sent_raw, n))
     if sent == n:
-        return n
+        return n, completed_us
 
-    # Partial (or zero) send: first call did not deliver the whole batch atomically.
+    # Partial (or zero) send: first call did not deliver the whole batch in one contiguous chunk.
     missed = n - sent
     _DIAG.partial_send_events += 1
     _DIAG.keys_deferred += missed
@@ -650,13 +659,13 @@ def _send_scan_code_batch_impl(
                 f"[input] SAME-FRAME RETRY recovered chord: {total_sent}/{n} "
                 f"({sent} first + {retry_sent} retry). scan_codes={scan_codes_tuple}"
             )
-        return total_sent
+        return total_sent, completed_us
 
     # Safety path (releases): complete remainder — split release beats a stuck key.
     _DIAG.keys_retried += missed
     if n > 1 and sent > 0:
         debug_log(
-            f"[input] CHORD SPLIT (release complete): only {sent}/{n} keys injected atomically "
+            f"[input] CHORD SPLIT (release complete): only {sent}/{n} keys injected contiguously "
             f"(key_up={is_up}); finishing remaining {missed}. scan_codes={scan_codes_tuple}"
         )
     else:
@@ -668,8 +677,16 @@ def _send_scan_code_batch_impl(
     remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
     remaining_inputs = [_cached_key_input(sc, flags) for sc in remaining_scan_codes]
     send_input_batch(remaining_inputs)
-    return n
+    return n, completed_us
 
+
+@dataclass(slots=True, frozen=True)
+class PlatformSendResult:
+    requested: int
+    inserted: int
+    completed_us: int
+    # Win32 error code, 0 if successful
+    win32_error: int
 
 def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> int:
     """Send scan codes. Always completes remainder (panic/release safety). Returns keys landed."""
@@ -678,21 +695,36 @@ def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool =
     scan_codes_tuple = tuple(dict.fromkeys(scan_codes))
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
     # release_all / watchdog use this path — never leave keys half-released.
-    return _send_scan_code_batch_impl(scan_codes_tuple, flags, complete_remainder=True)
+    landed, _ = _send_scan_code_batch_impl(scan_codes_tuple, flags, complete_remainder=True, clock_now=None)
+    return landed
 
-def send_scan_code_batch_trusted(scan_codes: tuple[int, ...] | list[int], key_up: bool = False) -> int:
-    """Hot-path send. Note-on allows a single immediate same-frame retry for partials; note-off completes remainder. Returns keys landed."""
+def send_scan_code_batch_trusted(
+    scan_codes: tuple[int, ...] | list[int],
+    key_up: bool = False,
+    clock_now: Callable[[], int] | None = None,
+) -> PlatformSendResult:
+    """Hot-path send. Note-on allows a single immediate same-frame retry for partials; note-off completes remainder. Returns PlatformSendResult."""
     if not scan_codes:
-        return 0
-    if len(scan_codes) != len(set(scan_codes)):
-        raise ValueError(f"send_scan_code_batch_trusted received duplicates: {scan_codes}")
+        return PlatformSendResult(
+            requested=0,
+            inserted=0,
+            completed_us=clock_now() if clock_now else 0,
+            win32_error=0,
+        )
     scan_codes_tuple = tuple(scan_codes)
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
-    # key_up=True → complete_remainder (stuck-key safety). key_up=False → musical atomicity.
-    return _send_scan_code_batch_impl(
+    # key_up=True → complete_remainder (stuck-key safety). key_up=False → musical contiguous batch.
+    landed, completed_us = _send_scan_code_batch_impl(
         scan_codes_tuple,
         flags,
         complete_remainder=key_up,
+        clock_now=clock_now,
+    )
+    return PlatformSendResult(
+        requested=len(scan_codes_tuple),
+        inserted=landed,
+        completed_us=completed_us,
+        win32_error=0,  # We don't extract Win32 error currently, but it's part of the seam
     )
 
 def get_process_name_by_pid(pid: int) -> str | None:

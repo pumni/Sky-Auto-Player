@@ -38,7 +38,8 @@ def test_musical_path_no_sleep_retry():
         mock_send_input.side_effect = [2, 1]
         inputs._DIAG.keys_retried = 0
         inputs._DIAG.keys_dropped = 0
-        landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        landed = result.inserted
 
         assert landed == 3
         assert inputs._DIAG.keys_retried == 1

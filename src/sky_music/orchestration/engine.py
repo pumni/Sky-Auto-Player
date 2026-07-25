@@ -648,20 +648,10 @@ class PlaybackEngine:
             cheap_foreground_probe=cheap_foreground_probe,
         )
         # Phase E: wire idle-gap core warmup hook
-        loop.core_warmup_hook = lambda max_us: self._spin_warmup(max_us)
         # Phase H: propagate reprobe kill switch and spin floor.
         loop.enable_spin_reprobe = self.enable_adaptive_spin
         loop._spin_floor_us = self.spin_floor_us
         return loop
-
-    def _spin_warmup(self, max_us: int) -> None:
-        """Busy-spin for up to max_us to warm the CPU core before sending after idle."""
-        if max_us <= 0:
-            return
-        perf_counter_ns = __import__("time").perf_counter_ns
-        target_ns = perf_counter_ns() + max_us * 1000
-        while perf_counter_ns() < target_ns:
-            pass
 
     def _probe_timer_wake_error(self, sleeper: Sleeper) -> int:
         """Measure this machine's sleeper wake error and derive the effective spin threshold.

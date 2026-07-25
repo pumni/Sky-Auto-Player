@@ -466,11 +466,28 @@ class WinSendInputBackend(_TrackedKeyState):
     def _emit(
         self, scan_codes: tuple[int, ...], *, key_up: bool
     ) -> tuple[tuple[int, ...], int | None]:
-        landed = self.inputs_module.send_scan_code_batch_trusted(scan_codes, key_up=key_up)
-        completed_us = self._now_us()
-        # Mocks/legacy callables may return None; treat as full success.
-        if landed is None:
-            return scan_codes, completed_us
+        result = self.inputs_module.send_scan_code_batch_trusted(
+            scan_codes,
+            key_up=key_up,
+            clock_now=self._now_us,
+        )
+        # Mocks/legacy callables may return None, int, or tuple; treat as full success if not PlatformSendResult.
+        if result is None:
+            return scan_codes, self._now_us()
+        
+        # We can dynamically check if it's the new result type
+        if hasattr(result, "inserted") and hasattr(result, "completed_us"):
+            landed = result.inserted
+            completed_us = result.completed_us
+        elif isinstance(result, tuple):
+            landed, completed_us = result
+        else:
+            if isinstance(result, int):
+                landed = result
+            else:
+                landed = getattr(result, "inserted", 0)
+            completed_us = self._now_us()
+            
         sent_n = max(0, min(landed, len(scan_codes)))
         if sent_n >= len(scan_codes):
             return scan_codes, completed_us

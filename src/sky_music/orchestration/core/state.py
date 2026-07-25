@@ -7,9 +7,9 @@ the last exiting reason accumulates the interval into ``pause_time_us`` exactly 
 
 The cross-thread display snapshot (``elapsed_snapshot_us``) is the Phase 4 §7.4 fix for
 the race that exists in this otherwise-cleaner machine: the supervisor thread reads
-``state`` for progress display while the dispatch thread mutates pause fields. Single
-tuple reference assignment is atomic even under free-threaded Python, so readers always
-observe either the pre-transition or post-transition snapshot — never a torn read.
+``state`` for progress display while the dispatch thread mutates pause fields. This
+is protected by a ``threading.Lock`` so readers always observe either the pre-transition
+or post-transition snapshot — never a torn read, fully safe under free-threaded Python.
 
 Boundary rule (enforced by ``tests/test_core_boundary.py``): nothing in
 ``sky_music.orchestration.core`` may import from ``sky_music.platform.*``,
@@ -19,6 +19,7 @@ Boundary rule (enforced by ``tests/test_core_boundary.py``): nothing in
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from sky_music.infrastructure.timing import Clock
@@ -48,13 +49,17 @@ class PlaybackState:
     # First reason that opened the current interval (telemetry attribution).
     pause_open_reason: str | None = None
     epoch_us: int = 0
-    # Atomic display snapshot — single tuple assignment by the dispatch-thread writer;
-    # cross-thread readers (supervisor) get either pre- or post-transition state via
-    # ``elapsed_snapshot_us``. ``init=False`` so the constructor doesn't need a clock;
-    # populated by ``__post_init__``.
+    # Cross-thread display snapshot protected by a lock (Phase 5 free-threaded safety).
+    # ``init=False`` so the constructor doesn't need a clock or lock explicitly passed.
     _display_snapshot: tuple[int, int | None, bool] = field(
         init=False,
         default=(0, None, False),
+        repr=False,
+        compare=False,
+    )
+    _snapshot_lock: threading.Lock = field(
+        init=False,
+        default_factory=threading.Lock,
         repr=False,
         compare=False,
     )
@@ -71,11 +76,12 @@ class PlaybackState:
         is atomic even under free-threading — readers always observe a consistent
         pre- or post-transition snapshot rather than torn fields.
         """
-        self._display_snapshot = (
-            self.epoch_us,
-            self.pause_interval_started_us,
-            self.is_paused(),
-        )
+        with self._snapshot_lock:
+            self._display_snapshot = (
+                self.epoch_us,
+                self.pause_interval_started_us,
+                self.is_paused(),
+            )
 
     def is_paused(self) -> bool:
         return bool(self.pause_reasons)
@@ -151,10 +157,10 @@ class PlaybackState:
     def elapsed_snapshot_us(self, clock: Clock) -> tuple[int, bool]:
         """Approximate (elapsed_us, paused) read for cross-thread display consumers.
 
-        Implements Phase 4 §7.4: a single atomically-assigned tuple
-        ``(epoch_us, pause_anchor, paused)`` is overwritten on every pause transition
-        by the dispatch-thread writer (single-writer discipline). This method reads
-        the tuple once and derives elapsed from it, returning both the elapsed
+        Implements Phase 4 §7.4: a single tuple ``(epoch_us, pause_anchor, paused)``
+        is overwritten on every pause transition by the dispatch-thread writer (single-writer
+        discipline), protected by a ``threading.Lock``. This method acquires the lock to
+        read the tuple once and derives elapsed from it, returning both the elapsed
         microseconds and the paused boolean that the supervisor wants for
         conditional progress publishing.
 
@@ -163,7 +169,8 @@ class PlaybackState:
         timing-critical dispatch decisions. The exact ``get_elapsed_us`` method
         remains the writer-thread source of truth.
         """
-        epoch_us, pause_anchor, paused = self._display_snapshot
+        with self._snapshot_lock:
+            epoch_us, pause_anchor, paused = self._display_snapshot
         if paused:
             assert pause_anchor is not None
             return max(0, pause_anchor - epoch_us), True

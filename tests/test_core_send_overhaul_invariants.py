@@ -22,7 +22,8 @@ def test_musical_path_retry_no_sleep():
         inputs._DIAG.keys_retried = 0
         inputs._DIAG.keys_dropped = 0
         
-        landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        landed = result.inserted
         
         assert landed == 3
         assert inputs._DIAG.keys_retried == 1
@@ -40,7 +41,8 @@ def test_musical_path_persistent_block():
         inputs._DIAG.keys_retried = 0
         inputs._DIAG.keys_dropped = 0
         
-        landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=False)
+        landed = result.inserted
         
         assert landed == 0
         assert inputs._DIAG.keys_retried == 0
@@ -55,7 +57,8 @@ def test_release_path_completes_remainder():
         # Release path: completes remainder using send_input_batch
         mock_send_input.return_value = 1
         
-        landed = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=True)
+        result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=True)
+        landed = result.inserted
         
         assert landed == 3
         mock_send_batch.assert_called_once()

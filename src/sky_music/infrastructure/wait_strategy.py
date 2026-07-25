@@ -86,27 +86,32 @@ class HybridWaitStrategy:
                 if remaining_to_sleep > 0:
                     from sky_music.platform.win32 import inputs
 
-                    if inputs.set_waitable_timer_relative_us(timer_handle, remaining_to_sleep):
-                        try:
-                            res = inputs.wait_for_multiple_objects(
-                                (timer_handle, command_event),
-                                inputs.INFINITE,
-                            )
-                            # Woken by command event (WAIT_OBJECT_0 + 1)
-                            if res == inputs.WAIT_OBJECT_0 + 1:
-                                return True
-                            if res is None:
+                    now = clock.now_us()
+                    remaining_us = target_system_us - now
+                    remaining_to_sleep = remaining_us - guard
+
+                    if remaining_to_sleep > 0:
+                        if inputs.set_waitable_timer_relative_us(timer_handle, remaining_to_sleep):
+                            try:
+                                res = inputs.wait_for_multiple_objects(
+                                    (timer_handle, command_event),
+                                    inputs.INFINITE,
+                                )
+                                # Woken by command event (WAIT_OBJECT_0 + 1)
+                                if res == inputs.WAIT_OBJECT_0 + 1:
+                                    return True
+                                if res is None:
+                                    sleep_us = min(remaining_to_sleep, 2_000)
+                                    sleeper.sleep(sleep_us / 1_000_000.0)
+                                    return False
+                            except Exception:
                                 sleep_us = min(remaining_to_sleep, 2_000)
                                 sleeper.sleep(sleep_us / 1_000_000.0)
                                 return False
-                        except Exception:
+                        else:
                             sleep_us = min(remaining_to_sleep, 2_000)
                             sleeper.sleep(sleep_us / 1_000_000.0)
                             return False
-                    else:
-                        sleep_us = min(remaining_to_sleep, 2_000)
-                        sleeper.sleep(sleep_us / 1_000_000.0)
-                        return False
 
                 # Spin remainder
                 self.spin_until_us(target_system_us, clock)

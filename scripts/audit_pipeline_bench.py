@@ -89,7 +89,7 @@ def main() -> None:
                 break
             for rel in coord.pop_due_pending(now):
                 coord.complete_releases((rel,), (rel.scan_code,))
-            for batch in coord.pop_due_authored(now):
+            for batch, _ in coord.pop_due_authored(now):
                 if batch.kind == "up":
                     coord.request_releases(batch.intents)
                     for rel in coord.pop_due_pending(coord.next_deadline_us() or now):

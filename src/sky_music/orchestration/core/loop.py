@@ -259,7 +259,7 @@ class DispatchLoop:
         unfocused_send_hook: Callable[[], None] | None = None,
         diagnostics_log: Callable[[str], None] | None = None,
         cheap_foreground_probe: Callable[[], bool] | None = None,
-        core_warmup_budget_us: int = 500,
+        core_warmup_budget_us: int = 200,
     ) -> None:
         self.coordinator = coordinator
         self.clock = clock
@@ -290,20 +290,21 @@ class DispatchLoop:
         self.cheap_foreground_probe = cheap_foreground_probe
         # Phase E: injected hook for idle-gap core warmup. Called with max_us
         # when the gap since last send exceeds SEND_COLD_THRESHOLD_US.
-        self.core_warmup_hook: Callable[[int], None] | None = None
+
         self.core_warmup_budget_us: int = max(0, core_warmup_budget_us)
+        self._last_send_elapsed_us: int = 0
         # Phase H: kill switch for mid-song reprobe (disabled when adaptive_spin is off).
         self.enable_spin_reprobe: bool = True
         # Spin floor for clamp during reprobe (mirrors engine.spin_floor_us).
         self._spin_floor_us: int = 700
         # Wall-clock epoch time of last reprobe (elapsed_us from playback start).
-        self._last_reprobe_elapsed_us: int = -REPROBE_MIN_INTERVAL_US - 1
+        self._last_reprobe_elapsed_us: int = 0
         # Accumulated telemetry list of applied thresholds (capped at 32 entries).
         self._reprobe_applied_thresholds: list[int] = []
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
-        self._last_send_completed_us = 0
+        
         # Phase 2 pre-down focus gate starts dormant — only after the first down dispatch
         # has actually fired does the loop accept the gate's strict no-send-while-unfocused
         # policy. Before that the polled focus-pause gate handles the pre-start unfocused
@@ -337,6 +338,22 @@ class DispatchLoop:
         if self.dispatch_lead_us > 0:
             return self.dispatch_lead_us
         return self.estimator.get_lead_us(ActionKind.DOWN, len(batch.intents))
+
+    def _get_progress_counters(self):
+        from sky_music.orchestration.core.ports import ProgressCounters
+        if not hasattr(self, "_max_lateness_us"):
+            return None
+        latencies = tuple(self._latencies)
+        self._latencies.clear()
+        return ProgressCounters(
+            max_lateness_us=self._max_lateness_us,
+            late_2ms=self._late_2ms,
+            late_5ms=self._late_5ms,
+            late_10ms=self._late_10ms,
+            release_max_us=self._release_max_us,
+            release_late_2ms=self._release_late_2ms,
+            recent_latencies_us=latencies,
+        )
 
     def _abort_input_safe(
         self,
@@ -457,8 +474,8 @@ class DispatchLoop:
             completion_us = send_end_us
 
         pre_send_spin_us = max(0, send_start_us - self._wait_spin_start_us)
-        idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_completed_us)
-        self._last_send_completed_us = completion_us
+        idle_gap_us = max(0, self._wait_spin_start_us - self._last_send_elapsed_us)
+        self._last_send_elapsed_us = completion_us
         visible_lateness_us = completion_us - action.at_us
         dispatch_lateness_us = lateness_us + send_duration_pure_us
 
@@ -810,6 +827,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
                 force=True,
+                counters=self._get_progress_counters(),
             )
         if command == PlaybackCommand.PANIC:
             self._abort_input_safe("panic", full_instrument=True)
@@ -820,6 +838,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
                 force=True,
+                counters=self._get_progress_counters(),
             )
         if command == PlaybackCommand.PAUSE:
             now_us = self.clock.now_us()
@@ -833,7 +852,8 @@ class DispatchLoop:
                     health=self.health_monitor.get_backend_health_snapshot(force=True),
                     input_path_degraded=self.health_monitor.input_path_degraded,
                     force=True,
-                )
+                    counters=self._get_progress_counters(),
+            )
             else:
                 closed = state.exit_pause("manual", now_us)
                 if closed is not None:
@@ -847,7 +867,8 @@ class DispatchLoop:
                     health=self.health_monitor.get_backend_health_snapshot(force=True),
                     input_path_degraded=self.health_monitor.input_path_degraded,
                     force=True,
-                )
+                    counters=self._get_progress_counters(),
+            )
         return None
 
     def _process_wait_states(
@@ -866,6 +887,7 @@ class DispatchLoop:
                 status="paused",
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
+                counters=self._get_progress_counters(),
             )
             # Off hot path: soft-flush telemetry while idle-polling (finding A3).
             self.telemetry.flush_if_large()
@@ -888,6 +910,7 @@ class DispatchLoop:
                 status=status_val,
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
+                counters=self._get_progress_counters(),
             )
             # Off hot path: soft-flush telemetry while idle-polling (finding A3).
             self.telemetry.flush_if_large()
@@ -929,6 +952,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
                 force=True,
+                counters=self._get_progress_counters(),
             )
             if state.has_pause_reason("manual"):
                 return True, None
@@ -1029,8 +1053,6 @@ class DispatchLoop:
         # acknowledgement latency — commands are human-rate (≈200 ms reaction floor),
         # so 2 ms is well below the noise floor of any user interaction.
         poll_interval_us = 2_000
-        warmup_run = False
-
         while True:
             if state.is_paused():
                 service_result = self._service_control_state(
@@ -1052,7 +1074,14 @@ class DispatchLoop:
 
             remaining_us = target_elapsed_us - elapsed_us
             target_system_us = state.epoch_us + target_elapsed_us
-            if remaining_us <= self.spin_threshold_us:
+            
+            # Phase E: idle-gap core warmup.
+            if self.spin_threshold_us >= 0 and target_elapsed_us - self._last_send_elapsed_us > SEND_COLD_THRESHOLD_US:
+                effective_spin_threshold = self.spin_threshold_us + min(self.core_warmup_budget_us, CORE_WARMUP_SPIN_MAX_US)
+            else:
+                effective_spin_threshold = self.spin_threshold_us
+
+            if remaining_us <= effective_spin_threshold:
                 self._wait_spin_start_us = elapsed_us
                 self.wait_strategy.spin_until_us(target_system_us, self.clock)
                 return None, last_runtime_poll_us, last_render_time_us, first_action_executed
@@ -1084,14 +1113,7 @@ class DispatchLoop:
                 # Re-read elapsed in case probe took ~16 ms wall time; remaining stays valid
                 # for the outer iteration — the loop will recompute on the next pass.
 
-            # Phase E: idle-gap core warmup.
-            now_us = self.clock.now_us()
-            if not warmup_run and self.core_warmup_hook is not None and now_us - self._last_send_completed_us > SEND_COLD_THRESHOLD_US:
-                remaining_budget = (target_elapsed_us - elapsed_us) - self.spin_threshold_us
-                if remaining_budget > 0:
-                    max_spin = min(self.core_warmup_budget_us, CORE_WARMUP_SPIN_MAX_US, remaining_budget)
-                    self.core_warmup_hook(max_spin)
-                warmup_run = True
+
 
             # Event-mode spin happens inside wait_until_us; record the nominal spin start so
             # pre_send_spin_us reflects the guard spin (the high-res sleeper wakes within the guard
@@ -1102,7 +1124,7 @@ class DispatchLoop:
                 target_system_us=target_system_us,
                 clock=self.clock,
                 sleeper=self.sleeper,
-                spin_threshold_us=self.spin_threshold_us,
+                spin_threshold_us=effective_spin_threshold,
                 policy=self.sleep_policy,
                 command_event=command_event,
             )
@@ -1150,7 +1172,8 @@ class DispatchLoop:
                             status="playing",
                             health=self.health_monitor.get_backend_health_snapshot(),
                             input_path_degraded=self.health_monitor.input_path_degraded,
-                        )
+                            counters=self._get_progress_counters(),
+            )
 
     def _drain_due(
         self,
@@ -1208,12 +1231,36 @@ class DispatchLoop:
         self.health_monitor.set_runtime_signal(focus_signal)
         # Per-run reset of the Phase 2 pre-down gate arming flag.
         # Note: _first_down_dispatched was removed in Phase 2.
+        self._max_lateness_us = 0
+        self._late_2ms = 0
+        self._late_5ms = 0
+        self._late_10ms = 0
+        self._release_max_us = 0
+        self._release_late_2ms = 0
+        import collections
+        self._latencies = collections.deque(maxlen=2000)
 
         def observe_result(exec_result: ExecutionResult | None) -> None:
             if exec_result is None:
                 return
             if exec_result.runtime_outcome != "deferred_release":
-                progress_sink.update_counters(exec_result.lateness_us, exec_result.kind)
+                lateness_us = exec_result.lateness_us
+                clamped = max(0, lateness_us)
+                if exec_result.kind == "down":
+                    if clamped > self._max_lateness_us:
+                        self._max_lateness_us = clamped
+                    if clamped > 2000:
+                        self._late_2ms += 1
+                    if clamped > 5000:
+                        self._late_5ms += 1
+                    if clamped > 10000:
+                        self._late_10ms += 1
+                    self._latencies.append(lateness_us)
+                else:
+                    if clamped > self._release_max_us:
+                        self._release_max_us = clamped
+                    if clamped > 2000:
+                        self._release_late_2ms += 1
 
         # Defined once (not per loop iteration) so the hot dispatch window never allocates a
         # fresh closure per note. ``first_action_executed`` is captured by reference, so the
@@ -1262,6 +1309,7 @@ class DispatchLoop:
                 health=self.health_monitor.get_backend_health_snapshot(force=True),
                 input_path_degraded=self.health_monitor.input_path_degraded,
                 force=True,
+                counters=self._get_progress_counters(),
             )
             progress_sink.finish(f"Finished playing {self.telemetry.song_name}")
 

@@ -4,7 +4,6 @@ import contextlib
 import queue
 import threading
 import time
-from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -39,10 +38,7 @@ from sky_music.orchestration.core.ports import (
     CommandSource as CommandSource,
 )
 from sky_music.orchestration.core.ports import (
-    FocusSignal as FocusSignal,
-)
-from sky_music.orchestration.core.ports import (
-    ProgressSink as ProgressSink,
+    ProgressCounters,
 )
 
 
@@ -79,7 +75,9 @@ class DirectProgressSink:
         health: BackendHealth | None = None,
         input_path_degraded: bool = False,
         force: bool = False,
+        counters: ProgressCounters | None = None,
     ) -> None:
+        _ = counters
         if self.renderer is None:
             return
         self.renderer.render(
@@ -110,6 +108,7 @@ class ProgressSnapshot:
     health: BackendHealth | None = None
     input_path_degraded: bool = False
     force: bool = False
+    counters: ProgressCounters | None = None
 
 
 class QueueCommandSource:
@@ -159,13 +158,12 @@ class SnapshotProgressSink:
     deque eviction is O(1) and never triggers a freeing collection on the hot path.
     """
 
-    def __init__(self, max_counters: int = 512) -> None:
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snapshot: ProgressSnapshot | None = None
         self._version = 0
         self._finish_message: str | None = None
-        # Bounded deque — a UI thread hiccup can drop counters but must never grow memory.
-        self._counter_updates: deque[tuple[int, str]] = deque(maxlen=max_counters)
+        self._finish_message: str | None = None
 
     def publish(
         self,
@@ -177,6 +175,7 @@ class SnapshotProgressSink:
         health: BackendHealth | None = None,
         input_path_degraded: bool = False,
         force: bool = False,
+        counters: ProgressCounters | None = None,
     ) -> None:
         with self._lock:
             self._snapshot = ProgressSnapshot(
@@ -187,6 +186,7 @@ class SnapshotProgressSink:
                 health=health,
                 input_path_degraded=input_path_degraded,
                 force=force,
+                counters=counters,
             )
             self._version += 1
 
@@ -194,27 +194,20 @@ class SnapshotProgressSink:
         with self._lock:
             self._finish_message = message
 
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        with self._lock:
-            self._counter_updates.append((lateness_us, kind))
-
     def consume(
         self,
         last_version: int,
-    ) -> tuple[int, ProgressSnapshot | None, tuple[tuple[int, str], ...], str | None]:
+    ) -> tuple[int, ProgressSnapshot | None, str | None]:
         # Fast path: nothing changed since last consume — avoids taking a lock and any
         # deque materialisation on the supervisor's 200Hz tick.
         with self._lock:
-            if self._version == last_version and not self._counter_updates and self._finish_message is None:
-                return last_version, None, (), None
+            if self._version == last_version and self._finish_message is None:
+                return last_version, None, None
             snapshot = self._snapshot if self._version != last_version else None
             version = self._version
-            # tuple(deque) is a fresh allocation; only do it when there are counters.
-            counters = tuple(self._counter_updates) if self._counter_updates else ()
-            self._counter_updates.clear()
             finish_message = self._finish_message
             self._finish_message = None
-        return version, snapshot, counters, finish_message
+        return version, snapshot, finish_message
 
 
 @dataclass(slots=True)
@@ -557,11 +550,10 @@ class PlaybackSupervisor:
         progress_sink: SnapshotProgressSink,
         last_version: int,
     ) -> int:
-        version, snapshot, counters, finish_message = progress_sink.consume(last_version)
-        if self.renderer is not None and hasattr(self.renderer, "update_counters"):
-            for lateness_us, kind in counters:
-                self.renderer.update_counters(lateness_us, kind=kind)
+        version, snapshot, finish_message = progress_sink.consume(last_version)
         if snapshot is not None:
+            if snapshot.counters is not None and self.renderer is not None and hasattr(self.renderer, "update_counters_batch"):
+                self.renderer.update_counters_batch(snapshot.counters)
             self._render_progress_snapshot(snapshot)
         if finish_message is not None and self.renderer is not None:
             self.renderer.finish(finish_message)
