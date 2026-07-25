@@ -1,1035 +1,366 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sky Auto Player — Auto Music Player for Sky: Children of the Light (Windows)</title>
-    <meta name="description" content="Sky Auto Player is a free, open-source auto music player for Sky: Children of the Light on Windows PC. It plays your JSON, skysheet, and TXT sheets hands-free — clean chords, fast songs, and long holds — using only standard Windows keyboard input, never touching the game." />
-    <meta name="author" content="pumni" />
-    <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <link rel="canonical" href="https://pumni.github.io/Sky-Auto-Player/" />
-    <link rel="author" href="https://github.com/pumni" />
-    <link rel="alternate" hreflang="en" href="https://pumni.github.io/Sky-Auto-Player/" />
-    <link rel="alternate" hreflang="vi" href="https://pumni.github.io/Sky-Auto-Player/vi/" />
-    <link rel="alternate" hreflang="x-default" href="https://pumni.github.io/Sky-Auto-Player/" />
-    <meta name="theme-color" content="#07111f" />
-    <meta name="color-scheme" content="dark" />
-    <!-- Fonts: system stack — no render-blocking Google Fonts request -->
-    <link rel="dns-prefetch" href="https://github.com" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='8' y1='8' x2='56' y2='56' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Cpath d='M40 12v27.4a8.9 8.9 0 1 1-4.2-7.6V18h16v-6H40Z' fill='url(%23a)'/%3E%3C/svg%3E" />
-    
-    <!-- Open Graph -->
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Sky Auto Player" />
-    <meta property="og:title" content="Sky Auto Player — Auto Music Player for Sky: Children of the Light" />
-    <meta property="og:description" content="Let your Sky: Children of the Light songs play themselves on PC. Free & open source, portable, and it never touches the game — just standard keystrokes. JSON, skysheet, and TXT sheets supported." />
-    <meta property="og:url" content="https://pumni.github.io/Sky-Auto-Player/" />
-    <meta property="og:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg" />
-    <meta property="og:image:type" content="image/jpeg" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Sky Auto Player - Sky: Children of the Light PC Music Sheet Player" />
-    <meta property="og:locale" content="en_US" />
-    <meta property="og:locale:alternate" content="vi_VN" />
-    
-    <!-- Twitter/X -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Sky Auto Player — Auto Music Player for Sky: Children of the Light" />
-    <meta name="twitter:description" content="Let your Sky: COTL songs play themselves on Windows PC. Free & open source, portable, never touches the game. JSON, skysheet, TXT." />
-    <meta name="twitter:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg" />
-    <meta name="twitter:image:alt" content="Sky Auto Player interface preview" />
-
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sky Auto Player — Timing-First Music Player for Sky on Windows</title>
+    <meta name="description" content="Sky Auto Player is a timing-first, open-source music player for Sky: Children of the Light on Windows. Load a sheet, then play notes, chords and holds.">
+    <meta name="author" content="pumni">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <link rel="canonical" href="https://pumni.github.io/Sky-Auto-Player/">
+    <link rel="alternate" hreflang="en" href="https://pumni.github.io/Sky-Auto-Player/">
+    <link rel="alternate" hreflang="vi" href="https://pumni.github.io/Sky-Auto-Player/vi/">
+    <link rel="alternate" hreflang="x-default" href="https://pumni.github.io/Sky-Auto-Player/">
+    <meta name="theme-color" content="#07090d">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2307090d'/%3E%3Ccircle cx='19' cy='18' r='4' fill='%23f7dda2'/%3E%3Ccircle cx='42' cy='28' r='3' fill='%23b8ccd6'/%3E%3Ccircle cx='31' cy='47' r='3' fill='%23dcae55'/%3E%3Cpath d='M21 19 40 28 31 45' fill='none' stroke='%23ded8cc' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Sky Auto Player">
+    <meta property="og:title" content="Sky Auto Player — Timing-First Music Player for Sky on Windows">
+    <meta property="og:description" content="Load a Sky music sheet and play notes, chords and holds on time with an open-source Windows application.">
+    <meta property="og:url" content="https://pumni.github.io/Sky-Auto-Player/">
+    <meta property="og:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Sky Auto Player timing-first music player for Sky on Windows">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:locale:alternate" content="vi_VN">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Sky Auto Player — Timing-First Music Player for Sky on Windows">
+    <meta name="twitter:description" content="Load a Sky music sheet and play notes, chords and holds on time with an open-source Windows application.">
+    <meta name="twitter:image" content="https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg">
+    <meta name="twitter:image:alt" content="Sky Auto Player timing-first music player for Sky on Windows">
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@graph": [
-          {
-            "@type": "WebSite",
-            "@id": "https://pumni.github.io/Sky-Auto-Player/#website",
-            "name": "Sky Auto Player",
-            "alternateName": ["Sky Auto Player", "Sky-Auto-Player", "Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
-            "url": "https://pumni.github.io/Sky-Auto-Player/",
-            "publisher": { "@id": "https://github.com/pumni#person" },
-            "inLanguage": "en"
-          },
-          {
-            "@type": "Person",
-            "@id": "https://github.com/pumni#person",
-            "name": "pumni",
-            "url": "https://github.com/pumni",
-            "sameAs": ["https://github.com/pumni"]
-          },
-          {
-            "@type": "SoftwareApplication",
-            "@id": "https://pumni.github.io/Sky-Auto-Player/#software",
-            "name": "Sky Auto Player",
-            "softwareVersion": "2.4.4",
-            "image": "https://pumni.github.io/Sky-Auto-Player/assets/og-banner.jpg",
-            "license": "https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE",
-            "alternateName": ["Sky Auto Player", "Sky-Auto-Player", "Sky-Player", "Sky COTL PC Music Player", "Sky COTL auto music player", "Sky CotL auto music player"],
-            "applicationCategory": "MultimediaApplication",
-            "operatingSystem": "Windows 10, Windows 11",
-            "isAccessibleForFree": true,
-            "about": {
-              "@type": "VideoGame",
-              "name": "Sky: Children of the Light",
-              "alternateName": "Sky",
-              "publisher": {
-                "@type": "Organization",
-                "name": "thatgamecompany",
-                "url": "https://thatskygame.com"
-              },
-              "sameAs": [
-                "https://en.wikipedia.org/wiki/Sky:_Children_of_the_Light",
-                "https://www.wikidata.org/wiki/Q64547527",
-                "https://www.thatskygame.com/"
-              ]
-            },
-            "subjectOf": {
-              "@type": "FAQPage",
-              "@id": "https://pumni.github.io/Sky-Auto-Player/faq.html#faq"
-            },
-            "description": "Sky Auto Player is a free and open-source Windows tool that automatically plays Sky: Children of the Light music sheets. It supports JSON, skysheet, and TXT formats, using only the public Windows SendInput API for input simulation.",
-            "url": "https://pumni.github.io/Sky-Auto-Player/",
-            "downloadUrl": "https://github.com/pumni/Sky-Auto-Player/releases/latest",
-            "codeRepository": "https://github.com/pumni/Sky-Auto-Player",
-            "creator": { "@id": "https://github.com/pumni#person" },
-            "offers": {
-              "@type": "Offer",
-              "price": "0",
-              "priceCurrency": "USD",
-              "availability": "https://schema.org/InStock",
-              "url": "https://github.com/pumni/Sky-Auto-Player/releases/latest"
-            }
-          },
-          {
-            "@type": "HowTo",
-            "@id": "https://pumni.github.io/Sky-Auto-Player/#howto",
-            "name": "Play your first Sky music sheet with Sky Auto Player",
-            "description": "From download to your first automated song in under two minutes. Sky Auto Player is a portable Windows app — no installer, no admin rights, no background services.",
-            "totalTime": "PT2M",
-            "tool": [{ "@type": "HowToTool", "name": "Windows 10 or 11 PC" }],
-            "step": [
-              { "@type": "HowToStep", "position": 1, "name": "Download", "text": "Grab the latest zip package from GitHub Releases. Every release ships with a SHA256 sidecar so you can verify before running." },
-              { "@type": "HowToStep", "position": 2, "name": "Extract", "text": "Unzip the folder anywhere — Desktop, Documents, or a tools directory. No installer, no admin rights, no registry entries." },
-              { "@type": "HowToStep", "position": 3, "name": "Add your songs", "text": "Export sheets as .json, .skysheet, or .txt from the Sky Music web editor and drop them into the songs folder next to Sky-Auto-Player.exe." },
-              { "@type": "HowToStep", "position": 4, "name": "Pick a song", "text": "Run Sky-Auto-Player.exe, type to fuzzy-search your library, and press Enter to arm the song." },
-              { "@type": "HowToStep", "position": 5, "name": "Play", "text": "Switch to the Sky game window and the song plays itself. Tap F8 to pause, F9 to skip, F10 to stop at any time." }
-            ]
-          }
-        ]
+        "@type": "SoftwareApplication",
+        "name": "Sky Auto Player",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Windows 10, Windows 11 (64-bit)",
+        "url": "https://pumni.github.io/Sky-Auto-Player/",
+        "downloadUrl": "https://github.com/pumni/Sky-Auto-Player/releases/latest",
+        "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+        "isAccessibleForFree": true
       }
     </script>
-
-    <link rel="preload" as="image" href="assets/preview.webp" />
-
-    <style>
-      :root {
-        --bg: #020617;
-        --bg-2: #07111f;
-        --text: #f8fafc;
-        --muted: #cbd5e1;
-        --muted-2: #94a3b8;
-        --primary: #38bdf8;
-        --secondary: #a78bfa;
-        --panel: rgba(17, 24, 39, 0.7);
-        --panel-strong: #090d16;
-        --line: rgba(148, 163, 184, 0.18);
-        --focus: #38bdf8;
-        --max: 1200px;
-        --radius-sm: 8px;
-        --radius-md: 16px;
-        --radius-lg: 24px;
-        --radius-xl: 32px;
-        --shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-        --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Noto Sans Vietnamese', sans-serif;
-      }
-
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      body {
-        min-height: 100vh;
-        background:
-          radial-gradient(circle at 8% 0%, rgba(125, 211, 252, 0.24), transparent 34rem),
-          radial-gradient(circle at 92% 4%, rgba(192, 132, 252, 0.20), transparent 34rem),
-          linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 52%, var(--bg) 100%);
-        background-attachment: fixed;
-        color: var(--text);
-        font-family: var(--font);
-        overflow-x: hidden;
-        text-rendering: optimizeLegibility;
-        -webkit-font-smoothing: antialiased;
-        line-height: 1.5;
-      }
-      body::before {
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        pointer-events: none;
-        content: "";
-        background-image:
-          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-        background-size: 48px 48px;
-        -webkit-mask-image: linear-gradient(to bottom, black, transparent 78%);
-        mask-image: linear-gradient(to bottom, black, transparent 78%);
-      }
-
-      .page { position: relative; z-index: 1; width: min(100% - 48px, var(--max)); margin: 0 auto; }
-      
-      /* Skip Link */
-      .skip-link {
-        position: absolute;
-        top: -100px;
-        left: 20px;
-        background: var(--primary);
-        color: #031018;
-        padding: 12px 24px;
-        font-weight: 850;
-        border-radius: var(--radius-sm);
-        z-index: 9999;
-        transition: top 0.2s;
-      }
-      .skip-link:focus { top: 20px; }
-
-      /* Site Header */
-      .site-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 24px 0;
-        border-bottom: 1px solid var(--line);
-      }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        text-decoration: none;
-        color: var(--text);
-        font-weight: 900;
-        font-size: 20px;
-        letter-spacing: -0.04em;
-        outline: none;
-      }
-      .brand:focus-visible { outline: 3px solid var(--focus); outline-offset: 6px; }
-      .brand-mark {
-        display: grid;
-        place-items: center;
-      }
-
-      .nav-links { display: flex; align-items: center; gap: 10px; }
-      .nav-link {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        min-height: 40px;
-        padding: 0 15px;
-        text-decoration: none;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 999px;
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 800;
-        background: rgba(15, 23, 42, 0.56);
-        backdrop-filter: blur(18px);
-        transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, color 180ms ease;
-        outline: none;
-      }
-      .nav-link:hover { color: var(--text); border-color: rgba(56, 189, 248, 0.5); background: rgba(15, 23, 42, 0.88); transform: translateY(-2px); }
-      .nav-link:focus-visible { outline: 3px solid var(--focus); }
-      .nav-link.github { border-color: rgba(56, 189, 248, 0.28); color: #dff7ff; }
-
-      /* Custom i18n Dropdown */
-      .lang-selector { position: relative; }
-      .lang-trigger {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        min-height: 40px;
-        background: rgba(15, 23, 42, 0.56);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        backdrop-filter: blur(18px);
-        color: var(--text);
-        padding: 0 15px;
-        border-radius: 999px;
-        font-size: 14px;
-        font-weight: 800;
-        cursor: pointer;
-        outline: none;
-        transition: border-color 150ms ease;
-      }
-      .lang-trigger:hover, .lang-trigger:focus-visible { border-color: var(--primary); }
-      .lang-trigger:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-      .lang-dropdown {
-        position: absolute;
-        top: calc(100% + 8px);
-        right: 0;
-        background: #0d1321;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 6px;
-        width: 140px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-        z-index: 100;
-      }
-      .lang-option {
-        display: flex;
-        align-items: center;
-        width: 100%;
-        padding: 8px 10px;
-        border: none;
-        background: transparent;
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 700;
-        border-radius: 6px;
-        cursor: pointer;
-        text-align: left;
-        outline: none;
-      }
-      .lang-option:hover, .lang-option:focus-visible {
-        color: var(--text);
-        background: rgba(255, 255, 255, 0.05);
-      }
-      .lang-option:focus-visible { outline: 2px solid var(--focus); }
-      .lang-option[aria-selected="true"] { color: var(--primary); }
-      .lang-option .check {
-        margin-right: 8px;
-        opacity: 0;
-        color: var(--primary);
-        flex-shrink: 0;
-      }
-      .lang-option[aria-selected="true"] .check { opacity: 1; }
-
-      /* Hero Section */
-      .hero {
-        display: grid;
-        grid-template-columns: 1.05fr 0.95fr;
-        gap: 60px;
-        align-items: center;
-        padding: 68px 0 68px;
-      }
-      .eyebrow {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background: rgba(56, 189, 248, 0.08);
-        border: 1px solid rgba(56, 189, 248, 0.15);
-        padding: 6px 14px;
-        border-radius: 999px;
-        color: var(--primary);
-        font-size: 12px;
-        font-weight: 900;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        margin-bottom: 24px;
-      }
-      .eyebrow-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 999px;
-        background: var(--primary);
-        box-shadow: 0 0 10px var(--primary);
-      }
-      .hero h1 {
-        font-size: clamp(38px, 6vw, 68px);
-        font-weight: 950;
-        line-height: 0.98;
-        letter-spacing: -0.05em;
-        margin-bottom: 24px;
-      }
-      .gradient-text {
-        background: linear-gradient(135deg, var(--primary) 20%, var(--secondary) 80%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-      }
-      .hero-copy {
-        font-size: clamp(16px, 2vw, 19px);
-        color: var(--muted);
-        line-height: 1.68;
-        margin-bottom: 34px;
-      }
-      .actions { display: flex; gap: 14px; margin-bottom: 28px; }
-      
-      /* Buttons Styling */
-      .button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        text-decoration: none;
-        padding: 14px 28px;
-        font-weight: 950;
-        font-size: 14px;
-        border-radius: 999px;
-        transition: transform 150ms ease, box-shadow 150ms ease, background 150ms ease;
-        outline: none;
-      }
-      .button-primary {
-        color: #031018;
-        background: linear-gradient(135deg, var(--primary), var(--secondary));
-        box-shadow: 0 10px 30px rgba(56, 189, 248, 0.25);
-      }
-      .button-primary:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 15px 35px rgba(56, 189, 248, 0.35);
-      }
-      .button-secondary {
-        color: var(--text);
-        background: var(--panel);
-        border: 1px solid var(--line);
-      }
-      .button-secondary:hover {
-        background: rgba(255, 255, 255, 0.05);
-        border-color: var(--muted);
-        transform: translateY(-2px);
-      }
-      .button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-
-      .hero-note {
-        display: flex;
-        align-items: flex-start;
-        gap: 9px;
-        color: var(--muted-2);
-        font-size: 13.5px;
-        max-width: 540px;
-        line-height: 1.65;
-      }
-      .hero-note strong { color: var(--text); }
-
-      /* Preview Card */
-      .preview-card {
-        min-width: 0;
-        border: 1px solid var(--line);
-        border-radius: var(--radius-lg);
-        background: var(--panel-strong);
-        box-shadow: var(--shadow);
-        overflow: hidden;
-      }
-      .window-bar {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 14px 20px;
-        border-bottom: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.02);
-      }
-      .window-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.15);
-      }
-      .window-title {
-        margin-left: 10px;
-        font-size: 12px;
-        font-family: ui-monospace, monospace;
-        color: var(--muted-2);
-        font-weight: 700;
-      }
-      .player-preview { padding: 20px; }
-      .player-preview img {
-        width: 100%;
-        height: auto;
-        border-radius: var(--radius-sm);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        display: block;
-      }
-
-      /* Stats */
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 14px;
-        margin-top: 18px;
-      }
-      .stat { padding: 14px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 18px; background: rgba(255, 255, 255, 0.055); }
-      .stat strong { display: block; font-size: 18px; }
-      .stat span { color: var(--muted-2); font-size: 13px; }
-
-      /* Trust Pillars Styles */
-      .trust {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 18px;
-        padding: 0 0 88px;
-      }
-      .trust-item,
-      .card,
-      .format-card,
-      .step,
-      .source-panel,
-      .callout {
-        border: 1px solid var(--line);
-        background: rgba(15, 23, 42, 0.56);
-        backdrop-filter: blur(18px);
-      }
-      
-      .section { padding: 0 0 88px; }
-      .section-header { max-width: 780px; margin-bottom: 26px; }
-      .section-kicker {
-        display: inline-flex;
-        margin-bottom: 12px;
-        color: var(--primary);
-        font-size: 13px;
-        font-weight: 950;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .section-title { margin-bottom: 0; font-size: clamp(30px, 5vw, 48px); line-height: 1.04; letter-spacing: -0.055em; }
-      .section-text { margin-top: 16px; color: var(--muted); font-size: 18px; line-height: 1.75; }
-
-      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-      .card { padding: 24px; border-radius: var(--radius-md); }
-      
-      .card-icon {
-        display: grid;
-        width: 42px;
-        height: 42px;
-        margin-bottom: 18px;
-        place-items: center;
-        border-radius: 14px;
-        background: rgba(125, 211, 252, 0.12);
-        color: var(--primary);
-      }
-      .card-icon .lucide {
-        width: 20px;
-        height: 20px;
-      }
-
-      .card h3, .format-card h3, .step h3 { margin-bottom: 10px; letter-spacing: -0.03em; }
-      .card h3, .step h3 { font-size: 18px; }
-      .card p, .format-card p, .step p, .source-panel p, .callout p { color: var(--muted); line-height: 1.72; }
-
-      .split { display: grid; grid-template-columns: 0.95fr 1.05fr; gap: 22px; align-items: start; }
-      .steps { display: grid; gap: 14px; counter-reset: steps; }
-      .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .steps-grid .step:last-child { grid-column: 1 / -1; }
-      .step { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; padding: 18px; border-radius: var(--radius-md); }
-      .step::before { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: #031018; font-weight: 950; content: counter(steps); counter-increment: steps; background: linear-gradient(135deg, var(--primary), var(--secondary)); }
-
-      /* Formats Grid */
-      .format-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-      .format-card { padding: 24px; border-radius: var(--radius-md); background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent), rgba(15, 23, 42, 0.6); }
-      .format-tag { display: inline-flex; margin-bottom: 18px; padding: 7px 10px; border-radius: 999px; color: #031018; font-size: 13px; font-weight: 950; background: var(--primary); }
-      .format-card h3 { font-size: 22px; }
-
-      .source-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; align-items: center; padding: 28px; border-radius: var(--radius-lg); background: radial-gradient(circle at 0% 0%, rgba(125, 211, 252, 0.16), transparent 34%), rgba(15, 23, 42, 0.7); }
-      .source-panel h2 { margin-bottom: 10px; font-size: clamp(26px, 4vw, 40px); letter-spacing: -0.05em; }
-
-      .callout { padding: 26px; border-color: rgba(250, 204, 21, 0.28); border-radius: var(--radius-md); background: rgba(250, 204, 21, 0.08); }
-      .callout strong { display: block; margin-bottom: 8px; color: #fde68a; font-size: 18px; }
-
-      /* FAQ Details/Summary Accordion Styles */
-      .faq { display: grid; gap: 12px; }
-      details {
-        border: 1px solid var(--line);
-        background: rgba(15, 23, 42, 0.56);
-        backdrop-filter: blur(18px);
-        border-radius: var(--radius-md);
-        padding: 20px;
-        transition: border-color 0.2s ease, background 0.2s ease;
-      }
-      details[open] {
-        border-color: var(--primary);
-        background: rgba(15, 23, 42, 0.72);
-      }
-      summary {
-        font-weight: 700;
-        font-size: 18px;
-        cursor: pointer;
-        list-style: none;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        outline: none;
-        user-select: none;
-      }
-      summary::-webkit-details-marker {
-        display: none;
-      }
-      summary::after {
-        content: '+';
-        font-size: 24px;
-        font-weight: 300;
-        color: var(--muted-2);
-        transition: transform 0.2s ease;
-      }
-      details[open] summary::after {
-        content: '−';
-        transform: rotate(180deg);
-      }
-      details p {
-        margin-top: 12px;
-        color: var(--muted);
-        line-height: 1.72;
-      }
-
-      .final-cta { position: relative; overflow: hidden; padding: 34px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: radial-gradient(circle at 20% 0%, rgba(125, 211, 252, 0.2), transparent 36%), radial-gradient(circle at 90% 20%, rgba(192, 132, 252, 0.18), transparent 34%), var(--panel-strong); box-shadow: var(--shadow); }
-      .final-cta h2 { max-width: 780px; margin-bottom: 12px; font-size: clamp(30px, 5vw, 52px); line-height: 1.04; letter-spacing: -0.055em; }
-      .final-cta p { max-width: 760px; color: var(--muted); font-size: 18px; line-height: 1.75; margin-bottom: 24px; }
-
-      .footer { display: flex; gap: 14px; align-items: center; justify-content: space-between; padding: 34px 0 46px; border-top: 1px solid rgba(255, 255, 255, 0.1); color: var(--muted-2); font-size: 14px; }
-      .footer-links { display: flex; gap: 14px; align-items: center; }
-      .footer a { color: var(--primary); font-weight: 850; text-decoration: none; }
-      .footer a:hover { text-decoration: underline; }
-
-      kbd {
-        display: inline-block;
-        padding: 2px 7px;
-        border: 1px solid rgba(255, 255, 255, 0.22);
-        border-bottom-width: 2px;
-        border-radius: 6px;
-        background: rgba(255, 255, 255, 0.08);
-        color: var(--text);
-        font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
-        font-size: 0.86em;
-        font-weight: 700;
-        line-height: 1;
-        white-space: nowrap;
-      }
-
-      @media (max-width: 940px) {
-        .hero, .split, .source-panel { grid-template-columns: 1fr; }
-        .hero { padding-top: 48px; }
-        .trust, .grid-3, .format-grid { grid-template-columns: 1fr 1fr; }
-        .source-panel .actions { margin-top: 0; }
-      }
-
-      @media (max-width: 680px) {
-        .page { width: min(100% - 24px, var(--max)); }
-        .site-header { align-items: stretch; flex-direction: column; gap: 16px; }
-        .nav-links { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 8px; }
-        .nav-link.github { grid-column: 1 / -1; text-align: center; }
-        .lang-selector { grid-column: 1 / -1; display: flex; justify-content: center; margin-top: 4px; }
-        .hero { gap: 34px; padding-bottom: 44px; }
-        .actions { flex-direction: column; }
-        .button { width: 100%; }
-        .trust, .grid-3, .format-grid { grid-template-columns: 1fr; }
-        .player-preview { padding: 14px; }
-        .stats { grid-template-columns: 1fr; }
-        .steps-grid { grid-template-columns: 1fr; }
-        .step { grid-template-columns: 1fr; }
-        .section, .trust { padding-bottom: 68px; }
-        .footer { align-items: flex-start; flex-direction: column; gap: 16px; }
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-          scroll-behavior: auto !important;
-          transition-duration: 0.01ms !important;
-          animation-duration: 0.01ms !important;
-          animation-iteration-count: 1 !important;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="assets/site.css">
+    <script src="assets/site.js" defer></script>
   </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <div class="page">
-      <header class="site-header" aria-label="Site header">
+  <body class="page-home page-home--en">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="container site-header__inner">
         <a class="brand" href="./" aria-label="Sky Auto Player home">
-          <svg class="brand-mark" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--primary);"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <span class="brand__mark" aria-hidden="true"></span>
           <span>Sky Auto Player</span>
         </a>
-        <nav class="nav-links" aria-label="Primary navigation">
-          <a class="nav-link" href="#why">Why</a>
-          <a class="nav-link" href="#performance">Performance</a>
-          <a class="nav-link" href="#quick-start">Get started</a>
-          <a class="nav-link" href="faq.html">FAQ</a>
-          <a class="nav-link github" href="https://github.com/pumni/Sky-Auto-Player" target="_blank" rel="noopener noreferrer">
-            <svg class="lucide lucide-github" style="width:16px;height:16px;margin-right:6px;display:inline-block;vertical-align:middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>GitHub
-          </a>
-          <div class="lang-selector" role="group" aria-label="Language selection">
-            <button class="lang-trigger" id="lang-trigger" aria-expanded="false" aria-haspopup="listbox" aria-label="Select language" type="button">
-              <span id="lang-label">English</span>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            <div class="lang-dropdown" id="lang-dropdown" role="listbox" aria-label="Available languages" hidden>
-              <button class="lang-option" role="option" data-lang="en" aria-selected="true">
-                <svg class="check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-                <span>English</span>
-              </button>
-              <button class="lang-option" role="option" data-lang="vi" aria-selected="false">
-                <svg class="check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-                <span>Tiếng Việt</span>
-              </button>
-            </div>
-          </div>
+        <nav class="site-nav" id="site-nav" aria-label="Primary">
+          <a href="#playback">Playback</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#technical">Technical</a>
+          <a href="faq.html">FAQ</a>
+          <a href="https://github.com/pumni/Sky-Auto-Player">GitHub</a>
+          <span class="site-nav__locale">
+            <span class="sr-only">Language</span>
+            <span class="locale-links">
+              <a href="./" aria-current="page">EN</a>
+              <a href="vi/">VI</a>
+            </span>
+          </span>
         </nav>
-      </header>
+        <div class="site-actions">
+          <a class="button button--primary button--small" href="https://github.com/pumni/Sky-Auto-Player/releases/latest">Download</a>
+          <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Open navigation" data-close-label="Open navigation" data-open-label="Close navigation">
+            <span class="menu-toggle__icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </header>
 
-      <main id="main">
-        <section class="hero" aria-labelledby="hero-title">
-          <div>
-            <div class="eyebrow">
-              <span class="eyebrow-dot" aria-hidden="true"></span>
-              Free & open source · Windows 10/11
+    <main id="main-content">
+      <section class="hero section-shell" aria-labelledby="hero-title">
+        <div class="container hero__layout">
+          <div class="hero__copy">
+            <p class="kicker">Music automation for Sky · Windows 10/11</p>
+            <h1 id="hero-title"><span>Play the sheet.</span><span>Not the keyboard.</span></h1>
+            <p class="hero__description">Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on time.</p>
+            <div class="hero__actions">
+              <a class="button button--primary" href="https://github.com/pumni/Sky-Auto-Player/releases/latest">Download for Windows</a>
+              <a class="button button--secondary" href="#how-it-works">See how it works</a>
             </div>
-            <h1 id="hero-title">
-              Let your Sky songs
-              <span class="gradient-text">play themselves.</span>
-            </h1>
-            <p class="hero-copy">
-              A free, open-source auto-player for <strong>Sky: Children of the Light</strong> on PC.
-              Drop in a sheet, tab into the game, and it plays the whole song for you — fast runs,
-              chords, and long holds land clean, not fumbled like a hand-mashed macro.
-            </p>
-            <div class="actions" aria-label="Project actions">
-              <a class="button button-primary" href="https://github.com/pumni/Sky-Auto-Player/releases/latest" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px;">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                Download Latest Release
-              </a>
-              <a class="button button-secondary" href="https://github.com/pumni/Sky-Auto-Player" target="_blank" rel="noopener noreferrer">
-                Star on GitHub
-              </a>
-            </div>
-            <p class="hero-note">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--primary);flex-shrink:0;margin-top:2px;"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
-              <span><strong>Stays outside the game.</strong> Sends normal keystrokes through Windows — the same way any macro does. No memory reads, no injection, no game files touched.</span>
-            </p>
+            <ul class="metadata-strip" aria-label="Supported packaging and sheet metadata">
+              <li>JSON</li>
+              <li>SKYSHEET</li>
+              <li>TXT</li>
+              <li>OPEN SOURCE</li>
+              <li>PORTABLE</li>
+              <li>NO INSTALLER</li>
+            </ul>
+            <p class="risk-note">Automated playback may conflict with Sky’s Terms of Service. <a href="faq.html#account-safety">Use responsibly and at your own risk.</a></p>
           </div>
-          <aside class="preview-card" aria-label="Sky Auto Player interface preview">
-            <div class="window-bar" aria-hidden="true">
-              <span class="window-dot"></span>
-              <span class="window-dot"></span>
-              <span class="window-dot"></span>
-              <span class="window-title">Sky Auto Player</span>
-            </div>
-            <div class="player-preview">
-              <picture>
-                <source srcset="assets/preview.avif" type="image/avif" />
-                <source srcset="assets/preview.webp" type="image/webp" />
-                <img src="assets/preview.png" alt="Sky Auto Player terminal interface showing the song picker with title, time, note count, risk, and suggested timing profile for each song" width="1376" height="768" fetchpriority="high" decoding="async" />
-              </picture>
-              <div class="stats" aria-label="Sky Auto Player highlights">
-                <div class="stat"><strong>Hands-free</strong><span>Plays notes, chords & holds</span></div>
-                <div class="stat"><strong>Portable</strong><span>No install · ~100 MB RAM</span></div>
-                <div class="stat"><strong>Free</strong><span>Open source · GPL v3</span></div>
+
+          <div class="hero__visual">
+            <figure class="timing-console" aria-labelledby="timing-demo-title">
+              <figcaption id="timing-demo-title" class="sr-only">Playback timing illustration</figcaption>
+              <div class="console__topline">
+                <span><span class="console__status" aria-hidden="true"></span>TIMING DEMO</span>
+                <span>READY</span>
               </div>
-            </div>
-          </aside>
-        </section>
-
-        <section class="trust" aria-label="Project trust pillars">
-          <article class="card">
-            <div class="card-icon"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></div>
-            <h3>Songs that sound right</h3>
-            <p>Fast melodies stay crisp, chords ring out together, and long notes hold their full length — the way the sheet was meant to be played.</p>
-          </article>
-          <article class="card">
-            <div class="card-icon"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></div>
-            <h3>Nothing touches the game</h3>
-            <p>Sky Auto Player only sends keystrokes, exactly like a keyboard. It never reads memory, injects code, or edits game files — so there's nothing to detect or patch.</p>
-          </article>
-          <article class="card">
-            <div class="card-icon"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg></div>
-            <h3>Unzip and run</h3>
-            <p>One portable folder. No installer, no admin rights, no registry changes, no background services. Delete the folder and it's gone without a trace.</p>
-          </article>
-        </section>
-
-        <section id="why" class="section" aria-labelledby="why-title">
-          <span class="section-kicker">Why Sky Auto Player</span>
-          <h2 id="why-title" class="section-title">Why not just any macro?</h2>
-          <p class="section-text">Playing a full song by hand is exhausting, and generic auto-clickers weren't built for music — they drift off-beat, mash chords into broken arpeggios, and cut long notes short. Sky Auto Player is built specifically for <em>Sky</em>'s instrument, so what you hear is the song, not a stumble.</p>
-          <div class="grid-3">
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></div>
-              <h3>Keeps the beat</h3>
-              <p>Every note fires on time, from slow ballads to rapid-fire passages. Speed a song up or slow it down and it still lands where it should.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12.15a1 1 0 0 0 .6.92l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .58-.92"/><path d="M2 16.15a1 1 0 0 0 .6.92l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .58-.92"/></svg></div>
-              <h3>Chords, not clatter</h3>
-              <p>Notes meant to sound together are struck together in a single game frame, so chords come out clean instead of a smeared roll of keys.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></div>
-              <h3>Your setup, your call</h3>
-              <p>Per-song profiles let you tweak tempo, frame rate, and theme. There's even a dry-run mode to preview a song without sending a single keystroke.</p>
-            </article>
+              <ol class="timing-console__events" aria-label="Illustrative playback events">
+                <li class="timing-event timing-event--chord">
+                  <span class="timing-event__time">00:12.400</span>
+                  <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span>
+                  <span class="timing-event__kind">CHORD</span>
+                </li>
+                <li class="timing-event timing-event--note">
+                  <span class="timing-event__time">00:12.733</span>
+                  <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>D4</span>
+                  <span class="timing-event__kind">NOTE</span>
+                </li>
+                <li class="timing-event timing-event--hold">
+                  <span class="timing-event__time">00:13.066</span>
+                  <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>E5 <span class="hold-line" aria-hidden="true">━━━━━━━</span></span>
+                  <span class="timing-event__kind">HOLD</span>
+                </li>
+                <li class="timing-event timing-event--chord">
+                  <span class="timing-event__time">00:13.600</span>
+                  <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>A2 + C4</span>
+                  <span class="timing-event__kind">CHORD</span>
+                </li>
+              </ol>
+              <div class="instrument-grid" aria-hidden="true">
+                <span class="instrument-key" data-active="note">A1</span>
+                <span class="instrument-key" data-active="chord">B1</span>
+                <span class="instrument-key">C1</span>
+                <span class="instrument-key">D1</span>
+                <span class="instrument-key">E1</span>
+                <span class="instrument-key">A2</span>
+                <span class="instrument-key">B2</span>
+                <span class="instrument-key" data-active="chord">C2</span>
+                <span class="instrument-key">D2</span>
+                <span class="instrument-key">E2</span>
+                <span class="instrument-key">A3</span>
+                <span class="instrument-key" data-active="hold">B3</span>
+                <span class="instrument-key">C3</span>
+                <span class="instrument-key">D3</span>
+                <span class="instrument-key">E3</span>
+              </div>
+              <div class="console__footer">
+                <span>15-KEY LAYOUT</span>
+                <span>NOT LIVE DATA</span>
+              </div>
+            </figure>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section id="performance" class="section" aria-labelledby="perf-title">
-          <header class="section-header">
-            <span class="section-kicker">Reliable playback</span>
-            <h2 id="perf-title" class="section-title">Steady, even when your PC isn't</h2>
-            <p class="section-text">Background downloads, antivirus scans, a loading spike in-game — the kind of things that make hand-played songs stumble. Sky Auto Player is built to keep its timing through all of it.</p>
-          </header>
-          <div class="grid-3">
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg></div>
-              <h3>Light on your machine</h3>
-              <p>It sips about 100 MB of RAM and stays quiet in the background, so it won't fight your game for resources or cost you frames.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
-              <h3>Holds the tempo</h3>
-              <p>The timing engine is tuned to stay on beat even under load, so a busy PC doesn't turn your performance into a mess of early and late notes.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg></div>
-              <h3>Tunes to your rig</h3>
-              <p>Run <code>--doctor</code> to check your system, then pick a tuning preset. Even a modest laptop can play cleanly with the right profile.</p>
-            </article>
+      <section id="playback" class="section-shell" aria-labelledby="playback-title">
+        <div class="container playback-proof__layout">
+          <div class="section-heading">
+            <p class="kicker">Built around the music</p>
+            <h2 id="playback-title" class="section-title">Timing is the instrument.</h2>
+            <p class="section-copy">A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro.</p>
+            <ul class="proof-points" aria-label="Playback capabilities">
+              <li>Frame-aligned chords</li>
+              <li>Tempo-aware playback</li>
+              <li>Notes, chords and holds</li>
+              <li>Dry-run preview</li>
+            </ul>
           </div>
-          <div class="callout" style="margin-top:18px">
-            <strong>Friends hearing dropped notes?</strong>
-            <p>That's usually network packet loss, not Sky Auto Player — the keys leave on time, some just never reach Sky's servers. The free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client on "Traffic and DNS (UDP)" mode routes game traffic over a cleaner path and usually fixes it.</p>
-          </div>
-        </section>
-
-        <section id="security" class="section" aria-labelledby="security-title">
-          <header class="section-header">
-            <span class="section-kicker">Safety & updates</span>
-            <h2 id="security-title" class="section-title">Built to stay on the safe side</h2>
-            <p class="section-text">Sky Auto Player works from the outside like any keyboard would, and it's open source — so you don't have to take our word for it. The security rules are even re-checked automatically before any change ships.</p>
-          </header>
-          <div class="grid-3">
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></div>
-              <h3>Never touches the game</h3>
-              <p>No memory reads, no DLL injection, no debuggers, no edited game files. Sky Auto Player runs entirely as its own separate program.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg></div>
-              <h3>Just keystrokes</h3>
-              <p>Input goes through Windows' built-in <code>SendInput</code> — the exact same path a normal keyboard or macro uses. Nothing exotic.</p>
-            </article>
-            <article class="card">
-              <div class="card-icon" aria-hidden="true"><svg class="lucide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m9 15 2 2 4-4"/></svg></div>
-              <h3>Bad files can't bite</h3>
-              <p>Every sheet is validated before it plays. A broken or malformed file is caught early with a clear message instead of misfiring.</p>
-            </article>
-          </div>
-          <div class="source-panel" style="margin-top:18px" aria-labelledby="update-title">
-            <div>
-              <h3 id="update-title">Updates you control</h3>
-              <p>The app never rewrites itself while running — it just flags new versions. You close it and run <code>updater.bat</code>, which verifies the download's SHA256 before copying and rolls back on error. Your <code>config.json</code> and <code>songs</code> folder are left untouched.</p>
-            </div>
-            <div class="actions">
-              <a class="button button-primary" href="https://github.com/pumni/Sky-Auto-Player/releases/latest" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px;">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                Download Latest Release
-              </a>
-            </div>
-          </div>
-        </section>
-
-        <section id="quick-start" class="section" aria-labelledby="quick-start-title">
-          <header class="section-header">
-            <span class="section-kicker">Get started</span>
-            <h2 id="quick-start-title" class="section-title">Play your first sheet in minutes</h2>
-            <p class="section-text">Sky Auto Player is portable — no installer, no admin rights, no registry settings. Just extract and run.</p>
-          </header>
-          <ol class="steps steps-grid">
-              <li class="step"><div><h3>Download</h3><p>Grab the latest zip from <a href="https://github.com/pumni/Sky-Auto-Player/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a> and unzip it anywhere — Desktop, Documents, wherever.</p></div></li>
-              <li class="step"><div><h3>Add songs</h3><p>Export sheets from the <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music editor</a> as <code>.json</code>, <code>.skysheet</code>, or <code>.txt</code> and drop them into the <code>songs</code> folder.</p></div></li>
-              <li class="step"><div><h3>Open the player</h3><p>Run <code>Sky-Auto-Player.exe</code> in Windows Terminal. Type to fuzzy-search your library; <kbd>Ctrl</kbd>+<kbd>R</kbd> reloads it after adding songs.</p></div></li>
-              <li class="step"><div><h3>Arm a song</h3><p>Highlight the track you want and press <kbd>Enter</kbd>. Tweak tempo, FPS, or theme first with <kbd>t</kbd> / <kbd>f</kbd> / <kbd>y</kbd> if you like.</p></div></li>
-              <li class="step"><div><h3>Play &amp; control</h3><p>Switch to the Sky window and it plays itself. <kbd>F8</kbd> pause · <kbd>F9</kbd> skip · <kbd>F10</kbd> stop · <kbd>F6</kbd> re-focus the game.</p></div></li>
+          <ol class="proof-track" aria-label="Illustrative sheet timeline">
+            <li class="proof-track__row">
+              <span class="proof-track__time">00:12.400</span>
+              <span class="proof-track__event">A1 + B2 + C3 <span class="proof-track__type">CHORD · arrive together</span></span>
+            </li>
+            <li class="proof-track__row">
+              <span class="proof-track__time">00:12.733</span>
+              <span class="proof-track__event">D4 <span class="proof-track__type">NOTE · keep spacing</span></span>
+            </li>
+            <li class="proof-track__row">
+              <span class="proof-track__time">00:13.066</span>
+              <span class="proof-track__event">E5 ━━━━━━━ <span class="proof-track__type">HOLD · preserve duration</span></span>
+            </li>
           </ol>
-          <aside class="source-panel" style="margin-top:22px" aria-labelledby="source-title">
+        </div>
+      </section>
+
+      <section class="section-shell" aria-labelledby="comparison-title">
+        <div class="container">
+          <div class="section-heading">
+            <p class="kicker">Not a generic macro</p>
+            <h2 id="comparison-title" class="section-title">Built for music, not click sequences.</h2>
+          </div>
+          <div class="comparison-wrap">
+            <table class="comparison-table">
+              <thead>
+                <tr>
+                  <th scope="col">Generic macro</th>
+                  <th scope="col">Sky Auto Player</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td data-label="Generic macro">Sequential key presses</td>
+                  <td data-label="Sky Auto Player">Chords aligned to one dispatch frame</td>
+                </tr>
+                <tr>
+                  <td data-label="Generic macro">Fixed delays</td>
+                  <td data-label="Sky Auto Player">Timing follows the sheet and tempo</td>
+                </tr>
+                <tr>
+                  <td data-label="Generic macro">Tap-focused playback</td>
+                  <td data-label="Sky Auto Player">Notes, chords and holds</td>
+                </tr>
+                <tr>
+                  <td data-label="Generic macro">One global setup</td>
+                  <td data-label="Sky Auto Player">Per-song timing profiles</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell" aria-labelledby="product-title">
+        <div class="container product-view__layout">
+          <figure class="screenshot-frame">
+            <div class="screenshot-frame__bar"><span class="screenshot-frame__dot" aria-hidden="true"></span><span>sky-auto-player / picker</span></div>
+            <img src="assets/picker.webp" alt="Sky Auto Player terminal song picker showing song metadata and a suggested timing profile." width="1331" height="821" loading="lazy" decoding="async">
+            <figcaption>Keyboard-first picker for song search, timing setup and playback status.</figcaption>
+          </figure>
+          <div>
+            <div class="section-heading">
+              <p class="kicker">The actual player</p>
+              <h2 id="product-title" class="section-title">Your library, timing profile and controls in one place.</h2>
+              <p class="section-copy">The keyboard-first picker keeps song search, playback setup and status visible without adding a heavyweight desktop interface.</p>
+            </div>
+            <ol class="annotations">
+              <li>Search and select songs from the terminal picker.</li>
+              <li>Review the suggested timing profile before playback.</li>
+              <li>Keep pause, skip and stop controls within reach.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="section-shell" aria-labelledby="how-title">
+        <div class="container">
+          <div class="section-heading">
+            <p class="kicker">Three steps</p>
+            <h2 id="how-title" class="section-title">From download to playback in minutes.</h2>
+          </div>
+          <ol class="steps">
+            <li class="step"><span class="step__number" aria-hidden="true"></span><div><h3>Download</h3><p>Get the latest ZIP from <a href="https://github.com/pumni/Sky-Auto-Player/releases/latest">GitHub Releases</a> and extract it to a folder you control. No system installer or administrator access is required.</p></div></li>
+            <li class="step"><span class="step__number" aria-hidden="true"></span><div><h3>Add a sheet</h3><p>Export a JSON, <code>.skysheet</code> or compatible TXT sheet from the <a href="https://specy.github.io/skyMusic/">Sky Music editor</a> and place it in the <code>songs</code> folder.</p></div></li>
+            <li class="step"><span class="step__number" aria-hidden="true"></span><div><h3>Play</h3><p>Open Sky Auto Player, choose a song, then switch to the Sky window when you are ready.</p></div></li>
+          </ol>
+          <p class="hotkey-note"><code>Ctrl+R</code> reloads the library · <code>F8</code> pauses · <code>F9</code> skips · <code>F10</code> stops</p>
+        </div>
+      </section>
+
+      <section id="technical" class="section-shell" aria-labelledby="technical-title">
+        <div class="container technical-trust__layout">
+          <div class="section-heading">
+            <p class="kicker">Technical boundaries</p>
+            <h2 id="technical-title" class="section-title">Clear about what it does—and what it does not do.</h2>
+            <p class="section-copy">Sky Auto Player runs as a separate Windows application and sends standard input events. Its source is public, so the implementation can be reviewed directly.</p>
+          </div>
+          <div>
+            <dl class="technical-ledger">
+              <div><dt>Input</dt><dd>Windows <code>SendInput</code></dd></div>
+              <div><dt>Process</dt><dd>Separate application</dd></div>
+              <div><dt>Game memory</dt><dd>Not inspected</dd></div>
+              <div><dt>Code injection</dt><dd>Not used</dd></div>
+              <div><dt>Game files</dt><dd>Not modified</dd></div>
+              <div><dt>License</dt><dd>GNU GPL v3.0</dd></div>
+              <div><dt>Updates</dt><dd>Explicit updater with checksum verification</dd></div>
+            </dl>
+            <p class="notice"><strong>Terms of Service:</strong> These technical boundaries do not guarantee account safety. Automated music playback may still conflict with Sky’s Terms of Service. Use the tool responsibly and at your own risk.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="formats" class="section-shell" aria-labelledby="formats-title">
+        <div class="container">
+          <div class="section-heading">
+            <p class="kicker">Supported sheets</p>
+            <h2 id="formats-title" class="section-title">Load the formats the community already uses.</h2>
+          </div>
+          <div class="format-list">
+            <div class="format-row">
+              <div class="format-row__extension">.json</div>
+              <div><div class="format-row__name">JSON</div><p class="format-row__description">Structured song sheets with musical events and metadata accepted by the player.</p></div>
+              <div class="format-row__tags">NOTE · CHORD · HOLD</div>
+            </div>
+            <div class="format-row">
+              <div class="format-row__extension">.skysheet</div>
+              <div><div class="format-row__name">Skysheet</div><p class="format-row__description">JSON-based sheets with the <code>.skysheet</code> extension used by the Sky music editor ecosystem.</p></div>
+              <div class="format-row__tags">SHEET EXPORT</div>
+            </div>
+            <div class="format-row">
+              <div class="format-row__extension">.txt</div>
+              <div><div class="format-row__name">JSON-compatible TXT</div><p class="format-row__description">Plain-text files containing a JSON-compatible sheet structure.</p></div>
+              <div class="format-row__tags">PLAIN TEXT</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="faq" class="section-shell" aria-labelledby="faq-title">
+        <div class="container">
+          <div class="section-heading section-heading--split">
             <div>
-              <h2 id="source-title">Free & open source</h2>
-              <p>Every line is public on GitHub under the GPL v3.0 license. No ads, no telemetry, no installer bundling junk. Read it, fork it, or send a fix.</p>
+              <p class="kicker">Before you download</p>
+              <h2 id="faq-title" class="section-title">A few useful answers first.</h2>
             </div>
-            <div class="actions">
-              <a class="button button-primary" href="https://github.com/pumni/Sky-Auto-Player" target="_blank" rel="noopener noreferrer">
-                View on GitHub
-              </a>
-              <a class="button button-secondary" href="https://github.com/pumni/Sky-Auto-Player/releases" target="_blank" rel="noopener noreferrer">All releases</a>
-            </div>
-          </aside>
-        </section>
-
-        <section id="formats" class="section" aria-labelledby="formats-title">
-          <header class="section-header">
-            <span class="section-kicker">Supported formats</span>
-            <h2 id="formats-title" class="section-title">Load your sheets, your way</h2>
-            <p class="section-text">Sky Auto Player accepts the three most common Sky sheet formats — no conversion needed. Sheets made in the popular <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor</a> (specy/skyMusic) work out of the box.</p>
-          </header>
-          <div class="format-grid">
-            <article class="format-card"><span class="format-tag">JSON</span><h3>Standard JSON</h3><p>The de-facto community format. Supports notes, chords, holds, tempo changes, and metadata (title, author, BPM).</p></article>
-            <article class="format-card"><span class="format-tag">skysheet</span><h3>Skysheet (.skysheet)</h3><p>Community format from the Sky Music web editor ecosystem. Structurally JSON-based with metadata conventions. Full feature parity with standard JSON — notes, chords, holds, tempo changes.</p></article>
-            <article class="format-card"><span class="format-tag">TXT</span><h3>JSON-compatible TXT</h3><p>Plain-text files containing valid JSON. Useful for quick edits in Notepad or sharing sheets in chat without file attachments.</p></article>
+            <a class="text-link" href="faq.html">Read the full FAQ</a>
           </div>
-        </section>
-
-        <section class="section" aria-labelledby="community-title">
-          <div class="callout">
-            <strong id="community-title">Join the Sky Auto Player community</strong>
-            <p>Share sheets, request features, report bugs, or contribute code. Star the repo to support the project. <a href="https://github.com/pumni/Sky-Auto-Player/discussions" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> and <a href="https://github.com/pumni/Sky-Auto-Player/issues" target="_blank" rel="noopener noreferrer">Issues</a> are open. The security rules are audited in CI before any change lands.</p>
-          </div>
-        </section>
-
-        <section class="section faq" aria-labelledby="faq-title">
-          <header class="section-header">
-            <span class="section-kicker">Frequently asked</span>
-            <h2 id="faq-title" class="section-title">Things people ask before downloading</h2>
-          </header>
-          <div class="faq">
-            <details>
-              <summary>Will I get banned for using Sky Auto Player?</summary>
-              <p>Sky Auto Player stays completely outside the game — it only sends standard keystrokes through the public Windows SendInput API, just like a keyboard macro or accessibility tool. It never reads game memory, hooks processes, injects DLLs, or modifies game files, so there's nothing for an anti-cheat to catch. That said, be honest with yourself: automated music playback may still go against Sky's Terms of Service. Use it responsibly and at your own risk.</p>
-            </details>
-            <details>
-              <summary>Where do I get song sheets?</summary>
-              <p>The <a href="https://specy.github.io/skyMusic/" target="_blank" rel="noopener noreferrer">Sky Music web editor (specy/skyMusic)</a> is the main source — pick a song, export it as JSON, skysheet, or txt, and drop the file into your <code>songs</code> folder. The Sky Auto Player <a href="https://github.com/pumni/Sky-Auto-Player/discussions/categories/sheets" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> also has community-shared sheets ready to download.</p>
-            </details>
-            <details>
-              <summary>Why do my friends hear dropped or stuttering notes?</summary>
-              <p>Usually it's not Sky Auto Player — the keypresses leave your PC on time, but network packet loss between you and Sky's servers means some never arrive. Installing the free <a href="https://1.1.1.1/" target="_blank" rel="noopener noreferrer">Cloudflare WARP (1.1.1.1)</a> client and setting it to "Traffic and DNS (UDP)" usually routes your game traffic over a cleaner path and fixes it.</p>
-            </details>
+          <div class="faq-preview__list">
             <details>
               <summary>Is Sky Auto Player free?</summary>
-              <p>Yes — 100% free and open source under the GNU GPL v3.0 license. No signups, no ads, no trackers. Download the latest build directly from GitHub Releases, verify the SHA256 sidecar if you like, and run it.</p>
+              <div class="faq-answer"><p>Yes. It is open source under GNU GPL v3.0 and the packaged release is available from GitHub Releases.</p></div>
             </details>
             <details>
-              <summary>Which Windows versions are supported?</summary>
-              <p>Sky Auto Player runs on 64-bit Windows 10 and Windows 11. It is a portable application that runs directly from its folder without requiring system installers, admin rights, or registering background services.</p>
+              <summary>Which systems are supported?</summary>
+              <div class="faq-answer"><p>The packaged application supports 64-bit Windows 10 and Windows 11. Verify the current release notes before downloading.</p></div>
             </details>
             <details>
-              <summary>What file formats can I load?</summary>
-              <p>You can load JSON (.json), skysheet (.skysheet), and plain text (.txt) files containing JSON-compatible lists. All community sheets created in standard editors like Sky Music web editor work natively without conversions.</p>
-            </details>
-            <details>
-              <summary>How do updates work?</summary>
-              <p>The application checks for new releases and shows a simple in-app notice when a version is available. To apply an update, close the app and run the <code>updater.bat</code> utility. The external script verifies SHA256 checksums before applying any files and preserves your <code>config.json</code> and custom <code>songs/</code> directories automatically.</p>
-            </details>
-            <details>
-              <summary>Does Sky Auto Player work on Mac or Linux?</summary>
-              <p>No. Sky Auto Player relies on Windows-only mechanisms — SendInput for keystrokes and MMCSS for precise timing — so macOS and Linux aren't supported and aren't on the roadmap.</p>
+              <summary>Can using it violate the game’s rules?</summary>
+              <div class="faq-answer"><p>Automated playback may conflict with Sky’s Terms of Service. The application’s technical architecture does not remove that policy risk.</p></div>
             </details>
           </div>
-        </section>
+        </div>
+      </section>
 
-      </main>
+      <section class="final-cta" aria-labelledby="final-title">
+        <div class="container final-cta__layout">
+          <div>
+            <h2 id="final-title">Your next performance is already written.</h2>
+            <p>Download Sky Auto Player, add a sheet and let the timing take care of itself.</p>
+          </div>
+          <div class="final-cta__actions">
+            <a class="button button--primary" href="https://github.com/pumni/Sky-Auto-Player/releases/latest">Download latest release</a>
+            <a class="button button--secondary" href="https://github.com/pumni/Sky-Auto-Player">View source on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
 
-      <footer class="footer" role="contentinfo">
-        <p>&copy; 2026 Sky Auto Player — GPL v3.0 — Built for the Sky: Children of the Light community</p>
-        <nav class="footer-links" aria-label="Footer links">
+    <footer class="site-footer">
+      <div class="container site-footer__layout">
+        <div class="site-footer__legal">
+          <p>Sky Auto Player · Open source under GNU GPL v3.0 · Built for the Sky music community</p>
+        </div>
+        <nav class="site-footer__links" aria-label="Footer">
           <a href="faq.html">FAQ</a>
-          <a href="https://github.com/pumni/Sky-Auto-Player" target="_blank" rel="noopener noreferrer">GitHub</a>
-          <a href="https://github.com/pumni/Sky-Auto-Player/releases" target="_blank" rel="noopener noreferrer">Releases</a>
-          <a href="https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">License</a>
-          <a href="https://github.com/pumni/Sky-Auto-Player/discussions" target="_blank" rel="noopener noreferrer">Community</a>
+          <a href="https://github.com/pumni/Sky-Auto-Player">GitHub</a>
+          <a href="https://github.com/pumni/Sky-Auto-Player/releases">Releases</a>
+          <a href="https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE">License</a>
+          <a href="https://github.com/pumni/Sky-Auto-Player/discussions">Discussions</a>
+          <a href="vi/">Tiếng Việt</a>
         </nav>
-      </footer>
-    </div>
-
-    <script>
-      // Language switcher
-      (function() {
-        'use strict';
-
-        function switchLanguage(lang) {
-          sessionStorage.setItem('lang-pref', lang);
-          const currentPath = window.location.pathname;
-          
-          if (lang === 'vi') {
-            // English -> Vietnamese
-            if (currentPath.endsWith('/index.html')) {
-              window.location.href = currentPath.replace(/index\.html$/, 'vi/index.html');
-            } else {
-              window.location.href = currentPath.replace(/\/$/, '') + '/vi/';
-            }
-          } else {
-            // Vietnamese -> English
-            if (currentPath.endsWith('/vi/index.html')) {
-              window.location.href = currentPath.replace(/vi\/index\.html$/, 'index.html');
-            } else if (currentPath.endsWith('/vi/')) {
-              window.location.href = currentPath.replace(/vi\/$/, '');
-            } else if (currentPath.endsWith('/vi')) {
-              window.location.href = currentPath.replace(/vi$/, '');
-            } else {
-              window.location.href = '../';
-            }
-          }
-        }
-
-        // Auto-redirect removed (SEO: navigator.language redirect harms crawlability and UX)
-
-        // Initialize language dropdown on load
-        (function() {
-          const path = window.location.pathname;
-          const isVi = path.includes('/vi/') || path.endsWith('/vi');
-          const langOptions = document.querySelectorAll('.lang-option');
-          const langLabel = document.getElementById('lang-label');
-          
-          langOptions.forEach(opt => {
-            const lang = opt.dataset.lang;
-            opt.setAttribute('aria-selected', (lang === 'vi') === isVi ? 'true' : 'false');
-          });
-          if (langLabel) {
-            langLabel.textContent = isVi ? 'Tiếng Việt' : 'English';
-          }
-        })();
-
-        // Custom dropdown logic
-        const langTrigger = document.getElementById('lang-trigger');
-        const langDropdown = document.getElementById('lang-dropdown');
-        const langOptions = document.querySelectorAll('.lang-option');
-        const langLabel = document.getElementById('lang-label');
-
-        function closeDropdown() {
-          langDropdown.hidden = true;
-          langTrigger.setAttribute('aria-expanded', 'false');
-        }
-
-        function openDropdown() {
-          langDropdown.hidden = false;
-          langTrigger.setAttribute('aria-expanded', 'true');
-        }
-
-        langTrigger.addEventListener('click', function(e) {
-          e.stopPropagation();
-          if (langDropdown.hidden) {
-            openDropdown();
-          } else {
-            closeDropdown();
-          }
-        });
-
-        langOptions.forEach(function(option) {
-          option.addEventListener('click', function() {
-            const lang = option.dataset.lang;
-            langOptions.forEach(function(opt) {
-              opt.setAttribute('aria-selected', opt.dataset.lang === lang ? 'true' : 'false');
-            });
-            langLabel.textContent = option.querySelector('span').textContent;
-            closeDropdown();
-            switchLanguage(lang);
-          });
-
-          option.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              option.click();
-            } else if (e.key === 'Escape') {
-              closeDropdown();
-              langTrigger.focus();
-            }
-          });
-        });
-
-        // Close dropdown when clicking outside
-        document.addEventListener('click', function(e) {
-          if (!langTrigger.contains(e.target) && !langDropdown.contains(e.target)) {
-            closeDropdown();
-          }
-        });
-
-        // Close dropdown on Escape
-        document.addEventListener('keydown', function(e) {
-          if (e.key === 'Escape') {
-            closeDropdown();
-          }
-        });
-
-      })();
-    </script>
+      </div>
+    </footer>
   </body>
 </html>
