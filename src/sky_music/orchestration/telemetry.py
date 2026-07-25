@@ -11,12 +11,11 @@ from typing import Any, TextIO
 
 from sky_music.infrastructure.backend import BackendHealth
 
-# Soft threshold for flush_if_large() — called only off the hot path (paused/wait
-# branches, record_pause, save). Not from record() mid-SendInput (finding A3).
+# Soft threshold reported by flush_if_large(). Runtime callers never export or
+# truncate here; lifecycle save() owns file I/O after timed dispatch has ended.
 _TELEMETRY_FLUSH_CHUNK = 10_000
-# Pathological hard cap: if a song never pauses and never hits flush_if_large,
-# record() flushes synchronously once buffer reaches this size rather than
-# unbounded RSS. Mirrors the RAM-hygiene plan: accept one stall over OOM.
+# Hard cap for the retain-first policy. Once full, record() performs only O(1)
+# counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 200_000
 
 _CSV_FIELDS: list[str] = [
@@ -256,6 +255,9 @@ class TelemetryLogger:
         # True once a mid-play flush cleared the in-memory list (disk becomes authoritative).
         self._cleared_mid_play: bool = False
         self._dropped_count: int = 0
+        self._attempted_record_count: int = 0
+        self._truncated: bool = False
+        self._telemetry_capacity: int = _TELEMETRY_MAX_BUFFER
         self.backend_health: BackendHealth | None = None
         self.release_outcome = None
         self.input_path_degraded: bool = False
@@ -341,6 +343,14 @@ class TelemetryLogger:
         assert scan_codes is not None
         assert reason is not None
 
+        self._attempted_record_count += 1
+        if len(self.records) >= self._telemetry_capacity:
+            # Dispatch-thread cap path: constant-time bookkeeping only. Do not
+            # construct a TelemetryRecord, slice the retained list, or export.
+            self._dropped_count += 1
+            self._truncated = True
+            return
+
         self.records.append(
             TelemetryRecord(
                 self.song_name,
@@ -368,23 +378,13 @@ class TelemetryLogger:
                 dispatch_lateness_us,
             )
         )
-        # Hot path: no mid-play flush at the soft chunk (A3). Only the hard cap
-        # may truncate synchronously here — pathological >100k-event songs with zero pauses.
-        if len(self.records) >= _TELEMETRY_MAX_BUFFER:
-            drop_count = len(self.records) // 2
-            self.records = self.records[drop_count:]
-            self._dropped_count += drop_count
-
     def flush_if_large(self) -> bool:
-        if not self.enabled or len(self.records) < _TELEMETRY_FLUSH_CHUNK:
-            return False
-        if self._retain_records_after_save:
-            return True
-        # Drop oldest records to prevent memory growth without blocking dispatch thread
-        drop_count = len(self.records) // 2
-        self.records = self.records[drop_count:]
-        self._dropped_count += drop_count
-        return True
+        """Report a large buffer without mutating it on the dispatch thread.
+
+        Detail export is deferred to ``save()`` at the playback lifecycle edge.
+        The hard cap in ``record()`` remains the memory bound.
+        """
+        return self.enabled and len(self.records) >= _TELEMETRY_FLUSH_CHUNK
 
     def _ensure_csv_open(self) -> None:
         """Lazily open the CSV at the current log_filepath (allows test path reassignment)."""
@@ -741,6 +741,19 @@ class TelemetryLogger:
             "fps": self.fps,
             "tempo_scale": self.tempo_scale,
             "total_events": len(rows),
+            "telemetry_truncated": self._truncated,
+            "telemetry_dropped_count": self._dropped_count,
+            # One logical truncation marker for the exported summary. It
+            # describes the retain-first policy without fabricating a CSV event.
+            "telemetry_buffer": {
+                "policy": "retain_first_n_stop_accepting",
+                "capacity": self._telemetry_capacity,
+                "attempted_count": self._attempted_record_count,
+                "retained_count": len(rows),
+                "dropped_count": self._dropped_count,
+                "truncated": self._truncated,
+                "marker_count": 1 if self._truncated else 0,
+            },
             "timing_semantics": {
                 "clock": "perf_counter_ns_us_quantized",
                 "onset_definition": "sendinput_return",

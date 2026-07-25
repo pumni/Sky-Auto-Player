@@ -33,10 +33,11 @@ from sky_music.orchestration.core.ports import (
 from sky_music.orchestration.core.state import PlaybackState as PlaybackState
 
 # Phase E: Idle-gap core warmup. After long idle gaps the CPU may have
-# downclocked; a short busy-spin before the next send warms the core so
-# SendInput prologue does not stretch beyond the deadline spin's budget.
+# downclocked; the hot-path cold guard adds ``core_warmup_budget_us`` (default
+# 200 µs, capped at ``CORE_WARMUP_SPIN_MAX_US``) directly to the
+# ``effective_spin_threshold`` so the final busy-spin window widens right
+# before the deadline — no separate blocking spin.
 SEND_COLD_THRESHOLD_US = 20_000
-CORE_WARMUP_SPIN_US = 200
 CORE_WARMUP_SPIN_MAX_US = 500
 
 # Phase H: Mid-song spin re-probe constants.
@@ -1273,6 +1274,19 @@ class DispatchLoop:
             observe_result(result)
 
         final_abort_reason = "error"  # default for any exception path not explicitly classified
+
+        def publish_terminal_progress(status: str) -> None:
+            """Publish the final counters even when playback exits early."""
+            progress_sink.publish(
+                elapsed_us=state.get_elapsed_us(self.clock),
+                total_us=total_time_us,
+                status=status,
+                health=self.health_monitor.get_backend_health_snapshot(force=True),
+                input_path_degraded=self.health_monitor.input_path_degraded,
+                force=True,
+                counters=self._get_progress_counters(),
+            )
+
         try:
             while not self.coordinator.is_finished():
                 # The per-batch down lead (_down_lead_for_batch) overrides the scalar dispatch_lead_us
@@ -1297,6 +1311,7 @@ class DispatchLoop:
                     command_event=command_event,
                 )
                 if command_result:
+                    final_abort_reason = command_result
                     return command_result
 
                 now_us = state.get_elapsed_us(self.clock)
@@ -1332,6 +1347,14 @@ class DispatchLoop:
                 degraded=self.health_monitor.input_path_degraded,
                 warn_us=self.health_monitor.input_path_warn_us,
             )
+            terminal_status = {
+                "finished": "done",
+                PLAYBACK_FINISHED: "done",
+                PLAYBACK_SKIPPED: "skipped",
+                PLAYBACK_QUIT: "stopped",
+                "error": "error",
+            }.get(final_abort_reason, "error")
+            publish_terminal_progress(terminal_status)
             # Partial-send diagnostics: recorded BEFORE save() so they reach the summary. The
             # dispatch thread is the sole sender and is finishing here, so the counters are final.
             # Pure instrumentation — never let a backend without it (test fakes) break teardown.

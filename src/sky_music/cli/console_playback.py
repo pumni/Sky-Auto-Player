@@ -32,6 +32,7 @@ from sky_music.orchestration.runtime_session import (
     PlaybackOverrides,
 )
 from sky_music.platform.win32 import inputs as _inputs
+from sky_music.platform.win32.console import virtual_terminal_processing_enabled
 from sky_music.ui.hud import (
     PLAYBACK_QUIT,
     ProgressRenderer,
@@ -358,22 +359,12 @@ def _check_textual_support() -> str | None:
     # For frozen exes (double-click), WT_SESSION is absent even in Windows Terminal.
     # Check ENABLE_VIRTUAL_TERMINAL_PROCESSING via Win32 API instead.
     if getattr(sys, "frozen", False):
-        try:
-            import ctypes
-            import ctypes.wintypes
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-            STD_OUTPUT_HANDLE = ctypes.c_ulong(-11)
-            handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
-            mode = ctypes.wintypes.DWORD()
-            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) and not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
-                    return (
-                        "The current console does not support ANSI / Virtual Terminal Processing. "
-                        "Launch the app from Windows Terminal (wt.exe) or "
-                        "enable 'Let Windows decide' under Settings > System > For developers > Terminal."
-                    )
-        except Exception:
-            pass  # cannot query — assume capable
+        if virtual_terminal_processing_enabled() is False:
+            return (
+                "The current console does not support ANSI / Virtual Terminal Processing. "
+                "Launch the app from Windows Terminal (wt.exe) or "
+                "enable 'Let Windows decide' under Settings > System > For developers > Terminal."
+            )
         return None
     # Dev/source mode: require WT_SESSION or TERM_PROGRAM
     if os.environ.get("WT_SESSION"):

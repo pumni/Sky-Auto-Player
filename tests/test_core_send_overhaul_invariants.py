@@ -51,17 +51,16 @@ def test_musical_path_persistent_block():
 
 
 def test_release_path_completes_remainder():
-    """Invariant I4: Note-off/release_all completes remainder via retry helper."""
-    with patch("sky_music.platform.win32.inputs.user32.SendInput") as mock_send_input, \
-         patch("sky_music.platform.win32.inputs.send_input_batch") as mock_send_batch:
-        # Release path: completes remainder using send_input_batch
+    """Invariant I4: Note-off/release_all completes remainder via immediate retry."""
+    with patch("sky_music.platform.win32.inputs.user32.SendInput") as mock_send_input:
+        # Release path: the direct native retry completes the remainder.
         mock_send_input.return_value = 1
         
         result = inputs.send_scan_code_batch_trusted((0x15, 0x16, 0x17), key_up=True)
         landed = result.inserted
         
         assert landed == 3
-        mock_send_batch.assert_called_once()
+        assert mock_send_input.call_count == 3
 
 
 def test_hybrid_wait_strategy_spin_does_not_sleep():

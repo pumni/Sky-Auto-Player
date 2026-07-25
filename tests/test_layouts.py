@@ -27,28 +27,21 @@ def test_legacy_compatibility_keys():
     assert SKY_15_KEY_MAP["2Key14"] == "/"
 
 
-def test_mapped_resolver_loads_user32_once(monkeypatch):
-    import ctypes
-
-    import sky_music.layouts as layouts
+def test_mapped_resolver_uses_platform_map_virtual_key(monkeypatch):
     from sky_music.domain import NoteKey
     from sky_music.layouts import DefaultNoteResolver
+    from sky_music.platform.win32 import inputs
 
-    class FakeUser32:
-        def MapVirtualKeyW(self, vk, mode):
-            return vk + mode + 1
+    calls = []
 
-    loads = []
+    def fake_map_virtual_key(vk, mode):
+        calls.append((vk, mode))
+        return vk + mode + 1
 
-    def fake_windll(name, use_last_error=True):
-        loads.append((name, use_last_error))
-        return FakeUser32()
-
-    monkeypatch.setattr(layouts, "_USER32", None)
-    monkeypatch.setattr(ctypes, "WinDLL", fake_windll)
+    monkeypatch.setattr(inputs.user32, "MapVirtualKeyW", fake_map_virtual_key)
 
     resolver = DefaultNoteResolver(SKY_15_KEY_PROFILE)
     assert resolver.resolve_scan_code(NoteKey("Key0"), mode="mapped") != 0
     assert resolver.resolve_scan_code(NoteKey("Key1"), mode="mapped") != 0
 
-    assert loads == [("user32", True)]
+    assert calls == [(0x59, 0), (0x55, 0)]

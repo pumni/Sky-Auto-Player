@@ -88,6 +88,21 @@ user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
 user32.SendInput.restype = wintypes.UINT
 user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
 user32.MapVirtualKeyW.restype = wintypes.UINT
+
+def map_virtual_key(vk: int) -> int:
+    """Map a validated virtual-key code through the isolated Win32 seam."""
+    if type(vk) is not int or not 0 <= vk <= 0xFF:
+        raise ValueError("vk must be an integer in the range 0..255")
+    return int(user32.MapVirtualKeyW(vk, 0))
+
+def get_window_process_id(hwnd: int) -> int | None:
+    """Return the process id for a validated top-level window handle."""
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    process_id = wintypes.DWORD()
+    if not user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id)):
+        return None
+    return int(process_id.value)
 user32.EnumWindows.argtypes = (ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM)
 user32.EnumWindows.restype = wintypes.BOOL
 user32.GetWindowTextLengthW.argtypes = (wintypes.HWND,)
@@ -442,7 +457,7 @@ _CACHE_LOCK = threading.RLock()
 # are serial and not interspersed. When it returns sent < n, that guarantee breaks
 # (late/ghost notes, remote desync).
 #
-# Musical policy (note-on / key_up=False): allows a single immediate same-frame retry for leftovers,
+# Musical policy (note-on / key_up=False): allows a single immediate sender-side retry for leftovers,
 # then drops any remaining unsent keys (DROPPED_BACKEND) to preserve timing. 
 # Incomplete chord > staggered wrong notes spanning multiple frames.
 #
@@ -465,9 +480,9 @@ class SendDiagnostics:
 
     partial_send_events: int = 0     # SendInput calls that returned sent < requested (any n)
     chord_split_events: int = 0      # n > 1 and 0 < sent < n — a chord literally split mid-way
-    keys_deferred: int = 0           # keys not in the first atomic SendInput (split or drop)
+    keys_deferred: int = 0           # keys not in the first SendInput batch (split or drop)
     keys_dropped: int = 0            # keys intentionally NOT retried (musical note-on path)
-    keys_retried: int = 0            # keys completed on a follow-up SendInput (note-off/safety OR same-frame note-on retry)
+    keys_retried: int = 0            # keys completed on a follow-up SendInput (note-off/safety OR immediate note-on retry)
     zero_progress_retries: int = 0   # SendInput calls that injected nothing (sent == 0)
     # No longer incremented by inputs.py; conceptually tracked by DispatchHealthMonitor
     # focus cache (TTL 2 ms). Kept in the schema for summary-key stability (I9).
@@ -594,31 +609,34 @@ def _send_scan_code_batch_impl(
     *,
     complete_remainder: bool,
     clock_now: Callable[[], int] | None = None,
-) -> tuple[int, int]:
-    """Inject scan codes via one SendInput; return (landed_keys, completion_us).
-    
-    If clock_now is provided, completion_us is sampled immediately after the FIRST
-    native SendInput returns, before any retry or logging, giving the most accurate
-    sender-side timestamp of the native boundary crossing.
+) -> tuple[int, int, int]:
+    """Inject scan codes; return ``(landed_keys, completion_us, win32_error)``.
+
+    ``completion_us`` is sampled immediately after every native attempt and the
+    returned value belongs to the final attempted call. The successful normal
+    path therefore remains exactly one ``SendInput`` call and one clock sample.
 
     ``complete_remainder``:
-      - False (musical note-on): allows a single immediate same-frame retry for leftovers, 
+      - False (musical note-on): allows a single immediate sender-side retry for leftovers,
         then drops any remaining unsent keys to preserve timing.
       - True (note-off / panic release): finish remaining keys (potentially spanning multiple 
         frames) so held keys cannot stick.
     """
     n = len(scan_codes_tuple)
     if n == 0:
-        return 0, (clock_now() if clock_now else 0)
+        return 0, (clock_now() if clock_now else 0), 0
     input_array = _lookup_or_build_input_array(scan_codes_tuple, flags)
 
-    sent_raw = int(user32.SendInput(n, input_array, _INPUT_SIZE))
-    # Phase 2: Sample immediately after native return, before any Python wrapper logic
+    ctypes.set_last_error(0)
+    sent_raw = user32.SendInput(n, input_array, _INPUT_SIZE)
+    # Keep this as the first observable Python operation after the native return.
     completed_us = clock_now() if clock_now else 0
-    # Clamp: a hostile/misbehaving return must not index past the tuple.
-    sent = max(0, min(sent_raw, n))
+    win32_error = ctypes.get_last_error() if sent_raw != n else 0
+    # Clamp only after capturing timestamp/error: a malformed native result must
+    # not index past the validated tuple.
+    sent = max(0, min(int(sent_raw), n))
     if sent == n:
-        return n, completed_us
+        return n, completed_us, 0
 
     # Partial (or zero) send: first call did not deliver the whole batch in one contiguous chunk.
     missed = n - sent
@@ -629,11 +647,10 @@ def _send_scan_code_batch_impl(
         _DIAG.chord_split_events += 1
 
     if not complete_remainder:
-        # SAME-FRAME retry (immediate, sleepless, exactly once). A retry issued µs after the
-        # first SendInput lands in the SAME game input-sampling frame (retry latency ~5-20µs
-        # vs one frame 6.9-16.7ms) with high probability (conceptually estimated as ~99.7% as a
-        # heuristic, not measured game-frame probability; retry latency is ≪ one frame under normal
-        # conditions), so it recovers the full chord with
+        # Immediate sender-side retry (sleepless, exactly once). The retry minimizes the
+        # sender-side gap after the partial native return and often recovers the full chord, but
+        # the game sampling frame is not observable here and must not be inferred from this timing.
+        # It recovers the full chord with
         # no perceptible timing defect. This is NOT the forbidden LATE retry: we never call
         # send_input_batch / _retry_wait_seconds (which sleep up to 2ms and would cross a frame
         # boundary and stagger the chord). Retry ONCE, then drop whatever still did not land —
@@ -641,8 +658,13 @@ def _send_scan_code_batch_impl(
         # single extra syscall on an already-failing rare event.
         remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
         retry_inputs = _lookup_or_build_input_array(remaining_scan_codes, flags)
-        retry_sent_raw = int(user32.SendInput(len(remaining_scan_codes), retry_inputs, _INPUT_SIZE))
-        retry_sent = max(0, min(retry_sent_raw, len(remaining_scan_codes)))
+        retry_requested = len(remaining_scan_codes)
+        ctypes.set_last_error(0)
+        retry_sent_raw = user32.SendInput(retry_requested, retry_inputs, _INPUT_SIZE)
+        # Logical completion is the return boundary of the final attempted call.
+        completed_us = clock_now() if clock_now else 0
+        win32_error = ctypes.get_last_error() if retry_sent_raw != retry_requested else 0
+        retry_sent = max(0, min(int(retry_sent_raw), retry_requested))
         total_sent = sent + retry_sent
         still_missed = n - total_sent
         if retry_sent > 0:
@@ -650,16 +672,16 @@ def _send_scan_code_batch_impl(
         if still_missed > 0:
             _DIAG.keys_dropped += still_missed
             debug_log(
-                f"[input] SAME-FRAME RETRY partial: landed {total_sent}/{n} "
+                f"[input] IMMEDIATE RETRY partial: landed {total_sent}/{n} "
                 f"({sent} first + {retry_sent} retry); dropping {still_missed}. "
                 f"scan_codes={scan_codes_tuple}"
             )
         elif sent < n:
             debug_log(
-                f"[input] SAME-FRAME RETRY recovered chord: {total_sent}/{n} "
+                f"[input] IMMEDIATE RETRY recovered chord: {total_sent}/{n} "
                 f"({sent} first + {retry_sent} retry). scan_codes={scan_codes_tuple}"
             )
-        return total_sent, completed_us
+        return total_sent, completed_us, win32_error
 
     # Safety path (releases): complete remainder — split release beats a stuck key.
     _DIAG.keys_retried += missed
@@ -675,9 +697,39 @@ def _send_scan_code_batch_impl(
         )
 
     remaining_scan_codes = scan_codes_tuple[sent:] if sent > 0 else scan_codes_tuple
-    remaining_inputs = [_cached_key_input(sc, flags) for sc in remaining_scan_codes]
-    send_input_batch(remaining_inputs)
-    return n, completed_us
+    retries_without_progress = 0
+    total_sent = sent
+    while remaining_scan_codes:
+        remaining_inputs = _lookup_or_build_input_array(remaining_scan_codes, flags)
+        requested = len(remaining_scan_codes)
+        ctypes.set_last_error(0)
+        retry_sent_raw = user32.SendInput(requested, remaining_inputs, _INPUT_SIZE)
+        # Release completion must also belong to its final native attempt.
+        completed_us = clock_now() if clock_now else 0
+        win32_error = ctypes.get_last_error() if retry_sent_raw != requested else 0
+        retry_sent = max(0, min(int(retry_sent_raw), requested))
+        if retry_sent == requested:
+            total_sent += retry_sent
+            return total_sent, completed_us, 0
+        if retry_sent > 0:
+            total_sent += retry_sent
+            remaining_scan_codes = remaining_scan_codes[retry_sent:]
+            retries_without_progress = 0
+            continue
+
+        retries_without_progress += 1
+        _DIAG.zero_progress_retries += 1
+        if retries_without_progress >= 3:
+            raise OSError(
+                f"SendInput failure: sent {total_sent}/{n} actions. "
+                f"Windows Error Code: {win32_error} "
+                f"({ctypes.FormatError(win32_error).strip()}). "
+                "Possible reasons: Sky is elevated (Admin) while this script is "
+                "not (UIPI mismatch), or target window handles became invalid."
+            )
+        _retry_wait_seconds(0.002)
+
+    return total_sent, completed_us, win32_error
 
 
 @dataclass(slots=True, frozen=True)
@@ -695,7 +747,12 @@ def send_scan_code_batch(scan_codes: tuple[int, ...] | list[int], key_up: bool =
     scan_codes_tuple = tuple(dict.fromkeys(scan_codes))
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
     # release_all / watchdog use this path — never leave keys half-released.
-    landed, _ = _send_scan_code_batch_impl(scan_codes_tuple, flags, complete_remainder=True, clock_now=None)
+    landed, _, _ = _send_scan_code_batch_impl(
+        scan_codes_tuple,
+        flags,
+        complete_remainder=True,
+        clock_now=None,
+    )
     return landed
 
 def send_scan_code_batch_trusted(
@@ -703,7 +760,7 @@ def send_scan_code_batch_trusted(
     key_up: bool = False,
     clock_now: Callable[[], int] | None = None,
 ) -> PlatformSendResult:
-    """Hot-path send. Note-on allows a single immediate same-frame retry for partials; note-off completes remainder. Returns PlatformSendResult."""
+    """Hot-path send with one immediate sender-side retry for note-on partials."""
     if not scan_codes:
         return PlatformSendResult(
             requested=0,
@@ -714,7 +771,7 @@ def send_scan_code_batch_trusted(
     scan_codes_tuple = tuple(scan_codes)
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
     # key_up=True → complete_remainder (stuck-key safety). key_up=False → musical contiguous batch.
-    landed, completed_us = _send_scan_code_batch_impl(
+    landed, completed_us, win32_error = _send_scan_code_batch_impl(
         scan_codes_tuple,
         flags,
         complete_remainder=key_up,
@@ -724,7 +781,7 @@ def send_scan_code_batch_trusted(
         requested=len(scan_codes_tuple),
         inserted=landed,
         completed_us=completed_us,
-        win32_error=0,  # We don't extract Win32 error currently, but it's part of the seam
+        win32_error=win32_error,
     )
 
 def get_process_name_by_pid(pid: int) -> str | None:

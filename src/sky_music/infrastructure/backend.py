@@ -53,11 +53,11 @@ class InputSendResult:
 class InputBackend(Protocol):
     """Protocol interface defining operations for keyboard note key injections."""
     def key_down(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        """Presses down a set of keyboard keys simultaneously."""
+        """Presses down a set of keyboard keys in one contiguous SendInput batch."""
         ...
 
     def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
-        """Releases a set of keyboard keys simultaneously."""
+        """Releases a set of keyboard keys in one contiguous SendInput batch."""
         ...
 
     def release_all(self) -> ReleaseAllOutcome:
@@ -69,7 +69,7 @@ class InputBackend(Protocol):
         ...
 
     def get_send_diagnostics(self) -> dict[str, int]:
-        """Returns partial-send counters since the last reset (chord-atomicity diagnostics)."""
+        """Returns partial-send counters since the last reset."""
         ...
 
     def set_clock(self, clock: Clock) -> None:

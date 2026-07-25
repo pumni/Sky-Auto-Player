@@ -1,29 +1,20 @@
-import ctypes
 import sys
-from ctypes import wintypes
 from typing import Any
 
 from sky_music.config import load_config
 from sky_music.layouts import PHYSICAL_SCAN_CODES, SKY_15_KEY_PROFILE, VK_CODES
 from sky_music.platform.win32 import inputs
-
-# Lazy-cached winmm handle — WinDLL is not free to re-create every call.
-_winmm: ctypes.WinDLL | None = None
-
-
-def _get_winmm() -> ctypes.WinDLL:
-    global _winmm
-    if _winmm is None:
-        _winmm = ctypes.WinDLL("winmm", use_last_error=True)
-    return _winmm
+from sky_music.platform.win32.diagnostics import (
+    check_timer_resolution as _check_timer_resolution,
+)
+from sky_music.platform.win32.diagnostics import (
+    is_process_elevated,
+)
 
 
 def is_admin() -> bool:
     """Checks if the current process is running with administrative privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        return False
+    return is_process_elevated()
 
 def check_sky_window() -> dict:
     """Diagnoses Sky window handle, process name, and potential UIPI elevation mismatches."""
@@ -34,9 +25,11 @@ def check_sky_window() -> dict:
         status["msg"] = "Sky window NOT found. Ensure the game is running and verify --sky-process-names."
         return status
 
-    pid = wintypes.DWORD()
-    inputs.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    proc_name = inputs.get_process_name_by_pid(pid.value)
+    pid = inputs.get_window_process_id(hwnd)
+    if pid is None:
+        status["msg"] = "Sky window process id could not be queried."
+        return status
+    proc_name = inputs.get_process_name_by_pid(pid)
 
     status["hwnd"] = hwnd
     status["process"] = proc_name or "Unknown Process"
@@ -44,7 +37,7 @@ def check_sky_window() -> dict:
     current_admin = is_admin()
     status["ok"] = True
 
-    msg_parts = [f"Found Sky window (HWND={hwnd}, PID={pid.value}, Process={status['process']})."]
+    msg_parts = [f"Found Sky window (HWND={hwnd}, PID={pid}, Process={status['process']})."]
     # Phase G.3: exact UIPI advisory text (plan §G.3).
     if not current_admin:
         msg_parts.append(
@@ -59,22 +52,7 @@ def check_sky_window() -> dict:
 
 def check_timer_resolution() -> dict:
     """Diagnoses high-precision multimedia timer subsystem settings on Windows."""
-    status = {"ok": True, "msg": "Windows Multimedia high-precision timers are active (resolution: 1ms expected)."}
-    
-    try:
-        winmm = _get_winmm()
-        # Attempt to temporarily begin period to see if winmm functions cleanly
-        res = winmm.timeBeginPeriod(1)
-        if res == 0:
-            winmm.timeEndPeriod(1)
-        else:
-            status["ok"] = False
-            status["msg"] = f"winmm.timeBeginPeriod failed with status code: {res}"
-    except Exception as exc:
-        status["ok"] = False
-        status["msg"] = f"Multimedia timer check failed: {exc}"
-        
-    return status
+    return _check_timer_resolution()
 
 def check_keyboard_layout() -> dict:
     """Diagnoses note mapping scan codes completeness and uniqueness."""

@@ -112,8 +112,9 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 1. `remaining ≤ spin_threshold` → busy-spin to target.
 2. Sleeper declares `is_high_resolution` (capability flag, e.g. `WaitableTimerSleeper`):
    - event mode (command event handle present): arm the waitable timer for
-     `remaining − guard` and block in `WaitForMultipleObjects(timer, command_event)` — zero
-     polling; commands/focus transitions wake the thread instantly; then spin the guard.
+     `remaining − guard` and block in `WaitForMultipleObjects(command_event, timer)` — zero
+     polling; commands/focus transitions wake the thread instantly. If both handles are ready,
+     the command handle is selected first; then the loop re-polls before entering the spin guard.
    - polled mode: 2 ms-capped sleeps towards `target − guard` so the loop can poll between steps.
 3. Fallback ladder (RealSleeper): coarse (≤20 ms, −5 ms buffer) → 1 ms ticks → yield → spin. (In event mode, the degraded 2ms polled sleep still monitors the command event to ensure prompt wake).
 
@@ -147,7 +148,7 @@ deterministic tests are unaffected):
 | Lead EMA cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
 | Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
-| Idle-gap core warmup | `CORE_WARMUP_SPIN_US = 200`, threshold 20 ms | `core_warmup_budget_us = 0` |
+| Idle-gap core warmup | `core_warmup_budget_us = 200`, threshold 20 ms | `core_warmup_budget_us = 0` |
 | Device margin | `.cache/input_latency.json` → `min_hold_margin_us`; default 500 | profile override |
 | Event-driven waits | on (runtime) | `--no-event-wait` |
 | GIL switch interval 1 ms | on | `--no-switch-interval-tuning` |
@@ -175,4 +176,4 @@ cleanest send tail of all runs.
 
 ## 8. Telemetry and Memory Hygiene
 
-To guarantee real-time safety, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it triggers a `flush_if_large` operation which drops half of the oldest buffered records rather than blocking dispatch to perform a file write, incrementing a truncated count. Final CSV export is performed entirely off the dispatch hot path (typically during pause or stop lifecycle points).
+To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.

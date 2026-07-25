@@ -338,10 +338,8 @@ class RuntimeDispatchCoordinator:
                 down_dispatch_completed_us=dispatch_completed_us,
                 # Anchor the visibility floor to the down DISPATCH COMPLETION.
                 #
-                # Telemetry shows the game-observed hold follows completion-to-completion: a
-                # start-anchored floor subtracts the down SendInput latency from every note, leaving
-                # roughly half of 1-frame local_precise notes below visibility at 144fps. With the
-                # completion anchor, observed hold is min_hold plus the up SendInput duration.
+                # The completion-to-completion sender timeline preserves the configured hold floor.
+                # It is a diagnostic proxy only: game sampling and kernel delivery are not observed.
                 #
                 # Same-key feasibility is kept honest in the scheduler by requiring
                 # interval >= min_hold; the anchor itself is only the visibility rule.

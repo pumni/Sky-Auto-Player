@@ -66,7 +66,7 @@ def test_check_sky_window_uipi_text_non_admin() -> None:
 
     with (
         patch.object(doctor.inputs, "get_sky_window", return_value=fake_hwnd),
-        patch.object(doctor.inputs.user32, "GetWindowThreadProcessId", return_value=0),
+        patch.object(doctor.inputs, "get_window_process_id", return_value=12345),
         patch.object(doctor.inputs, "get_process_name_by_pid", return_value="Sky.exe"),
         patch("sky_music.infrastructure.doctor.is_admin", return_value=False),
     ):

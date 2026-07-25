@@ -82,8 +82,8 @@ class TestTelemetryFlushChunk:
         logger.log_filepath = tmp_path / f"{name}.csv"
         return logger
 
-    def test_flush_chunk_clears_records(self, tmp_path: Path) -> None:
-        """Soft flush is off the hot path: record() retains; flush_if_large drops half."""
+    def test_flush_chunk_defers_records_to_lifecycle_save(self, tmp_path: Path) -> None:
+        """Soft threshold reports pressure without mutating the runtime buffer."""
         from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
     
         logger = self._make_logger(tmp_path, "flush_test")
@@ -93,8 +93,7 @@ class TestTelemetryFlushChunk:
     
         assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
         assert logger.flush_if_large() is True
-        # It should drop half of the records
-        assert len(logger.records) == (_TELEMETRY_FLUSH_CHUNK + 1) - ((_TELEMETRY_FLUSH_CHUNK + 1) // 2)
+        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
 
     def test_retain_mode_preserves_records_past_flush(self, tmp_path: Path) -> None:
         """If retain_all=True, flush_if_large does not truncate in memory."""
@@ -127,8 +126,7 @@ class TestTelemetryFlushChunk:
         logger.save()
         assert csv_path.exists()
         data = csv_path.read_text(encoding="utf-8")
-        # Since flush_if_large drops half the records, only the remaining are saved
-        expected_len = (_TELEMETRY_FLUSH_CHUNK + 1) - ((_TELEMETRY_FLUSH_CHUNK + 1) // 2)
+        expected_len = _TELEMETRY_FLUSH_CHUNK + 1
         # Plus 1 for header
         assert len(data.strip().splitlines()) == expected_len + 1
 

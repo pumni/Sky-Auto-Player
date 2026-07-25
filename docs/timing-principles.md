@@ -1,6 +1,6 @@
 # Timing Principles for Sky Music Player
 
-This document is the engineering source of truth for designing, reviewing, and calibrating timing profiles for Sky Music Player. It defines the principles that guarantee reliable note registration inside the game and reliable audibility for online listeners.
+This document is the engineering source of truth for designing, reviewing, and calibrating timing profiles for Sky Music Player. It defines sender-side timing contracts and profile guidance; game registration remains subject to uninstrumented frame-sampling evidence, while online audibility has additional listener-side constraints.
 
 ---
 
@@ -61,14 +61,14 @@ If the authored interval is smaller than `min_hold_us`:
 ---
 
 ## 3. The Completion-Anchor Contract
-To guarantee that a note meets the visibility floor regardless of OS dispatch latency, key releases are scheduled relative to down-dispatch completion rather than down-dispatch start.
+To enforce the sender-side minimum-hold floor despite measured OS dispatch latency, key releases are scheduled relative to down-dispatch completion rather than down-dispatch start. This does not prove when the game sampled the key.
 
 The runtime visibility contract implemented in [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) is:
 $$\text{release\_not\_before\_us} = \text{down\_dispatch\_completed\_us} + \text{min\_hold\_us}$$
 $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{release\_not\_before\_us})$$
 
 ### Rationale
-Telemetry shows that the game-observed hold duration tracks completion-to-completion timing. Measuring the floor from the down dispatch start (start-anchoring) subtracts the down injection latency from the key hold duration. For `local_precise` at 144 FPS (6.94 ms hold), this caused roughly 50% of notes to fall below the game's 1-frame visibility limit. Completion-anchoring ensures a true 1-frame hold in-game with minimal overhead. (Note: Residual completion latencies inside the kernel driver itself are generally <0.5ms on Windows; since 2026-07 they are covered by the constant `min_hold_margin_us` in the Hold Model above rather than left unaccounted.)
+The sender-side completion-to-completion proxy preserves the intended hold floor: measuring from down-dispatch start would subtract the down injection latency from the sender timeline. For `local_precise` at 144 FPS (6.94 ms hold), this avoided the previously observed sender-side shortfall. Completion-anchoring does not establish a game-observed hold, because game sampling and kernel delivery are not instrumented here. The constant `min_hold_margin_us` models residual sender-to-device delivery latency; it is a margin, not game-onset evidence.
 
 ### Interaction with Adaptive Dispatch Lead (2026-06)
 Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a per-kind EMA of `send_duration_us` (clamped to 2 ms) so completions land on `scheduled_us`. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
@@ -129,10 +129,14 @@ previous-session lead estimates rather than cold-starting at zero for `_SEED_SAM
 Corrupt or version-mismatched cache is silently ignored — never raises into play.
 
 ### Idle-gap core warmup (Phase E)
-After a gap of ≥ 20 ms since the last `SendInput`, the dispatch thread expands its final spin threshold by adding the `core_warmup_budget_us` (capped at `CORE_WARMUP_SPIN_MAX_US`).
-(≤ 200 µs) to warm the CPU core before the next send. The warmup is skipped if already past the
-note deadline. Controlled by `CORE_WARMUP_SPIN_US = 200` and `SEND_COLD_THRESHOLD_US = 20_000`
-in `core/loop.py`.
+After a gap of ≥ 20 ms since the last `SendInput` completion elapsed, the dispatch thread
+expands its final spin threshold by adding `core_warmup_budget_us` (default 200 µs, capped at
+`CORE_WARMUP_SPIN_MAX_US` = 500 µs) to the `effective_spin_threshold`. This widens the busy-spin
+window immediately before the deadline — warming the CPU core without a separate blocking
+spin. The cold guard is skipped when the dispatch is already late, a command requires pause/stop,
+a release is due at the same target, or no blocking interval remains.
+Controlled in `core/loop.py` by `core_warmup_budget_us` (default 200) and
+`SEND_COLD_THRESHOLD_US` (20_000 µs).
 
 ### Mid-song spin re-probe (Phase H)
 The pre-play spin probe derives `effective_spin_threshold_us` once before playback. Mid-song,

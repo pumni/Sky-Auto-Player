@@ -94,11 +94,15 @@ class HybridWaitStrategy:
                         if inputs.set_waitable_timer_relative_us(timer_handle, remaining_to_sleep):
                             try:
                                 res = inputs.wait_for_multiple_objects(
-                                    (timer_handle, command_event),
+                                    # Put the command first: when both objects are
+                                    # signalled, Win32 returns the lowest-index handle.
+                                    (command_event, timer_handle),
                                     inputs.INFINITE,
                                 )
-                                # Woken by command event (WAIT_OBJECT_0 + 1)
-                                if res == inputs.WAIT_OBJECT_0 + 1:
+                                # Woken by command event (index 0). A simultaneous
+                                # timer/command edge therefore cannot advance to a
+                                # note-on before the dispatch loop polls the command.
+                                if res == inputs.WAIT_OBJECT_0:
                                     return True
                                 if res is None:
                                     sleep_us = min(remaining_to_sleep, 2_000)

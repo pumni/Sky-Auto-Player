@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from contextlib import nullcontext
+from contextvars import Context
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -125,29 +126,20 @@ class QueueCommandSource:
 
 
 class SharedFocusSignal:
-    """Lock-protected focus flag shared between the supervisor and dispatch thread.
-
-    ``is_active`` lives on the hot read path of the dispatch loop; the writer only
-    flips it on focus transitions. We avoid the lock on the unchanged case so a
-    steady-state dispatch loop pays no lock acquire under free-threaded Python.
-    """
+    """Focus state shared through Python's documented ``threading.Event`` primitive."""
 
     def __init__(self, active: bool = True) -> None:
-        self._active = active
-        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self.set_active(active)
 
     def set_active(self, active: bool) -> None:
-        with self._lock:
-            if active != self._active:
-                self._active = active
+        if active:
+            self._event.set()
+        else:
+            self._event.clear()
 
     def is_active(self) -> bool:
-        # Fast path: read the live bool. If two set_active calls race against this
-        # read the worst outcome is one extra dispatch loop iteration using the
-        # previous state, then an immediate re-read sees the fresh value — no missed
-        # transition is possible because set_active signals the command event after
-        # flipping, so the loop re-checks is_active() on the next wake.
-        return self._active
+        return self._event.is_set()
 
 
 class SnapshotProgressSink:
@@ -397,6 +389,7 @@ class PlaybackSupervisor:
         dispatch_thread = threading.Thread(
             target=dispatch_target,
             name="sky-music-dispatch",
+            context=Context(),
         )
         dispatch_thread.start()
 

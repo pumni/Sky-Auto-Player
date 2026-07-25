@@ -9,10 +9,22 @@ from sky_music.orchestration.telemetry import TelemetryLogger
 from sky_music.platform.win32 import inputs
 
 
-def test_core_warmup_spin_us_exists():
-    assert hasattr(loop, "CORE_WARMUP_SPIN_US")
-    assert isinstance(loop.CORE_WARMUP_SPIN_US, int)
-    assert loop.CORE_WARMUP_SPIN_US >= 200
+def test_core_warmup_budget_us_default():
+    import inspect
+
+    from sky_music.orchestration.core.loop import DispatchLoop
+
+    sig = inspect.signature(DispatchLoop.__init__)
+    default = sig.parameters["core_warmup_budget_us"].default
+    assert isinstance(default, int)
+    assert default >= 200, f"core_warmup_budget_us default should be >= 200 µs, got {default}"
+
+
+def test_core_warmup_spin_max_us_exists():
+    from sky_music.orchestration.core.loop import CORE_WARMUP_SPIN_MAX_US
+
+    assert isinstance(CORE_WARMUP_SPIN_MAX_US, int)
+    assert CORE_WARMUP_SPIN_MAX_US >= 500
 
 
 def test_send_cold_threshold_us_exists():
