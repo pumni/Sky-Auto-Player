@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python environment
         uses: ./.github/actions/python-environment
@@ -87,7 +89,7 @@ jobs:
           if ($errs -and $errs.Count -gt 0) {
             Write-Host "::error::installer/updater.ps1 failed to parse on Windows PowerShell 5.1."
             $errs | ForEach-Object {
-              Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnPosition, $_.Message)
+              Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
             }
             exit 1
           }
@@ -110,7 +112,7 @@ jobs:
           $tagVer = $Matches[1]
           $pyVer = uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
           if ($tagVer -ne $pyVer) {
-            throw "I18 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
+            throw "I48 fail: tag version '$tagVer' != pyproject version '$pyVer'. Bump pyproject.toml before tagging."
           }
           Write-Host "Version lock OK: $tagVer"
           # Compute prerelease flag using the SAME PEP 440 parser the in-app
