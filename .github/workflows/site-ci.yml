@@ -7,6 +7,7 @@ on:
       - 'site/**'
       - '.github/workflows/site-ci.yml'
       - '.github/workflows/pages.yml'
+      - '.github/actions/site-validate/**'
 
 permissions:
   contents: read
@@ -14,10 +15,6 @@ permissions:
 concurrency:
   group: site-ci-${{ github.ref }}
   cancel-in-progress: true
-
-defaults:
-  run:
-    working-directory: site
 
 jobs:
   validate:
@@ -30,32 +27,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Bun
-        # Version is pinned via site/package.json `packageManager` field (single source of truth).
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Type and Astro checks
-        run: bun run check
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Formatting
-        run: bun run format:check
-
-      - name: Build static site
-        run: bun run build
-
-      - name: Verify required output
-        run: bun run verify:dist
-
-      - name: Install Playwright Chromium
-        run: bunx playwright install chromium --with-deps
-
-      - name: Run E2E and accessibility tests
-        run: bun run test:e2e
-        env:
-          CI: true
+      - name: Validate site
+        uses: ./.github/actions/site-validate

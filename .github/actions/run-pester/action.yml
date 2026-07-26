@@ -1,0 +1,26 @@
+name: Run installer Pester tests
+description: >
+  Install pinned Pester 5.9.0 and run every *.Tests.ps1 under installer/Tests.
+  Pester 5.x is required (root-level BeforeAll is deprecated in Pester 6).
+
+runs:
+  using: composite
+  steps:
+    - name: Pester — installer/Tests
+      shell: pwsh
+      timeout-minutes: 10
+      run: |
+        # Pin 5.9.0 exactly for reproducible CI. updater.Tests.ps1 uses
+        # BeforeAll/AfterAll inside a wrapper Describe block.
+        Install-Module Pester -RequiredVersion 5.9.0 `
+          -Force -Scope CurrentUser -AcceptLicense
+        Import-Module Pester -RequiredVersion 5.9.0 -ErrorAction Stop
+        $r = Invoke-Pester -Path .\installer\Tests -PassThru
+        if ($r.FailedCount -gt 0) {
+          Write-Host "::error::Pester failed: $($r.FailedCount) of $($r.TotalCount) tests"
+          $r.Tests | Where-Object { $_.Result -ne 'Passed' } | ForEach-Object {
+            Write-Host ("  - " + $_.Path + " :: " + $_.ErrorRecord.Exception.Message)
+          }
+          exit 1
+        }
+        Write-Host "Pester OK: $($r.PassedCount)/$($r.TotalCount) tests passed"

@@ -1,0 +1,36 @@
+name: Updater PS 5.1 gate
+description: >
+  Fail if installer/updater.ps1 lacks a UTF-8 BOM or fails to parse on
+  Windows PowerShell 5.1 (updater.bat fallback when pwsh is absent).
+
+runs:
+  using: composite
+  steps:
+    - name: BOM + parse installer/updater.ps1 on Windows PowerShell 5.1
+      # Must use powershell.exe (5.1), not pwsh. Keep this script ASCII-only:
+      # GitHub Actions writes the run block to a temp .ps1 without a BOM, so
+      # PS 5.1 would mis-decode any non-ASCII byte the same way updater.ps1
+      # breaks without its BOM.
+      shell: powershell
+      run: |
+        $ps1 = Join-Path -Path (Get-Location).Path -ChildPath 'installer\updater.ps1'
+        if (-not (Test-Path -LiteralPath $ps1)) {
+          Write-Host "::error::Missing updater script: $ps1"
+          exit 1
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($ps1)
+        if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+          Write-Host "::error::installer/updater.ps1 must start with a UTF-8 BOM for the Windows PowerShell 5.1 fallback. updater.bat falls back to powershell.exe when pwsh is absent; a BOM-less file with non-ASCII bytes breaks the external update path (regression class of 2.4.1)."
+          exit 1
+        }
+        $errs = $null
+        $tokens = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1, [ref]$tokens, [ref]$errs)
+        if ($errs -and $errs.Count -gt 0) {
+          Write-Host "::error::installer/updater.ps1 failed to parse on Windows PowerShell 5.1 ($($errs.Count) error(s))."
+          $errs | ForEach-Object {
+            Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
+          }
+          exit 1
+        }
+        Write-Host "Windows PowerShell 5.1 gate OK (UTF-8 BOM present, parser clean)."

@@ -15,6 +15,11 @@ runs:
       with:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
+        # Keep in sync with repo-root `.python-version` (free-threaded pin).
+        # setup-uv sets UV_PYTHON so every later `uv` invocation resolves the
+        # same interpreter; `uv sync` still re-reads `.python-version` as a
+        # second source of truth.
+        python-version: "3.14+freethreaded"
 
     - name: Materialize .env
       shell: pwsh

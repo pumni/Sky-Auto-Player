@@ -49,52 +49,11 @@ jobs:
       - name: Tests — full
         run: uv run pytest
 
-      - name: Pester — installer/updater.ps1 tests
-        timeout-minutes: 10
-        run: |
-          # Pester 5.x is required — the test file uses `BeforeAll`/`AfterAll`
-          # at the top of a wrapper Describe block, and root-level setup is
-          # deprecated in Pester 6. Pin 5.9.0 exactly for reproducible CI.
-          Install-Module Pester -RequiredVersion 5.9.0 `
-            -Force -Scope CurrentUser -AcceptLicense
-          Import-Module Pester -RequiredVersion 5.9.0 -ErrorAction Stop
-          $r = Invoke-Pester -Path .\installer\Tests\updater.Tests.ps1 -PassThru
-          if ($r.FailedCount -gt 0) {
-            Write-Host "::error::Pester failed: $($r.FailedCount) of $($r.TotalCount) tests"
-            $r.Tests | Where-Object { $_.Result -ne 'Passed' } | ForEach-Object {
-              Write-Host ("  - " + $_.Path + " :: " + $_.ErrorRecord.Exception.Message)
-            }
-            exit 1
-          }
-          Write-Host "Pester OK: $($r.PassedCount)/$($r.TotalCount) tests passed"
+      - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
+        uses: ./.github/actions/updater-ps51-gate
 
-      - name: Parse installer/updater.ps1 on Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          # Keep this inline script ASCII-only: Windows PowerShell 5.1 can
-          # misread a UTF-8 workflow temp script without a BOM.
-          $ps1 = Join-Path -Path (Get-Location).Path -ChildPath 'installer\updater.ps1'
-          if (-not (Test-Path -LiteralPath $ps1)) {
-            Write-Host "::error::Missing updater script: $ps1"
-            exit 1
-          }
-          $bytes = [System.IO.File]::ReadAllBytes($ps1)
-          if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
-            Write-Host "::error::installer/updater.ps1 must start with a UTF-8 BOM for the Windows PowerShell 5.1 fallback."
-            exit 1
-          }
-          $errs = $null
-          $tokens = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1, [ref]$tokens, [ref]$errs)
-          if ($errs -and $errs.Count -gt 0) {
-            Write-Host "::error::installer/updater.ps1 failed to parse on Windows PowerShell 5.1."
-            $errs | ForEach-Object {
-              Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
-            }
-            exit 1
-          }
-          Write-Host "Windows PowerShell 5.1 parser OK."
-
+      - name: Pester — installer tests
+        uses: ./.github/actions/run-pester
 
       - name: Rust wheel precheck (only when rust/ exists)
         run: |

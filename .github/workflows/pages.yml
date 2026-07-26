@@ -6,6 +6,7 @@ on:
     paths:
       - 'site/**'
       - '.github/workflows/pages.yml'
+      - '.github/actions/site-validate/**'
   workflow_dispatch:
 
 permissions:
@@ -14,10 +15,6 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
-
-defaults:
-  run:
-    working-directory: site
 
 jobs:
   build:
@@ -30,35 +27,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Bun
-        # Version is pinned via site/package.json `packageManager` field (single source of truth).
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Type and Astro checks
-        run: bun run check
-
-      - name: Lint and formatting
-        run: bun run lint && bun run format:check
-
-      - name: Build static site
-        run: bun run build
-
-      - name: Verify required output
-        run: bun run verify:dist
-
-      - name: Install Playwright Chromium
-        run: bunx playwright install chromium --with-deps
-
-      - name: Run route, accessibility and responsive tests
-        run: bun run test:e2e
-        env:
-          CI: true
+      - name: Validate site
+        uses: ./.github/actions/site-validate
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3

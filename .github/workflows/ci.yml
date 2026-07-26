@@ -60,7 +60,9 @@ jobs:
           relevant=false
           while IFS= read -r path; do
             case "$path" in
-              src/*|tests/*|scripts/*|installer/*|manifests/*|.github/workflows/*|.github/actions/*)
+              # manifests/* intentionally omitted: winget channel is deferred
+              # and has no CI gate yet (placeholder SHA only).
+              src/*|tests/*|scripts/*|installer/*|.github/workflows/*|.github/actions/*)
                 relevant=true
                 break
                 ;;
@@ -113,7 +115,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -126,37 +128,15 @@ jobs:
         with:
           run-runtime-audit: "true"
 
-      - name: Parse installer/updater.ps1 on Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          # updater.bat falls back to powershell.exe (Windows PowerShell 5.1)
-          # when pwsh is not installed on the user's machine. PS 5.1 reads
-          # no-BOM .ps1 files with the system ANSI codepage (Windows-1252
-          # on en-US hosts), so non-ASCII bytes (em-dash --, S-section
-          # sign) get decoded as a corrupted sequence and break the
-          # parser. This step fails-fast if the file cannot be parsed
-          # by PS 5.1, preventing a regression of the bug that closed
-          # 2.4.1 (file carried non-ASCII comments without a UTF-8 BOM,
-          # broke external updates on any install without PS7). Runs on
-          # the GitHub Windows runner which always has PS 5.1 available
-          # side-by-side with pwsh.
-          # Keep this inline script ASCII-only: GitHub Actions writes the
-          # run: block to a temp .ps1 without a BOM, so PS 5.1 would
-          # mis-decode any non-ASCII byte here the same way.
-          $errs = $null; $tokens = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            "$PWD\installer\updater.ps1", [ref]$tokens, [ref]$errs)
-          if ($errs -and $errs.Count -gt 0) {
-            Write-Host "::error::installer/updater.ps1 fails to parse on Windows PowerShell 5.1 ($($errs.Count) error(s)). updater.bat falls back to PS 5.1 when pwsh is absent; the external update path is broken. Likely cause: file lacks UTF-8 BOM and contains non-ASCII characters decoded wrong by the system ANSI codepage."
-            $errs | ForEach-Object {
-              Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
-            }
-            exit 1
-          }
-          Write-Host "PS 5.1 parse OK -- external updater remains compatible with updater.bat PS 5.1 fallback."
+      - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
+        uses: ./.github/actions/updater-ps51-gate
 
-      - name: Tests — unit (scheduler, parser, domain — no Windows required)
-        run: uv run pytest -m "not windows and not slow"
+      - name: Pester — installer tests
+        uses: ./.github/actions/run-pester
+
+      - name: Tests — unit (skip slow benchmarks)
+        # Run windows-marked tests when present; skip only wall-clock `slow`.
+        run: uv run pytest -m "not slow"
 
   status:
     name: Sky Auto Player — full altitude gate
