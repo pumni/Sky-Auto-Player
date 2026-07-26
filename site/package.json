@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify:dist": "node scripts/verify-dist.mjs",
+    "verify:dist": "bun scripts/verify-dist.mjs",
     "test:e2e": "playwright test",
     "test:update": "playwright test --update-snapshots",
     "astro": "astro"

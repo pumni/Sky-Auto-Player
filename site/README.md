@@ -6,16 +6,16 @@ Static Astro site for the Sky Auto Player project, published under the /Sky-Auto
 
 Run from this directory:
 
-    npm ci
-    npm run dev
+    bun install
+    bun run dev
 
 ## Quality gates
 
-    npm run check
-    npm run lint
-    npm run format:check
-    npm run build
-    npm run verify:dist
-    npm run test:e2e
+    bun run check
+    bun run lint
+    bun run format:check
+    bun run build
+    bun run verify:dist
+    bun run test:e2e
 
 The site is static output. The production build is written to dist/, and the E2E suite checks routing, canonical metadata, accessibility, responsive behavior, the project favicon, and the mobile screenshot crop.

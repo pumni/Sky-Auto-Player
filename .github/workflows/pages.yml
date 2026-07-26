@@ -28,36 +28,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: site/package-lock.json
+          bun-version: latest
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Type and Astro checks
-        run: npm run check
+        run: bun run check
 
       - name: Lint and formatting
-        run: npm run lint && npm run format:check
+        run: bun run lint && bun run format:check
 
       - name: Build static site
-        run: npm run build
+        run: bun run build
 
       - name: Verify required output
-        run: npm run verify:dist
+        run: bun run verify:dist
 
       - name: Install Playwright Chromium
-        run: npx playwright install chromium --with-deps
+        run: bunx playwright install chromium --with-deps
 
       - name: Run route, accessibility and responsive tests
-        run: npm run test:e2e
+        run: bun run test:e2e
         env:
           CI: true
 
