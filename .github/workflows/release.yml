@@ -179,7 +179,7 @@ jobs:
           Write-Host "All required assets exist in RUNNER_TEMP."
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
