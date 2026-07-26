@@ -47,14 +47,12 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         <a
           class="locale-switch__option"
           href={isVi ? otherLocalePath : currentPath}
-          aria-current={!isVi ? 'page' : undefined}
-          >EN</a
+          aria-current={!isVi ? 'page' : undefined}>EN</a
         >
         <a
           class="locale-switch__option"
           href={isVi ? currentPath : otherLocalePath}
-          aria-current={isVi ? 'page' : undefined}
-          >VI</a
+          aria-current={isVi ? 'page' : undefined}>VI</a
         >
       </span>
     </nav>
