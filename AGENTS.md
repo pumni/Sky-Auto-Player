@@ -93,7 +93,7 @@ Read the matching row **before** touching the area.
 | `pyproject.toml` / `.python-version` | Both must stay in sync (see Architecture Invariants). | |
 | Security-sensitive surfaces | `SECURITY.md`, `scripts/audit_security_mandates.py` | Verify directly — do not delegate to a subagent summary. |
 | A new `docs/*-plan.md` | `docs/INDEX.md` | Mark as proposal; normative docs win. |
-| Marketing site / GitHub Pages | `docs/index.html`, `docs/vi/index.html`, `docs/faq.html`, `docs/vi/faq.html`, `.github/workflows/pages.yml`, `scripts/validate_pages_site.ps1` | Preserve canonical/hreflang matrix; deploy allowlist only; do not rely on project-level robots.txt. |
+| Marketing site / GitHub Pages | `site/`, `.github/workflows/pages.yml`, `.github/workflows/site-ci.yml` | Astro source in `site/`; pages deploy via GitHub Actions. Preserve canonical/hreflang matrix; do not commit `site/dist/`. |
 
 ## Architecture Invariants (what the code cannot say)
 

@@ -69,3 +69,6 @@ site/dist/
 site/.astro/
 site/playwright-report/
 site/test-results/
+
+# Legacy build_pages_site.ps1 output (script retired; directory must not be re-created).
+_site/

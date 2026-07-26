@@ -24,7 +24,7 @@ itself is wrong, open an issue first - do not fix it silently in a code PR.
 - New sheet-format readers (JSON, skysheet, JSON-compatible TXT are the supported set today).
 - Documentation improvements that match the existing `docs/INDEX.md` hierarchy.
 - Windows platform integrations that respect the `platform/`-only `ctypes` boundary.
-- Translation improvements for the landing page (`docs/index.html`, `docs/vi/index.html`).
+- Translation improvements for the landing page (source files in `site/src/content/` and `site/src/data/`).
 
 ## Out of scope (will be closed)
 

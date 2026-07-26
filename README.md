@@ -9,13 +9,13 @@
 <a href="https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange" alt="License"></a>
 <a href="https://github.com/pumni/Sky-Auto-Player/stargazers"><img src="https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold" alt="Stars"></a>
 
-**[🌐 Landing page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq.html)** · **[Download](https://github.com/pumni/Sky-Auto-Player/releases/latest)**
+**[🌐 Landing page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Download](https://github.com/pumni/Sky-Auto-Player/releases/latest)**
 
 </div>
 
 <div align="center">
-  <a href="docs/assets/picker.webp" target="_blank">
-    <img src="docs/assets/picker.webp" alt="Sky Auto Player TUI picker" width="640" style="border-radius: 8px; max-width: 100%;">
+  <a href="site/public/assets/images/picker.webp" target="_blank">
+    <img src="site/public/assets/images/picker.webp" alt="Sky Auto Player TUI picker" width="640" style="border-radius: 8px; max-width: 100%;">
   </a>
 </div>
 
@@ -109,7 +109,7 @@ non-standard environment presets.
 </details>
 
 The full FAQ — 14 questions covering file formats, troubleshooting, the update mechanism, and
-the security model — lives at **<https://pumni.github.io/Sky-Auto-Player/faq.html>**.
+the security model — lives at **<https://pumni.github.io/Sky-Auto-Player/faq/>**.
 
 ---
 
