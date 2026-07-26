@@ -4,7 +4,8 @@ export const homeEn: HomeContent = {
   locale: 'en',
   seo: {
     title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows',
-    description: 'Load a Sky music sheet and play notes, chords and holds on time with an open-source Windows application.',
+    description:
+      'Load a Sky music sheet and play notes, chords and holds on time with an open-source Windows application.',
   },
   navigation: {
     playback: 'Playback',
@@ -16,7 +17,8 @@ export const homeEn: HomeContent = {
   hero: {
     kicker: 'Music automation for Sky · Windows 10/11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
-    description: 'Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on time.',
+    description:
+      'Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on time.',
     primaryCta: 'Download for Windows',
     secondaryCta: 'See how it works',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
@@ -26,8 +28,14 @@ export const homeEn: HomeContent = {
   playback: {
     kicker: 'Built around the music',
     title: 'Timing is the instrument.',
-    description: 'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro.',
-    points: ['Frame-aligned chords', 'Tempo-aware playback', 'Notes, chords and holds', 'Dry-run preview'],
+    description:
+      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro.',
+    points: [
+      'Frame-aligned chords',
+      'Tempo-aware playback',
+      'Notes, chords and holds',
+      'Dry-run preview',
+    ],
   },
   comparison: {
     kicker: 'Not a generic macro',
@@ -44,7 +52,8 @@ export const homeEn: HomeContent = {
   product: {
     kicker: 'The actual player',
     title: 'Your library, timing profile and controls in one place.',
-    description: 'The keyboard-first picker keeps song search, playback setup and status visible without adding a heavyweight desktop interface.',
+    description:
+      'The keyboard-first picker keeps song search, playback setup and status visible without adding a heavyweight desktop interface.',
     annotations: [
       'Search and select songs from the terminal picker.',
       'Review the suggested timing profile before playback.',
@@ -57,15 +66,18 @@ export const homeEn: HomeContent = {
     items: [
       {
         title: 'Download',
-        description: 'Get the latest ZIP from GitHub Releases and extract it to a folder you control. No system installer or administrator access is required.',
+        description:
+          'Get the latest ZIP from GitHub Releases and extract it to a folder you control. No system installer or administrator access is required.',
       },
       {
         title: 'Add a sheet',
-        description: 'Export a JSON, .skysheet or compatible TXT sheet from the Sky Music editor and place it in the songs folder.',
+        description:
+          'Export a JSON, .skysheet or compatible TXT sheet from the Sky Music editor and place it in the songs folder.',
       },
       {
         title: 'Play',
-        description: 'Open Sky Auto Player, choose a song, then switch to the Sky window when you are ready.',
+        description:
+          'Open Sky Auto Player, choose a song, then switch to the Sky window when you are ready.',
       },
     ],
     hotkeyNote: 'Ctrl+R reloads the library · F8 pauses · F9 skips · F10 stops',
@@ -73,7 +85,8 @@ export const homeEn: HomeContent = {
   technical: {
     kicker: 'Technical boundaries',
     title: 'Clear about what it does—and what it does not do.',
-    description: 'Sky Auto Player runs as a separate Windows application and sends standard input events. Its source is public, so the implementation can be reviewed directly.',
+    description:
+      'Sky Auto Player runs as a separate Windows application and sends standard input events. Its source is public, so the implementation can be reviewed directly.',
     ledger: [
       { term: 'Input', definition: 'Windows SendInput' },
       { term: 'Process', definition: 'Separate application' },
@@ -83,7 +96,8 @@ export const homeEn: HomeContent = {
       { term: 'License', definition: 'GNU GPL v3.0' },
       { term: 'Updates', definition: 'Explicit updater with checksum verification' },
     ],
-    notice: 'Terms of Service: These technical boundaries do not guarantee account safety. Automated music playback may still conflict with Sky’s Terms of Service. Use the tool responsibly and at your own risk.',
+    notice:
+      'Terms of Service: These technical boundaries do not guarantee account safety. Automated music playback may still conflict with Sky’s Terms of Service. Use the tool responsibly and at your own risk.',
   },
   formats: {
     kicker: 'Supported sheets',
@@ -92,13 +106,15 @@ export const homeEn: HomeContent = {
       {
         extension: '.json',
         name: 'JSON',
-        description: 'Structured song sheets with musical events and metadata accepted by the player.',
+        description:
+          'Structured song sheets with musical events and metadata accepted by the player.',
         tags: 'NOTE · CHORD · HOLD',
       },
       {
         extension: '.skysheet',
         name: 'Skysheet',
-        description: 'JSON-based sheets with the .skysheet extension used by the Sky music editor ecosystem.',
+        description:
+          'JSON-based sheets with the .skysheet extension used by the Sky music editor ecosystem.',
         tags: 'SHEET EXPORT',
       },
       {

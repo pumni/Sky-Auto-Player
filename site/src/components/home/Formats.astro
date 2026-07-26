@@ -5,82 +5,83 @@ interface Props {
   data: HomeContent['formats'];
   locale: 'en' | 'vi';
 }
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
-<section id="formats" class="section-shell" aria-labelledby="formats-title">
+
+<section id="formats" class="section-shell section-shell--compact" aria-labelledby="formats-title">
   <div class="container">
     <div class="section-heading">
       <p class="kicker">{data.kicker}</p>
       <h2 id="formats-title" class="section-title">{data.title}</h2>
     </div>
     <div class="format-list">
-      {data.items.map(item => (
-        <div class="format-row">
-          <div class="format-row__extension">{item.extension}</div>
-          <div>
-            <div class="format-row__name">{item.name}</div>
-            <p class="format-row__description">{item.description}</p>
+      {
+        data.items.map((item) => (
+          <div class="format-row">
+            <div class="format-row__extension">{item.extension}</div>
+            <div class="format-row__copy">
+              <div class="format-row__name">{item.name}</div>
+              <p class="format-row__description">{item.description}</p>
+            </div>
+            <div class="format-row__tags">{item.tags}</div>
           </div>
-          <div class="format-row__tags">{item.tags}</div>
-        </div>
-      ))}
+        ))
+      }
     </div>
   </div>
 </section>
 
 <style>
+  .section-heading {
+    max-width: 38rem;
+  }
   .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
     margin-bottom: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .section-title {
     margin-bottom: var(--space-6);
   }
   .format-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
+    margin: 0;
+    border-top: 1px solid var(--border-default);
   }
   .format-row {
     display: grid;
     gap: var(--space-4);
-    background: var(--color-surface-1);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-panel);
-    padding: var(--space-4);
-    align-items: center;
+    padding-block: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    align-items: start;
   }
   @media (min-width: 40rem) {
     .format-row {
-      grid-template-columns: 120px 1fr 200px;
+      grid-template-columns: minmax(5rem, 0.25fr) minmax(0, 1fr) minmax(10rem, 0.45fr);
+      align-items: center;
     }
   }
   .format-row__extension {
+    color: var(--color-accent-strong);
     font-family: var(--font-mono);
-    font-weight: 700;
     font-size: var(--font-size-lead);
-    color: var(--color-text);
+    font-weight: 700;
+  }
+  .format-row__copy {
+    min-width: 0;
   }
   .format-row__name {
-    font-weight: 600;
     margin-bottom: var(--space-1);
+    font-weight: 650;
   }
   .format-row__description {
     color: var(--color-text-subtle);
     font-size: var(--font-size-sm);
   }
   .format-row__tags {
-    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-    text-align: right;
-  }
-  @media (max-width: 40rem) {
-    .format-row__tags {
-      text-align: left;
-    }
+    font-size: var(--font-size-xs);
   }
 </style>

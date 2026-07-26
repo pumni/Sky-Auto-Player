@@ -1,13 +1,13 @@
 ---
 import type { HomeContent } from '../../data/home.types';
-import { SITE } from '../../data/site';
 
 interface Props {
   data: HomeContent['steps'];
   locale: 'en' | 'vi';
 }
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
+
 <section id="how-it-works" class="section-shell" aria-labelledby="how-title">
   <div class="container">
     <div class="section-heading">
@@ -15,15 +15,19 @@ const { data, locale } = Astro.props;
       <h2 id="how-title" class="section-title">{data.title}</h2>
     </div>
     <ol class="steps">
-      {data.items.map((item, i) => (
-        <li class="step">
-          <span class="step__number" aria-hidden="true">{i + 1}</span>
-          <div>
-            <h3>{item.title}</h3>
-            <p>{item.description}</p>
-          </div>
-        </li>
-      ))}
+      {
+        data.items.map((item, i) => (
+          <li class="step">
+            <span class="step__number" aria-hidden="true">
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <div class="step__copy">
+              <h3>{item.title}</h3>
+              <p>{item.description}</p>
+            </div>
+          </li>
+        ))
+      }
     </ol>
     <p class="hotkey-note">{data.hotkeyNote}</p>
   </div>
@@ -31,52 +35,67 @@ const { data, locale } = Astro.props;
 
 <style>
   .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
     margin-bottom: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .section-title {
+    max-width: 30rem;
     margin-bottom: var(--space-6);
   }
   .steps {
     display: grid;
-    gap: var(--space-6);
-    margin-bottom: var(--space-6);
-  }
-  @media (min-width: 64rem) {
-    .steps {
-      grid-template-columns: repeat(3, 1fr);
-    }
+    gap: 0;
+    max-width: 58rem;
+    margin: 0 0 var(--space-6);
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border-default);
   }
   .step {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
+    display: grid;
+    grid-template-columns: 4rem minmax(0, 1fr);
+    gap: var(--space-5);
+    padding-block: var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
   }
   .step__number {
-    font-family: var(--font-display);
-    font-size: 3rem;
-    color: var(--border-default);
+    padding-top: 0.25rem;
+    color: var(--color-accent-strong);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
     line-height: 1;
   }
+  .step__copy {
+    min-width: 0;
+  }
   .step h3 {
+    margin-bottom: var(--space-2);
     font-family: var(--font-body);
     font-size: var(--font-size-lead);
-    margin-bottom: var(--space-2);
+    font-weight: 650;
+    line-height: 1.35;
   }
   .step p {
+    max-width: 52rem;
     color: var(--color-text-subtle);
   }
   .hotkey-note {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
-    text-align: center;
+    max-width: 58rem;
     margin-top: var(--space-8);
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-subtle);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+  @media (max-width: 30rem) {
+    .step {
+      grid-template-columns: 2.5rem minmax(0, 1fr);
+      gap: var(--space-3);
+    }
   }
 </style>

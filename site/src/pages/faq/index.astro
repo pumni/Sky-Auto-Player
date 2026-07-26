@@ -1,82 +1,11 @@
 ---
-import BaseLayout from '../../layouts/BaseLayout.astro';
-import FaqToc from '../../components/faq/FaqToc.astro';
-import FaqList from '../../components/faq/FaqList.astro';
-import { SITE } from '../../data/site';
-import { withBase } from '../../utils/urls';
+import FaqPage from '../../components/faq/FaqPage.astro';
 
 const seo = {
   title: 'Sky Auto Player FAQ — Setup, Safety, Formats and Troubleshooting',
-  description: 'Frequently asked questions about Sky Auto Player: setup, Windows support, sheet formats, updates, technical boundaries and troubleshooting.'
+  description:
+    'Frequently asked questions about Sky Auto Player: setup, Windows support, sheet formats, updates, technical boundaries and troubleshooting.',
 };
 ---
-<BaseLayout locale="en" seo={seo}>
-  <section class="faq-hero section-shell" aria-labelledby="faq-title">
-    <div class="container">
-      <p class="kicker">Sky Auto Player · Reference</p>
-      <h1 id="faq-title">Frequently asked questions</h1>
-      <p class="faq-hero__copy">Setup, sheet formats, Windows support, technical boundaries and troubleshooting for the timing-first music player.</p>
-    </div>
-  </section>
 
-  <div class="container faq-layout">
-    <FaqToc locale="en" />
-    <FaqList locale="en" />
-  </div>
-
-  <section class="final-cta section-shell" aria-labelledby="faq-cta-title">
-    <div class="container final-cta__layout">
-      <div>
-        <h2 id="faq-cta-title">Ready to try a sheet?</h2>
-        <p>Download the latest release, then return to the picker when your song is ready.</p>
-      </div>
-      <div class="final-cta__actions">
-        <a class="button button--primary" href={SITE.releaseUrl}>Download latest release</a>
-        <a class="button button--secondary" href={withBase('/')}>Back to landing page</a>
-      </div>
-    </div>
-  </section>
-</BaseLayout>
-
-<style>
-  .faq-layout {
-    display: grid;
-    gap: var(--space-8);
-    margin-bottom: var(--section-space-default);
-  }
-  @media (min-width: 64rem) {
-    .faq-layout {
-      grid-template-columns: 240px 1fr;
-    }
-  }
-  .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-2);
-  }
-  .faq-hero__copy {
-    font-size: var(--font-size-lead);
-    color: var(--color-text-subtle);
-    margin-top: var(--space-4);
-    max-width: var(--content-max);
-  }
-  .final-cta {
-    background: var(--color-surface-1);
-    text-align: center;
-    border-top: 1px solid var(--border-default);
-  }
-  .final-cta__layout {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-6);
-  }
-  .final-cta h2 { margin-bottom: var(--space-4); }
-  .final-cta p { color: var(--color-text-subtle); }
-  .final-cta__actions {
-    display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-4);
-  }
-</style>
+<FaqPage locale="en" seo={seo} />

@@ -1,8 +1,8 @@
 ---
-key: "account-safety"
-locale: "vi"
+key: 'account-safety'
+locale: 'vi'
 order: 2
-category: "Safety"
+category: 'Safety'
 question: "D\u00f9ng Sky Auto Player v\u1edbi Sky: Children of the Light c\u00f3 b\u1ecb ban kh\u00f4ng?"
 ---
 

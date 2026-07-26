@@ -5,8 +5,9 @@ interface Props {
   data: HomeContent['technical'];
   locale: 'en' | 'vi';
 }
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
+
 <section id="technical" class="section-shell" aria-labelledby="technical-title">
   <div class="container technical-trust__layout">
     <div class="section-heading">
@@ -16,12 +17,14 @@ const { data, locale } = Astro.props;
     </div>
     <div>
       <dl class="technical-ledger">
-        {data.ledger.map(item => (
-          <div class="ledger-row">
-            <dt>{item.term}</dt>
-            <dd>{item.definition}</dd>
-          </div>
-        ))}
+        {
+          data.ledger.map((item) => (
+            <div class="ledger-row">
+              <dt>{item.term}</dt>
+              <dd>{item.definition}</dd>
+            </div>
+          ))
+        }
       </dl>
       <p class="notice">{data.notice}</p>
     </div>

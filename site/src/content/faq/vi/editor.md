@@ -1,8 +1,8 @@
 ---
-key: "editor"
-locale: "vi"
+key: 'editor'
+locale: 'vi'
 order: 14
-category: "Formats"
+category: 'Formats'
 question: "Sky Auto Player c\u00f3 li\u00ean quan g\u00ec \u0111\u1ebfn Sky Music web editor?"
 ---
 

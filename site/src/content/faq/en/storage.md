@@ -1,8 +1,8 @@
 ---
-key: "storage"
-locale: "en"
+key: 'storage'
+locale: 'en'
 order: 13
-category: "General"
+category: 'General'
 question: "Where are Sky Auto Player\u2019s logs and config stored?"
 ---
 

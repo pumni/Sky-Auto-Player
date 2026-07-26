@@ -1,8 +1,8 @@
 ---
-key: "formats"
-locale: "vi"
+key: 'formats'
+locale: 'vi'
 order: 3
-category: "Formats"
+category: 'Formats'
 question: "Sky Auto Player h\u1ed7 tr\u1ee3 \u0111\u1ecbnh d\u1ea1ng file n\u00e0o?"
 ---
 

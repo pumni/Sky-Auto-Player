@@ -1,8 +1,8 @@
 ---
-key: "updates"
-locale: "vi"
+key: 'updates'
+locale: 'vi'
 order: 8
-category: "General"
+category: 'General'
 question: "C\u01a1 ch\u1ebf c\u1eadp nh\u1eadt c\u1ee7a Sky Auto Player ho\u1ea1t \u0111\u1ed9ng th\u1ebf n\u00e0o?"
 ---
 

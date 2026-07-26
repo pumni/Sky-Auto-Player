@@ -6,9 +6,10 @@ interface Props {
   data: HomeContent['finalCta'];
   locale: 'en' | 'vi';
 }
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
-<section class="final-cta section-shell" aria-labelledby="final-title">
+
+<section class="final-cta section-shell section-shell--feature" aria-labelledby="final-title">
   <div class="container final-cta__layout">
     <div>
       <h2 id="final-title">{data.title}</h2>
@@ -56,7 +57,7 @@ const { data, locale } = Astro.props;
     text-align: center;
   }
   .button--primary {
-    background: var(--color-text);
+    background: var(--color-accent);
     color: var(--color-bg);
   }
   .button--primary:hover {
@@ -68,6 +69,7 @@ const { data, locale } = Astro.props;
     border: 1px solid var(--border-default);
   }
   .button--secondary:hover {
-    border-color: var(--color-text);
+    border-color: var(--color-accent);
+    background: var(--color-surface-1);
   }
 </style>

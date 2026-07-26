@@ -10,7 +10,12 @@ const { data, locale } = Astro.props;
 const isVi = locale === 'vi';
 const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
 ---
-<section id="faq-preview" class="section-shell" aria-labelledby="faq-preview-title">
+
+<section
+  id="faq-preview"
+  class="section-shell section-shell--compact"
+  aria-labelledby="faq-preview-title"
+>
   <div class="container">
     <div class="section-heading section-heading--split">
       <div>

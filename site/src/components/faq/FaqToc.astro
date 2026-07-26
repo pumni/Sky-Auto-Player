@@ -1,21 +1,25 @@
 ---
-import { getCollection } from 'astro:content';
+import type { CollectionEntry } from 'astro:content';
 import type { Locale } from '../../data/site';
 
 interface Props {
   locale: Locale;
+  faqs: CollectionEntry<'faq'>[];
 }
-const { locale } = Astro.props;
 
-const allFaqs = await getCollection('faq', ({ data }) => data.locale === locale);
-allFaqs.sort((a, b) => a.data.order - b.data.order);
+const { locale, faqs } = Astro.props;
 ---
+
 <nav class="faq-toc" aria-label={locale === 'vi' ? 'Mục FAQ' : 'FAQ sections'}>
   <p class="faq-toc__label">{locale === 'vi' ? 'Trong trang này' : 'On this page'}</p>
   <ul>
-    {allFaqs.map(faq => (
-      <li><a href={`#${faq.data.key}`}>{faq.data.question}</a></li>
-    ))}
+    {
+      faqs.map((faq) => (
+        <li>
+          <a href={`#${faq.data.key}`}>{faq.data.question}</a>
+        </li>
+      ))
+    }
   </ul>
 </nav>
 

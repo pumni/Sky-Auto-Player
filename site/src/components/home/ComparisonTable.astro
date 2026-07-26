@@ -5,9 +5,10 @@ interface Props {
   data: HomeContent['comparison'];
   locale: 'en' | 'vi';
 }
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
-<section class="section-shell" aria-labelledby="comparison-title">
+
+<section class="section-shell section-shell--compact" aria-labelledby="comparison-title">
   <div class="container">
     <div class="section-heading">
       <p class="kicker">{data.kicker}</p>
@@ -22,12 +23,14 @@ const { data, locale } = Astro.props;
           </tr>
         </thead>
         <tbody>
-          {data.rows.map(row => (
-            <tr>
-              <td data-label={data.macroHeader}>{row.macro}</td>
-              <td data-label={data.playerHeader}>{row.player}</td>
-            </tr>
-          ))}
+          {
+            data.rows.map((row) => (
+              <tr>
+                <td data-label={data.macroHeader}>{row.macro}</td>
+                <td data-label={data.playerHeader}>{row.player}</td>
+              </tr>
+            ))
+          }
         </tbody>
       </table>
     </div>
@@ -54,7 +57,8 @@ const { data, locale } = Astro.props;
     border-collapse: collapse;
     text-align: left;
   }
-  .comparison-table th, .comparison-table td {
+  .comparison-table th,
+  .comparison-table td {
     padding: var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
   }

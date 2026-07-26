@@ -6,20 +6,20 @@ import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
 
 const structuredData = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Sky Auto Player",
-  "applicationCategory": "MultimediaApplication",
-  "operatingSystem": "Windows 10, Windows 11 (64-bit)",
-  "url": new URL(withBase('/vi/'), SITE.productionOrigin).href,
-  "image": new URL(withBase('/assets/images/og-banner.jpg'), SITE.productionOrigin).href,
-  "downloadUrl": SITE.releaseUrl,
-  "softwareVersion": "2.4.4",
-  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
-  "isAccessibleForFree": true,
-  "inLanguage": "vi"
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Sky Auto Player',
+  applicationCategory: 'MultimediaApplication',
+  operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+  url: new URL(withBase('/vi/'), SITE.productionOrigin).href,
+  image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
+  downloadUrl: SITE.releaseUrl,
+  license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+  isAccessibleForFree: true,
+  inLanguage: 'vi',
 };
 ---
+
 <BaseLayout locale="vi" seo={homeVi.seo} structuredData={structuredData}>
   <HomePage content={homeVi} />
 </BaseLayout>

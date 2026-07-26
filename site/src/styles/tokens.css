@@ -20,9 +20,9 @@
     --border-default: color-mix(in srgb, var(--color-text) 18%, transparent);
     --border-accent: color-mix(in srgb, var(--color-accent) 34%, transparent);
 
-    --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
-    --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
-    --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
+    --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
 
     --font-size-xs: clamp(0.78rem, 0.76rem + 0.08vw, 0.84rem);
     --font-size-sm: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
@@ -54,5 +54,6 @@
     --motion-fast: 140ms;
     --motion-normal: 240ms;
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --shadow-console: 0 24px 80px rgb(0 0 0 / 34%);
   }
 }

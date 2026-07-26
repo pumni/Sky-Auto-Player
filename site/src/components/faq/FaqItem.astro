@@ -1,13 +1,15 @@
 ---
-import { render } from 'astro:content';
+import { render, type CollectionEntry } from 'astro:content';
 
 interface Props {
-  faq: any;
+  faq: CollectionEntry<'faq'>;
   isOpen?: boolean;
 }
+
 const { faq, isOpen = false } = Astro.props;
 const { Content } = await render(faq);
 ---
+
 <details class="faq-item" id={faq.data.key} open={isOpen}>
   <summary>{faq.data.question}</summary>
   <div class="faq-answer">

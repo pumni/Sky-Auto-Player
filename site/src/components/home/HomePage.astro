@@ -16,6 +16,7 @@ interface Props {
 
 const { content } = Astro.props;
 ---
+
 <Hero data={content.hero} locale={content.locale} />
 <PlaybackProof data={content.playback} locale={content.locale} />
 <ComparisonTable data={content.comparison} locale={content.locale} />

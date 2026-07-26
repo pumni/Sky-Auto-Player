@@ -1,14 +1,15 @@
 ---
+import '@fontsource-variable/inter/wght.css';
+import '@fontsource-variable/playfair-display/wght.css';
 import '../styles/tokens.css';
 import '../styles/reset.css';
 import '../styles/global.css';
 import '../styles/utilities.css';
 
-import { SITE } from '../data/site';
+import { SITE, type Locale } from '../data/site';
 import SiteHeader from '../components/layout/SiteHeader.astro';
 import SiteFooter from '../components/layout/SiteFooter.astro';
-import { withBase } from '../utils/urls';
-import type { Locale } from '../data/site';
+import { localizedPath, withBase } from '../utils/urls';
 
 interface Props {
   locale: Locale;
@@ -16,23 +17,18 @@ interface Props {
     title: string;
     description: string;
   };
-  structuredData?: Record<string, any>;
+  structuredData?: Record<string, unknown>;
 }
 
 const { locale, seo, structuredData } = Astro.props;
-
 const isVi = locale === 'vi';
-// Fix canonical path handling for Astro URL
 const currentPath = Astro.url.pathname;
 const canonicalUrl = new URL(currentPath, SITE.productionOrigin);
-
-// Hreflang alternates map
-const hreflangEn = new URL(currentPath.replace('/vi/', '/'), SITE.productionOrigin).href;
-const hreflangVi = new URL(currentPath.includes('/vi/') ? currentPath : currentPath.replace(SITE.basePath, SITE.basePath + '/vi'), SITE.productionOrigin).href;
-
-const ogImage = new URL(withBase('/assets/images/og-banner.jpg'), SITE.productionOrigin).href;
-const fontUrl = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap';
+const hreflangEn = new URL(localizedPath(currentPath, 'en'), SITE.productionOrigin).href;
+const hreflangVi = new URL(localizedPath(currentPath, 'vi'), SITE.productionOrigin).href;
+const ogImage = new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href;
 ---
+
 <!doctype html>
 <html lang={locale}>
   <head>
@@ -42,16 +38,18 @@ const fontUrl = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,
     <meta name="description" content={seo.description} />
     <meta name="author" content="pumni" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
-    
+
     <link rel="canonical" href={canonicalUrl.href} />
     <link rel="alternate" hreflang="en" href={hreflangEn} />
     <link rel="alternate" hreflang="vi" href={hreflangVi} />
     <link rel="alternate" hreflang="x-default" href={hreflangEn} />
-    
+
     <meta name="theme-color" content="#07090d" />
     <meta name="color-scheme" content="dark" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2307090d'/%3E%3Ccircle cx='19' cy='18' r='4' fill='%23f7dda2'/%3E%3Ccircle cx='42' cy='28' r='3' fill='%23b8ccd6'/%3E%3Ccircle cx='31' cy='47' r='3' fill='%23dcae55'/%3E%3Cpath d='M21 19 40 28 31 45' fill='none' stroke='%23ded8cc' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
-    
+    <link rel="icon" type="image/svg+xml" href={withBase('/assets/sky-auto-player-mark.svg')} />
+    <link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
+    <link rel="apple-touch-icon" href={withBase('/favicon.svg')} />
+
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={SITE.name} />
     <meta property="og:title" content={seo.title} />
@@ -64,20 +62,18 @@ const fontUrl = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,
     <meta property="og:image:alt" content="Sky Auto Player" />
     <meta property="og:locale" content={isVi ? 'vi_VN' : 'en_US'} />
     <meta property="og:locale:alternate" content={isVi ? 'en_US' : 'vi_VN'} />
-    
+
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={seo.title} />
     <meta name="twitter:description" content={seo.description} />
     <meta name="twitter:image" content={ogImage} />
     <meta name="twitter:image:alt" content="Sky Auto Player" />
-    
-    {structuredData && (
-      <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
-    )}
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href={fontUrl} />
+
+    {
+      structuredData && (
+        <script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData)} />
+      )
+    }
   </head>
   <body class={`page-layout page-layout--${locale}`}>
     <a class="skip-link" href="#main-content">

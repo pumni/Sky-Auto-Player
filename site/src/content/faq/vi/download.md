@@ -1,8 +1,8 @@
 ---
-key: "download"
-locale: "vi"
+key: 'download'
+locale: 'vi'
 order: 5
-category: "General"
+category: 'General'
 question: "T\u1ea3i Sky Auto Player \u1edf \u0111\u00e2u?"
 ---
 

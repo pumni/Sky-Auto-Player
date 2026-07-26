@@ -1,8 +1,8 @@
 ---
-key: "windows"
-locale: "vi"
+key: 'windows'
+locale: 'vi'
 order: 4
-category: "General"
+category: 'General'
 question: "Sky Auto Player h\u1ed7 tr\u1ee3 phi\u00ean b\u1ea3n Windows n\u00e0o?"
 ---
 

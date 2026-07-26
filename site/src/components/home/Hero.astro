@@ -1,6 +1,7 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
+import { withBase } from '../../utils/urls';
 import TimingConsole from './TimingConsole.astro';
 
 interface Props {
@@ -9,7 +10,8 @@ interface Props {
 }
 const { data, locale } = Astro.props;
 ---
-<section class="hero section-shell" aria-labelledby="hero-title">
+
+<section class="hero section-shell section-shell--feature" aria-labelledby="hero-title">
   <div class="container hero__layout">
     <div class="hero__copy">
       <p class="kicker">{data.kicker}</p>
@@ -17,12 +19,21 @@ const { data, locale } = Astro.props;
       <p class="hero__description">{data.description}</p>
       <div class="hero__actions">
         <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
-        <a class="button button--secondary" href="#how-it-works">{data.secondaryCta}</a>
+        <a
+          class="button button--secondary"
+          href={withBase(locale === 'vi' ? '/vi/#how-it-works' : '/#how-it-works')}
+          >{data.secondaryCta}</a
+        >
       </div>
       <ul class="metadata-strip" aria-label="Supported packaging and sheet metadata">
-        {data.metadata.map(item => <li>{item}</li>)}
+        {data.metadata.map((item) => <li>{item}</li>)}
       </ul>
-      <p class="risk-note">{data.riskNote} <a href="faq/">{data.riskNoteLink}</a></p>
+      <p class="risk-note">
+        {data.riskNote}{' '}
+        <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}
+          >{data.riskNoteLink}</a
+        >
+      </p>
     </div>
     <div class="hero__visual">
       <TimingConsole locale={locale} />
@@ -31,14 +42,20 @@ const { data, locale } = Astro.props;
 </section>
 
 <style>
+  .hero {
+    border-top: 0;
+  }
   .hero__layout {
     display: grid;
     gap: var(--space-8);
     align-items: center;
   }
   @media (min-width: 64rem) {
+    .hero {
+      border-top: 0;
+    }
     .hero__layout {
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
     }
   }
   .kicker {
@@ -49,6 +66,15 @@ const { data, locale } = Astro.props;
     letter-spacing: 0.1em;
     margin-bottom: var(--space-2);
   }
+  .hero h1 {
+    max-width: 100%;
+  }
+  .hero h1 span {
+    display: block;
+  }
+  .hero__copy {
+    max-width: 38rem;
+  }
   .hero__description {
     font-size: var(--font-size-lead);
     color: var(--color-text-subtle);
@@ -58,6 +84,11 @@ const { data, locale } = Astro.props;
     display: flex;
     gap: var(--space-4);
     margin-bottom: var(--space-6);
+    flex-wrap: wrap;
+  }
+  .hero__copy,
+  .hero__visual {
+    min-width: 0;
   }
   .metadata-strip {
     display: flex;
@@ -78,5 +109,14 @@ const { data, locale } = Astro.props;
   .risk-note a {
     color: var(--color-text);
     text-decoration: underline;
+  }
+  @media (max-width: 40rem) {
+    .hero__actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .hero__actions .button {
+      width: 100%;
+    }
   }
 </style>

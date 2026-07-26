@@ -1,8 +1,8 @@
 ---
-key: "tuning"
-locale: "vi"
+key: 'tuning'
+locale: 'vi'
 order: 10
-category: "Troubleshooting"
+category: 'Troubleshooting'
 question: "C\u00f3 th\u1ec3 ch\u1ec9nh Sky Auto Player cho PC y\u1ebfu kh\u00f4ng?"
 ---
 

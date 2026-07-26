@@ -1,8 +1,8 @@
 ---
-key: "network"
-locale: "vi"
+key: 'network'
+locale: 'vi'
 order: 9
-category: "Troubleshooting"
+category: 'Troubleshooting'
 question: "T\u1ea1i sao m\u1ed9t s\u1ed1 n\u1ed1t b\u1ecb m\u1ea5t trong qu\u00e1 tr\u00ecnh ph\u00e1t?"
 ---
 

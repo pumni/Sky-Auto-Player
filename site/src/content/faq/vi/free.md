@@ -1,8 +1,8 @@
 ---
-key: "free"
-locale: "vi"
+key: 'free'
+locale: 'vi'
 order: 1
-category: "General"
+category: 'General'
 question: "Sky Auto Player c\u00f3 mi\u1ec5n ph\u00ed kh\u00f4ng?"
 ---
 

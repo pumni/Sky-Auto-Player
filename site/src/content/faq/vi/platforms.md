@@ -1,8 +1,8 @@
 ---
-key: "platforms"
-locale: "vi"
+key: 'platforms'
+locale: 'vi'
 order: 6
-category: "General"
+category: 'General'
 question: "Sky Auto Player c\u00f3 ch\u1ea1y tr\u00ean Mac ho\u1eb7c Linux kh\u00f4ng?"
 ---
 

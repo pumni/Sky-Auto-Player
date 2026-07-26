@@ -1,8 +1,8 @@
 ---
-key: "permissions"
-locale: "vi"
+key: 'permissions'
+locale: 'vi'
 order: 12
-category: "General"
+category: 'General'
 question: "Sky Auto Player c\u00f3 c\u1ea7n quy\u1ec1n admin kh\u00f4ng?"
 ---
 

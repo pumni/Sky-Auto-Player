@@ -1,8 +1,8 @@
 ---
-key: "format-difference"
-locale: "vi"
+key: 'format-difference'
+locale: 'vi'
 order: 7
-category: "Formats"
+category: 'Formats'
 question: "S\u1ef1 kh\u00e1c nhau gi\u1eefa JSON, skysheet v\u00e0 TXT l\u00e0 g\u00ec?"
 ---
 

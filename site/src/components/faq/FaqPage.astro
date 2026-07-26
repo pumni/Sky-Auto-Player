@@ -1,0 +1,145 @@
+---
+import { getCollection, type CollectionEntry } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { SITE, type Locale } from '../../data/site';
+import { withBase } from '../../utils/urls';
+import FaqToc from './FaqToc.astro';
+import FaqList from './FaqList.astro';
+
+interface Props {
+  locale: Locale;
+  seo: {
+    title: string;
+    description: string;
+  };
+}
+
+const { locale, seo } = Astro.props;
+const isVi = locale === 'vi';
+const faqs = (await getCollection('faq', ({ data }) => data.locale === locale)).sort(
+  (a, b) => a.data.order - b.data.order,
+);
+
+function plainText(markdown: string): string {
+  return markdown
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_>#~-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((faq: CollectionEntry<'faq'>) => ({
+    '@type': 'Question',
+    name: faq.data.question,
+    acceptedAnswer: {
+      '@type': 'Answer',
+      text: plainText(faq.body ?? ''),
+    },
+  })),
+};
+---
+
+<BaseLayout locale={locale} seo={seo} structuredData={structuredData}>
+  <section class="faq-hero section-shell section-shell--feature" aria-labelledby="faq-title">
+    <div class="container">
+      <p class="kicker">Sky Auto Player · {isVi ? 'Tham khảo' : 'Reference'}</p>
+      <h1 id="faq-title">{isVi ? 'Câu hỏi thường gặp' : 'Frequently asked questions'}</h1>
+      <p class="faq-hero__copy">
+        {
+          isVi
+            ? 'Cài đặt, định dạng sheet, hỗ trợ Windows, giới hạn kỹ thuật và xử lý lỗi cho trình phát nhạc ưu tiên timing.'
+            : 'Setup, sheet formats, Windows support, technical boundaries and troubleshooting for the timing-first music player.'
+        }
+      </p>
+    </div>
+  </section>
+
+  <div class="container faq-layout">
+    <FaqToc locale={locale} faqs={faqs} />
+    <FaqList locale={locale} faqs={faqs} />
+  </div>
+
+  <section class="final-cta section-shell section-shell--feature" aria-labelledby="faq-cta-title">
+    <div class="container final-cta__layout">
+      <div>
+        <h2 id="faq-cta-title">{isVi ? 'Sẵn sàng thử một sheet?' : 'Ready to try a sheet?'}</h2>
+        <p>
+          {
+            isVi
+              ? 'Tải bản phát hành mới nhất rồi quay lại trình chọn khi bài hát của bạn đã sẵn sàng.'
+              : 'Download the latest release, then return to the picker when your song is ready.'
+          }
+        </p>
+      </div>
+      <div class="final-cta__actions">
+        <a class="button button--primary" href={SITE.releaseUrl}
+          >{isVi ? 'Tải bản mới nhất' : 'Download latest release'}</a
+        >
+        <a class="button button--secondary" href={withBase(isVi ? '/vi/' : '/')}
+          >{isVi ? 'Về trang chủ' : 'Back to landing page'}</a
+        >
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .faq-layout {
+    display: grid;
+    gap: var(--space-8);
+    margin-bottom: var(--section-space-default);
+  }
+  @media (min-width: 64rem) {
+    .faq-layout {
+      grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+    }
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .faq-hero__copy {
+    font-size: var(--font-size-lead);
+    color: var(--color-text-subtle);
+    margin-top: var(--space-4);
+    max-width: var(--content-max);
+  }
+  .final-cta {
+    background: var(--color-surface-1);
+    text-align: center;
+    border-top: 1px solid var(--border-default);
+  }
+  .final-cta__layout {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-6);
+  }
+  .final-cta h2 {
+    margin-bottom: var(--space-4);
+  }
+  .final-cta p {
+    color: var(--color-text-subtle);
+  }
+  .final-cta__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-4);
+  }
+  @media (max-width: 40rem) {
+    .final-cta__actions {
+      flex-direction: column;
+      align-items: stretch;
+      width: min(100%, 22rem);
+    }
+  }
+</style>
