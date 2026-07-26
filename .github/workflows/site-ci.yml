@@ -7,12 +7,6 @@ on:
       - 'site/**'
       - '.github/workflows/site-ci.yml'
       - '.github/workflows/pages.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - '.github/workflows/site-ci.yml'
-      - '.github/workflows/pages.yml'
 
 permissions:
   contents: read
@@ -32,11 +26,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         # Version is pinned via site/package.json `packageManager` field (single source of truth).
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
