@@ -2,6 +2,7 @@
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
+import Kicker from '../ui/Kicker.astro';
 import TimingConsole from './TimingConsole.astro';
 
 interface Props {
@@ -17,8 +18,11 @@ const { data, locale } = Astro.props;
 >
   <div class="container hero__layout">
     <div class="hero__copy">
-      <p class="kicker">{data.kicker}</p>
-      <h1 id="hero-title"><span>{data.titleLines[0]}</span><span>{data.titleLines[1]}</span></h1>
+      <Kicker>{data.kicker}</Kicker>
+      <h1 id="hero-title">
+        <span>{data.titleLines[0]}</span>{' '}
+        <span class="hero__counterline">{data.titleLines[1]}</span>
+      </h1>
       <p class="hero__description">{data.description}</p>
       <div class="hero__actions">
         <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
@@ -51,6 +55,7 @@ const { data, locale } = Astro.props;
       </p>
     </div>
     <div class="hero__visual">
+      <span class="hero__score-lines" aria-hidden="true"></span>
       <TimingConsole locale={locale} />
     </div>
   </div>
@@ -60,89 +65,132 @@ const { data, locale } = Astro.props;
   .hero {
     border-top: 0;
   }
+
   .hero__layout {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-8);
     align-items: center;
   }
-  @media (min-width: 64rem) {
-    .hero {
-      border-top: 0;
-    }
-    .hero__layout {
-      grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
-    }
-  }
-  .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-2);
-  }
-  .hero h1 {
-    max-width: 100%;
-  }
-  .hero h1 span {
-    display: block;
-  }
-  .hero__copy {
-    max-width: 38rem;
-  }
-  .hero__description {
-    font-size: var(--font-size-lead);
-    color: var(--color-text-subtle);
-    margin-block: var(--space-4);
-  }
-  .hero__actions {
-    display: flex;
-    gap: var(--space-4);
-    margin-bottom: var(--space-6);
-    flex-wrap: wrap;
-  }
+
   .hero__copy,
   .hero__visual {
     min-width: 0;
   }
+
+  .hero__copy {
+    max-width: 38rem;
+  }
+
+  .hero h1 {
+    max-width: 11ch;
+  }
+
+  .hero h1 span {
+    display: block;
+  }
+
+  .hero__counterline {
+    color: var(--color-text-secondary);
+  }
+
+  .hero__description {
+    max-inline-size: 48ch;
+    margin-block: var(--space-5);
+    color: var(--color-text-tertiary);
+    font-size: var(--type-lead);
+    line-height: var(--leading-lead);
+  }
+
+  .hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin-block-end: var(--space-6);
+  }
+
   .metadata-strip {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2) var(--space-5);
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-bottom: var(--space-4);
-    list-style: none;
+    margin-block-end: var(--space-4);
     padding: 0;
-    margin-left: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--type-label);
+    list-style: none;
   }
+
   .metadata-strip li {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
     min-height: 1.25rem;
   }
+
   .metadata-strip__dot {
     width: 0.35rem;
     height: 0.35rem;
-    border-radius: 50%;
-    background: var(--color-accent);
     flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--color-action);
     opacity: 0.85;
   }
+
   .risk-note {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
+    font-size: var(--type-small);
   }
+
   .risk-note a {
-    color: var(--color-text);
+    color: var(--color-text-primary);
     text-decoration: underline;
   }
+
+  .hero__visual {
+    position: relative;
+  }
+
+  .hero__visual > :not(.hero__score-lines) {
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero__score-lines {
+    position: absolute;
+    inset: 12% 0 auto 8%;
+    block-size: 38%;
+    background: repeating-linear-gradient(
+      to bottom,
+      var(--line-faint) 0 1px,
+      transparent 1px 1.1rem
+    );
+    opacity: 0.65;
+    pointer-events: none;
+    mask-image: linear-gradient(90deg, transparent, black 18%, black 82%, transparent);
+  }
+
+  @media (min-width: 64rem) {
+    .hero__layout {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--grid-gap);
+    }
+
+    .hero__copy {
+      grid-column: 1 / span 5;
+    }
+
+    .hero__visual {
+      grid-column: 6 / -1;
+      margin-inline-end: 0;
+    }
+  }
+
   @media (max-width: 40rem) {
     .hero__actions {
       flex-direction: column;
       align-items: stretch;
     }
+
     .hero__actions .button {
       width: 100%;
     }

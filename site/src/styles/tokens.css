@@ -1,35 +1,82 @@
-@layer reset, tokens, base, layout, components, utilities;
+@layer reset, tokens, theme, base, layout, patterns, components, utilities;
 
 @layer tokens {
   :root {
     color-scheme: dark;
 
-    --color-bg: #07090d;
-    --color-surface-1: #0a0e14;
-    --color-surface-2: #111821;
-    --color-text: #f4efe3;
-    --color-text-muted: #b8b4ab;
-    --color-text-subtle: #92958f;
-    --color-accent: #efca78;
-    --color-accent-strong: #f7dda2;
-    --color-sky: #b8ccd6;
-    --color-success: #a9cbb7;
-    --color-danger: #efb5a9;
+    /* Raw palette: semantic roles below are the public component API. */
+    --night-0: #07090d;
+    --night-1: #0a0e14;
+    --night-2: #111821;
+    --night-3: #18212b;
+    --ink-0: #f4efe3;
+    --ink-1: #b8b4ab;
+    --ink-2: #92958f;
+    --gold-1: #efca78;
+    --gold-2: #f7dda2;
+    --sky-1: #b8ccd6;
+    --mint-1: #a9cbb7;
+    --coral-1: #efb5a9;
 
-    --border-subtle: color-mix(in srgb, var(--color-text) 10%, transparent);
-    --border-default: color-mix(in srgb, var(--color-text) 18%, transparent);
-    --border-accent: color-mix(in srgb, var(--color-accent) 34%, transparent);
+    --color-page: var(--night-0);
+    --color-surface-quiet: var(--night-1);
+    --color-surface-instrument: var(--night-2);
+    --color-surface-active: var(--night-3);
+    --color-text-primary: var(--ink-0);
+    --color-text-secondary: var(--ink-1);
+    --color-text-tertiary: var(--ink-2);
+    --color-action: var(--gold-1);
+    --color-action-soft: var(--gold-2);
+    --color-info: var(--sky-1);
+    --color-success: var(--mint-1);
+    --color-warning: var(--coral-1);
+
+    --line-faint: rgb(244 239 227 / 10%);
+    --line-default: rgb(244 239 227 / 18%);
+    --line-accent: rgb(239 202 120 / 34%);
+
+    /* Compatibility aliases keep existing components stable during migration. */
+    --color-bg: var(--color-page);
+    --color-surface-1: var(--color-surface-quiet);
+    --color-surface-2: var(--color-surface-instrument);
+    --color-text: var(--color-text-primary);
+    --color-text-muted: var(--color-text-secondary);
+    --color-text-subtle: var(--color-text-tertiary);
+    --color-accent: var(--color-action);
+    --color-accent-strong: var(--color-action-soft);
+    --color-sky: var(--color-info);
+    --color-danger: var(--color-warning);
+    --border-subtle: var(--line-faint);
+    --border-default: var(--line-default);
+    --border-accent: var(--line-accent);
 
     --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
     --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
     --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
 
-    --font-size-xs: clamp(0.78rem, 0.76rem + 0.08vw, 0.84rem);
-    --font-size-sm: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
-    --font-size-body: clamp(1rem, 0.97rem + 0.14vw, 1.1rem);
-    --font-size-lead: clamp(1.15rem, 1.06rem + 0.35vw, 1.4rem);
-    --font-size-h2: clamp(2rem, 1.55rem + 1.7vw, 3.5rem);
-    --font-size-hero: clamp(2.75rem, 1.9rem + 3.2vw, 5.25rem);
+    --type-micro: clamp(0.72rem, 0.7rem + 0.08vw, 0.78rem);
+    --type-label: clamp(0.78rem, 0.76rem + 0.1vw, 0.86rem);
+    --type-small: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
+    --type-body: clamp(1rem, 0.97rem + 0.15vw, 1.1rem);
+    --type-lead: clamp(1.16rem, 1.08rem + 0.3vw, 1.42rem);
+    --type-h3: clamp(1.24rem, 1.12rem + 0.45vw, 1.62rem);
+    --type-h2: clamp(2.15rem, 1.55rem + 2.1vw, 4rem);
+    --type-hero: clamp(3rem, 1.65rem + 5vw, 7rem);
+    --type-display-metric: clamp(3.5rem, 2.2rem + 5vw, 8rem);
+
+    --font-size-xs: var(--type-label);
+    --font-size-sm: var(--type-small);
+    --font-size-body: var(--type-body);
+    --font-size-lead: var(--type-lead);
+    --font-size-h2: var(--type-h2);
+    --font-size-hero: var(--type-hero);
+
+    --leading-micro: 1.25;
+    --leading-ui: 1.35;
+    --leading-body: 1.62;
+    --leading-lead: 1.45;
+    --leading-heading: 1.06;
+    --leading-display: 0.96;
 
     --space-1: 0.25rem;
     --space-2: 0.5rem;
@@ -38,22 +85,66 @@
     --space-5: 1.5rem;
     --space-6: 2rem;
     --space-7: 3rem;
-    --space-8: 4.5rem;
-    --space-9: 6.5rem;
+    --space-8: 4rem;
+    --space-9: 6rem;
+    --space-10: 8rem;
+    --space-11: 12rem;
 
-    --section-space-compact: clamp(3rem, 5vw, 4.25rem);
-    --section-space-default: clamp(4rem, 6.5vw, 5.75rem);
-    --section-space-feature: clamp(5rem, 8vw, 7.5rem);
+    --section-xs: clamp(2.5rem, 4vw, 4rem);
+    --section-sm: clamp(3.5rem, 5vw, 5.5rem);
+    --section-md: clamp(5rem, 7vw, 7.5rem);
+    --section-lg: clamp(6.5rem, 9vw, 10rem);
+    --section-xl: clamp(8rem, 12vw, 13rem);
 
-    --radius-control: 0.4rem;
-    --radius-panel: 0.8rem;
-    --container-max: 77.5rem;
+    --section-space-compact: var(--section-sm);
+    --section-space-default: var(--section-md);
+    --section-space-feature: var(--section-lg);
+
+    --radius-xs: 0.25rem;
+    --radius-sm: 0.45rem;
+    --radius-md: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-control: var(--radius-sm);
+    --radius-panel: var(--radius-md);
+    --container-max: 84rem;
     --content-max: 44rem;
-    --gutter: clamp(1.25rem, 3vw, 2.75rem);
+    --readable-max: 66ch;
+    --gutter: clamp(1.25rem, 3.2vw, 3.5rem);
+    --grid-gap: clamp(1rem, 2vw, 2rem);
 
-    --motion-fast: 140ms;
-    --motion-normal: 240ms;
-    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --duration-instant: 90ms;
+    --duration-fast: 150ms;
+    --duration-normal: 240ms;
+    --duration-emphasis: 420ms;
+    --duration-sequence: 720ms;
+    --motion-fast: var(--duration-fast);
+    --motion-normal: var(--duration-normal);
+    --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-snap: cubic-bezier(0.2, 1.2, 0.3, 1);
     --shadow-console: 0 24px 80px rgb(0 0 0 / 34%);
+    --shadow-instrument: inset 0 1px 0 rgb(255 255 255 / 5%), 0 32px 90px rgb(0 0 0 / 28%);
+  }
+}
+
+@supports (color: oklch(50% 0.1 100)) {
+  @layer tokens {
+    :root {
+      --night-0: oklch(11% 0.015 255);
+      --night-1: oklch(14% 0.018 252);
+      --night-2: oklch(18% 0.022 248);
+      --night-3: oklch(22% 0.025 244);
+      --ink-0: oklch(96% 0.018 84);
+      --ink-1: oklch(82% 0.014 82);
+      --ink-2: oklch(68% 0.012 82);
+      --gold-1: oklch(84% 0.105 84);
+      --gold-2: oklch(90% 0.075 86);
+      --sky-1: oklch(80% 0.045 224);
+      --mint-1: oklch(80% 0.065 154);
+      --coral-1: oklch(77% 0.085 30);
+      --line-faint: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+      --line-default: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
+      --line-accent: color-mix(in oklch, var(--color-action) 42%, transparent);
+    }
   }
 }

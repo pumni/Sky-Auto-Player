@@ -6,38 +6,44 @@ const { locale } = Astro.props;
 const isVi = locale === 'vi';
 ---
 
-<figure class="timing-console" aria-labelledby="timing-demo-title">
+<figure class="timing-console ui-instrument-surface" aria-labelledby="timing-demo-title">
   <figcaption id="timing-demo-title" class="sr-only">
     {isVi ? 'Minh họa định thời phát nhạc' : 'Playback timing illustration'}
   </figcaption>
   <div class="console__topline">
-    <span
-      ><span class="console__status" aria-hidden="true"></span>{
-        isVi ? 'MÔ PHỎNG TIMING' : 'TIMING DEMO'
-      }</span
+    <span class="console__identity">{isVi ? 'BỘ ĐỊNH THỜI' : 'TIMING ENGINE'}</span>
+    <span class="console__status-label"
+      ><span class="console__status" aria-hidden="true"></span>{isVi ? 'SẴN SÀNG' : 'READY'}</span
     >
-    <span>{isVi ? 'SẴN SÀNG' : 'READY'}</span>
+  </div>
+  <div class="console__playhead">
+    <span>{isVi ? 'VỊ TRÍ PHÁT' : 'PLAYHEAD'}</span>
+    <span class="telemetry">00:13.066</span>
   </div>
   <ol
     class="timing-console__events"
     aria-label={isVi ? 'Các sự kiện phát nhạc minh họa' : 'Illustrative playback events'}
   >
-    <li class="timing-event timing-event--chord">
-      <span class="timing-event__time">00:12.400</span>
+    <li class="timing-event timing-event--chord" data-event-index="1">
+      <span class="timing-event__time telemetry">00:12.400</span>
       <span class="timing-event__keys"
         ><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span
       >
       <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
     </li>
-    <li class="timing-event timing-event--note">
-      <span class="timing-event__time">00:12.733</span>
+    <li class="timing-event timing-event--note" data-event-index="2">
+      <span class="timing-event__time telemetry">00:12.733</span>
       <span class="timing-event__keys"
         ><span class="timing-event__marker" aria-hidden="true"></span>D4</span
       >
       <span class="timing-event__kind">{isVi ? 'NỐT' : 'NOTE'}</span>
     </li>
-    <li class="timing-event timing-event--hold">
-      <span class="timing-event__time">00:13.066</span>
+    <li
+      class="timing-event timing-event--hold timing-event--active"
+      data-event-index="3"
+      aria-current="step"
+    >
+      <span class="timing-event__time telemetry">00:13.066</span>
       <span class="timing-event__keys"
         ><span class="timing-event__marker" aria-hidden="true"></span>E5 <span
           class="hold-line"
@@ -46,8 +52,8 @@ const isVi = locale === 'vi';
       >
       <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
     </li>
-    <li class="timing-event timing-event--chord">
-      <span class="timing-event__time">00:13.600</span>
+    <li class="timing-event timing-event--chord" data-event-index="4">
+      <span class="timing-event__time telemetry">00:13.600</span>
       <span class="timing-event__keys"
         ><span class="timing-event__marker" aria-hidden="true"></span>A2 + C4</span
       >
@@ -75,55 +81,76 @@ const isVi = locale === 'vi';
 
 <style>
   .timing-console {
+    --panel-accent: var(--color-action);
+    container: timing-console / inline-size;
     position: relative;
     min-width: 0;
     margin: 0;
-    padding: clamp(var(--space-4), 3vw, var(--space-6));
+    padding: clamp(var(--space-4), 3cqi, var(--space-6));
     overflow: hidden;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-panel);
-    background: var(--color-surface-2);
-    box-shadow: var(--shadow-console);
     font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
+    font-size: var(--type-small);
   }
+
   .timing-console::after {
     position: absolute;
     top: 0;
     right: 10%;
     width: 5rem;
     height: 1px;
-    background: var(--color-accent);
+    background: var(--panel-accent);
     content: '';
     opacity: 0.85;
   }
-  .console__topline {
+
+  .console__topline,
+  .console__playhead {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    font-size: var(--type-label);
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
+
+  .console__status-label {
+    color: var(--color-success);
+  }
+
   .console__status {
     display: inline-block;
-    width: 8px;
-    height: 8px;
-    background: var(--color-success);
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-inline-end: var(--space-2);
     border-radius: 50%;
-    margin-right: var(--space-2);
-    box-shadow: 0 0 0 3px rgb(169 203 183 / 12%);
-    box-shadow: 0 0 0 3px rgb(169 203 183 / 12%);
+    background: var(--color-success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 12%, transparent);
   }
+
+  .console__playhead {
+    align-items: baseline;
+    margin-block-start: var(--space-6);
+    padding-block-end: var(--space-3);
+    border-block-end: 1px solid var(--line-accent);
+    color: var(--color-action-soft);
+  }
+
+  .telemetry,
+  .timing-event__time {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
   .timing-console__events {
     display: grid;
     gap: 0;
-    margin-block: var(--space-6);
+    margin-block: var(--space-5);
     padding: 0;
     list-style: none;
   }
+
   .timing-event {
     display: grid;
     grid-template-columns: minmax(5.8rem, 0.45fr) minmax(8rem, 0.8fr) minmax(4.6rem, 0.35fr);
@@ -131,104 +158,133 @@ const isVi = locale === 'vi';
     align-items: center;
     min-width: 0;
     padding-block: var(--space-4);
-    border-top: 1px solid var(--border-subtle);
+    border-block-start: 1px solid var(--line-faint);
   }
+
   .timing-event:last-child {
-    border-bottom: 1px solid var(--border-subtle);
+    border-block-end: 1px solid var(--line-faint);
   }
+
+  .timing-event--active {
+    background: color-mix(in srgb, var(--color-action) 6%, transparent);
+  }
+
   .timing-event__time,
   .timing-event__keys {
-    color: var(--color-text);
+    color: var(--color-text-primary);
     font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
+    font-size: var(--type-small);
   }
+
   .timing-event__time {
     white-space: nowrap;
   }
+
   .timing-event__keys {
     display: inline-flex;
     min-width: 0;
     align-items: center;
     gap: var(--space-2);
-    color: var(--color-accent-strong);
+    color: var(--color-action-soft);
     overflow-wrap: anywhere;
   }
+
   .timing-event__marker {
     display: inline-block;
-    flex: 0 0 auto;
     width: 0.6rem;
     height: 0.6rem;
+    flex: 0 0 auto;
     border: 1px solid currentColor;
     border-radius: 50%;
   }
+
   .timing-event--chord .timing-event__marker {
     border-radius: 0.12rem;
     box-shadow:
-      0.2rem -0.2rem 0 -0.03rem var(--color-surface-2),
+      0.2rem -0.2rem 0 -0.03rem var(--color-surface-instrument),
       0.2rem -0.2rem 0 0.04rem currentColor;
   }
+
   .timing-event--hold .timing-event__marker {
     width: 1.35rem;
     height: 0.2rem;
     border-radius: 0;
   }
+
   .timing-event__kind {
     justify-self: end;
-    color: var(--color-sky);
+    color: var(--color-info);
     font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
+    font-size: var(--type-label);
+    letter-spacing: 0.08em;
     white-space: nowrap;
   }
+
   .hold-line {
     color: var(--color-success);
     letter-spacing: -0.15em;
   }
+
   .instrument-grid {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: clamp(0.28rem, 1vw, 0.55rem);
-    margin-top: var(--space-5);
+    margin-block-start: var(--space-5);
   }
+
   .instrument-key {
     display: grid;
     min-width: 0;
     aspect-ratio: 1;
     place-items: center;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-1);
-    color: var(--color-text-muted);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-quiet);
+    color: var(--color-text-secondary);
   }
+
   .instrument-key[data-active='note'] {
-    border-color: var(--color-sky);
-    background: rgb(145 174 187 / 22%);
-    color: var(--color-text);
+    border-color: var(--color-info);
+    background: color-mix(in srgb, var(--color-info) 22%, transparent);
+    color: var(--color-text-primary);
   }
+
   .instrument-key[data-active='chord'] {
-    border-color: var(--color-accent);
-    background: rgb(239 202 120 / 18%);
-    color: var(--color-accent-strong);
+    border-color: var(--color-action);
+    background: color-mix(in srgb, var(--color-action) 18%, transparent);
+    color: var(--color-action-soft);
   }
+
   .instrument-key[data-active='hold'] {
     border-color: var(--color-success);
-    background: rgb(169 203 183 / 17%);
-    color: var(--color-text);
+    background: color-mix(in srgb, var(--color-success) 17%, transparent);
+    color: var(--color-text-primary);
   }
+
+  @container timing-console (width < 34rem) {
+    .timing-event {
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: var(--space-2);
+    }
+
+    .timing-event__kind {
+      grid-column: 2;
+      justify-self: start;
+    }
+  }
+
   @media (max-width: 40rem) {
     .timing-console {
       padding: var(--space-3);
     }
-    .timing-event {
-      gap: var(--space-2);
-      font-size: var(--font-size-xs);
-    }
+
     .hold-line {
       display: none;
     }
-    .console__topline {
+
+    .console__topline,
+    .console__playhead {
       gap: var(--space-2);
-      flex-wrap: wrap;
     }
   }
 </style>
