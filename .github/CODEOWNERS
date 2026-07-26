@@ -3,3 +3,6 @@
 /.github/actions/ @pumni
 /.github/dependabot.yml @pumni
 /.github/CODEOWNERS @pumni
+
+# Marketing site source and Pages workflows.
+/site/ @pumni

@@ -1,18 +1,24 @@
-name: Deploy website to GitHub Pages
+name: Website CI
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site-ci.yml'
+      - '.github/workflows/pages.yml'
   push:
     branches: [main]
     paths:
       - 'site/**'
+      - '.github/workflows/site-ci.yml'
       - '.github/workflows/pages.yml'
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: site-ci-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:
@@ -20,8 +26,8 @@ defaults:
     working-directory: site
 
 jobs:
-  build:
-    name: Build website
+  validate:
+    name: Validate website
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,17 +41,17 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
       - name: Install dependencies
         run: npm ci
 
       - name: Type and Astro checks
         run: npm run check
 
-      - name: Lint and formatting
-        run: npm run lint && npm run format:check
+      - name: Lint
+        run: npm run lint
+
+      - name: Formatting
+        run: npm run format:check
 
       - name: Build static site
         run: npm run build
@@ -56,28 +62,7 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
-      - name: Run route, accessibility and responsive tests
+      - name: Run E2E and accessibility tests
         run: npm run test:e2e
         env:
           CI: true
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/dist
-
-  deploy:
-    name: Deploy website
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
