@@ -1,0 +1,82 @@
+---
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import FaqToc from '../../../components/faq/FaqToc.astro';
+import FaqList from '../../../components/faq/FaqList.astro';
+import { SITE } from '../../../data/site';
+import { withBase } from '../../../utils/urls';
+
+const seo = {
+  title: 'FAQ Sky Auto Player — Cài đặt, an toàn, định dạng và xử lý lỗi',
+  description: 'Câu hỏi thường gặp về Sky Auto Player: cài đặt, hỗ trợ Windows, định dạng sheet, cập nhật, giới hạn kỹ thuật và xử lý lỗi.'
+};
+---
+<BaseLayout locale="vi" seo={seo}>
+  <section class="faq-hero section-shell" aria-labelledby="faq-title">
+    <div class="container">
+      <p class="kicker">Sky Auto Player · Tham khảo</p>
+      <h1 id="faq-title">Câu hỏi thường gặp</h1>
+      <p class="faq-hero__copy">Cài đặt, định dạng sheet, hỗ trợ Windows, giới hạn kỹ thuật và xử lý lỗi cho trình phát nhạc ưu tiên timing.</p>
+    </div>
+  </section>
+
+  <div class="container faq-layout">
+    <FaqToc locale="vi" />
+    <FaqList locale="vi" />
+  </div>
+
+  <section class="final-cta section-shell" aria-labelledby="faq-cta-title">
+    <div class="container final-cta__layout">
+      <div>
+        <h2 id="faq-cta-title">Sẵn sàng thử một sheet?</h2>
+        <p>Tải bản phát hành mới nhất rồi quay lại trình chọn khi bài hát của bạn đã sẵn sàng.</p>
+      </div>
+      <div class="final-cta__actions">
+        <a class="button button--primary" href={SITE.releaseUrl}>Tải bản mới nhất</a>
+        <a class="button button--secondary" href={withBase('/vi/')}>Về trang chủ</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .faq-layout {
+    display: grid;
+    gap: var(--space-8);
+    margin-bottom: var(--section-space-default);
+  }
+  @media (min-width: 64rem) {
+    .faq-layout {
+      grid-template-columns: 240px 1fr;
+    }
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .faq-hero__copy {
+    font-size: var(--font-size-lead);
+    color: var(--color-text-subtle);
+    margin-top: var(--space-4);
+    max-width: var(--content-max);
+  }
+  .final-cta {
+    background: var(--color-surface-1);
+    text-align: center;
+    border-top: 1px solid var(--border-default);
+  }
+  .final-cta__layout {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-6);
+  }
+  .final-cta h2 { margin-bottom: var(--space-4); }
+  .final-cta p { color: var(--color-text-subtle); }
+  .final-cta__actions {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-4);
+  }
+</style>

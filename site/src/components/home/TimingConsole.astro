@@ -1,0 +1,125 @@
+---
+interface Props {
+  locale: 'en' | 'vi';
+}
+const { locale } = Astro.props;
+const isVi = locale === 'vi';
+---
+<figure class="timing-console" aria-labelledby="timing-demo-title">
+  <figcaption id="timing-demo-title" class="sr-only">{isVi ? 'Minh họa định thời phát nhạc' : 'Playback timing illustration'}</figcaption>
+  <div class="console__topline">
+    <span><span class="console__status" aria-hidden="true"></span>{isVi ? 'MÔ PHỎNG TIMING' : 'TIMING DEMO'}</span>
+    <span>{isVi ? 'SẴN SÀNG' : 'READY'}</span>
+  </div>
+  <ol class="timing-console__events" aria-label={isVi ? 'Các sự kiện phát nhạc minh họa' : 'Illustrative playback events'}>
+    <li class="timing-event timing-event--chord">
+      <span class="timing-event__time">00:12.400</span>
+      <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span>
+      <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
+    </li>
+    <li class="timing-event timing-event--note">
+      <span class="timing-event__time">00:12.733</span>
+      <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>D4</span>
+      <span class="timing-event__kind">{isVi ? 'NỐT' : 'NOTE'}</span>
+    </li>
+    <li class="timing-event timing-event--hold">
+      <span class="timing-event__time">00:13.066</span>
+      <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>E5 <span class="hold-line" aria-hidden="true">━━━━━━━</span></span>
+      <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
+    </li>
+    <li class="timing-event timing-event--chord">
+      <span class="timing-event__time">00:13.600</span>
+      <span class="timing-event__keys"><span class="timing-event__marker" aria-hidden="true"></span>A2 + C4</span>
+      <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
+    </li>
+  </ol>
+  <div class="instrument-grid" aria-hidden="true">
+    <span class="instrument-key" data-active="note">A1</span>
+    <span class="instrument-key" data-active="chord">B1</span>
+    <span class="instrument-key">C1</span>
+    <span class="instrument-key">D1</span>
+    <span class="instrument-key">E1</span>
+    <span class="instrument-key">A2</span>
+    <span class="instrument-key">B2</span>
+    <span class="instrument-key" data-active="chord">C2</span>
+    <span class="instrument-key">D2</span>
+    <span class="instrument-key">E2</span>
+    <span class="instrument-key">A3</span>
+    <span class="instrument-key" data-active="hold">B3</span>
+    <span class="instrument-key">C3</span>
+    <span class="instrument-key">D3</span>
+    <span class="instrument-key">E3</span>
+  </div>
+  <div class="console__footer">
+    <span>{isVi ? 'BỐ CỤC 15 PHÍM' : '15-KEY LAYOUT'}</span>
+    <span>{isVi ? 'KHÔNG PHẢI DỮ LIỆU TRỰC TIẾP' : 'NOT LIVE DATA'}</span>
+  </div>
+</figure>
+
+<style>
+  .timing-console {
+    background: var(--color-surface-2);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-panel);
+    padding: var(--space-4);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+  .console__topline, .console__footer {
+    display: flex;
+    justify-content: space-between;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+  .console__status {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--color-success);
+    border-radius: 50%;
+    margin-right: var(--space-2);
+  }
+  .timing-console__events {
+    margin-block: var(--space-4);
+    border-block: 1px solid var(--border-subtle);
+    padding-block: var(--space-2);
+  }
+  .timing-event {
+    display: flex;
+    gap: var(--space-4);
+    padding-block: var(--space-1);
+  }
+  .timing-event__time {
+    color: var(--color-text-subtle);
+  }
+  .timing-event__kind {
+    margin-left: auto;
+    color: var(--color-accent);
+  }
+  .instrument-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: var(--space-2);
+    margin-block: var(--space-4);
+  }
+  .instrument-key {
+    background: var(--color-surface-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    text-align: center;
+    padding-block: var(--space-2);
+    color: var(--color-text-muted);
+  }
+  .instrument-key[data-active="note"] {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+  .instrument-key[data-active="chord"] {
+    background: var(--color-sky);
+    color: var(--color-bg);
+  }
+  .instrument-key[data-active="hold"] {
+    background: var(--color-danger);
+    color: var(--color-bg);
+  }
+</style>

@@ -1,0 +1,108 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  data: HomeContent['product'];
+  locale: 'en' | 'vi';
+}
+const { data, locale } = Astro.props;
+---
+<section class="section-shell" aria-labelledby="product-title">
+  <div class="container product-view__layout">
+    <figure class="screenshot-frame">
+      <div class="screenshot-frame__bar"><span class="screenshot-frame__dot" aria-hidden="true"></span><span>sky-auto-player / picker</span></div>
+      <img src={withBase("/assets/images/picker.webp")} alt="Sky Auto Player picker" width="1331" height="821" loading="lazy" decoding="async">
+      <figcaption>{locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}</figcaption>
+    </figure>
+    <div>
+      <div class="section-heading">
+        <p class="kicker">{data.kicker}</p>
+        <h2 id="product-title" class="section-title">{data.title}</h2>
+        <p class="section-copy">{data.description}</p>
+      </div>
+      <ol class="annotations">
+        {data.annotations.map((ann, i) => (
+          <li><span class="anno-num">{i + 1}</span>{ann}</li>
+        ))}
+      </ol>
+    </div>
+  </div>
+</section>
+
+<style>
+  .product-view__layout {
+    display: grid;
+    gap: var(--space-8);
+  }
+  @media (min-width: 64rem) {
+    .product-view__layout {
+      grid-template-columns: 1.5fr 1fr;
+      align-items: center;
+    }
+  }
+  .screenshot-frame {
+    background: var(--color-surface-2);
+    border-radius: var(--radius-panel);
+    border: 1px solid var(--border-default);
+    overflow: hidden;
+  }
+  .screenshot-frame__bar {
+    background: var(--color-surface-1);
+    padding: var(--space-2) var(--space-4);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .screenshot-frame__dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--color-text-muted);
+  }
+  figcaption {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .section-title {
+    margin-bottom: var(--space-4);
+  }
+  .section-copy {
+    color: var(--color-text-subtle);
+    margin-bottom: var(--space-6);
+  }
+  .annotations {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .annotations li {
+    display: flex;
+    gap: var(--space-4);
+    align-items: flex-start;
+  }
+  .anno-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-weight: 700;
+    font-size: var(--font-size-sm);
+    flex-shrink: 0;
+  }
+</style>

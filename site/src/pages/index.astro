@@ -1,0 +1,25 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import HomePage from '../components/home/HomePage.astro';
+import { homeEn } from '../data/home.en';
+import { SITE } from '../data/site';
+import { withBase } from '../utils/urls';
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Sky Auto Player",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "Windows 10, Windows 11 (64-bit)",
+  "url": new URL(withBase('/'), SITE.productionOrigin).href,
+  "image": new URL(withBase('/assets/images/og-banner.jpg'), SITE.productionOrigin).href,
+  "downloadUrl": SITE.releaseUrl,
+  "softwareVersion": "2.4.4",
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "isAccessibleForFree": true,
+  "inLanguage": "en"
+};
+---
+<BaseLayout locale="en" seo={homeEn.seo} structuredData={structuredData}>
+  <HomePage content={homeEn} />
+</BaseLayout>

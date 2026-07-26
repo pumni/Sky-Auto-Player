@@ -1,0 +1,82 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import { SITE } from '../../data/site';
+import TimingConsole from './TimingConsole.astro';
+
+interface Props {
+  data: HomeContent['hero'];
+  locale: 'en' | 'vi';
+}
+const { data, locale } = Astro.props;
+---
+<section class="hero section-shell" aria-labelledby="hero-title">
+  <div class="container hero__layout">
+    <div class="hero__copy">
+      <p class="kicker">{data.kicker}</p>
+      <h1 id="hero-title"><span>{data.titleLines[0]}</span><span>{data.titleLines[1]}</span></h1>
+      <p class="hero__description">{data.description}</p>
+      <div class="hero__actions">
+        <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
+        <a class="button button--secondary" href="#how-it-works">{data.secondaryCta}</a>
+      </div>
+      <ul class="metadata-strip" aria-label="Supported packaging and sheet metadata">
+        {data.metadata.map(item => <li>{item}</li>)}
+      </ul>
+      <p class="risk-note">{data.riskNote} <a href="faq/">{data.riskNoteLink}</a></p>
+    </div>
+    <div class="hero__visual">
+      <TimingConsole locale={locale} />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero__layout {
+    display: grid;
+    gap: var(--space-8);
+    align-items: center;
+  }
+  @media (min-width: 64rem) {
+    .hero__layout {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .hero__description {
+    font-size: var(--font-size-lead);
+    color: var(--color-text-subtle);
+    margin-block: var(--space-4);
+  }
+  .hero__actions {
+    display: flex;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+  }
+  .metadata-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-4);
+  }
+  .metadata-strip li {
+    display: flex;
+    align-items: center;
+  }
+  .risk-note {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+  .risk-note a {
+    color: var(--color-text);
+    text-decoration: underline;
+  }
+</style>

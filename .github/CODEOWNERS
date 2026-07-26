@@ -1,0 +1,5 @@
+# Workflow and dependency automation changes require maintainer review.
+/.github/workflows/ @pumni
+/.github/actions/ @pumni
+/.github/dependabot.yml @pumni
+/.github/CODEOWNERS @pumni

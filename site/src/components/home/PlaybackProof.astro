@@ -1,0 +1,95 @@
+---
+import type { HomeContent } from '../../data/home.types';
+
+interface Props {
+  data: HomeContent['playback'];
+  locale: 'en' | 'vi';
+}
+const { data, locale } = Astro.props;
+---
+<section id="playback" class="section-shell" aria-labelledby="playback-title">
+  <div class="container playback-proof__layout">
+    <div class="section-heading">
+      <p class="kicker">{data.kicker}</p>
+      <h2 id="playback-title" class="section-title">{data.title}</h2>
+      <p class="section-copy">{data.description}</p>
+      <ul class="proof-points" aria-label="Playback capabilities">
+        {data.points.map(point => <li>{point}</li>)}
+      </ul>
+    </div>
+    <ol class="proof-track">
+      <li class="proof-track__row">
+        <span class="proof-track__time">00:12.400</span>
+        <span class="proof-track__event">A1 + B2 + C3 <span class="proof-track__type">{locale === 'vi' ? 'HỢP ÂM · vang cùng lúc' : 'CHORD · arrive together'}</span></span>
+      </li>
+      <li class="proof-track__row">
+        <span class="proof-track__time">00:12.733</span>
+        <span class="proof-track__event">D4 <span class="proof-track__type">{locale === 'vi' ? 'NỐT · giữ khoảng cách' : 'NOTE · keep spacing'}</span></span>
+      </li>
+      <li class="proof-track__row">
+        <span class="proof-track__time">00:13.066</span>
+        <span class="proof-track__event">E5 ━━━━━━━ <span class="proof-track__type">{locale === 'vi' ? 'NỐT NGÂN · giữ trường độ' : 'HOLD · preserve duration'}</span></span>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<style>
+  .playback-proof__layout {
+    display: grid;
+    gap: var(--space-8);
+  }
+  @media (min-width: 64rem) {
+    .playback-proof__layout {
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+    }
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .section-title {
+    margin-bottom: var(--space-4);
+  }
+  .section-copy {
+    color: var(--color-text-subtle);
+    margin-bottom: var(--space-6);
+  }
+  .proof-points {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+    font-weight: 600;
+  }
+  .proof-points li::before {
+    content: "• ";
+    color: var(--color-accent);
+  }
+  .proof-track {
+    font-family: var(--font-mono);
+    border-left: 2px solid var(--border-default);
+    padding-left: var(--space-4);
+  }
+  .proof-track__row {
+    margin-bottom: var(--space-4);
+  }
+  .proof-track__time {
+    display: block;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+  .proof-track__event {
+    display: block;
+    font-size: var(--font-size-body);
+  }
+  .proof-track__type {
+    color: var(--color-accent);
+    font-size: var(--font-size-xs);
+    margin-left: var(--space-2);
+  }
+</style>

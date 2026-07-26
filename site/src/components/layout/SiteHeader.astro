@@ -1,0 +1,200 @@
+---
+import type { Locale } from '../../data/site';
+import { SITE } from '../../data/site';
+import { withBase } from '../../utils/urls';
+import { homeEn } from '../../data/home.en';
+import { homeVi } from '../../data/home.vi';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const isVi = locale === 'vi';
+const content = isVi ? homeVi : homeEn;
+const nav = content.navigation;
+
+const currentPath = Astro.url.pathname;
+const otherLocalePath = isVi 
+  ? currentPath.replace('/vi/', '/')
+  : currentPath.replace(SITE.basePath, SITE.basePath + '/vi/');
+---
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="brand" href={withBase(isVi ? '/vi/' : '/')} aria-label={isVi ? 'Sky Auto Player trang chủ' : 'Sky Auto Player home'}>
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 11 23 16 17 26" stroke="#ded8cc" stroke-width="1.2" stroke-linecap="round"/>
+          <circle cx="11" cy="10" r="2.3" fill="#f7dda2"/>
+          <circle cx="24" cy="16" r="1.7" fill="#b8ccd6"/>
+          <circle cx="17" cy="26" r="1.7" fill="#dcae55"/>
+        </svg>
+      </span>
+      <span>Sky Auto Player</span>
+    </a>
+    
+    <nav class="site-nav" id="site-nav" aria-label={isVi ? 'Điều hướng chính' : 'Primary'}>
+      <a href={withBase(isVi ? '/vi/#playback' : '/#playback')}>{nav.playback}</a>
+      <a href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>{nav.howItWorks}</a>
+      <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
+      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>{nav.faq}</a>
+      <a href={SITE.repositoryUrl}>{nav.github}</a>
+      
+      <span class="site-nav__locale">
+        <span class="sr-only">{isVi ? 'Ngôn ngữ' : 'Language'}</span>
+        <span class="locale-links">
+          <a href={isVi ? otherLocalePath : currentPath} aria-current={!isVi ? 'page' : undefined}>EN</a>
+          <a href={isVi ? currentPath : otherLocalePath} aria-current={isVi ? 'page' : undefined}>VI</a>
+        </span>
+      </span>
+    </nav>
+    
+    <div class="site-actions">
+      <a class="button button--primary button--small" href={SITE.releaseUrl}>
+        {isVi ? 'Tải xuống' : 'Download'}
+      </a>
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label={isVi ? 'Mở điều hướng' : 'Open navigation'}>
+        <span class="menu-toggle__icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    border-bottom: 1px solid var(--border-subtle);
+    padding-block: var(--space-4);
+    position: relative;
+    z-index: 100;
+  }
+  .site-header__inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 700;
+    font-size: var(--font-size-lead);
+  }
+  .brand__mark {
+    width: 28px;
+    height: 28px;
+  }
+  .site-nav {
+    display: flex;
+    gap: var(--space-5);
+    align-items: center;
+  }
+  .site-nav a {
+    font-weight: 500;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+  .site-nav a:hover,
+  .site-nav a[aria-current="page"] {
+    color: var(--color-text);
+  }
+  .site-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-control);
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+  .button--primary {
+    background: var(--color-text);
+    color: var(--color-bg);
+  }
+  .button--primary:hover {
+    background: var(--color-accent-strong);
+  }
+  .button--secondary {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--border-default);
+  }
+  .button--secondary:hover {
+    border-color: var(--color-text);
+  }
+  .locale-links {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .locale-links a {
+    font-weight: 700;
+  }
+  .menu-toggle {
+    display: none;
+    width: 44px;
+    height: 44px;
+  }
+  .menu-toggle__icon {
+    display: block;
+    width: 24px;
+    height: 2px;
+    background: currentColor;
+    position: relative;
+    margin: auto;
+  }
+  .menu-toggle__icon::before,
+  .menu-toggle__icon::after {
+    content: '';
+    position: absolute;
+    width: 24px;
+    height: 2px;
+    background: currentColor;
+    left: 0;
+  }
+  .menu-toggle__icon::before { top: -6px; }
+  .menu-toggle__icon::after { bottom: -6px; }
+
+  @media (max-width: 64rem) {
+    .site-nav {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      width: 100%;
+      background: var(--color-surface-1);
+      flex-direction: column;
+      padding: var(--space-4);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .site-nav.is-open {
+      display: flex;
+    }
+    .menu-toggle {
+      display: flex;
+    }
+  }
+
+  @media (max-width: 26.25rem) {
+    .site-actions .button {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const toggle = document.querySelector('.menu-toggle');
+  const nav = document.querySelector('.site-nav');
+  if (toggle && nav) {
+    toggle.addEventListener('click', () => {
+      const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', String(!isExpanded));
+      nav.classList.toggle('is-open');
+    });
+  }
+</script>

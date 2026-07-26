@@ -1,0 +1,54 @@
+---
+import { getCollection } from 'astro:content';
+import type { Locale } from '../../data/site';
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+
+const allFaqs = await getCollection('faq', ({ data }) => data.locale === locale);
+allFaqs.sort((a, b) => a.data.order - b.data.order);
+---
+<nav class="faq-toc" aria-label={locale === 'vi' ? 'Mục FAQ' : 'FAQ sections'}>
+  <p class="faq-toc__label">{locale === 'vi' ? 'Trong trang này' : 'On this page'}</p>
+  <ul>
+    {allFaqs.map(faq => (
+      <li><a href={`#${faq.data.key}`}>{faq.data.question}</a></li>
+    ))}
+  </ul>
+</nav>
+
+<style>
+  .faq-toc {
+    position: sticky;
+    top: 6rem;
+    align-self: start;
+    display: none;
+  }
+  @media (min-width: 64rem) {
+    .faq-toc {
+      display: block;
+    }
+  }
+  .faq-toc__label {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-4);
+  }
+  .faq-toc ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .faq-toc a {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-sm);
+  }
+  .faq-toc a:hover {
+    color: var(--color-text);
+  }
+</style>

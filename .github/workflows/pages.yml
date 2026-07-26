@@ -1,93 +1,70 @@
-name: Deploy marketing site
+name: Deploy GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - "docs/index.html"
-      - "docs/faq.html"
-      - "docs/vi/index.html"
-      - "docs/vi/faq.html"
-      - "docs/assets/**"
-      - "docs/sitemap.xml"
-      - "docs/llms.txt"
-      - "docs/google*.html"
-      - "docs/.nojekyll"
-      - "scripts/build_pages_site.ps1"
-      - "scripts/validate_pages_site.ps1"
-      - ".github/workflows/pages.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "docs/index.html"
-      - "docs/faq.html"
-      - "docs/vi/index.html"
-      - "docs/vi/faq.html"
-      - "docs/assets/**"
-      - "docs/sitemap.xml"
-      - "docs/llms.txt"
-      - "docs/google*.html"
-      - "docs/.nojekyll"
-      - "scripts/build_pages_site.ps1"
-      - "scripts/validate_pages_site.ps1"
-      - ".github/workflows/pages.yml"
+      - 'site/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
-  group: github-pages
-  cancel-in-progress: true
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build and validate marketing site
+  build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    defaults:
+      run:
+        working-directory: ./site
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@v4
 
-      - name: Build allowlisted Pages artifact
-        shell: pwsh
-        run: >-
-          ./scripts/build_pages_site.ps1
-          -Source docs
-          -Destination _site
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: './site/package-lock.json'
 
-      - name: Validate Pages source and artifact
-        shell: pwsh
-        run: >-
-          ./scripts/validate_pages_site.ps1
-          -Source docs
-          -Artifact _site
-
-      - name: Configure Pages
+      - name: Setup Pages
+        id: pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and Lint
+        run: npm run check
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run E2E and A11y tests
+        run: npm run test:e2e
+
+      - name: Build with Astro
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: ./site/dist
 
   deploy:
-    name: Deploy marketing site
-    if: github.event_name != 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-
+    needs: build-and-test
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
