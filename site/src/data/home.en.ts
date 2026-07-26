@@ -129,6 +129,20 @@ export const homeEn: HomeContent = {
     kicker: 'Before you download',
     title: 'A few useful answers first.',
     readMoreLink: 'Read the full FAQ',
+    items: [
+      {
+        question: 'Is Sky Auto Player free and open source?',
+        href: '/faq/#free',
+      },
+      {
+        question: 'Which sheet formats are supported?',
+        href: '/faq/#formats',
+      },
+      {
+        question: 'Can this affect my Sky account?',
+        href: '/faq/#account-safety',
+      },
+    ],
   },
   finalCta: {
     title: 'Your next performance is already written.',

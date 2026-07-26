@@ -44,7 +44,10 @@ const structuredData = {
 ---
 
 <BaseLayout locale={locale} seo={seo} structuredData={structuredData}>
-  <section class="faq-hero section-shell section-shell--feature" aria-labelledby="faq-title">
+  <section
+    class="faq-hero section-shell section-shell--feature section-shell--after-header"
+    aria-labelledby="faq-title"
+  >
     <div class="container">
       <p class="kicker">Sky Auto Player · {isVi ? 'Tham khảo' : 'Reference'}</p>
       <h1 id="faq-title">{isVi ? 'Câu hỏi thường gặp' : 'Frequently asked questions'}</h1>

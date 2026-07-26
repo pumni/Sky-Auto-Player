@@ -11,7 +11,10 @@ interface Props {
 const { data, locale } = Astro.props;
 ---
 
-<section class="hero section-shell section-shell--feature" aria-labelledby="hero-title">
+<section
+  class="hero section-shell section-shell--feature section-shell--after-header"
+  aria-labelledby="hero-title"
+>
   <div class="container hero__layout">
     <div class="hero__copy">
       <p class="kicker">{data.kicker}</p>
@@ -25,8 +28,20 @@ const { data, locale } = Astro.props;
           >{data.secondaryCta}</a
         >
       </div>
-      <ul class="metadata-strip" aria-label="Supported packaging and sheet metadata">
-        {data.metadata.map((item) => <li>{item}</li>)}
+      <ul
+        class="metadata-strip"
+        aria-label={locale === 'vi'
+          ? 'Định dạng sheet và thông tin đóng gói'
+          : 'Supported packaging and sheet metadata'}
+      >
+        {
+          data.metadata.map((item) => (
+            <li>
+              <span class="metadata-strip__dot" aria-hidden="true" />
+              <span>{item}</span>
+            </li>
+          ))
+        }
       </ul>
       <p class="risk-note">
         {data.riskNote}{' '}
@@ -93,14 +108,27 @@ const { data, locale } = Astro.props;
   .metadata-strip {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-2) var(--space-4);
+    gap: var(--space-2) var(--space-5);
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     margin-bottom: var(--space-4);
+    list-style: none;
+    padding: 0;
+    margin-left: 0;
   }
   .metadata-strip li {
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    gap: var(--space-2);
+    min-height: 1.25rem;
+  }
+  .metadata-strip__dot {
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: 50%;
+    background: var(--color-accent);
+    flex: 0 0 auto;
+    opacity: 0.85;
   }
   .risk-note {
     font-size: var(--font-size-sm);

@@ -63,14 +63,21 @@ const { data } = Astro.props;
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-6);
     padding-block: var(--space-3);
     border-bottom: 1px solid var(--border-subtle);
   }
   .ledger-row dt {
     font-weight: 600;
+    min-width: 8rem;
   }
   .ledger-row dd {
     color: var(--color-text-subtle);
+    margin: 0;
+    text-align: right;
+    flex: 1 1 auto;
+    min-width: 10rem;
   }
   .notice {
     font-size: var(--font-size-sm);

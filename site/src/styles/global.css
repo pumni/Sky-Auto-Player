@@ -126,6 +126,7 @@
 
   .button--primary:hover {
     background: var(--color-accent-strong);
+    color: var(--color-bg);
   }
 
   .button--secondary {

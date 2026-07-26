@@ -30,4 +30,9 @@
   .section-shell--feature {
     padding-block: var(--section-space-feature);
   }
+
+  /* First section under site header: pull content up without killing feature bottom space. */
+  .section-shell--after-header {
+    padding-top: clamp(2.25rem, 3.5vw, 3.25rem);
+  }
 }

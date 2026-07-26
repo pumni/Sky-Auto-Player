@@ -24,10 +24,10 @@ test.describe('navigation and route contracts', () => {
 
   test('locale switching preserves the current page', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/faq/');
-    await page.locator('.locale-links a').filter({ hasText: 'VI' }).click();
+    await page.locator('.locale-switch__option').filter({ hasText: 'VI' }).click();
     await expect(page).toHaveURL(/\/Sky-Auto-Player\/vi\/faq\/$/);
 
-    await page.locator('.locale-links a').filter({ hasText: 'EN' }).click();
+    await page.locator('.locale-switch__option').filter({ hasText: 'EN' }).click();
     await expect(page).toHaveURL(/\/Sky-Auto-Player\/faq\/$/);
   });
 

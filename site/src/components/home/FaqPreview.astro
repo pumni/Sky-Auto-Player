@@ -24,6 +24,21 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
       </div>
       <a class="text-link" href={faqUrl}>{data.readMoreLink}</a>
     </div>
+
+    <ul class="faq-teasers">
+      {
+        data.items.map((item) => (
+          <li>
+            <a class="faq-teasers__link" href={withBase(item.href)}>
+              <span class="faq-teasers__q">{item.question}</span>
+              <span class="faq-teasers__go" aria-hidden="true">
+                →
+              </span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
   </div>
 </section>
 
@@ -35,6 +50,7 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
     align-items: flex-end;
     gap: var(--space-4);
     margin-bottom: var(--space-6);
+    max-width: 52rem;
   }
   .kicker {
     font-weight: 700;
@@ -44,9 +60,47 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
     letter-spacing: 0.1em;
     margin-bottom: var(--space-2);
   }
+  .section-title {
+    margin: 0;
+  }
   .text-link {
     color: var(--color-accent);
     text-decoration: underline;
     font-weight: 600;
+  }
+  .faq-teasers {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--border-default);
+    max-width: 52rem;
+  }
+  .faq-teasers li {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .faq-teasers__link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding-block: var(--space-4);
+    color: var(--color-text);
+    text-decoration: none;
+    min-height: 44px;
+  }
+  .faq-teasers__link:hover .faq-teasers__q {
+    color: var(--color-accent-strong);
+  }
+  .faq-teasers__q {
+    min-width: 0;
+    font-weight: 600;
+    font-size: var(--font-size-body);
+    line-height: 1.35;
+    transition: color var(--motion-fast) var(--ease-out);
+  }
+  .faq-teasers__go {
+    flex: 0 0 auto;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
   }
 </style>

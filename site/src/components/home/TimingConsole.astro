@@ -71,10 +71,6 @@ const isVi = locale === 'vi';
     <span class="instrument-key">D3</span>
     <span class="instrument-key">E3</span>
   </div>
-  <div class="console__footer">
-    <span>{isVi ? 'BỐ CỤC 15 PHÍM' : '15-KEY LAYOUT'}</span>
-    <span>{isVi ? 'KHÔNG PHẢI DỮ LIỆU TRỰC TIẾP' : 'NOT LIVE DATA'}</span>
-  </div>
 </figure>
 
 <style>
@@ -101,8 +97,7 @@ const isVi = locale === 'vi';
     content: '';
     opacity: 0.85;
   }
-  .console__topline,
-  .console__footer {
+  .console__topline {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -220,9 +215,6 @@ const isVi = locale === 'vi';
     background: rgb(169 203 183 / 17%);
     color: var(--color-text);
   }
-  .console__footer {
-    color: var(--color-sky);
-  }
   @media (max-width: 40rem) {
     .timing-console {
       padding: var(--space-3);
@@ -234,8 +226,7 @@ const isVi = locale === 'vi';
     .hold-line {
       display: none;
     }
-    .console__topline,
-    .console__footer {
+    .console__topline {
       gap: var(--space-2);
       flex-wrap: wrap;
     }

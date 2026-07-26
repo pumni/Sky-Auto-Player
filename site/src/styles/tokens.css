@@ -41,9 +41,9 @@
     --space-8: 4.5rem;
     --space-9: 6.5rem;
 
-    --section-space-compact: clamp(3.5rem, 6vw, 5rem);
-    --section-space-default: clamp(4.75rem, 8vw, 7rem);
-    --section-space-feature: clamp(6rem, 10vw, 9rem);
+    --section-space-compact: clamp(3rem, 5vw, 4.25rem);
+    --section-space-default: clamp(4rem, 6.5vw, 5.75rem);
+    --section-space-feature: clamp(5rem, 8vw, 7.5rem);
 
     --radius-control: 0.4rem;
     --radius-panel: 0.8rem;

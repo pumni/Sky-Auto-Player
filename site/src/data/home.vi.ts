@@ -126,9 +126,23 @@ export const homeVi: HomeContent = {
     ],
   },
   faqPreview: {
-    kicker: 'Trước khi tải xuống',
-    title: 'Một vài câu trả lời hữu ích trước.',
-    readMoreLink: 'Đọc FAQ đầy đủ',
+    kicker: 'Trước khi tải',
+    title: 'Một vài câu trả lời hữu ích.',
+    readMoreLink: 'Đọc toàn bộ FAQ',
+    items: [
+      {
+        question: 'Sky Auto Player có miễn phí và mã nguồn mở không?',
+        href: '/vi/faq/#free',
+      },
+      {
+        question: 'Hỗ trợ những định dạng sheet nào?',
+        href: '/vi/faq/#formats',
+      },
+      {
+        question: 'Việc dùng tool có ảnh hưởng tài khoản Sky không?',
+        href: '/vi/faq/#account-safety',
+      },
+    ],
   },
   finalCta: {
     title: 'Màn trình diễn tiếp theo đã nằm sẵn trong sheet.',

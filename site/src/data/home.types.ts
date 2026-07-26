@@ -64,6 +64,11 @@ export interface HomeContent {
     kicker: string;
     title: string;
     readMoreLink: string;
+    items: ReadonlyArray<{
+      question: string;
+      /** Locale path without origin; may include hash. Example: "/faq/#download" */
+      href: string;
+    }>;
   };
   finalCta: {
     title: string;

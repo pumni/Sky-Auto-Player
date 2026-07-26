@@ -28,8 +28,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         class="brand__mark"
         src={withBase('/assets/sky-auto-player-mark.svg')}
         alt=""
-        width="28"
-        height="28"
+        width="32"
+        height="32"
         aria-hidden="true"
       />
       <span>Sky Auto Player</span>
@@ -43,16 +43,19 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <a href={SITE.repositoryUrl}>{nav.github}</a>
       <a class="nav-download" href={SITE.releaseUrl}>{isVi ? 'Tải xuống' : 'Download'}</a>
 
-      <span class="site-nav__locale">
-        <span class="sr-only">{isVi ? 'Ngôn ngữ' : 'Language'}</span>
-        <span class="locale-links">
-          <a href={isVi ? otherLocalePath : currentPath} aria-current={!isVi ? 'page' : undefined}
-            >EN</a
-          >
-          <a href={isVi ? currentPath : otherLocalePath} aria-current={isVi ? 'page' : undefined}
-            >VI</a
-          >
-        </span>
+      <span class="locale-switch" aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}>
+        <a
+          class="locale-switch__option"
+          href={isVi ? otherLocalePath : currentPath}
+          aria-current={!isVi ? 'page' : undefined}
+          >EN</a
+        >
+        <a
+          class="locale-switch__option"
+          href={isVi ? currentPath : otherLocalePath}
+          aria-current={isVi ? 'page' : undefined}
+          >VI</a
+        >
       </span>
     </nav>
 
@@ -101,8 +104,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     white-space: nowrap;
   }
   .brand__mark {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     flex: 0 0 auto;
   }
   .site-nav {
@@ -115,8 +118,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
   }
-  .site-nav a:hover,
-  .site-nav a[aria-current='page'] {
+  .site-nav > a:hover,
+  .site-nav > a[aria-current='page'] {
     color: var(--color-text);
   }
   .site-actions {
@@ -125,38 +128,49 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     gap: var(--space-4);
     flex: 0 0 auto;
   }
-  .button {
+
+  .locale-switch {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-2) var(--space-4);
+    align-items: stretch;
+    gap: 1px;
+    padding: 2px;
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-control);
-    font-weight: 600;
-    font-size: var(--font-size-sm);
-    text-align: center;
+    background: var(--color-surface-1);
   }
-  .button--primary {
+  .locale-switch__option {
+    display: grid;
+    min-width: 2.5rem;
+    min-height: 2rem;
+    place-items: center;
+    padding-inline: 0.6rem;
+    border-radius: calc(var(--radius-control) - 2px);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 650;
+    line-height: 1;
+    transition:
+      background-color var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+  .locale-switch__option:hover {
+    background: var(--color-surface-2);
+    color: var(--color-text);
+  }
+  .locale-switch .locale-switch__option[aria-current='page'] {
     background: var(--color-accent);
     color: var(--color-bg);
   }
-  .button--primary:hover {
+  .locale-switch .locale-switch__option[aria-current='page']:hover {
     background: var(--color-accent-strong);
+    color: var(--color-bg);
   }
-  .button--secondary {
-    background: transparent;
-    color: var(--color-text);
-    border: 1px solid var(--border-default);
+  .locale-switch .locale-switch__option:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -3px;
   }
-  .button--secondary:hover {
-    border-color: var(--color-accent);
-    background: var(--color-surface-1);
-  }
-  .locale-links {
-    display: flex;
-    gap: var(--space-2);
-  }
-  .locale-links a {
-    font-weight: 700;
+  .locale-switch .locale-switch__option[aria-current='page']:focus-visible {
+    outline-color: var(--color-bg);
   }
   /* Desktop keeps the header CTA; small viewports use the menu CTA instead. */
   .nav-download {
@@ -235,17 +249,14 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     :global(.js) .site-nav.is-open {
       display: flex;
     }
-    .site-nav > a,
-    .site-nav__locale {
+    .site-nav > a {
       padding-block: var(--space-3);
       border-bottom: 1px solid var(--border-subtle);
       background: var(--color-bg);
     }
-    .site-nav__locale {
-      border-bottom: 0;
-    }
-    .locale-links {
-      gap: var(--space-4);
+    .locale-switch {
+      align-self: flex-start;
+      margin-top: var(--space-3);
     }
     .menu-toggle {
       display: flex;
