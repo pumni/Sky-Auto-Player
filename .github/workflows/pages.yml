@@ -29,9 +29,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Bun
+        # Version is pinned via site/package.json `packageManager` field (single source of truth).
         uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -5,7 +5,7 @@ The site bundles the Vietnamese-capable variable font packages below through Fon
 - Inter Variable — Copyright 2016 The Inter Project Authors: https://github.com/rsms/inter
 - Playfair Display Variable — Copyright 2017 The Playfair Display Project Authors: https://github.com/clauseggers/Playfair-Display
 
-The complete license text follows. The original package license files are also recorded in `package-lock.json`.
+The complete license text follows. The original package license files are also recorded in `bun.lock`.
 Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) Inter-Italic[opsz,wght].ttf: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
