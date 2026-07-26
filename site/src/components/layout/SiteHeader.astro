@@ -41,6 +41,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
       <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>{nav.faq}</a>
       <a href={SITE.repositoryUrl}>{nav.github}</a>
+      <a class="nav-download" href={SITE.releaseUrl}>{isVi ? 'Tải xuống' : 'Download'}</a>
 
       <span class="site-nav__locale">
         <span class="sr-only">{isVi ? 'Ngôn ngữ' : 'Language'}</span>
@@ -157,6 +158,10 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   .locale-links a {
     font-weight: 700;
   }
+  /* Desktop keeps the header CTA; small viewports use the menu CTA instead. */
+  .nav-download {
+    display: none;
+  }
   .menu-toggle {
     display: none;
     width: 44px;
@@ -250,6 +255,11 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   @media (max-width: 26.25rem) {
     .site-actions .button {
       display: none;
+    }
+    .nav-download {
+      display: block;
+      font-weight: 700;
+      color: var(--color-accent);
     }
   }
 

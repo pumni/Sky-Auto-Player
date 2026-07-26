@@ -39,6 +39,12 @@ test.describe('accessibility and responsive contracts', () => {
       );
     }
     await expect(page.locator('.header-download')).toBeHidden();
+    await page.locator('.menu-toggle').click();
+    await expect(page.locator('.nav-download')).toBeVisible();
+    await expect(page.locator('.nav-download')).toHaveAttribute(
+      'href',
+      'https://github.com/pumni/Sky-Auto-Player/releases/latest',
+    );
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'srcset',
       /picker-mobile\.webp/,
