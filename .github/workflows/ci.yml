@@ -52,16 +52,20 @@ jobs:
       - name: Parse installer/updater.ps1 on Windows PowerShell 5.1
         shell: powershell
         run: |
-          # ``updater.bat`` falls back to ``powershell.exe`` (Windows PowerShell
-          # 5.1) when ``pwsh`` is not installed on the user's machine.  PS 5.1
-          # reads no-BOM ``.ps1`` files with the system ANSI codepage
-          # (Windows-1252 on en-US hosts), so non-ASCII bytes (em-dash ``--``,
-          # ``§``) get decoded as ``â€“`` / ``Â§`` and break the parser.  This
-          # step fails-fast if the file cannot be parsed by PS 5.1, preventing
-          # a regression of the bug that closed 2.4.1 (file carried non-ASCII
-          # comments without a UTF-8 BOM, broke external updates on any install
-          # without PS7).  Runs on the GitHub Windows runner which always has
-          # PS 5.1 available side-by-side with pwsh.
+          # updater.bat falls back to powershell.exe (Windows PowerShell 5.1)
+          # when pwsh is not installed on the user's machine. PS 5.1 reads
+          # no-BOM .ps1 files with the system ANSI codepage (Windows-1252
+          # on en-US hosts), so non-ASCII bytes (em-dash --, S-section
+          # sign) get decoded as a corrupted sequence and break the
+          # parser. This step fails-fast if the file cannot be parsed
+          # by PS 5.1, preventing a regression of the bug that closed
+          # 2.4.1 (file carried non-ASCII comments without a UTF-8 BOM,
+          # broke external updates on any install without PS7). Runs on
+          # the GitHub Windows runner which always has PS 5.1 available
+          # side-by-side with pwsh.
+          # Keep this inline script ASCII-only: GitHub Actions writes the
+          # run: block to a temp .ps1 without a BOM, so PS 5.1 would
+          # mis-decode any non-ASCII byte here the same way.
           $errs = $null; $tokens = $null
           $null = [System.Management.Automation.Language.Parser]::ParseFile(
             "$PWD\installer\updater.ps1", [ref]$tokens, [ref]$errs)
@@ -72,7 +76,7 @@ jobs:
             }
             exit 1
           }
-          Write-Host "PS 5.1 parse OK — external updater remains compatible with updater.bat's PS 5.1 fallback."
+          Write-Host "PS 5.1 parse OK -- external updater remains compatible with updater.bat PS 5.1 fallback."
 
       - name: Tests — unit (scheduler, parser, domain — no Windows required)
         run: uv run pytest -m "not windows and not slow"
