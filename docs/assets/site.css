@@ -986,10 +986,6 @@ code,
   text-align: right;
 }
 
-.faq-preview__list {
-  border-top: 1px solid var(--line-medium);
-}
-
 details {
   border-bottom: 1px solid var(--line-soft);
 }
@@ -1024,6 +1020,7 @@ details[open] summary::after {
   content: "−";
 }
 
+/* .faq-answer, .faq-answer p, .faq-answer p + p are shared between landing (condensed FAQ in .faq-preview__list) and the FAQ page (.faq-item). Do not scope. */
 .faq-answer {
   max-width: 56rem;
   padding: 0 3rem var(--space-5) 0;
@@ -1038,8 +1035,13 @@ details[open] summary::after {
   margin-top: var(--space-3);
 }
 
-.faq-preview__footer {
-  margin-top: var(--space-5);
+.faq-answer ul {
+  margin: var(--space-3) 0 0;
+  padding-left: 1.3rem;
+}
+
+.faq-answer li + li {
+  margin-top: var(--space-2);
 }
 
 .final-cta {
@@ -1111,13 +1113,22 @@ details[open] summary::after {
   color: var(--paper-300);
 }
 
-/* FAQ page */
+/* Page namespaces — scope FAQ-page-only selectors so landing and FAQ can evolve independently. */
+/* See docs/plan/.../03_FILE_BY_FILE_TECHNICAL_PLAN.md §6 — keep .faq-answer/.faq-answer p shared. */
 
-.faq-hero {
+.page-home .faq-preview__list {
+  border-top: 1px solid var(--line-medium);
+}
+
+.page-home .faq-preview__footer {
+  margin-top: var(--space-5);
+}
+
+.page-faq .faq-hero {
   padding-block: clamp(4rem, 8vw, 7rem);
 }
 
-.faq-hero h1 {
+.page-faq .faq-hero h1 {
   max-width: 13ch;
   margin: 0;
   color: var(--paper-100);
@@ -1127,26 +1138,26 @@ details[open] summary::after {
   line-height: 1;
 }
 
-.faq-hero__copy {
+.page-faq .faq-hero__copy {
   max-width: 44rem;
   margin: var(--space-5) 0 0;
   color: var(--paper-300);
   font-size: var(--text-lg);
 }
 
-.faq-layout {
+.page-faq .faq-layout {
   display: grid;
   align-items: start;
   gap: var(--space-8);
   padding-bottom: var(--space-9);
 }
 
-.faq-toc {
+.page-faq .faq-toc {
   padding: var(--space-4) 0;
   border-block: 1px solid var(--line-medium);
 }
 
-.faq-toc__label {
+.page-faq .faq-toc__label {
   margin: 0 0 var(--space-3);
   color: var(--star-300);
   font-family: var(--font-mono);
@@ -1155,7 +1166,7 @@ details[open] summary::after {
   text-transform: uppercase;
 }
 
-.faq-toc ul {
+.page-faq .faq-toc ul {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-4);
@@ -1164,20 +1175,20 @@ details[open] summary::after {
   list-style: none;
 }
 
-.faq-toc a {
+.page-faq .faq-toc a {
   color: var(--paper-300);
   font-size: var(--text-sm);
 }
 
-.faq-toc a:hover {
+.page-faq .faq-toc a:hover {
   color: var(--paper-100);
 }
 
-.faq-content {
+.page-faq .faq-content {
   min-width: 0;
 }
 
-.faq-content > h2 {
+.page-faq .faq-content > h2 {
   margin: 0 0 var(--space-5);
   color: var(--paper-100);
   font-family: var(--font-display);
@@ -1186,29 +1197,20 @@ details[open] summary::after {
   line-height: 1.1;
 }
 
-.faq-content .faq-item {
+.page-faq .faq-content .faq-item {
   scroll-margin-top: 6rem;
 }
 
-.faq-item summary {
+.page-faq .faq-item summary {
   font-size: var(--text-lg);
 }
 
-.faq-item .faq-answer {
+.page-faq .faq-item .faq-answer {
   max-width: 52rem;
   font-size: var(--text-base);
 }
 
-.faq-answer ul {
-  margin: var(--space-3) 0 0;
-  padding-left: 1.3rem;
-}
-
-.faq-answer li + li {
-  margin-top: var(--space-2);
-}
-
-.faq-answer__note {
+.page-faq .faq-answer__note {
   color: var(--paper-400);
   font-size: var(--text-sm);
 }
@@ -1218,7 +1220,7 @@ details[open] summary::after {
     min-width: 10rem;
   }
 
-  .faq-toc ul {
+  .page-faq .faq-toc ul {
     column-gap: var(--space-5);
   }
 }
@@ -1252,20 +1254,20 @@ details[open] summary::after {
     grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
   }
 
-  .faq-layout {
+  .page-faq .faq-layout {
     grid-template-columns: minmax(12rem, 0.3fr) minmax(0, 1fr);
   }
 
-  .faq-toc {
+  .page-faq .faq-toc {
     position: sticky;
     top: 6.5rem;
   }
 
-  .faq-toc ul {
+  .page-faq .faq-toc ul {
     display: grid;
   }
 
-  .faq-toc li + li {
+  .page-faq .faq-toc li + li {
     margin-top: var(--space-2);
   }
 }
