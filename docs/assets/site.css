@@ -22,7 +22,7 @@
   --line-medium: rgba(244, 239, 227, 0.18);
   --line-accent: rgba(239, 202, 120, 0.34);
   --shadow-console: 0 24px 80px rgba(0, 0, 0, 0.34);
-  --font-display: Georgia, "Times New Roman", serif;
+  --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
   --font-body: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --text-xs: clamp(0.72rem, 0.69rem + 0.12vw, 0.78rem);
@@ -200,28 +200,11 @@ code,
   background: var(--night-850);
 }
 
-.brand__mark::before,
-.brand__mark::after {
-  position: absolute;
-  width: 0.28rem;
-  height: 0.28rem;
-  border-radius: 50%;
-  background: var(--star-300);
-  content: "";
-}
-
-.brand__mark::before {
-  top: 0.48rem;
-  left: 0.55rem;
-  box-shadow: 0.85rem 0.3rem 0 0.04rem var(--sky-300), 1.25rem 1.05rem 0 -0.02rem var(--star-500);
-}
-
-.brand__mark::after {
-  right: 0.42rem;
-  bottom: 0.46rem;
-  width: 0.18rem;
-  height: 0.18rem;
-  background: var(--paper-300);
+.brand__mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  padding: 0.28rem;
 }
 
 .site-nav {
@@ -395,6 +378,7 @@ code,
 }
 
 .section-heading--split {
+  max-width: none;
   display: flex;
   align-items: end;
   justify-content: space-between;
