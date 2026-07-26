@@ -1,0 +1,75 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import { SITE } from '../../data/site';
+
+interface Props {
+  data: HomeContent['finalCta'];
+  locale: 'en' | 'vi';
+}
+const { data } = Astro.props;
+---
+
+<section class="final-cta section-shell section-shell--feature" aria-labelledby="final-title">
+  <div class="container final-cta__layout">
+    <div>
+      <h2 id="final-title">{data.title}</h2>
+      <p>{data.description}</p>
+    </div>
+    <div class="final-cta__actions">
+      <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
+      <a class="button button--secondary" href={SITE.repositoryUrl}>{data.secondaryCta}</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .final-cta {
+    background: var(--color-surface-1);
+    text-align: center;
+    border-top: 1px solid var(--border-default);
+  }
+  .final-cta__layout {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-6);
+  }
+  h2 {
+    margin-bottom: var(--space-4);
+  }
+  p {
+    color: var(--color-text-subtle);
+  }
+  .final-cta__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-4);
+  }
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-control);
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+  .button--primary {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+  .button--primary:hover {
+    background: var(--color-accent-strong);
+  }
+  .button--secondary {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--border-default);
+  }
+  .button--secondary:hover {
+    border-color: var(--color-accent);
+    background: var(--color-surface-1);
+  }
+</style>

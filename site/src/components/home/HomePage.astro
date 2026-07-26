@@ -1,0 +1,28 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import Hero from './Hero.astro';
+import PlaybackProof from './PlaybackProof.astro';
+import ComparisonTable from './ComparisonTable.astro';
+import ProductView from './ProductView.astro';
+import Steps from './Steps.astro';
+import TechnicalTrust from './TechnicalTrust.astro';
+import Formats from './Formats.astro';
+import FaqPreview from './FaqPreview.astro';
+import FinalCta from './FinalCta.astro';
+
+interface Props {
+  content: HomeContent;
+}
+
+const { content } = Astro.props;
+---
+
+<Hero data={content.hero} locale={content.locale} />
+<PlaybackProof data={content.playback} locale={content.locale} />
+<ComparisonTable data={content.comparison} locale={content.locale} />
+<ProductView data={content.product} locale={content.locale} />
+<Steps data={content.steps} locale={content.locale} />
+<TechnicalTrust data={content.technical} locale={content.locale} />
+<Formats data={content.formats} locale={content.locale} />
+<FaqPreview data={content.faqPreview} locale={content.locale} />
+<FinalCta data={content.finalCta} locale={content.locale} />

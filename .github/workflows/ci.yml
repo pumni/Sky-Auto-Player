@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FORCE_COLOR: "1"
 
@@ -14,31 +21,83 @@ defaults:
     shell: pwsh
 
 jobs:
-  validate:
-    name: Sky Auto Player — full altitude gate
-    runs-on: windows-latest
-    timeout-minutes: 25
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Pin uv cache to workspace volume
+      - name: Classify changed paths
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          New-Item -ItemType File -Force -Path .env | Out-Null
-          Copy-Item -Force .env.example .env
+          set -euo pipefail
 
-      - name: Sync deps
-        run: uv sync --frozen
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            changed_files="$(git diff --name-only "$PR_BASE_SHA" "$CURRENT_SHA")"
+          elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            changed_files="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA")"
+          else
+            changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
+          fi
 
-      - name: Runtime audit — free-threaded readiness
-        run: uv run --env-file .env python scripts/audit_free_threaded_wheels.py
+          relevant=false
+          while IFS= read -r path; do
+            case "$path" in
+              src/*|tests/*|scripts/*|installer/*|manifests/*|.github/workflows/*|.github/actions/*)
+                relevant=true
+                break
+                ;;
+              pyproject.toml|uv.lock|.python-version|.env.example|Sky-Auto-Player.spec)
+                relevant=true
+                break
+                ;;
+              windows_version_info.txt|updater.bat|AGENTS.md|SECURITY.md|.config/security_audit_baseline.json)
+                relevant=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Relevant validation changes: $relevant"
+
+  static:
+    name: Static and security gates
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python environment
+        uses: ./.github/actions/python-environment
+        with:
+          run-runtime-audit: "false"
 
       - name: Lint — ruff
         run: uv run ruff check .
@@ -48,6 +107,24 @@ jobs:
 
       - name: Security — AGENTS.md P0 audit
         run: uv run --env-file .env python scripts/audit_security_mandates.py
+
+  validate:
+    name: Windows compatibility and unit tests
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python environment
+        uses: ./.github/actions/python-environment
+        with:
+          run-runtime-audit: "true"
 
       - name: Parse installer/updater.ps1 on Windows PowerShell 5.1
         shell: powershell
@@ -80,3 +157,26 @@ jobs:
 
       - name: Tests — unit (scheduler, parser, domain — no Windows required)
         run: uv run pytest -m "not windows and not slow"
+
+  status:
+    name: Sky Auto Player — full altitude gate
+    if: always()
+    needs: [changes, static, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Require relevant gates to pass
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          [[ "$CHANGES_RESULT" == "success" ]]
+          [[ "$STATIC_RESULT" == "success" || "$STATIC_RESULT" == "skipped" ]]
+          [[ "$VALIDATE_RESULT" == "success" || "$VALIDATE_RESULT" == "skipped" ]]
+          echo "CI status is green."

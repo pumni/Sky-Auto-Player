@@ -62,3 +62,10 @@ src/sky_music/_version.py
 # source — also excluded from release zips by build_app.py's installer_ignore).
 TestResults.xml
 **/TestResults.xml
+
+# Astro / Node website toolchain (also covered by site/.gitignore)
+site/node_modules/
+site/dist/
+site/.astro/
+site/playwright-report/
+site/test-results/

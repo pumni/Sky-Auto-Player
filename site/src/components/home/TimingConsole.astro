@@ -1,0 +1,243 @@
+---
+interface Props {
+  locale: 'en' | 'vi';
+}
+const { locale } = Astro.props;
+const isVi = locale === 'vi';
+---
+
+<figure class="timing-console" aria-labelledby="timing-demo-title">
+  <figcaption id="timing-demo-title" class="sr-only">
+    {isVi ? 'Minh họa định thời phát nhạc' : 'Playback timing illustration'}
+  </figcaption>
+  <div class="console__topline">
+    <span
+      ><span class="console__status" aria-hidden="true"></span>{
+        isVi ? 'MÔ PHỎNG TIMING' : 'TIMING DEMO'
+      }</span
+    >
+    <span>{isVi ? 'SẴN SÀNG' : 'READY'}</span>
+  </div>
+  <ol
+    class="timing-console__events"
+    aria-label={isVi ? 'Các sự kiện phát nhạc minh họa' : 'Illustrative playback events'}
+  >
+    <li class="timing-event timing-event--chord">
+      <span class="timing-event__time">00:12.400</span>
+      <span class="timing-event__keys"
+        ><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span
+      >
+      <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
+    </li>
+    <li class="timing-event timing-event--note">
+      <span class="timing-event__time">00:12.733</span>
+      <span class="timing-event__keys"
+        ><span class="timing-event__marker" aria-hidden="true"></span>D4</span
+      >
+      <span class="timing-event__kind">{isVi ? 'NỐT' : 'NOTE'}</span>
+    </li>
+    <li class="timing-event timing-event--hold">
+      <span class="timing-event__time">00:13.066</span>
+      <span class="timing-event__keys"
+        ><span class="timing-event__marker" aria-hidden="true"></span>E5 <span
+          class="hold-line"
+          aria-hidden="true">━━━━━━━</span
+        ></span
+      >
+      <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
+    </li>
+    <li class="timing-event timing-event--chord">
+      <span class="timing-event__time">00:13.600</span>
+      <span class="timing-event__keys"
+        ><span class="timing-event__marker" aria-hidden="true"></span>A2 + C4</span
+      >
+      <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
+    </li>
+  </ol>
+  <div class="instrument-grid" aria-hidden="true">
+    <span class="instrument-key" data-active="note">A1</span>
+    <span class="instrument-key" data-active="chord">B1</span>
+    <span class="instrument-key">C1</span>
+    <span class="instrument-key">D1</span>
+    <span class="instrument-key">E1</span>
+    <span class="instrument-key">A2</span>
+    <span class="instrument-key">B2</span>
+    <span class="instrument-key" data-active="chord">C2</span>
+    <span class="instrument-key">D2</span>
+    <span class="instrument-key">E2</span>
+    <span class="instrument-key">A3</span>
+    <span class="instrument-key" data-active="hold">B3</span>
+    <span class="instrument-key">C3</span>
+    <span class="instrument-key">D3</span>
+    <span class="instrument-key">E3</span>
+  </div>
+  <div class="console__footer">
+    <span>{isVi ? 'BỐ CỤC 15 PHÍM' : '15-KEY LAYOUT'}</span>
+    <span>{isVi ? 'KHÔNG PHẢI DỮ LIỆU TRỰC TIẾP' : 'NOT LIVE DATA'}</span>
+  </div>
+</figure>
+
+<style>
+  .timing-console {
+    position: relative;
+    min-width: 0;
+    margin: 0;
+    padding: clamp(var(--space-4), 3vw, var(--space-6));
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-panel);
+    background: var(--color-surface-2);
+    box-shadow: var(--shadow-console);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+  .timing-console::after {
+    position: absolute;
+    top: 0;
+    right: 10%;
+    width: 5rem;
+    height: 1px;
+    background: var(--color-accent);
+    content: '';
+    opacity: 0.85;
+  }
+  .console__topline,
+  .console__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .console__status {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--color-success);
+    border-radius: 50%;
+    margin-right: var(--space-2);
+    box-shadow: 0 0 0 3px rgb(169 203 183 / 12%);
+    box-shadow: 0 0 0 3px rgb(169 203 183 / 12%);
+  }
+  .timing-console__events {
+    display: grid;
+    gap: 0;
+    margin-block: var(--space-6);
+    padding: 0;
+    list-style: none;
+  }
+  .timing-event {
+    display: grid;
+    grid-template-columns: minmax(5.8rem, 0.45fr) minmax(8rem, 0.8fr) minmax(4.6rem, 0.35fr);
+    gap: var(--space-3);
+    align-items: center;
+    min-width: 0;
+    padding-block: var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .timing-event:last-child {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .timing-event__time,
+  .timing-event__keys {
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+  .timing-event__time {
+    white-space: nowrap;
+  }
+  .timing-event__keys {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-accent-strong);
+    overflow-wrap: anywhere;
+  }
+  .timing-event__marker {
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 0.6rem;
+    height: 0.6rem;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+  }
+  .timing-event--chord .timing-event__marker {
+    border-radius: 0.12rem;
+    box-shadow:
+      0.2rem -0.2rem 0 -0.03rem var(--color-surface-2),
+      0.2rem -0.2rem 0 0.04rem currentColor;
+  }
+  .timing-event--hold .timing-event__marker {
+    width: 1.35rem;
+    height: 0.2rem;
+    border-radius: 0;
+  }
+  .timing-event__kind {
+    justify-self: end;
+    color: var(--color-sky);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+  }
+  .hold-line {
+    color: var(--color-success);
+    letter-spacing: -0.15em;
+  }
+  .instrument-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: clamp(0.28rem, 1vw, 0.55rem);
+    margin-top: var(--space-5);
+  }
+  .instrument-key {
+    display: grid;
+    min-width: 0;
+    aspect-ratio: 1;
+    place-items: center;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-control);
+    background: var(--color-surface-1);
+    color: var(--color-text-muted);
+  }
+  .instrument-key[data-active='note'] {
+    border-color: var(--color-sky);
+    background: rgb(145 174 187 / 22%);
+    color: var(--color-text);
+  }
+  .instrument-key[data-active='chord'] {
+    border-color: var(--color-accent);
+    background: rgb(239 202 120 / 18%);
+    color: var(--color-accent-strong);
+  }
+  .instrument-key[data-active='hold'] {
+    border-color: var(--color-success);
+    background: rgb(169 203 183 / 17%);
+    color: var(--color-text);
+  }
+  .console__footer {
+    color: var(--color-sky);
+  }
+  @media (max-width: 40rem) {
+    .timing-console {
+      padding: var(--space-3);
+    }
+    .timing-event {
+      gap: var(--space-2);
+      font-size: var(--font-size-xs);
+    }
+    .hold-line {
+      display: none;
+    }
+    .console__topline,
+    .console__footer {
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+  }
+</style>

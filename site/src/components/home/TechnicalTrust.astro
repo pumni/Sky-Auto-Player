@@ -1,0 +1,82 @@
+---
+import type { HomeContent } from '../../data/home.types';
+
+interface Props {
+  data: HomeContent['technical'];
+  locale: 'en' | 'vi';
+}
+const { data } = Astro.props;
+---
+
+<section id="technical" class="section-shell" aria-labelledby="technical-title">
+  <div class="container technical-trust__layout">
+    <div class="section-heading">
+      <p class="kicker">{data.kicker}</p>
+      <h2 id="technical-title" class="section-title">{data.title}</h2>
+      <p class="section-copy">{data.description}</p>
+    </div>
+    <div>
+      <dl class="technical-ledger">
+        {
+          data.ledger.map((item) => (
+            <div class="ledger-row">
+              <dt>{item.term}</dt>
+              <dd>{item.definition}</dd>
+            </div>
+          ))
+        }
+      </dl>
+      <p class="notice">{data.notice}</p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .technical-trust__layout {
+    display: grid;
+    gap: var(--space-8);
+  }
+  @media (min-width: 64rem) {
+    .technical-trust__layout {
+      grid-template-columns: 1fr 1.5fr;
+    }
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .section-title {
+    margin-bottom: var(--space-4);
+  }
+  .section-copy {
+    color: var(--color-text-subtle);
+  }
+  .technical-ledger {
+    border-top: 1px solid var(--border-default);
+    margin-bottom: var(--space-6);
+  }
+  .ledger-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    padding-block: var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .ledger-row dt {
+    font-weight: 600;
+  }
+  .ledger-row dd {
+    color: var(--color-text-subtle);
+  }
+  .notice {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    background: var(--color-surface-2);
+    padding: var(--space-4);
+    border-left: 4px solid var(--color-accent);
+  }
+</style>

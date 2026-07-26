@@ -1,0 +1,59 @@
+@layer reset, tokens, base, layout, components, utilities;
+
+@layer tokens {
+  :root {
+    color-scheme: dark;
+
+    --color-bg: #07090d;
+    --color-surface-1: #0a0e14;
+    --color-surface-2: #111821;
+    --color-text: #f4efe3;
+    --color-text-muted: #b8b4ab;
+    --color-text-subtle: #92958f;
+    --color-accent: #efca78;
+    --color-accent-strong: #f7dda2;
+    --color-sky: #b8ccd6;
+    --color-success: #a9cbb7;
+    --color-danger: #efb5a9;
+
+    --border-subtle: color-mix(in srgb, var(--color-text) 10%, transparent);
+    --border-default: color-mix(in srgb, var(--color-text) 18%, transparent);
+    --border-accent: color-mix(in srgb, var(--color-accent) 34%, transparent);
+
+    --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
+    --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+
+    --font-size-xs: clamp(0.78rem, 0.76rem + 0.08vw, 0.84rem);
+    --font-size-sm: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
+    --font-size-body: clamp(1rem, 0.97rem + 0.14vw, 1.1rem);
+    --font-size-lead: clamp(1.15rem, 1.06rem + 0.35vw, 1.4rem);
+    --font-size-h2: clamp(2rem, 1.55rem + 1.7vw, 3.5rem);
+    --font-size-hero: clamp(2.75rem, 1.9rem + 3.2vw, 5.25rem);
+
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+    --space-7: 3rem;
+    --space-8: 4.5rem;
+    --space-9: 6.5rem;
+
+    --section-space-compact: clamp(3.5rem, 6vw, 5rem);
+    --section-space-default: clamp(4.75rem, 8vw, 7rem);
+    --section-space-feature: clamp(6rem, 10vw, 9rem);
+
+    --radius-control: 0.4rem;
+    --radius-panel: 0.8rem;
+    --container-max: 77.5rem;
+    --content-max: 44rem;
+    --gutter: clamp(1.25rem, 3vw, 2.75rem);
+
+    --motion-fast: 140ms;
+    --motion-normal: 240ms;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --shadow-console: 0 24px 80px rgb(0 0 0 / 34%);
+  }
+}

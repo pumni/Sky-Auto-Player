@@ -1,0 +1,69 @@
+---
+import { render, type CollectionEntry } from 'astro:content';
+
+interface Props {
+  faq: CollectionEntry<'faq'>;
+  isOpen?: boolean;
+}
+
+const { faq, isOpen = false } = Astro.props;
+const { Content } = await render(faq);
+---
+
+<details class="faq-item" id={faq.data.key} open={isOpen}>
+  <summary>{faq.data.question}</summary>
+  <div class="faq-answer">
+    <Content />
+  </div>
+</details>
+
+<style>
+  .faq-item {
+    border-bottom: 1px solid var(--border-subtle);
+    padding-block: var(--space-4);
+  }
+  .faq-item summary {
+    font-weight: 600;
+    font-size: var(--font-size-lead);
+    cursor: pointer;
+    list-style: none;
+    position: relative;
+    padding-right: var(--space-6);
+  }
+  .faq-item summary::-webkit-details-marker {
+    display: none;
+  }
+  .faq-item summary::after {
+    content: '+';
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.5rem;
+    color: var(--color-text-muted);
+  }
+  .faq-item[open] summary::after {
+    content: '−';
+  }
+  .faq-answer {
+    margin-top: var(--space-4);
+    color: var(--color-text-subtle);
+  }
+  .faq-answer :global(a) {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .faq-answer :global(p) {
+    margin-bottom: var(--space-4);
+  }
+  .faq-answer :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .faq-answer :global(code) {
+    font-family: var(--font-mono);
+    background: var(--color-surface-1);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+</style>

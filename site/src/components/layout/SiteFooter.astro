@@ -1,0 +1,60 @@
+---
+import type { Locale } from '../../data/site';
+import { SITE } from '../../data/site';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const isVi = locale === 'vi';
+---
+
+<footer class="site-footer">
+  <div class="container site-footer__layout">
+    <div class="site-footer__legal">
+      <p>
+        {
+          isVi
+            ? 'Sky Auto Player · Mã nguồn mở theo GNU GPL v3.0 · Xây dựng cho cộng đồng âm nhạc Sky'
+            : 'Sky Auto Player · Open source under GNU GPL v3.0 · Built for the Sky music community'
+        }
+      </p>
+    </div>
+    <nav class="site-footer__links" aria-label={isVi ? 'Chân trang' : 'Footer'}>
+      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
+      <a href={SITE.repositoryUrl}>GitHub</a>
+      <a href={`${SITE.repositoryUrl}/releases`}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
+      <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
+      <a href={`${SITE.repositoryUrl}/discussions`}>Discussions</a>
+      <a href={withBase(isVi ? '/' : '/vi/')}>{isVi ? 'English' : 'Tiếng Việt'}</a>
+    </nav>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border-subtle);
+    padding-block: var(--space-6);
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-sm);
+  }
+  .site-footer__layout {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+  .site-footer__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
+  .site-footer__links a {
+    color: var(--color-text-muted);
+  }
+  .site-footer__links a:hover {
+    color: var(--color-text);
+  }
+</style>

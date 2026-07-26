@@ -1,0 +1,32 @@
+name: Sky Auto Player Python environment
+description: Install the pinned free-threaded Python toolchain and sync locked dependencies.
+
+inputs:
+  run-runtime-audit:
+    description: Run the free-threaded wheel readiness audit after syncing dependencies.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Materialize .env
+      shell: pwsh
+      run: |
+        New-Item -ItemType File -Force -Path .env | Out-Null
+        Copy-Item -Force .env.example .env
+
+    - name: Sync deps (frozen)
+      shell: pwsh
+      run: uv sync --frozen
+
+    - name: Runtime audit — free-threaded readiness
+      if: inputs.run-runtime-audit == 'true'
+      shell: pwsh
+      run: uv run --env-file .env python scripts/audit_free_threaded_wheels.py

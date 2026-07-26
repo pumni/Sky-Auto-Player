@@ -1,0 +1,173 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  data: HomeContent['product'];
+  locale: 'en' | 'vi';
+}
+const { data, locale } = Astro.props;
+---
+
+<section class="section-shell section-shell--feature" aria-labelledby="product-title">
+  <div class="container product-view__layout">
+    <figure class="screenshot-frame">
+      <div class="screenshot-frame__bar">
+        <span class="screenshot-frame__dot" aria-hidden="true"></span>
+        <span>sky-auto-player / picker</span>
+      </div>
+      <a
+        class="screenshot-link"
+        href={withBase('/assets/images/picker.webp')}
+        aria-label={locale === 'vi'
+          ? 'Mở ảnh trình chọn kích thước lớn'
+          : 'Open picker screenshot at full size'}
+      >
+        <picture>
+          <source
+            media="(max-width: 40rem)"
+            srcset={withBase('/assets/images/picker-mobile.webp')}
+          />
+          <img
+            src={withBase('/assets/images/picker.webp')}
+            alt={locale === 'vi'
+              ? 'Trình chọn bài nhạc của Sky Auto Player'
+              : 'Sky Auto Player song picker'}
+            width="1331"
+            height="821"
+            loading="lazy"
+            decoding="async"
+          />
+        </picture>
+      </a>
+      <figcaption>
+        {locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}
+      </figcaption>
+    </figure>
+
+    <div class="product-view__copy">
+      <div class="section-heading">
+        <p class="kicker">{data.kicker}</p>
+        <h2 id="product-title" class="section-title">{data.title}</h2>
+        <p class="section-copy">{data.description}</p>
+      </div>
+      <ol class="annotations">
+        {
+          data.annotations.map((ann, i) => (
+            <li>
+              <span class="anno-num">{String(i + 1).padStart(2, '0')}</span>
+              <span>{ann}</span>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </div>
+</section>
+
+<style>
+  .product-view__layout {
+    display: grid;
+    gap: var(--space-8);
+  }
+  @media (min-width: 64rem) {
+    .product-view__layout {
+      grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.8fr);
+      align-items: center;
+    }
+  }
+  .screenshot-frame {
+    align-self: start;
+    min-width: 0;
+    margin: 0;
+    padding: var(--space-3);
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-panel);
+    background: var(--color-surface-1);
+  }
+  .screenshot-frame__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-2) var(--space-3);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+  }
+  .screenshot-frame__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--color-accent);
+  }
+  .screenshot-link,
+  .screenshot-link picture {
+    display: block;
+  }
+  .screenshot-frame img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    transition: border-color var(--motion-fast) var(--ease-out);
+  }
+  .screenshot-link:hover img {
+    border-color: var(--color-accent);
+  }
+  figcaption {
+    padding: var(--space-3) var(--space-2) var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+  .product-view__copy {
+    min-width: 0;
+  }
+  .kicker {
+    margin-bottom: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .section-title {
+    margin-bottom: var(--space-4);
+  }
+  .section-copy {
+    margin-bottom: var(--space-6);
+    color: var(--color-text-subtle);
+  }
+  .annotations {
+    display: grid;
+    gap: var(--space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .annotations li {
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: start;
+    color: var(--color-text-muted);
+  }
+  .anno-num {
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    place-items: center;
+    border: 1px solid var(--color-accent);
+    border-radius: 50%;
+    color: var(--color-accent-strong);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+  }
+  @media (max-width: 40rem) {
+    .screenshot-frame img {
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      object-position: 18% center;
+    }
+  }
+</style>

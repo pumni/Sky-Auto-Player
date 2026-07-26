@@ -1,0 +1,25 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import type { Locale } from '../../data/site';
+import FaqItem from './FaqItem.astro';
+
+interface Props {
+  locale: Locale;
+  faqs: CollectionEntry<'faq'>[];
+}
+
+const { locale, faqs } = Astro.props;
+---
+
+<article class="faq-content">
+  <h2>{locale === 'vi' ? 'Câu hỏi và trả lời' : 'Questions and answers'}</h2>
+  <div class="faq-list">
+    {faqs.map((faq, index) => <FaqItem faq={faq} isOpen={index < 2} />)}
+  </div>
+</article>
+
+<style>
+  .faq-content h2 {
+    margin-bottom: var(--space-6);
+  }
+</style>

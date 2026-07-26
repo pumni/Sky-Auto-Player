@@ -1,0 +1,87 @@
+---
+import type { HomeContent } from '../../data/home.types';
+
+interface Props {
+  data: HomeContent['formats'];
+  locale: 'en' | 'vi';
+}
+const { data } = Astro.props;
+---
+
+<section id="formats" class="section-shell section-shell--compact" aria-labelledby="formats-title">
+  <div class="container">
+    <div class="section-heading">
+      <p class="kicker">{data.kicker}</p>
+      <h2 id="formats-title" class="section-title">{data.title}</h2>
+    </div>
+    <div class="format-list">
+      {
+        data.items.map((item) => (
+          <div class="format-row">
+            <div class="format-row__extension">{item.extension}</div>
+            <div class="format-row__copy">
+              <div class="format-row__name">{item.name}</div>
+              <p class="format-row__description">{item.description}</p>
+            </div>
+            <div class="format-row__tags">{item.tags}</div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .section-heading {
+    max-width: 38rem;
+  }
+  .kicker {
+    margin-bottom: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .section-title {
+    margin-bottom: var(--space-6);
+  }
+  .format-list {
+    margin: 0;
+    border-top: 1px solid var(--border-default);
+  }
+  .format-row {
+    display: grid;
+    gap: var(--space-4);
+    padding-block: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    align-items: start;
+  }
+  @media (min-width: 40rem) {
+    .format-row {
+      grid-template-columns: minmax(5rem, 0.25fr) minmax(0, 1fr) minmax(10rem, 0.45fr);
+      align-items: center;
+    }
+  }
+  .format-row__extension {
+    color: var(--color-accent-strong);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-lead);
+    font-weight: 700;
+  }
+  .format-row__copy {
+    min-width: 0;
+  }
+  .format-row__name {
+    margin-bottom: var(--space-1);
+    font-weight: 650;
+  }
+  .format-row__description {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-sm);
+  }
+  .format-row__tags {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+</style>

@@ -1,0 +1,52 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  data: HomeContent['faqPreview'];
+  locale: 'en' | 'vi';
+}
+const { data, locale } = Astro.props;
+const isVi = locale === 'vi';
+const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
+---
+
+<section
+  id="faq-preview"
+  class="section-shell section-shell--compact"
+  aria-labelledby="faq-preview-title"
+>
+  <div class="container">
+    <div class="section-heading section-heading--split">
+      <div>
+        <p class="kicker">{data.kicker}</p>
+        <h2 id="faq-preview-title" class="section-title">{data.title}</h2>
+      </div>
+      <a class="text-link" href={faqUrl}>{data.readMoreLink}</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .section-heading--split {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+  }
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .text-link {
+    color: var(--color-accent);
+    text-decoration: underline;
+    font-weight: 600;
+  }
+</style>

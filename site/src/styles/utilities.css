@@ -1,0 +1,33 @@
+@layer utilities {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+}
+
+@layer layout {
+  .container {
+    width: min(calc(100% - 2 * var(--gutter)), var(--container-max));
+    margin-inline: auto;
+  }
+
+  .section-shell {
+    padding-block: var(--section-space-default);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .section-shell--compact {
+    padding-block: var(--section-space-compact);
+  }
+
+  .section-shell--feature {
+    padding-block: var(--section-space-feature);
+  }
+}

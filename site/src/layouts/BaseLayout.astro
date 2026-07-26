@@ -1,0 +1,88 @@
+---
+import '@fontsource-variable/inter/wght.css';
+import '@fontsource-variable/playfair-display/wght.css';
+import '../styles/tokens.css';
+import '../styles/reset.css';
+import '../styles/global.css';
+import '../styles/utilities.css';
+
+import { SITE, type Locale } from '../data/site';
+import SiteHeader from '../components/layout/SiteHeader.astro';
+import SiteFooter from '../components/layout/SiteFooter.astro';
+import { localizedPath, withBase } from '../utils/urls';
+
+interface Props {
+  locale: Locale;
+  seo: {
+    title: string;
+    description: string;
+  };
+  structuredData?: Record<string, unknown>;
+}
+
+const { locale, seo, structuredData } = Astro.props;
+const isVi = locale === 'vi';
+const currentPath = Astro.url.pathname;
+const canonicalUrl = new URL(currentPath, SITE.productionOrigin);
+const hreflangEn = new URL(localizedPath(currentPath, 'en'), SITE.productionOrigin).href;
+const hreflangVi = new URL(localizedPath(currentPath, 'vi'), SITE.productionOrigin).href;
+const ogImage = new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href;
+---
+
+<!doctype html>
+<html lang={locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{seo.title}</title>
+    <meta name="description" content={seo.description} />
+    <meta name="author" content="pumni" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <link rel="canonical" href={canonicalUrl.href} />
+    <link rel="alternate" hreflang="en" href={hreflangEn} />
+    <link rel="alternate" hreflang="vi" href={hreflangVi} />
+    <link rel="alternate" hreflang="x-default" href={hreflangEn} />
+
+    <meta name="theme-color" content="#07090d" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href={withBase('/assets/sky-auto-player-mark.svg')} />
+    <link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
+    <link rel="apple-touch-icon" href={withBase('/favicon.svg')} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:title" content={seo.title} />
+    <meta property="og:description" content={seo.description} />
+    <meta property="og:url" content={canonicalUrl.href} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Sky Auto Player" />
+    <meta property="og:locale" content={isVi ? 'vi_VN' : 'en_US'} />
+    <meta property="og:locale:alternate" content={isVi ? 'en_US' : 'vi_VN'} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={seo.title} />
+    <meta name="twitter:description" content={seo.description} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content="Sky Auto Player" />
+
+    {
+      structuredData && (
+        <script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData)} />
+      )
+    }
+  </head>
+  <body class={`page-layout page-layout--${locale}`}>
+    <a class="skip-link" href="#main-content">
+      {isVi ? 'Chuyển đến nội dung chính' : 'Skip to content'}
+    </a>
+    <SiteHeader locale={locale} />
+    <main id="main-content">
+      <slot />
+    </main>
+    <SiteFooter locale={locale} />
+  </body>
+</html>

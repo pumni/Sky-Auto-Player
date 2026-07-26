@@ -1,0 +1,326 @@
+---
+import type { Locale } from '../../data/site';
+import { SITE } from '../../data/site';
+import { localizedPath, withBase } from '../../utils/urls';
+import { homeEn } from '../../data/home.en';
+import { homeVi } from '../../data/home.vi';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const isVi = locale === 'vi';
+const content = isVi ? homeVi : homeEn;
+const nav = content.navigation;
+const currentPath = Astro.url.pathname;
+const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
+---
+
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a
+      class="brand"
+      href={withBase(isVi ? '/vi/' : '/')}
+      aria-label={isVi ? 'Sky Auto Player trang chủ' : 'Sky Auto Player home'}
+    >
+      <img
+        class="brand__mark"
+        src={withBase('/assets/sky-auto-player-mark.svg')}
+        alt=""
+        width="28"
+        height="28"
+        aria-hidden="true"
+      />
+      <span>Sky Auto Player</span>
+    </a>
+
+    <nav class="site-nav" id="site-nav" aria-label={isVi ? 'Điều hướng chính' : 'Primary'}>
+      <a href={withBase(isVi ? '/vi/#playback' : '/#playback')}>{nav.playback}</a>
+      <a href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>{nav.howItWorks}</a>
+      <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
+      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>{nav.faq}</a>
+      <a href={SITE.repositoryUrl}>{nav.github}</a>
+      <a class="nav-download" href={SITE.releaseUrl}>{isVi ? 'Tải xuống' : 'Download'}</a>
+
+      <span class="site-nav__locale">
+        <span class="sr-only">{isVi ? 'Ngôn ngữ' : 'Language'}</span>
+        <span class="locale-links">
+          <a href={isVi ? otherLocalePath : currentPath} aria-current={!isVi ? 'page' : undefined}
+            >EN</a
+          >
+          <a href={isVi ? currentPath : otherLocalePath} aria-current={isVi ? 'page' : undefined}
+            >VI</a
+          >
+        </span>
+      </span>
+    </nav>
+
+    <div class="site-actions">
+      <a class="button button--primary button--small header-download" href={SITE.releaseUrl}>
+        {isVi ? 'Tải xuống' : 'Download'}
+      </a>
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="site-nav"
+        aria-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
+        data-open-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
+        data-close-label={isVi ? 'Đóng điều hướng' : 'Close navigation'}
+      >
+        <span class="menu-toggle__icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--color-bg);
+    padding-block: var(--space-4);
+    position: relative;
+    z-index: 100;
+  }
+  .site-header__inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 700;
+    font-size: var(--font-size-lead);
+    min-width: 0;
+  }
+  .brand > span:last-child {
+    white-space: nowrap;
+  }
+  .brand__mark {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+  }
+  .site-nav {
+    display: flex;
+    gap: var(--space-5);
+    align-items: center;
+  }
+  .site-nav a {
+    font-weight: 500;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+  .site-nav a:hover,
+  .site-nav a[aria-current='page'] {
+    color: var(--color-text);
+  }
+  .site-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex: 0 0 auto;
+  }
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-control);
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+  .button--primary {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+  .button--primary:hover {
+    background: var(--color-accent-strong);
+  }
+  .button--secondary {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--border-default);
+  }
+  .button--secondary:hover {
+    border-color: var(--color-accent);
+    background: var(--color-surface-1);
+  }
+  .locale-links {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .locale-links a {
+    font-weight: 700;
+  }
+  /* Desktop keeps the header CTA; small viewports use the menu CTA instead. */
+  .nav-download {
+    display: none;
+  }
+  .menu-toggle {
+    display: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-control);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+  }
+  .menu-toggle__icon {
+    display: block;
+    width: 24px;
+    height: 2px;
+    background: currentColor;
+    position: relative;
+    margin: auto;
+    transition:
+      transform var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .menu-toggle__icon::before,
+  .menu-toggle__icon::after {
+    content: '';
+    position: absolute;
+    width: 24px;
+    height: 2px;
+    background: currentColor;
+    left: 0;
+    transition:
+      transform var(--motion-fast) var(--ease-out),
+      top var(--motion-fast) var(--ease-out);
+  }
+  .menu-toggle__icon::before {
+    top: -7px;
+  }
+  .menu-toggle__icon::after {
+    top: 7px;
+  }
+  .menu-toggle[aria-expanded='true'] .menu-toggle__icon {
+    background: transparent;
+  }
+  .menu-toggle[aria-expanded='true'] .menu-toggle__icon::before {
+    top: 0;
+    transform: rotate(45deg);
+  }
+  .menu-toggle[aria-expanded='true'] .menu-toggle__icon::after {
+    top: 0;
+    transform: rotate(-45deg);
+  }
+
+  @media (max-width: 64rem) {
+    .site-nav {
+      display: flex;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      width: 100%;
+      background: var(--color-surface-1);
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: var(--space-3) var(--gutter) var(--space-5);
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--color-bg);
+      box-shadow: 0 1rem 2rem rgb(0 0 0 / 20%);
+    }
+    :global(.js) .site-nav {
+      display: none;
+    }
+    :global(.js) .site-nav.is-open {
+      display: flex;
+    }
+    .site-nav > a,
+    .site-nav__locale {
+      padding-block: var(--space-3);
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--color-bg);
+    }
+    .site-nav__locale {
+      border-bottom: 0;
+    }
+    .locale-links {
+      gap: var(--space-4);
+    }
+    .menu-toggle {
+      display: flex;
+    }
+  }
+
+  @media (max-width: 26.25rem) {
+    .site-actions .button {
+      display: none;
+    }
+    .nav-download {
+      display: block;
+      font-weight: 700;
+      color: var(--color-accent);
+    }
+  }
+
+  @media (min-width: 80rem) {
+    .site-header {
+      position: sticky;
+      top: 0;
+      background: var(--color-bg);
+    }
+  }
+</style>
+
+<script>
+  document.documentElement.classList.add('js');
+
+  const toggle = document.querySelector<HTMLButtonElement>('.menu-toggle');
+  const nav = document.querySelector<HTMLElement>('.site-nav');
+  const desktopQuery = window.matchMedia('(min-width: 64.01rem)');
+
+  if (toggle && nav) {
+    const closeMenu = (returnFocus = false) => {
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-label', toggle.dataset.openLabel || 'Open navigation');
+      nav.classList.remove('is-open');
+      if (returnFocus) toggle.focus();
+    };
+
+    const openMenu = () => {
+      toggle.setAttribute('aria-expanded', 'true');
+      toggle.setAttribute('aria-label', toggle.dataset.closeLabel || 'Close navigation');
+      nav.classList.add('is-open');
+    };
+
+    toggle.addEventListener('click', () => {
+      if (toggle.getAttribute('aria-expanded') === 'true') closeMenu();
+      else openMenu();
+    });
+
+    nav.addEventListener('click', (event) => {
+      if (event.target instanceof HTMLAnchorElement) closeMenu();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
+        closeMenu(true);
+      }
+    });
+
+    document.addEventListener('pointerdown', (event) => {
+      if (toggle.getAttribute('aria-expanded') !== 'true') return;
+      if (
+        event.target instanceof Node &&
+        !nav.contains(event.target) &&
+        !toggle.contains(event.target)
+      ) {
+        closeMenu();
+      }
+    });
+
+    desktopQuery.addEventListener('change', (event) => {
+      if (event.matches) closeMenu();
+    });
+  }
+</script>

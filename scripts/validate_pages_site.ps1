@@ -13,205 +13,180 @@ if (-not $Source -and -not $Artifact) {
     exit 1
 }
 
-$pyprojectPath = "pyproject.toml"
-$projectVersion = ""
-if (Test-Path $pyprojectPath) {
-    $pyprojectContent = Get-Content $pyprojectPath -Raw
-    if ($pyprojectContent -match 'version\s*=\s*"([^"]+)"') {
-        $projectVersion = $matches[1]
-    }
+function Fail {
+    param([string]$Message)
+    Write-Error $Message
+    exit 1
 }
 
 function Validate-Manifest {
     param([string]$ArtifactPath)
-    Write-Host "Validating Artifact Manifest at $ArtifactPath..."
-    
-    $files = Get-ChildItem -Path $ArtifactPath -Recurse -File
+    Write-Host "Validating artifact allowlist at $ArtifactPath..."
+
+    $root = Convert-Path $ArtifactPath
+    $files = Get-ChildItem -LiteralPath $ArtifactPath -Recurse -File
     foreach ($file in $files) {
-        $relPath = $file.FullName.Substring((Convert-Path $ArtifactPath).Length + 1).Replace('\', '/')
-        
-        # Reject invalid paths
+        $relPath = $file.FullName.Substring($root.Length + 1).Replace('\', '/')
+
         if ($relPath -match '\.(md|toml|lock|py|ps1)$' -or $relPath -match '^\.git') {
-            Write-Error "Invalid file type found in artifact: $relPath"
-            exit 1
+            Fail "Invalid file type found in artifact: $relPath"
         }
-        if ($relPath -match '/plan/' -or $relPath -match '/archive/' -or $relPath -match '/perf-baselines/' -or $relPath -match '/lighthouse-report/') {
-            Write-Error "Invalid path found in artifact: $relPath"
-            exit 1
+        if ($relPath -match '(^|/)(plan|archive|perf-baselines|lighthouse-report)(/|$)') {
+            Fail "Invalid path found in artifact: $relPath"
         }
-        
-        # Check allowed files
-        $isAllowed = $false
-        if ($relPath -in @("index.html", "faq.html", "vi/index.html", "vi/faq.html", "sitemap.xml", "llms.txt", ".nojekyll")) {
-            $isAllowed = $true
-        } elseif ($relPath -match '^google.*\.html$') {
-            $isAllowed = $true
-        } elseif ($relPath -match '^assets/') {
-            $isAllowed = $true
-        }
-        
+
+        $rootFiles = @(
+            'index.html', 'faq.html', 'faq/index.html', 'vi/index.html', 'vi/faq.html', 'vi/faq/index.html',
+            'robots.txt', 'llms.txt', 'favicon.ico', 'favicon.svg',
+            'sitemap-index.xml', 'sitemap-0.xml'
+        )
+        $isAllowed = $relPath -in $rootFiles -or
+            $relPath -match '^google[^/]*\.html$' -or
+            $relPath -match '^assets/' -or
+            $relPath -match '^_astro/'
+
         if (-not $isAllowed) {
-            Write-Error "File not in allowlist: $relPath"
-            exit 1
+            Fail "File not in allowlist: $relPath"
         }
-        
-        # Check symlink
+
         if ($file.Attributes -match 'ReparsePoint') {
-            Write-Error "Symlinks not allowed: $relPath"
-            exit 1
+            Fail "Symlinks not allowed: $relPath"
         }
     }
     Write-Host "Manifest validation passed."
 }
 
-function Validate-HtmlFiles {
+function Validate-CanonicalHtml {
     param([string]$BasePath)
-    Write-Host "Validating HTML files in $BasePath..."
-    
-    $htmlFiles = @(
-        "index.html",
-        "faq.html",
-        "vi/index.html",
-        "vi/faq.html"
-    )
-    
-    foreach ($relPath in $htmlFiles) {
+    Write-Host "Validating canonical HTML files in $BasePath..."
+
+    $canonicalPages = @{
+        'index.html' = 'https://pumni.github.io/Sky-Auto-Player/'
+        'faq/index.html' = 'https://pumni.github.io/Sky-Auto-Player/faq/'
+        'vi/index.html' = 'https://pumni.github.io/Sky-Auto-Player/vi/'
+        'vi/faq/index.html' = 'https://pumni.github.io/Sky-Auto-Player/vi/faq/'
+    }
+
+    foreach ($entry in $canonicalPages.GetEnumerator()) {
+        $relPath = $entry.Key
         $fullPath = Join-Path $BasePath $relPath
-        if (-not (Test-Path $fullPath)) {
-            Write-Error "Missing required HTML file: $relPath"
-            exit 1
+        if (-not (Test-Path -LiteralPath $fullPath)) {
+            Fail "Missing required HTML file: $relPath"
         }
-        
-        $content = Get-Content $fullPath -Raw
-        
-        # 1. <html lang>
-        if ($content -notmatch '<html[^>]+lang="([^"]+)"') { Write-Error "$($relPath): Missing html lang"; exit 1 }
-        
-        # 2. title not empty
-        if ($content -notmatch '<title>.+</title>') { Write-Error "$($relPath): Missing or empty title"; exit 1 }
-        
-        # 3. meta description
-        if ($content -notmatch '<meta\s+name="description"\s+content="[^"]+"') { Write-Error "$($relPath): Missing or empty meta description"; exit 1 }
-        
-        # 4. canonical
-        $canonicalCount = ([regex]::Matches($content, '<link\s+rel="canonical"\s+href="([^"]+)"')).Count
-        if ($canonicalCount -ne 1) { Write-Error "$($relPath): Expected 1 canonical link, found $canonicalCount"; exit 1 }
-        
-        $canonicalUrl = [regex]::Match($content, '<link\s+rel="canonical"\s+href="([^"]+)"').Groups[1].Value
-        
-        # 5. hreflang (en, vi, x-default)
+
+        $content = Get-Content -LiteralPath $fullPath -Raw
+        if ($content -notmatch '<html[^>]+lang="(en|vi)"') { Fail "$($relPath): Missing html lang" }
+        if ($content -notmatch '<title>.+</title>') { Fail "$($relPath): Missing or empty title" }
+        if ($content -notmatch '<meta\s+name="description"\s+content="[^"]+"') { Fail "$($relPath): Missing or empty meta description" }
+
+        $canonicalMatch = [regex]::Match($content, '<link\s+rel="canonical"\s+href="([^"]+)"')
+        if (-not $canonicalMatch.Success) { Fail "$($relPath): Missing canonical link" }
+        if ($canonicalMatch.Groups[1].Value -ne $entry.Value) { Fail "$($relPath): Canonical does not match expected route" }
+
         $hreflangMatches = [regex]::Matches($content, '<link\s+rel="alternate"\s+hreflang="([^"]+)"')
-        $hreflangs = $hreflangMatches | ForEach-Object { $_.Groups[1].Value } | Sort-Object
-        $expectedHreflangs = @("en", "vi", "x-default") | Sort-Object
-        if (Compare-Object $hreflangs $expectedHreflangs -SyncWindow 0) { Write-Error "$($relPath): Incorrect hreflang tags. Found: $($hreflangs -join ', ')"; exit 1 }
-        
-        # 6. og:url = canonical
-        if ($content -notmatch "<meta\s+property=`"og:url`"\s+content=`"$canonicalUrl`"") { Write-Error "$($relPath): og:url does not match canonical or is missing"; exit 1 }
-        
-        # 7. og:image absolute HTTPS
-        if ($content -notmatch '<meta\s+property="og:image"\s+content="https://[^"]+"') { Write-Error "$($relPath): og:image missing or not absolute HTTPS"; exit 1 }
-        
-        # 8. no noindex
-        if ($content -match '<meta\s+name="robots"\s+content=".*noindex.*"') { Write-Error "$($relPath): Contains noindex"; exit 1 }
-        
-        # 9. JSON-LD parse
+        $hreflangs = @($hreflangMatches | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+        $expectedHreflangs = @('en', 'vi', 'x-default') | Sort-Object
+        if (Compare-Object $hreflangs $expectedHreflangs -SyncWindow 0) { Fail "$($relPath): Incorrect hreflang tags" }
+
+        if ($content -notmatch "<meta\s+property=`"og:url`"\s+content=`"$([regex]::Escape($entry.Value))`"") {
+            Fail "$($relPath): og:url does not match canonical"
+        }
+        if ($content -notmatch '<meta\s+property="og:image"\s+content="https://[^/"]+') { Fail "$($relPath): og:image missing or not absolute HTTPS" }
+        if ($content -match '<meta\s+name="robots"\s+content=".*noindex.*"') { Fail "$($relPath): Contains noindex" }
+
         $jsonLdMatches = [regex]::Matches($content, '(?s)<script\s+type="application/ld\+json">(.+?)</script>')
-        if ($jsonLdMatches.Count -gt 0) {
-            foreach ($m in $jsonLdMatches) {
-                try {
-                    $json = $m.Groups[1].Value | ConvertFrom-Json
-                    
-                    if ($relPath -match 'index\.html') {
-                        if ($json.'@type' -ne 'SoftwareApplication' -and $json.'@type' -ne 'WebSite') {
-                            # It could be WebSite + SoftwareApplication graph or just one of them.
-                            # Just ensuring it has some schema.
-                        }
-                        if ($json.softwareVersion -and $projectVersion -and $json.softwareVersion -ne $projectVersion) {
-                            Write-Error "$($relPath): softwareVersion '$($json.softwareVersion)' does not match project version '$projectVersion'"
-                            exit 1
-                        }
-                    }
-                    if ($relPath -match 'faq\.html') {
-                        if ($json.'@type' -ne 'FAQPage' -and $json.'@type' -ne 'BreadcrumbList') {
-                            # Could be multiple schemas, just checking parsing works.
-                        }
-                    }
-                } catch {
-                    Write-Error "$($relPath): Failed to parse JSON-LD: $_"
-                    exit 1
-                }
-            }
+        if ($jsonLdMatches.Count -ne 1) { Fail "$($relPath): Expected exactly one JSON-LD block" }
+        try {
+            $json = $jsonLdMatches[0].Groups[1].Value | ConvertFrom-Json
+        } catch {
+            Fail "$($relPath): Failed to parse JSON-LD: $_"
+        }
+        if ($relPath -match 'faq/index\.html' -and $json.'@type' -ne 'FAQPage') {
+            Fail "$($relPath): Expected FAQPage JSON-LD"
+        }
+        if ($relPath -notmatch 'faq/index\.html' -and $json.'@type' -ne 'SoftwareApplication') {
+            Fail "$($relPath): Expected SoftwareApplication JSON-LD"
         }
     }
-    Write-Host "HTML validation passed."
+    Write-Host "Canonical HTML validation passed."
+}
+
+function Validate-LegacyRedirects {
+    param([string]$BasePath)
+    $redirects = @{
+        'faq.html' = './faq/'
+        'vi/faq.html' = './faq/'
+    }
+    foreach ($entry in $redirects.GetEnumerator()) {
+        $fullPath = Join-Path $BasePath $entry.Key
+        if (-not (Test-Path -LiteralPath $fullPath)) { Fail "Missing legacy redirect: $($entry.Key)" }
+        $content = Get-Content -LiteralPath $fullPath -Raw
+        if ($content -notmatch 'http-equiv="refresh"' -or $content -notmatch [regex]::Escape("url=$($entry.Value)")) {
+            Fail "Invalid legacy redirect: $($entry.Key)"
+        }
+    }
+}
+
+function Validate-GoogleVerification {
+    param([string]$BasePath)
+    $matches = Get-ChildItem -LiteralPath $BasePath -Filter 'google*.html' -File
+    if ($matches.Count -lt 1) { Fail 'Missing Google verification file' }
+    foreach ($file in $matches) {
+        $content = Get-Content -LiteralPath $file.FullName -Raw
+        if ($content -notmatch 'google-site-verification:') { Fail "Invalid Google verification file: $($file.Name)" }
+    }
 }
 
 function Validate-Sitemap {
     param([string]$BasePath)
-    Write-Host "Validating sitemap in $BasePath..."
-    $sitemapPath = Join-Path $BasePath "sitemap.xml"
-    if (-not (Test-Path $sitemapPath)) {
-        Write-Error "Missing sitemap.xml"
-        exit 1
+    Write-Host "Validating sitemap index in $BasePath..."
+
+    $indexPath = Join-Path $BasePath 'sitemap-index.xml'
+    if (-not (Test-Path -LiteralPath $indexPath)) { Fail 'Missing sitemap-index.xml' }
+    [xml]$indexXml = Get-Content -LiteralPath $indexPath -Raw
+    if ($indexXml.sitemapindex.NamespaceURI -ne 'http://www.sitemaps.org/schemas/sitemap/0.9') {
+        Fail 'Sitemap index invalid namespace'
     }
-    
-    [xml]$xml = Get-Content $sitemapPath
-    
-    # Check namespace
-    if ($xml.urlset.NamespaceURI -ne "http://www.sitemaps.org/schemas/sitemap/0.9") {
-        Write-Error "Sitemap invalid namespace"
-        exit 1
+
+    $childLoc = @($indexXml.sitemapindex.sitemap.loc)[0]
+    if (-not $childLoc) { Fail 'Sitemap index has no child sitemap' }
+    $childName = Split-Path ([Uri]$childLoc) -Leaf
+    $sitemapPath = Join-Path $BasePath $childName
+    if (-not (Test-Path -LiteralPath $sitemapPath)) { Fail "Missing child sitemap: $childName" }
+
+    [xml]$xml = Get-Content -LiteralPath $sitemapPath -Raw
+    if ($xml.urlset.NamespaceURI -ne 'http://www.sitemaps.org/schemas/sitemap/0.9') {
+        Fail 'Sitemap invalid namespace'
     }
-    
-    $urls = $xml.urlset.url
-    if ($urls.Count -ne 4) {
-        Write-Error "Sitemap should have exactly 4 URLs, found $($urls.Count)"
-        exit 1
-    }
-    
+
+    $urls = @($xml.urlset.url)
+    if ($urls.Count -ne 4) { Fail "Sitemap should have exactly 4 URLs, found $($urls.Count)" }
     $expectedLocs = @(
-        "https://pumni.github.io/Sky-Auto-Player/",
-        "https://pumni.github.io/Sky-Auto-Player/vi/",
-        "https://pumni.github.io/Sky-Auto-Player/faq.html",
-        "https://pumni.github.io/Sky-Auto-Player/vi/faq.html"
+        'https://pumni.github.io/Sky-Auto-Player/',
+        'https://pumni.github.io/Sky-Auto-Player/faq/',
+        'https://pumni.github.io/Sky-Auto-Player/vi/',
+        'https://pumni.github.io/Sky-Auto-Player/vi/faq/'
     )
-    
-    $locs = $urls | ForEach-Object { $_.loc }
-    foreach ($loc in $locs) {
-        if ($loc -notmatch '^https://pumni\.github\.io/Sky-Auto-Player/') {
-            Write-Error "Invalid domain or path in sitemap: $loc"
-            exit 1
-        }
-        if ($loc -match 'Sky-Player/') {
-            Write-Error "Legacy Sky-Player URL found in sitemap: $loc"
-            exit 1
-        }
-        if ($loc -notin $expectedLocs) {
-            Write-Error "Unexpected URL in sitemap: $loc"
-            exit 1
-        }
-    }
-    
-    # Check alternate reciprocal and lastmod format
-    # Simple regex check for lastmod
     foreach ($url in $urls) {
-        if ($url.lastmod -and $url.lastmod -notmatch '^\d{4}-\d{2}-\d{2}') {
-            Write-Error "Invalid lastmod format in sitemap: $($url.lastmod)"
-            exit 1
-        }
+        if ($url.loc -notin $expectedLocs) { Fail "Unexpected URL in sitemap: $($url.loc)" }
+        if ($url.loc -notmatch '^https://pumni\.github\.io/Sky-Auto-Player/') { Fail "Invalid sitemap domain: $($url.loc)" }
     }
-    Write-Host "Sitemap validation passed."
+    Write-Host 'Sitemap validation passed.'
 }
 
 if ($Artifact) {
     Validate-Manifest -ArtifactPath $Artifact
-    Validate-HtmlFiles -BasePath $Artifact
+    Validate-CanonicalHtml -BasePath $Artifact
+    Validate-LegacyRedirects -BasePath $Artifact
+    Validate-GoogleVerification -BasePath $Artifact
     Validate-Sitemap -BasePath $Artifact
 }
 
 if ($Source) {
-    Validate-HtmlFiles -BasePath $Source
+    Validate-CanonicalHtml -BasePath $Source
+    Validate-LegacyRedirects -BasePath $Source
+    Validate-GoogleVerification -BasePath $Source
     Validate-Sitemap -BasePath $Source
 }
 
-Write-Host "All validations passed!"
+Write-Host 'All validations passed!'

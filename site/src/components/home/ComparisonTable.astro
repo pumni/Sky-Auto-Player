@@ -1,0 +1,101 @@
+---
+import type { HomeContent } from '../../data/home.types';
+
+interface Props {
+  data: HomeContent['comparison'];
+  locale: 'en' | 'vi';
+}
+const { data } = Astro.props;
+---
+
+<section class="section-shell section-shell--compact" aria-labelledby="comparison-title">
+  <div class="container">
+    <div class="section-heading">
+      <p class="kicker">{data.kicker}</p>
+      <h2 id="comparison-title" class="section-title">{data.title}</h2>
+    </div>
+    <div class="comparison-wrap">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th scope="col">{data.macroHeader}</th>
+            <th scope="col">{data.playerHeader}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            data.rows.map((row) => (
+              <tr>
+                <td data-label={data.macroHeader}>{row.macro}</td>
+                <td data-label={data.playerHeader}>{row.player}</td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<style>
+  .kicker {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+  .section-title {
+    margin-bottom: var(--space-6);
+  }
+  .comparison-wrap {
+    overflow-x: auto;
+  }
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+  .comparison-table th,
+  .comparison-table td {
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .comparison-table th {
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .comparison-table td {
+    color: var(--color-text-subtle);
+  }
+  .comparison-table td:last-child {
+    color: var(--color-accent);
+    font-weight: 500;
+  }
+  @media (max-width: 40rem) {
+    .comparison-table thead {
+      display: none;
+    }
+    .comparison-table tr {
+      display: block;
+      margin-bottom: var(--space-4);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      padding: var(--space-4);
+    }
+    .comparison-table td {
+      display: block;
+      border: none;
+      padding: var(--space-1) 0;
+    }
+    .comparison-table td::before {
+      content: attr(data-label);
+      display: block;
+      font-weight: 600;
+      color: var(--color-text);
+      font-size: var(--font-size-sm);
+      margin-bottom: var(--space-1);
+    }
+  }
+</style>
