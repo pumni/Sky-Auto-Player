@@ -6,77 +6,111 @@ const { locale } = Astro.props;
 const isVi = locale === 'vi';
 ---
 
-<figure class="timing-console ui-instrument-surface" aria-labelledby="timing-demo-title">
+<figure
+  class="timing-console ui-instrument-surface"
+  aria-labelledby="timing-demo-title"
+  data-timing-console
+>
   <figcaption id="timing-demo-title" class="sr-only">
     {isVi ? 'Minh họa định thời phát nhạc' : 'Playback timing illustration'}
   </figcaption>
   <div class="console__topline">
     <span class="console__identity">{isVi ? 'BỘ ĐỊNH THỜI' : 'TIMING ENGINE'}</span>
     <span class="console__status-label"
-      ><span class="console__status" aria-hidden="true"></span>{isVi ? 'SẴN SÀNG' : 'READY'}</span
+      ><span class="console__status" aria-hidden="true"></span><span data-timing-ready
+        >{isVi ? 'SẴN SÀNG' : 'READY'}</span
+      ></span
     >
   </div>
   <div class="console__playhead">
     <span>{isVi ? 'VỊ TRÍ PHÁT' : 'PLAYHEAD'}</span>
     <span class="telemetry">00:13.066</span>
+    <span class="console__playhead-track" aria-hidden="true"
+      ><i class="console__playhead-marker"></i></span
+    >
   </div>
   <ol
     class="timing-console__events"
     aria-label={isVi ? 'Các sự kiện phát nhạc minh họa' : 'Illustrative playback events'}
   >
-    <li class="timing-event timing-event--chord" data-event-index="1">
+    <li
+      class="timing-event timing-event--chord"
+      data-event-index="1"
+      data-event-time="00:12.400"
+      style="--event-index: 1"
+    >
       <span class="timing-event__time telemetry">00:12.400</span>
       <span class="timing-event__keys"
         ><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span
       >
       <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
     </li>
-    <li class="timing-event timing-event--note" data-event-index="2">
+    <li
+      class="timing-event timing-event--note"
+      data-event-index="2"
+      data-event-time="00:12.733"
+      style="--event-index: 2"
+    >
       <span class="timing-event__time telemetry">00:12.733</span>
       <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>D4</span
+        ><span class="timing-event__marker" aria-hidden="true"></span>D2</span
       >
       <span class="timing-event__kind">{isVi ? 'NỐT' : 'NOTE'}</span>
     </li>
     <li
       class="timing-event timing-event--hold timing-event--active"
       data-event-index="3"
+      data-event-time="00:13.066"
+      style="--event-index: 3"
       aria-current="step"
     >
       <span class="timing-event__time telemetry">00:13.066</span>
       <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>E5 <span
+        ><span class="timing-event__marker" aria-hidden="true"></span>E3 <span
           class="hold-line"
           aria-hidden="true">━━━━━━━</span
         ></span
       >
       <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
     </li>
-    <li class="timing-event timing-event--chord" data-event-index="4">
+    <li
+      class="timing-event timing-event--chord"
+      data-event-index="4"
+      data-event-time="00:13.600"
+      style="--event-index: 4"
+    >
       <span class="timing-event__time telemetry">00:13.600</span>
       <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>A2 + C4</span
+        ><span class="timing-event__marker" aria-hidden="true"></span>A2 + C2</span
       >
       <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
     </li>
   </ol>
+  {/* 15-key score grid: data-event must match event keys above (A1+B2+C3, D2, E3, A2+C2). */}
   <div class="instrument-grid" aria-hidden="true">
-    <span class="instrument-key" data-active="note">A1</span>
-    <span class="instrument-key" data-active="chord">B1</span>
+    <span class="instrument-key" data-event="1">A1</span>
+    <span class="instrument-key">B1</span>
     <span class="instrument-key">C1</span>
     <span class="instrument-key">D1</span>
     <span class="instrument-key">E1</span>
-    <span class="instrument-key">A2</span>
-    <span class="instrument-key">B2</span>
-    <span class="instrument-key" data-active="chord">C2</span>
-    <span class="instrument-key">D2</span>
+    <span class="instrument-key" data-event="4">A2</span>
+    <span class="instrument-key" data-event="1">B2</span>
+    <span class="instrument-key" data-event="4">C2</span>
+    <span class="instrument-key" data-event="2">D2</span>
     <span class="instrument-key">E2</span>
     <span class="instrument-key">A3</span>
-    <span class="instrument-key" data-active="hold">B3</span>
-    <span class="instrument-key">C3</span>
+    <span class="instrument-key">B3</span>
+    <span class="instrument-key" data-event="1">C3</span>
     <span class="instrument-key">D3</span>
-    <span class="instrument-key">E3</span>
+    <span class="instrument-key is-active" data-event="3">E3</span>
   </div>
+  <button class="console__replay" type="button" data-timing-replay>
+    <span aria-hidden="true">↻</span>
+    {isVi ? 'XEM LẠI NHỊP' : 'REPLAY TIMING'}
+  </button>
+  <span class="sr-only" aria-live="polite" data-timing-status>
+    {isVi ? 'Trạng thái cuối: nốt ngân E3 tại 00:13.066' : 'Final state: held note E3 at 00:13.066'}
+  </span>
 </figure>
 
 <style>
@@ -138,6 +172,29 @@ const isVi = locale === 'vi';
     color: var(--color-action-soft);
   }
 
+  .console__playhead-track {
+    position: relative;
+    display: block;
+    flex: 1 1 8rem;
+    height: 1px;
+    margin-inline-start: var(--space-4);
+    background: var(--line-faint);
+  }
+
+  .console__playhead-marker {
+    position: absolute;
+    top: 50%;
+    left: calc(var(--playhead-progress, 0) * 100%);
+    display: block;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--color-action);
+    box-shadow: 0 0 0 0.25rem color-mix(in oklch, var(--color-action) 12%, transparent);
+    transform: translate(-50%, -50%);
+    transition: transform var(--duration-emphasis) var(--ease-out);
+  }
+
   .telemetry,
   .timing-event__time {
     font-variant-numeric: tabular-nums lining-nums;
@@ -165,8 +222,22 @@ const isVi = locale === 'vi';
     border-block-end: 1px solid var(--line-faint);
   }
 
+  .timing-console.is-playing .timing-event:not(.is-active) {
+    opacity: 0.5;
+  }
+
+  .timing-console.is-playing .timing-event.is-active {
+    opacity: 1;
+    background: color-mix(in oklch, var(--color-action) 8%, transparent);
+  }
+
   .timing-event--active {
     background: color-mix(in srgb, var(--color-action) 6%, transparent);
+  }
+
+  .timing-event.is-active .timing-event__marker {
+    background: currentColor;
+    box-shadow: 0 0 0 0.22rem color-mix(in oklch, currentColor 14%, transparent);
   }
 
   .timing-event__time,
@@ -221,8 +292,16 @@ const isVi = locale === 'vi';
   }
 
   .hold-line {
+    display: inline-block;
     color: var(--color-success);
     letter-spacing: -0.15em;
+    transform: scaleX(0.35);
+    transform-origin: left;
+    transition: transform var(--duration-emphasis) var(--ease-out);
+  }
+
+  .timing-event.is-active .hold-line {
+    transform: scaleX(1);
   }
 
   .instrument-grid {
@@ -241,24 +320,48 @@ const isVi = locale === 'vi';
     border-radius: var(--radius-xs);
     background: var(--color-surface-quiet);
     color: var(--color-text-secondary);
+    transition:
+      background-color var(--duration-fast) var(--ease-standard),
+      border-color var(--duration-fast) var(--ease-standard),
+      transform var(--duration-fast) var(--ease-standard);
   }
 
-  .instrument-key[data-active='note'] {
+  .instrument-key[data-event='2'].is-active {
     border-color: var(--color-info);
     background: color-mix(in srgb, var(--color-info) 22%, transparent);
     color: var(--color-text-primary);
   }
 
-  .instrument-key[data-active='chord'] {
+  .instrument-key[data-event='1'].is-active,
+  .instrument-key[data-event='4'].is-active {
     border-color: var(--color-action);
     background: color-mix(in srgb, var(--color-action) 18%, transparent);
     color: var(--color-action-soft);
   }
 
-  .instrument-key[data-active='hold'] {
+  .instrument-key[data-event='3'].is-active {
     border-color: var(--color-success);
     background: color-mix(in srgb, var(--color-success) 17%, transparent);
     color: var(--color-text-primary);
+  }
+
+  .console__replay {
+    min-height: 40px;
+    margin-block-start: var(--space-4);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .console__replay:hover,
+  .console__replay:focus-visible {
+    color: var(--color-action-soft);
   }
 
   @container timing-console (width < 34rem) {
@@ -282,9 +385,84 @@ const isVi = locale === 'vi';
       display: none;
     }
 
+    /* Condensed score: only keys that participate in the demo sequence. */
+    .instrument-key:not([data-event]) {
+      display: none;
+    }
+
+    .instrument-grid {
+      grid-template-columns: repeat(auto-fit, minmax(2.6rem, 1fr));
+    }
+
     .console__topline,
     .console__playhead {
       gap: var(--space-2);
     }
+
+    .console__playhead-track {
+      flex-basis: 4rem;
+      margin-inline-start: var(--space-2);
+    }
   }
 </style>
+<script>
+  const timingConsole = document.querySelector<HTMLElement>('.timing-console');
+
+  if (timingConsole) {
+    const events = Array.from(timingConsole.querySelectorAll<HTMLElement>('.timing-event'));
+    const keys = Array.from(timingConsole.querySelectorAll<HTMLElement>('.instrument-key'));
+    const marker = timingConsole.querySelector<HTMLElement>('.console__playhead-marker');
+    const status = timingConsole.querySelector<HTMLElement>('[data-timing-status]');
+    const replay = timingConsole.querySelector<HTMLButtonElement>('[data-timing-replay]');
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let runId = 0;
+
+    const setActive = (index: number) => {
+      const event = events.find((item) => item.dataset.eventIndex === String(index));
+      const time = event?.dataset.eventTime || '';
+      events.forEach((item) => {
+        const active = item === event;
+        item.classList.toggle('is-active', active);
+        if (active) item.setAttribute('aria-current', 'step');
+        else item.removeAttribute('aria-current');
+      });
+      keys.forEach((key) => key.classList.toggle('is-active', key.dataset.event === String(index)));
+      marker?.style.setProperty('--playhead-progress', String(Math.max(0, index - 1) / 3));
+      if (status && time) status.textContent = time + ' · ' + (event?.textContent?.trim() ?? '');
+    };
+
+    const runSequence = () => {
+      runId += 1;
+      const currentRun = runId;
+      if (reducedMotion) {
+        timingConsole.classList.remove('is-playing');
+        setActive(3);
+        return;
+      }
+      timingConsole.classList.add('is-playing');
+      events.forEach((event) => event.classList.remove('is-active'));
+      keys.forEach((key) => key.classList.remove('is-active'));
+      [1, 2, 3, 4].forEach((index, step) => {
+        window.setTimeout(() => {
+          if (currentRun !== runId) return;
+          setActive(index);
+        }, step * 720);
+      });
+    };
+
+    setActive(3);
+    replay?.addEventListener('click', runSequence);
+    if (!('IntersectionObserver' in window)) runSequence();
+    else {
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          if (!entry?.isIntersecting) return;
+          runSequence();
+          observer.disconnect();
+        },
+        { threshold: 0.35 },
+      );
+      observer.observe(timingConsole);
+    }
+  }
+</script>

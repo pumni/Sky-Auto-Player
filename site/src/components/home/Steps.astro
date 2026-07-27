@@ -1,101 +1,141 @@
 ---
 import type { HomeContent } from '../../data/home.types';
+import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['steps'];
   locale: 'en' | 'vi';
 }
+
 const { data } = Astro.props;
 ---
 
-<section id="how-it-works" class="section-shell" aria-labelledby="how-title">
-  <div class="container">
-    <div class="section-heading">
-      <p class="kicker">{data.kicker}</p>
-      <h2 id="how-title" class="section-title">{data.title}</h2>
+<section
+  id="how-it-works"
+  class="steps-section section-shell section-shell--utility"
+  aria-labelledby="how-title"
+>
+  <div class="container steps__layout">
+    <SectionIntro kicker={data.kicker} title={data.title} titleId="how-title" measure="narrow" />
+    <div>
+      <ol class="steps" aria-label={data.kicker}>
+        {
+          data.items.map((item, i) => (
+            <li class="step">
+              <span class="step__number" aria-hidden="true">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <div class="step__copy">
+                <h3>{item.title}</h3>
+                <p>{item.description}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+      <p class="hotkey-note"><span>KEYBOARD STRIP</span>{data.hotkeyNote}</p>
     </div>
-    <ol class="steps">
-      {
-        data.items.map((item, i) => (
-          <li class="step">
-            <span class="step__number" aria-hidden="true">
-              {String(i + 1).padStart(2, '0')}
-            </span>
-            <div class="step__copy">
-              <h3>{item.title}</h3>
-              <p>{item.description}</p>
-            </div>
-          </li>
-        ))
-      }
-    </ol>
-    <p class="hotkey-note">{data.hotkeyNote}</p>
   </div>
 </section>
 
 <style>
-  .kicker {
-    margin-bottom: var(--space-2);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+  .steps__layout {
+    display: grid;
+    gap: var(--space-7);
   }
-  .section-title {
-    max-width: 30rem;
-    margin-bottom: var(--space-6);
+
+  @media (min-width: 64rem) {
+    .steps__layout {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      gap: var(--grid-gap);
+      align-items: start;
+    }
+
+    /* Editorial offset: sequence sits one optical step right of the title column. */
+    .steps__layout > :last-child {
+      padding-inline-start: var(--space-4);
+    }
   }
+
   .steps {
+    position: relative;
     display: grid;
     gap: 0;
     max-width: 58rem;
-    margin: 0 0 var(--space-6);
+    margin: 0;
     padding: 0;
     list-style: none;
-    border-top: 1px solid var(--border-default);
   }
+
+  .steps::before {
+    position: absolute;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.8rem;
+    width: 1px;
+    background: var(--line-accent);
+    content: '';
+  }
+
   .step {
+    position: relative;
     display: grid;
-    grid-template-columns: 4rem minmax(0, 1fr);
-    gap: var(--space-5);
+    grid-template-columns: 1.6rem minmax(0, 1fr);
+    gap: var(--space-4);
     padding-block: var(--space-5);
-    border-bottom: 1px solid var(--border-subtle);
+    border-block-start: 1px solid var(--line-faint);
   }
+
+  .step:last-child {
+    border-block-end: 1px solid var(--line-faint);
+  }
+
   .step__number {
-    padding-top: 0.25rem;
-    color: var(--color-accent-strong);
+    position: relative;
+    z-index: 1;
+    display: grid;
+    width: 1.6rem;
+    height: 1.6rem;
+    place-items: center;
+    border: 1px solid var(--color-action);
+    border-radius: 50%;
+    background: var(--color-page);
+    color: var(--color-action-soft);
     font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    line-height: 1;
+    font-size: var(--type-micro);
   }
+
   .step__copy {
     min-width: 0;
   }
+
   .step h3 {
-    margin-bottom: var(--space-2);
-    font-family: var(--font-body);
-    font-size: var(--font-size-lead);
+    margin-block-end: var(--space-2);
+    font-size: var(--type-h3);
     font-weight: 650;
-    line-height: 1.35;
   }
+
   .step p {
     max-width: 52rem;
-    color: var(--color-text-subtle);
+    color: var(--color-text-tertiary);
   }
+
   .hotkey-note {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-5);
     max-width: 58rem;
-    margin-top: var(--space-5);
-    padding-top: var(--space-4);
-    border-top: 1px solid var(--border-subtle);
-    color: var(--color-text-muted);
+    margin-block-start: var(--space-5);
+    padding-block-start: var(--space-4);
+    border-block-start: 1px solid var(--line-default);
+    color: var(--color-text-secondary);
     font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
+    font-size: var(--type-small);
   }
-  @media (max-width: 30rem) {
-    .step {
-      grid-template-columns: 2.5rem minmax(0, 1fr);
-      gap: var(--space-3);
-    }
+
+  .hotkey-note span {
+    color: var(--color-action);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
   }
 </style>

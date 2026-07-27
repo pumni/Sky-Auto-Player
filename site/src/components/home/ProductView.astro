@@ -1,20 +1,23 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { withBase } from '../../utils/urls';
+import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['product'];
   locale: 'en' | 'vi';
 }
+
 const { data, locale } = Astro.props;
 ---
 
-<section class="section-shell section-shell--feature" aria-labelledby="product-title">
+<section class="product-showcase section-shell section-shell--peak" aria-labelledby="product-title">
+  <div class="product-showcase__atmosphere" aria-hidden="true"></div>
   <div class="container product-view__layout">
-    <figure class="screenshot-frame">
+    <figure class="screenshot-frame ui-instrument-panel ui-instrument-panel--product">
       <div class="screenshot-frame__bar">
-        <span class="screenshot-frame__dot" aria-hidden="true"></span>
-        <span>sky-auto-player / picker</span>
+        <span>SKY AUTO PLAYER / PICKER</span>
+        <span>PRODUCT PROOF / PORTABLE</span>
       </div>
       <a
         class="screenshot-link"
@@ -41,21 +44,31 @@ const { data, locale } = Astro.props;
         </picture>
       </a>
       <figcaption>
-        {locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}
+        <span
+          >{locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}</span
+        >
+        <span class="screenshot-frame__caption-meta">PNG · FULL SIZE</span>
       </figcaption>
     </figure>
 
     <div class="product-view__copy">
-      <div class="section-heading">
-        <p class="kicker">{data.kicker}</p>
-        <h2 id="product-title" class="section-title">{data.title}</h2>
-        <p class="section-copy">{data.description}</p>
-      </div>
-      <ol class="annotations">
+      <SectionIntro
+        kicker={data.kicker}
+        title={data.title}
+        description={data.description}
+        titleId="product-title"
+        measure="narrow"
+      />
+      <ol
+        class="annotations"
+        aria-label={locale === 'vi' ? 'Điểm nổi bật trong sản phẩm' : 'Product annotations'}
+      >
         {
           data.annotations.map((ann, i) => (
             <li>
-              <span class="anno-num">{String(i + 1).padStart(2, '0')}</span>
+              <span class="anno-num" aria-hidden="true">
+                {String(i + 1).padStart(2, '0')}
+              </span>
               <span>{ann}</span>
             </li>
           ))
@@ -66,108 +79,204 @@ const { data, locale } = Astro.props;
 </section>
 
 <style>
+  .product-showcase {
+    position: relative;
+    overflow: hidden;
+    border-block: 1px solid var(--line-default);
+    background:
+      radial-gradient(circle at 18% 38%, rgb(110 180 201 / 7%), transparent 36rem),
+      radial-gradient(
+        circle at 86% 12%,
+        color-mix(in oklch, var(--color-action) 6%, transparent),
+        transparent 28rem
+      ),
+      var(--color-surface-quiet);
+    isolation: isolate;
+  }
+
+  .product-showcase__atmosphere {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 3.1rem,
+      rgb(244 239 227 / 3.5%) 3.1rem 3.15rem
+    );
+    mask-image: linear-gradient(90deg, transparent, black 14%, black 82%, transparent);
+    pointer-events: none;
+  }
+
   .product-view__layout {
+    position: relative;
+    z-index: 1;
     display: grid;
-    gap: var(--space-8);
+    gap: var(--space-7);
   }
-  @media (min-width: 64rem) {
-    .product-view__layout {
-      grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.8fr);
-      align-items: center;
-    }
-  }
+
   .screenshot-frame {
-    align-self: start;
     min-width: 0;
     margin: 0;
     padding: var(--space-3);
-    overflow: hidden;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-panel);
-    background: var(--color-surface-1);
+    position: relative;
+    z-index: 1;
   }
-  .screenshot-frame__bar {
+
+  .screenshot-frame__bar,
+  figcaption {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-2) var(--space-3);
-    color: var(--color-text-muted);
+    justify-content: space-between;
+    gap: var(--space-3);
+    color: var(--color-text-secondary);
     font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
+    font-size: var(--type-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
-  .screenshot-frame__dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: var(--color-accent);
+
+  .screenshot-frame__bar {
+    padding: var(--space-2) var(--space-2) var(--space-3);
   }
+
+  .screenshot-frame__bar span:first-child {
+    color: var(--color-text-primary);
+  }
+
   .screenshot-link,
   .screenshot-link picture {
     display: block;
   }
+
   .screenshot-frame img {
+    display: block;
     width: 100%;
     height: auto;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    transition: border-color var(--motion-fast) var(--ease-out);
+    border: 1px solid var(--line-faint);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--duration-fast) var(--ease-standard);
   }
-  .screenshot-link:hover img {
-    border-color: var(--color-accent);
+
+  .screenshot-link:hover img,
+  .screenshot-link:focus-visible img {
+    border-color: var(--color-action);
   }
+
   figcaption {
     padding: var(--space-3) var(--space-2) var(--space-2);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
   }
+
+  .screenshot-frame__caption-meta {
+    color: var(--color-text-tertiary);
+  }
+
   .product-view__copy {
     min-width: 0;
+    position: relative;
+    z-index: 2;
+    padding-block: var(--space-4);
   }
-  .kicker {
-    margin-bottom: var(--space-2);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-  .section-title {
-    margin-bottom: var(--space-4);
-  }
-  .section-copy {
-    margin-bottom: var(--space-6);
-    color: var(--color-text-subtle);
-  }
+
   .annotations {
+    position: relative;
     display: grid;
-    gap: var(--space-5);
-    margin: 0;
+    gap: 0;
+    margin: var(--space-6) 0 0;
     padding: 0;
     list-style: none;
   }
+
+  .annotations::before {
+    position: absolute;
+    top: 0.8rem;
+    bottom: 0.8rem;
+    left: 0.75rem;
+    width: 1px;
+    background: var(--line-accent);
+    content: '';
+  }
+
   .annotations li {
+    position: relative;
     display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr);
+    grid-template-columns: 1.5rem minmax(0, 1fr);
     gap: var(--space-3);
     align-items: start;
-    color: var(--color-text-muted);
+    padding-block: var(--space-4);
+    color: var(--color-text-secondary);
+    border-block-end: 1px solid var(--line-faint);
   }
+
+  .annotations li:last-child {
+    border-block-end: 0;
+  }
+
   .anno-num {
+    position: relative;
+    z-index: 1;
     display: grid;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
     place-items: center;
-    border: 1px solid var(--color-accent);
+    border: 1px solid var(--color-action);
     border-radius: 50%;
-    color: var(--color-accent-strong);
+    background: var(--color-surface-quiet);
+    color: var(--color-action-soft);
     font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
+    font-size: var(--type-micro);
   }
+
+  @media (min-width: 64rem) {
+    .product-view__layout {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--grid-gap);
+      align-items: center;
+    }
+
+    .screenshot-frame {
+      grid-column: 1 / span 8;
+      margin-inline-start: clamp(-4rem, -3.5vw, -1rem);
+      margin-inline-end: clamp(-1rem, -1vw, 0);
+    }
+
+    .product-view__copy {
+      grid-column: 9 / -1;
+      padding-inline-start: var(--space-2);
+      padding-block: var(--space-6);
+    }
+
+    .annotations li::before {
+      position: absolute;
+      top: 1.45rem;
+      left: -2.75rem;
+      width: 2.25rem;
+      height: 1px;
+      background: var(--line-accent);
+      content: '';
+      opacity: 0.85;
+    }
+  }
+
+  @media (min-width: 80rem) {
+    .screenshot-frame {
+      grid-column: 1 / span 9;
+      margin-inline-start: clamp(-5.5rem, -4vw, -1.5rem);
+    }
+
+    .product-view__copy {
+      grid-column: 10 / -1;
+    }
+  }
+
   @media (max-width: 40rem) {
-    .screenshot-frame img {
-      aspect-ratio: 4 / 3;
-      object-fit: cover;
-      object-position: 18% center;
+    .screenshot-frame {
+      padding: var(--space-2);
+    }
+
+    .annotations::before,
+    .annotations li::before {
+      display: none;
     }
   }
 </style>

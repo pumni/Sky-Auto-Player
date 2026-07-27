@@ -1,21 +1,35 @@
 ---
 import type { HomeContent } from '../../data/home.types';
+import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['comparison'];
   locale: 'en' | 'vi';
 }
-const { data } = Astro.props;
+
+const { data, locale } = Astro.props;
 ---
 
-<section class="section-shell section-shell--compact" aria-labelledby="comparison-title">
-  <div class="container">
-    <div class="section-heading">
-      <p class="kicker">{data.kicker}</p>
-      <h2 id="comparison-title" class="section-title">{data.title}</h2>
-    </div>
+<section
+  class="comparison-section section-shell section-shell--utility"
+  aria-labelledby="comparison-title"
+>
+  <div class="container comparison__layout">
+    <SectionIntro
+      kicker={data.kicker}
+      title={data.title}
+      titleId="comparison-title"
+      measure="narrow"
+    />
     <div class="comparison-wrap">
       <table class="comparison-table">
+        <caption class="sr-only">
+          {
+            locale === 'vi'
+              ? 'So sánh macro thông thường với Sky Auto Player'
+              : 'Comparison of a generic macro and Sky Auto Player'
+          }
+        </caption>
         <thead>
           <tr>
             <th scope="col">{data.macroHeader}</th>
@@ -27,7 +41,10 @@ const { data } = Astro.props;
             data.rows.map((row) => (
               <tr>
                 <td data-label={data.macroHeader}>{row.macro}</td>
-                <td data-label={data.playerHeader}>{row.player}</td>
+                <td class="comparison-table__player" data-label={data.playerHeader}>
+                  <span class="comparison-table__node" aria-hidden="true" />
+                  {row.player}
+                </td>
               </tr>
             ))
           }
@@ -38,64 +55,149 @@ const { data } = Astro.props;
 </section>
 
 <style>
-  .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-2);
+  .comparison__layout {
+    display: grid;
+    gap: var(--space-6);
   }
-  .section-title {
-    margin-bottom: var(--space-6);
+
+  @media (min-width: 64rem) {
+    .comparison__layout {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      gap: var(--grid-gap);
+      align-items: start;
+    }
   }
+
   .comparison-wrap {
+    min-width: 0;
     overflow-x: auto;
   }
+
   .comparison-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
     text-align: left;
   }
+
   .comparison-table th,
   .comparison-table td {
+    width: 50%;
     padding: var(--space-4);
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--line-faint);
+    vertical-align: top;
+    overflow-wrap: anywhere;
   }
+
   .comparison-table th {
-    font-weight: 600;
-    color: var(--color-text);
-  }
-  .comparison-table td {
-    color: var(--color-text-subtle);
-  }
-  .comparison-table td:last-child {
-    color: var(--color-accent);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
     font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
+
+  .comparison-table th:first-child,
+  .comparison-table td:first-child {
+    color: var(--color-text-tertiary);
+    background: color-mix(in oklch, var(--color-page) 55%, transparent);
+  }
+
+  .comparison-table th:last-child,
+  .comparison-table td:last-child {
+    border-inline-start: 1px solid var(--line-accent);
+  }
+
+  .comparison-table th:last-child {
+    color: var(--color-action-soft);
+  }
+
+  .comparison-table td {
+    color: var(--color-text-tertiary);
+  }
+
+  .comparison-table td:last-child {
+    color: var(--color-text-primary);
+    background: color-mix(in oklch, var(--color-surface-active) 32%, transparent);
+  }
+
+  .comparison-table__player {
+    position: relative;
+  }
+
+  .comparison-table__node {
+    display: inline-block;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-inline-end: var(--space-2);
+    border-radius: 50%;
+    background: var(--color-action);
+    box-shadow: 0 0 0 0.2rem color-mix(in oklch, var(--color-action) 12%, transparent);
+    vertical-align: 0.05em;
+  }
+
   @media (max-width: 40rem) {
-    .comparison-table thead {
-      display: none;
+    .comparison-wrap {
+      overflow: visible;
     }
-    .comparison-table tr {
-      display: block;
-      margin-bottom: var(--space-4);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-panel);
-      padding: var(--space-4);
-    }
+
+    .comparison-table,
+    .comparison-table tbody,
+    .comparison-table tr,
     .comparison-table td {
       display: block;
-      border: none;
-      padding: var(--space-1) 0;
+      width: 100%;
     }
+
+    .comparison-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    .comparison-table tr {
+      padding-block: var(--space-3);
+      border-block-end: 1px solid var(--line-faint);
+    }
+
+    .comparison-table td {
+      display: grid;
+      grid-template-columns: minmax(7rem, 0.4fr) minmax(0, 1fr);
+      gap: var(--space-3);
+      padding: var(--space-2) 0;
+      border: 0;
+    }
+
     .comparison-table td::before {
+      color: var(--color-text-tertiary);
       content: attr(data-label);
-      display: block;
-      font-weight: 600;
-      color: var(--color-text);
-      font-size: var(--font-size-sm);
-      margin-bottom: var(--space-1);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .comparison-table td:first-child,
+    .comparison-table td:last-child {
+      border-inline-start: 0;
+      background: transparent;
+    }
+
+    .comparison-table__node {
+      display: none;
+    }
+
+    .comparison-table th,
+    .comparison-table td {
+      padding-inline: 0;
+    }
+
+    .comparison-table th {
+      font-size: var(--type-micro);
     }
   }
 </style>

@@ -1,0 +1,22 @@
+---
+import Kicker from './Kicker.astro';
+
+interface Props {
+  title: string;
+  kicker?: string;
+  description?: string;
+  titleId?: string;
+  measure?: 'narrow' | 'normal' | 'wide';
+  align?: 'start' | 'center';
+}
+
+const { title, kicker, description, titleId, measure = 'normal', align = 'start' } = Astro.props;
+---
+
+<div
+  class:list={['ui-section-intro', `ui-section-intro--${measure}`, `ui-section-intro--${align}`]}
+>
+  {kicker && <Kicker>{kicker}</Kicker>}
+  <h2 id={titleId} class="ui-section-title">{title}</h2>
+  {description && <p class="ui-section-copy">{description}</p>}
+</div>

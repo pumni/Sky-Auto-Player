@@ -14,6 +14,7 @@ const isVi = locale === 'vi';
 const content = isVi ? homeVi : homeEn;
 const nav = content.navigation;
 const currentPath = Astro.url.pathname;
+const isFaq = currentPath.includes('/faq');
 const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 ---
 
@@ -39,7 +40,9 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <a href={withBase(isVi ? '/vi/#playback' : '/#playback')}>{nav.playback}</a>
       <a href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>{nav.howItWorks}</a>
       <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
-      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>{nav.faq}</a>
+      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')} aria-current={isFaq ? 'page' : undefined}
+        >{nav.faq}</a
+      >
       <a href={SITE.repositoryUrl}>{nav.github}</a>
       <a class="nav-download" href={SITE.releaseUrl}>{isVi ? 'Tải xuống' : 'Download'}</a>
 
@@ -78,197 +81,239 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
 <style>
   .site-header {
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--color-bg);
-    padding-block: var(--space-4);
     position: relative;
     z-index: 100;
+    border-bottom: 1px solid var(--line-faint);
+    background: var(--color-page);
+    padding-block: 1rem;
   }
+
   .site-header__inner {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     gap: var(--space-4);
   }
+
   .brand {
-    display: flex;
+    display: inline-flex;
+    min-width: 0;
     align-items: center;
     gap: var(--space-2);
+    color: var(--color-text-primary);
+    font-size: var(--type-small);
     font-weight: 700;
-    font-size: var(--font-size-lead);
-    min-width: 0;
+    letter-spacing: -0.01em;
   }
+
   .brand > span:last-child {
     white-space: nowrap;
   }
+
   .brand__mark {
     width: 32px;
     height: 32px;
     flex: 0 0 auto;
   }
+
   .site-nav {
     display: flex;
-    gap: var(--space-5);
     align-items: center;
+    gap: clamp(0.9rem, 1.8vw, 1.75rem);
   }
-  .site-nav a {
-    font-weight: 500;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+
+  .site-nav > a {
+    position: relative;
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    color: var(--color-text-secondary);
+    font-size: var(--type-label);
+    font-weight: 600;
   }
+
+  .site-nav > a::after {
+    position: absolute;
+    right: 0;
+    bottom: 0.35rem;
+    left: 0;
+    height: 1px;
+    background: var(--color-action);
+    content: '';
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
   .site-nav > a:hover,
-  .site-nav > a[aria-current='page'] {
-    color: var(--color-text);
+  .site-nav > a:focus-visible {
+    color: var(--color-text-primary);
   }
+
+  .site-nav > a:hover::after,
+  .site-nav > a:focus-visible::after {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+
   .site-actions {
     display: flex;
-    align-items: center;
-    gap: var(--space-4);
     flex: 0 0 auto;
+    align-items: center;
+    gap: var(--space-3);
   }
 
   .locale-switch {
     display: inline-flex;
-    align-items: stretch;
-    gap: 1px;
-    padding: 2px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-1);
+    align-items: center;
+    gap: 0.2rem;
   }
+
   .locale-switch__option {
+    position: relative;
     display: grid;
-    min-width: 2.5rem;
-    min-height: 2rem;
+    min-width: 2.75rem;
+    min-height: 44px;
     place-items: center;
-    padding-inline: 0.6rem;
-    border-radius: calc(var(--radius-control) - 2px);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-    font-weight: 650;
-    line-height: 1;
-    transition:
-      background-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-label);
+    font-weight: 600;
   }
-  .locale-switch__option:hover {
-    background: var(--color-surface-2);
-    color: var(--color-text);
+
+  .locale-switch__option::after {
+    position: absolute;
+    right: 0.35rem;
+    bottom: 0.35rem;
+    left: 0.35rem;
+    height: 1px;
+    background: var(--color-action);
+    content: '';
+    transform: scaleX(0);
+    transition: transform var(--duration-fast) var(--ease-standard);
   }
-  .locale-switch .locale-switch__option[aria-current='page'] {
-    background: var(--color-accent);
-    color: var(--color-bg);
+
+  .locale-switch__option:hover,
+  .locale-switch__option[aria-current='page'] {
+    color: var(--color-text-primary);
   }
-  .locale-switch .locale-switch__option[aria-current='page']:hover {
-    background: var(--color-accent-strong);
-    color: var(--color-bg);
+
+  .locale-switch__option[aria-current='page']::after {
+    transform: scaleX(1);
   }
-  .locale-switch .locale-switch__option:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: -3px;
-  }
-  .locale-switch .locale-switch__option[aria-current='page']:focus-visible {
-    outline-color: var(--color-bg);
-  }
-  /* Desktop keeps the header CTA; small viewports use the menu CTA instead. */
+
   .nav-download {
     display: none;
   }
+
   .menu-toggle {
     display: none;
     width: 44px;
     height: 44px;
     padding: 0;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-1);
-    color: var(--color-text);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-instrument);
+    color: var(--color-text-primary);
   }
-  .menu-toggle__icon {
-    display: block;
-    width: 24px;
-    height: 2px;
-    background: currentColor;
-    position: relative;
-    margin: auto;
-    transition:
-      transform var(--motion-fast) var(--ease-out),
-      background var(--motion-fast) var(--ease-out);
-  }
+
+  .menu-toggle__icon,
   .menu-toggle__icon::before,
   .menu-toggle__icon::after {
-    content: '';
-    position: absolute;
-    width: 24px;
+    display: block;
+    width: 1.25rem;
     height: 2px;
     background: currentColor;
-    left: 0;
     transition:
-      transform var(--motion-fast) var(--ease-out),
-      top var(--motion-fast) var(--ease-out);
+      transform var(--duration-fast) var(--ease-out),
+      top var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out);
   }
-  .menu-toggle__icon::before {
-    top: -7px;
+
+  .menu-toggle__icon {
+    position: relative;
+    margin: auto;
   }
+
+  .menu-toggle__icon::before,
   .menu-toggle__icon::after {
-    top: 7px;
+    position: absolute;
+    left: 0;
+    content: '';
   }
+
+  .menu-toggle__icon::before {
+    top: -0.4rem;
+  }
+
+  .menu-toggle__icon::after {
+    top: 0.4rem;
+  }
+
   .menu-toggle[aria-expanded='true'] .menu-toggle__icon {
     background: transparent;
   }
+
   .menu-toggle[aria-expanded='true'] .menu-toggle__icon::before {
     top: 0;
     transform: rotate(45deg);
   }
+
   .menu-toggle[aria-expanded='true'] .menu-toggle__icon::after {
     top: 0;
     transform: rotate(-45deg);
   }
 
-  @media (max-width: 64rem) {
+  @media (max-width: 63.99rem) {
+    .header-download {
+      display: none;
+    }
+
+    .menu-toggle {
+      display: block;
+    }
+
     .site-nav {
-      display: flex;
       position: absolute;
       top: 100%;
+      right: 0;
       left: 0;
-      width: 100%;
-      background: var(--color-surface-1);
+      display: none;
       flex-direction: column;
       align-items: stretch;
       gap: 0;
       padding: var(--space-3) var(--gutter) var(--space-5);
-      border-bottom: 1px solid var(--border-subtle);
-      background: var(--color-bg);
-      box-shadow: 0 1rem 2rem rgb(0 0 0 / 20%);
+      border-bottom: 1px solid var(--line-default);
+      background: var(--color-page);
     }
-    :global(.js) .site-nav {
-      display: none;
-    }
+
     :global(.js) .site-nav.is-open {
       display: flex;
     }
+
     .site-nav > a {
-      padding-block: var(--space-3);
-      border-bottom: 1px solid var(--border-subtle);
-      background: var(--color-bg);
+      border-bottom: 1px solid var(--line-faint);
     }
+
+    .site-nav > a::after {
+      bottom: 0;
+    }
+
     .locale-switch {
       align-self: flex-start;
-      margin-top: var(--space-3);
-    }
-    .menu-toggle {
-      display: flex;
+      margin-block-start: var(--space-2);
     }
   }
 
   @media (max-width: 26.25rem) {
-    .site-actions .button {
-      display: none;
+    .brand > span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+
     .nav-download {
-      display: block;
-      font-weight: 700;
-      color: var(--color-accent);
+      display: inline-flex;
+      color: var(--color-action);
     }
   }
 
@@ -276,7 +321,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     .site-header {
       position: sticky;
       top: 0;
-      background: var(--color-bg);
+      background: color-mix(in oklch, var(--color-page) 94%, transparent);
+      backdrop-filter: blur(12px);
     }
   }
 </style>
@@ -289,6 +335,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   const desktopQuery = window.matchMedia('(min-width: 64.01rem)');
 
   if (toggle && nav) {
+    const getLinks = () => Array.from(nav.querySelectorAll<HTMLAnchorElement>('a'));
+
     const closeMenu = (returnFocus = false) => {
       toggle.setAttribute('aria-expanded', 'false');
       toggle.setAttribute('aria-label', toggle.dataset.openLabel || 'Open navigation');
@@ -300,6 +348,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       toggle.setAttribute('aria-expanded', 'true');
       toggle.setAttribute('aria-label', toggle.dataset.closeLabel || 'Close navigation');
       nav.classList.add('is-open');
+      getLinks()[0]?.focus();
     };
 
     toggle.addEventListener('click', () => {
@@ -312,8 +361,23 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     });
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
+      if (toggle.getAttribute('aria-expanded') !== 'true') return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
         closeMenu(true);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const links = getLinks();
+      const first = links[0];
+      const last = links.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     });
 

@@ -25,6 +25,16 @@ export const homeVi: HomeContent = {
     riskNote: 'Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
     riskNoteLink: 'Hãy dùng có trách nhiệm và tự chịu rủi ro.',
   },
+  proofStrip: {
+    kicker: 'Hồ sơ trình diễn',
+    metric: 'ĐỒNG BỘ FRAME / MỤC TIÊU 60 FPS',
+    signals: [
+      'Chỉ Windows SendInput',
+      'Bản ZIP portable',
+      'Mã nguồn mở, kiểm chứng được',
+      'Profile timing theo từng bài',
+    ],
+  },
   playback: {
     kicker: 'Được xây dựng quanh bản nhạc',
     title: 'Timing cũng là một phần của nhạc cụ.',

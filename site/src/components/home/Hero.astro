@@ -3,6 +3,7 @@ import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
 import Kicker from '../ui/Kicker.astro';
+import ConstellationMark from '../ui/ConstellationMark.astro';
 import TimingConsole from './TimingConsole.astro';
 
 interface Props {
@@ -32,21 +33,6 @@ const { data, locale } = Astro.props;
           >{data.secondaryCta}</a
         >
       </div>
-      <ul
-        class="metadata-strip"
-        aria-label={locale === 'vi'
-          ? 'Định dạng sheet và thông tin đóng gói'
-          : 'Supported packaging and sheet metadata'}
-      >
-        {
-          data.metadata.map((item) => (
-            <li>
-              <span class="metadata-strip__dot" aria-hidden="true" />
-              <span>{item}</span>
-            </li>
-          ))
-        }
-      </ul>
       <p class="risk-note">
         {data.riskNote}{' '}
         <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}
@@ -54,9 +40,26 @@ const { data, locale } = Astro.props;
         >
       </p>
     </div>
+
     <div class="hero__visual">
       <span class="hero__score-lines" aria-hidden="true"></span>
+      <span class="hero__constellation" aria-hidden="true"><ConstellationMark /></span>
+      <span class="hero__bridge" aria-hidden="true"></span>
       <TimingConsole locale={locale} />
+      <div
+        class="hero__stage-meta"
+        aria-label={locale === 'vi' ? 'Thông tin stage' : 'Stage metadata'}
+      >
+        <span>OPEN SOURCE / PORTABLE</span>
+        <span>WINDOWS / SENDINPUT</span>
+      </div>
+    </div>
+
+    <div class="hero__rail ui-timing-rail" aria-hidden="true">
+      <span class="ui-timing-rail__node" data-state="active">01</span>
+      <span class="ui-timing-rail__node">02</span>
+      <span class="ui-timing-rail__node">03</span>
+      <span class="hero__rail-label">PLAYHEAD / SCORE / INPUT</span>
     </div>
   </div>
 </section>
@@ -64,13 +67,15 @@ const { data, locale } = Astro.props;
 <style>
   .hero {
     border-top: 0;
+    position: relative;
+    isolation: isolate;
   }
 
   .hero__layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-8);
-    align-items: center;
+    gap: var(--space-6);
+    align-items: start;
   }
 
   .hero__copy,
@@ -80,10 +85,13 @@ const { data, locale } = Astro.props;
 
   .hero__copy {
     max-width: 38rem;
+    position: relative;
+    z-index: 2;
   }
 
   .hero h1 {
-    max-width: 11ch;
+    max-width: 10ch;
+    margin-block: var(--space-4) var(--space-5);
   }
 
   .hero h1 span {
@@ -96,7 +104,7 @@ const { data, locale } = Astro.props;
 
   .hero__description {
     max-inline-size: 48ch;
-    margin-block: var(--space-5);
+    margin-block: 0 var(--space-5);
     color: var(--color-text-tertiary);
     font-size: var(--type-lead);
     line-height: var(--leading-lead);
@@ -107,33 +115,6 @@ const { data, locale } = Astro.props;
     flex-wrap: wrap;
     gap: var(--space-4);
     margin-block-end: var(--space-6);
-  }
-
-  .metadata-strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-5);
-    margin-block-end: var(--space-4);
-    padding: 0;
-    color: var(--color-text-secondary);
-    font-size: var(--type-label);
-    list-style: none;
-  }
-
-  .metadata-strip li {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: 1.25rem;
-  }
-
-  .metadata-strip__dot {
-    width: 0.35rem;
-    height: 0.35rem;
-    flex: 0 0 auto;
-    border-radius: 50%;
-    background: var(--color-action);
-    opacity: 0.85;
   }
 
   .risk-note {
@@ -148,40 +129,147 @@ const { data, locale } = Astro.props;
 
   .hero__visual {
     position: relative;
+    isolation: isolate;
+    padding-block: var(--space-5);
   }
 
-  .hero__visual > :not(.hero__score-lines) {
+  .hero__visual > :not(.hero__score-lines):not(.hero__bridge) {
     position: relative;
     z-index: 1;
   }
 
   .hero__score-lines {
     position: absolute;
-    inset: 12% 0 auto 8%;
-    block-size: 38%;
+    inset: 8% -4% auto 0;
+    block-size: 42%;
     background: repeating-linear-gradient(
       to bottom,
       var(--line-faint) 0 1px,
       transparent 1px 1.1rem
     );
-    opacity: 0.65;
+    opacity: 0.7;
     pointer-events: none;
-    mask-image: linear-gradient(90deg, transparent, black 18%, black 82%, transparent);
+    mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
+  }
+
+  .hero__bridge {
+    position: absolute;
+    top: 18%;
+    left: -12%;
+    width: 18%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line-accent));
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .hero__visual::before {
+    position: absolute;
+    inset: 0 -14% -10% -6%;
+    z-index: -1;
+    border: 1px solid var(--line-faint);
+    background:
+      radial-gradient(circle at 42% 40%, rgb(110 180 201 / 9%), transparent 48%),
+      radial-gradient(
+        circle at 78% 18%,
+        color-mix(in oklch, var(--color-action) 8%, transparent),
+        transparent 28%
+      ),
+      var(--color-surface-quiet);
+    content: '';
+    clip-path: polygon(3% 0, 100% 0, 100% 90%, 96% 100%, 0 100%, 0 8%);
+    opacity: 0.88;
+  }
+
+  .hero__constellation {
+    position: absolute;
+    right: -1.5rem;
+    bottom: -1.5rem;
+    width: 8rem;
+    color: var(--color-action);
+    opacity: 0.12;
+    transform: rotate(-8deg);
+  }
+
+  .hero__stage-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-block-start: var(--space-3);
+    padding-inline: var(--space-2);
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.06em;
+  }
+
+  .hero__rail {
+    grid-column: 1 / -1;
+    max-width: 42rem;
+    margin-block-start: var(--space-4);
+  }
+
+  .hero__rail::after {
+    position: absolute;
+    bottom: calc(100% - 0.95rem);
+    left: 0.9rem;
+    width: 1px;
+    height: clamp(2rem, 4vw, 4.5rem);
+    background: linear-gradient(180deg, transparent, var(--line-accent));
+    content: '';
+  }
+
+  .hero__rail-label {
+    position: absolute;
+    right: 0;
+    padding-inline-start: var(--space-3);
+    background: var(--color-page);
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
   }
 
   @media (min-width: 64rem) {
     .hero__layout {
       grid-template-columns: repeat(12, minmax(0, 1fr));
       gap: var(--grid-gap);
+      align-items: start;
     }
 
     .hero__copy {
       grid-column: 1 / span 5;
+      padding-block-start: var(--space-6);
     }
 
     .hero__visual {
       grid-column: 6 / -1;
-      margin-inline-end: 0;
+      margin-inline-end: clamp(-4.5rem, -4vw, -1.25rem);
+      padding-block-start: var(--space-2);
+    }
+
+    .hero__bridge {
+      opacity: 1;
+      left: -18%;
+      width: 22%;
+      top: 22%;
+    }
+
+    .hero__rail {
+      grid-column: 4 / -1;
+      max-width: none;
+      margin-inline-start: clamp(0rem, 1vw, 1.5rem);
+    }
+  }
+
+  @media (min-width: 80rem) {
+    .hero__visual {
+      margin-inline-end: clamp(-6rem, -5vw, -2rem);
+    }
+
+    .hero__visual::before {
+      inset: -2% -16% -12% -8%;
     }
   }
 

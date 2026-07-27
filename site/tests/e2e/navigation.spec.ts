@@ -51,6 +51,7 @@ test.describe('navigation and route contracts', () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(nav).toHaveClass(/is-open/);
+    await expect(nav.locator('a').first()).toBeFocused();
 
     await page.keyboard.press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');

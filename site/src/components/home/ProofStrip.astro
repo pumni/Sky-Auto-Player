@@ -1,0 +1,139 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import Kicker from '../ui/Kicker.astro';
+
+interface Props {
+  data: HomeContent;
+}
+
+const { data } = Astro.props;
+const isVi = data.locale === 'vi';
+const strip = data.proofStrip;
+---
+
+<section class="proof-strip section-shell section-shell--proof" aria-labelledby="proof-strip-title">
+  <div class="container proof-strip__layout">
+    <div class="proof-strip__header">
+      <Kicker>{strip.kicker}</Kicker>
+      <h2 id="proof-strip-title" class="sr-only">
+        {isVi ? 'Tín hiệu sản phẩm chính' : 'Key product signals'}
+      </h2>
+      <span class="proof-strip__metric">{strip.metric}</span>
+    </div>
+
+    <ul class="proof-strip__capabilities" aria-label={isVi ? 'Tín hiệu chính' : 'Key signals'}>
+      {
+        strip.signals.map((signal, index) => (
+          <li>
+            <span class="proof-strip__index" aria-hidden="true">
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            <span>{signal}</span>
+          </li>
+        ))
+      }
+    </ul>
+
+    <div
+      class="proof-strip__metadata"
+      aria-label={isVi ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'}
+    >
+      {data.hero.metadata.map((item) => <span>{item}</span>)}
+    </div>
+  </div>
+</section>
+
+<style>
+  .proof-strip {
+    border-block-color: var(--line-default);
+    background: color-mix(in oklch, var(--color-surface-quiet) 58%, var(--color-page));
+  }
+
+  .proof-strip__layout {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .proof-strip__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .proof-strip__header .ui-kicker {
+    margin: 0;
+  }
+
+  .proof-strip__metric,
+  .proof-strip__metadata,
+  .proof-strip__index {
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .proof-strip__metric {
+    color: var(--color-success);
+  }
+
+  .proof-strip__capabilities {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--grid-gap);
+    margin: 0;
+    padding: var(--space-4) 0;
+    border-block: 1px solid var(--line-faint);
+    list-style: none;
+  }
+
+  .proof-strip__capabilities li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: baseline;
+    min-width: 0;
+    color: var(--color-text-primary);
+    font-size: var(--type-small);
+    font-weight: 600;
+  }
+
+  .proof-strip__index {
+    color: var(--color-action);
+  }
+
+  .proof-strip__metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+  }
+
+  .proof-strip__metadata span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .proof-strip__metadata span::before {
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: 50%;
+    background: var(--color-action);
+    content: '';
+  }
+
+  @media (max-width: 48rem) {
+    .proof-strip__capabilities {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .proof-strip__capabilities {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

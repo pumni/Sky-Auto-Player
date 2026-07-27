@@ -1,49 +1,150 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
+import ConstellationMark from '../ui/ConstellationMark.astro';
 
 interface Props {
   data: HomeContent['finalCta'];
   locale: 'en' | 'vi';
 }
-const { data } = Astro.props;
+
+const { data, locale } = Astro.props;
 ---
 
 <section class="final-cta section-shell section-shell--feature" aria-labelledby="final-title">
   <div class="container final-cta__layout">
-    <div>
+    <div class="final-cta__copy">
+      <p class="final-cta__eyebrow">
+        {locale === 'vi' ? 'SẴN SÀNG CHO MÀN TRÌNH DIỄN' : 'READY FOR THE PERFORMANCE'}
+      </p>
       <h2 id="final-title">{data.title}</h2>
-      <p>{data.description}</p>
+      <p class="final-cta__description">{data.description}</p>
     </div>
     <div class="final-cta__actions">
       <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
       <a class="button button--secondary" href={SITE.repositoryUrl}>{data.secondaryCta}</a>
+      <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 10–11</span>
     </div>
+    <div class="final-cta__rail ui-timing-rail" aria-hidden="true">
+      <span class="ui-timing-rail__node" data-state="active">01</span>
+      <span class="ui-timing-rail__node">02</span>
+      <span class="ui-timing-rail__node">03</span>
+    </div>
+    <span class="final-cta__mark" aria-hidden="true"><ConstellationMark /></span>
   </div>
 </section>
 
 <style>
   .final-cta {
-    background: var(--color-surface-1);
-    text-align: center;
-    border-top: 1px solid var(--border-default);
+    position: relative;
+    overflow: hidden;
+    border-block: 1px solid var(--line-default);
+    background: var(--color-surface-quiet);
   }
+
   .final-cta__layout {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-6);
+    position: relative;
+    display: grid;
+    gap: var(--space-7);
   }
-  h2 {
-    margin-bottom: var(--space-4);
+
+  .final-cta__copy,
+  .final-cta__actions {
+    position: relative;
+    z-index: 1;
   }
-  p {
-    color: var(--color-text-subtle);
+
+  .final-cta__eyebrow,
+  .final-cta__metric {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
+
+  .final-cta__eyebrow {
+    margin-block-end: var(--space-3);
+    color: var(--color-text-secondary);
+  }
+
+  .final-cta h2 {
+    max-width: 10ch;
+    margin-block-end: var(--space-4);
+    font-size: var(--type-h2);
+  }
+
+  .final-cta__description {
+    max-width: 46ch;
+    color: var(--color-text-secondary);
+  }
+
   .final-cta__actions {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    gap: var(--space-4);
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .final-cta__metric {
+    flex-basis: 100%;
+    color: var(--color-text-tertiary);
+  }
+
+  .final-cta__mark {
+    position: absolute;
+    right: -1rem;
+    bottom: -1rem;
+    color: var(--color-action);
+    opacity: 0.12;
+    transform: scale(2.8);
+    transform-origin: right bottom;
+  }
+
+  .final-cta__rail {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: min(28rem, 50%);
+    opacity: 0.7;
+  }
+
+  .final-cta__rail .ui-timing-rail__node {
+    background: var(--color-surface-quiet);
+  }
+
+  @media (min-width: 64rem) {
+    .final-cta__layout {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--grid-gap);
+      align-items: end;
+    }
+
+    .final-cta__copy {
+      grid-column: 1 / span 8;
+    }
+
+    .final-cta__actions {
+      grid-column: 9 / -1;
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 40rem) {
+    .final-cta__actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .final-cta__metric {
+      margin-block-start: var(--space-2);
+    }
+
+    .final-cta__rail {
+      position: relative;
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      margin-block-start: var(--space-3);
+    }
   }
 </style>

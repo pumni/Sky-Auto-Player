@@ -1,11 +1,13 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { withBase } from '../../utils/urls';
+import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['faqPreview'];
   locale: 'en' | 'vi';
 }
+
 const { data, locale } = Astro.props;
 const isVi = locale === 'vi';
 const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
@@ -13,16 +15,18 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
 
 <section
   id="faq-preview"
-  class="section-shell section-shell--compact"
+  class="faq-section section-shell section-shell--compact"
   aria-labelledby="faq-preview-title"
 >
-  <div class="container">
-    <div class="section-heading section-heading--split">
-      <div>
-        <p class="kicker">{data.kicker}</p>
-        <h2 id="faq-preview-title" class="section-title">{data.title}</h2>
-      </div>
-      <a class="text-link" href={faqUrl}>{data.readMoreLink}</a>
+  <div class="container faq-preview__layout">
+    <div class="faq-preview__heading">
+      <SectionIntro
+        kicker={data.kicker}
+        title={data.title}
+        titleId="faq-preview-title"
+        measure="narrow"
+      />
+      <a class="text-link" href={faqUrl}>{data.readMoreLink}<span aria-hidden="true"> →</span></a>
     </div>
 
     <ul class="faq-teasers">
@@ -43,64 +47,89 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
 </section>
 
 <style>
-  .section-heading--split {
+  .faq-preview__layout {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  .faq-section {
+    background: color-mix(in oklch, var(--color-surface-quiet) 22%, var(--color-page));
+  }
+
+  @media (min-width: 64rem) {
+    .faq-preview__layout {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      gap: var(--grid-gap);
+      align-items: start;
+      /* Soft inset so FAQ reads lighter than adjacent utility blocks. */
+      padding-inline: clamp(0rem, 4vw, 4rem);
+    }
+  }
+
+  .faq-preview__heading {
     display: flex;
     flex-wrap: wrap;
+    align-items: end;
     justify-content: space-between;
-    align-items: flex-end;
     gap: var(--space-4);
-    margin-bottom: var(--space-6);
-    max-width: 52rem;
   }
-  .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-2);
-  }
-  .section-title {
-    margin: 0;
-  }
+
   .text-link {
-    color: var(--color-accent);
-    text-decoration: underline;
-    font-weight: 600;
+    min-height: 44px;
+    align-content: center;
+    color: var(--color-action);
+    font-weight: 650;
   }
+
   .faq-teasers {
-    list-style: none;
+    max-width: 58rem;
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--border-default);
-    max-width: 52rem;
+    border-block-start: 1px solid var(--line-default);
+    list-style: none;
   }
+
   .faq-teasers li {
-    border-bottom: 1px solid var(--border-subtle);
+    border-block-end: 1px solid var(--line-faint);
   }
+
   .faq-teasers__link {
     display: flex;
+    min-height: 56px;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
-    padding-block: var(--space-4);
-    color: var(--color-text);
-    text-decoration: none;
-    min-height: 44px;
+    color: var(--color-text-primary);
   }
-  .faq-teasers__link:hover .faq-teasers__q {
-    color: var(--color-accent-strong);
-  }
+
   .faq-teasers__q {
     min-width: 0;
     font-weight: 600;
-    font-size: var(--font-size-body);
-    line-height: 1.35;
-    transition: color var(--motion-fast) var(--ease-out);
+    line-height: var(--leading-ui);
+    transition: color var(--duration-fast) var(--ease-standard);
   }
+
+  .faq-teasers__link:hover .faq-teasers__q,
+  .faq-teasers__link:focus-visible .faq-teasers__q {
+    color: var(--color-action-soft);
+  }
+
   .faq-teasers__go {
     flex: 0 0 auto;
-    color: var(--color-accent);
+    color: var(--color-action);
     font-family: var(--font-mono);
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
+  .faq-teasers__link:hover .faq-teasers__go,
+  .faq-teasers__link:focus-visible .faq-teasers__go {
+    transform: translateX(3px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .faq-teasers__link:hover .faq-teasers__go,
+    .faq-teasers__link:focus-visible .faq-teasers__go {
+      transform: none;
+    }
   }
 </style>

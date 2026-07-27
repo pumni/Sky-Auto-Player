@@ -1,83 +1,74 @@
 ---
 import type { HomeContent } from '../../data/home.types';
+import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['playback'];
   locale: 'en' | 'vi';
 }
+
 const { data, locale } = Astro.props;
 const isVi = locale === 'vi';
+const diagramLabels = isVi
+  ? ['SỰ KIỆN SHEET', 'CỬA SỔ FRAME', 'INPUT ĐỒNG BỘ']
+  : ['SHEET EVENT', 'FRAME WINDOW', 'SYNCED INPUT'];
 ---
 
-<section id="playback" class="section-shell" aria-labelledby="playback-title">
+<section id="playback" class="section-shell section-shell--open" aria-labelledby="playback-title">
   <div class="container playback-proof__layout">
-    <div class="section-heading">
-      <p class="kicker">{data.kicker}</p>
-      <h2 id="playback-title" class="section-title">{data.title}</h2>
-      <p class="section-copy">{data.description}</p>
+    <div class="playback-proof__intro">
+      <SectionIntro
+        kicker={data.kicker}
+        title={data.title}
+        description={data.description}
+        titleId="playback-title"
+        measure="narrow"
+      />
       <ul class="proof-points" aria-label={isVi ? 'Năng lực phát nhạc' : 'Playback capabilities'}>
         {data.points.map((point) => <li>{point}</li>)}
       </ul>
     </div>
 
-    <div class="playback-stage">
-      <div class="playback-stage__header">
-        <span>{isVi ? 'CỬA SỔ ĐỒNG BỘ' : 'SYNC WINDOW'}</span>
-        <span class="playback-stage__state"
-          ><span class="playback-stage__dot" aria-hidden="true"></span>{
-            isVi ? 'ỔN ĐỊNH' : 'STABLE'
-          }</span
+    <div class="causal-diagram ui-instrument-surface">
+      <div class="causal-diagram__header">
+        <span>{isVi ? 'MÔ HÌNH NGUYÊN NHÂN' : 'CAUSAL TIMING MODEL'}</span>
+        <span class="causal-diagram__status"
+          >{isVi ? 'MỘT LẦN / ỔN ĐỊNH' : 'ONE PASS / STABLE'}</span
         >
       </div>
-      <div class="playback-stage__playhead" aria-hidden="true">
-        <span>{isVi ? 'VỊ TRÍ PHÁT' : 'PLAYHEAD'}</span>
-        <span>00:13.066</span>
+      <div class="causal-diagram__lane" aria-hidden="true">
+        <span class="causal-diagram__line"></span>
+        <span class="causal-node causal-node--source">01</span>
+        <span class="causal-node causal-node--window">02</span>
+        <span class="causal-node causal-node--input">03</span>
       </div>
       <ol
-        class="proof-track"
-        aria-label={isVi ? 'Căn chỉnh sự kiện theo thời gian' : 'Time-aligned playback events'}
+        class="causal-steps"
+        aria-label={isVi ? 'Các bước căn chỉnh timing' : 'Timing alignment steps'}
       >
-        <li class="proof-track__row">
-          <span class="proof-track__time">00:12.400</span>
-          <span class="proof-track__event"
-            >A1 + B2 + C3 <span class="proof-track__type"
-              >{isVi ? 'HỢP ÂM · đến cùng lúc' : 'CHORD · arrive together'}</span
-            ></span
-          >
-        </li>
-        <li class="proof-track__row">
-          <span class="proof-track__time">00:12.733</span>
-          <span class="proof-track__event"
-            >D4 <span class="proof-track__type"
-              >{isVi ? 'NỐT · giữ khoảng cách' : 'NOTE · keep spacing'}</span
-            ></span
-          >
-        </li>
-        <li class="proof-track__row proof-track__row--active">
-          <span class="proof-track__time">00:13.066</span>
-          <span class="proof-track__event"
-            >E5 <span class="hold-glyph" aria-hidden="true"></span><span class="proof-track__type"
-              >{isVi ? 'NỐT NGÂN · giữ trường độ' : 'HOLD · preserve duration'}</span
-            ></span
-          >
-        </li>
+        {
+          diagramLabels.map((label, index) => (
+            <li>
+              <span class="causal-step__number">{String(index + 1).padStart(2, '0')}</span>
+              <span class="causal-step__label">{label}</span>
+              <span class="causal-step__value">
+                {index === 0
+                  ? 'A1 + B2 + C3'
+                  : index === 1
+                    ? '00:13.066'
+                    : isVi
+                      ? 'CÙNG FRAME'
+                      : 'SAME FRAME'}
+              </span>
+            </li>
+          ))
+        }
       </ol>
-      <div class="playback-stage__legend">
-        <span
-          ><i class="legend-dot legend-dot--chord" aria-hidden="true"></i>{
-            isVi ? 'Hợp âm' : 'Chord'
-          }</span
-        >
-        <span
-          ><i class="legend-dot legend-dot--note" aria-hidden="true"></i>{
-            isVi ? 'Nốt' : 'Note'
-          }</span
-        >
-        <span
-          ><i class="legend-dot legend-dot--hold" aria-hidden="true"></i>{
-            isVi ? 'Nốt ngân' : 'Hold'
-          }</span
-        >
+      <div class="causal-events" aria-label={isVi ? 'Ví dụ trường độ' : 'Duration example'}>
+        <span class="causal-events__caption">{isVi ? 'TRƯỜNG ĐỘ' : 'DURATION'}</span>
+        <span class="causal-event causal-event--chord">A1+B2+C3</span>
+        <span class="causal-event causal-event--note">D2</span>
+        <span class="causal-event causal-event--hold">E3 <i aria-hidden="true"></i></span>
       </div>
     </div>
   </div>
@@ -88,210 +79,241 @@ const isVi = locale === 'vi';
     display: grid;
     gap: var(--space-8);
   }
-  @media (min-width: 64rem) {
-    .playback-proof__layout {
-      grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-      align-items: start;
-    }
-  }
-  .section-heading {
+
+  .playback-proof__intro,
+  .causal-diagram {
     min-width: 0;
-    max-width: 38rem;
   }
-  .kicker {
-    margin-bottom: var(--space-2);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-  .section-title {
-    margin-bottom: var(--space-4);
-  }
-  .section-copy {
-    margin-bottom: var(--space-6);
-    color: var(--color-text-subtle);
-  }
+
   .proof-points {
     display: grid;
     gap: var(--space-3);
-    margin: 0;
+    margin: var(--space-7) 0 0;
     padding: 0;
     list-style: none;
   }
+
   .proof-points li {
     position: relative;
-    padding-left: var(--space-5);
-    color: var(--color-text-muted);
+    padding-inline-start: var(--space-5);
+    color: var(--color-text-secondary);
   }
+
   .proof-points li::before {
     position: absolute;
     top: 0.72em;
     left: 0;
-    width: 0.5rem;
-    height: 0.5rem;
-    border: 1px solid var(--color-accent);
-    border-radius: 50%;
+    width: 0.45rem;
+    height: 0.45rem;
+    border: 1px solid var(--color-action);
     content: '';
     transform: translateY(-50%);
   }
-  .playback-stage {
+
+  .causal-diagram {
     position: relative;
-    min-width: 0;
-    padding: clamp(var(--space-5), 4vw, var(--space-7));
     overflow: hidden;
-    border: 1px solid var(--border-default);
-    background: var(--color-surface-1);
+    padding: clamp(var(--space-5), 4vw, var(--space-7));
+    container: causal-diagram / inline-size;
   }
-  .playback-stage::after {
+
+  .causal-diagram::after {
     position: absolute;
     top: 0;
-    left: 12%;
-    width: 7rem;
+    right: 14%;
+    width: 5rem;
     height: 1px;
-    background: var(--color-accent);
+    background: var(--color-action);
     content: '';
   }
-  .playback-stage__header,
-  .playback-stage__playhead,
-  .playback-stage__legend {
+
+  .causal-diagram__header,
+  .causal-step__label,
+  .causal-events__caption {
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .causal-diagram__header {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
     gap: var(--space-3);
-    color: var(--color-text-muted);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
-  .playback-stage__state {
+
+  .causal-diagram__status {
     color: var(--color-success);
   }
-  .playback-stage__dot {
-    display: inline-block;
-    width: 0.45rem;
-    height: 0.45rem;
-    margin-right: var(--space-2);
-    border-radius: 50%;
-    background: var(--color-success);
-    box-shadow: 0 0 0 3px rgb(169 203 183 / 12%);
-  }
-  .playback-stage__playhead {
-    align-items: center;
-    margin-top: var(--space-6);
-    padding-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-accent);
-    color: var(--color-accent-strong);
-  }
-  .proof-track {
+
+  .causal-diagram__lane {
     position: relative;
+    display: flex;
+    justify-content: space-between;
+    margin-block: var(--space-7) var(--space-3);
+  }
+
+  .causal-diagram__line {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    height: 1px;
+    background: var(--line-accent);
+  }
+
+  .causal-node {
+    position: relative;
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    place-items: center;
+    border: 1px solid var(--color-action);
+    border-radius: 50%;
+    background: var(--color-surface-instrument);
+    color: var(--color-action-soft);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+  }
+
+  .causal-node--window {
+    border-color: var(--color-info);
+    color: var(--color-info);
+  }
+
+  .causal-node--input {
+    border-color: var(--color-success);
+    color: var(--color-success);
+  }
+
+  .causal-steps {
     display: grid;
     gap: 0;
     margin: 0;
-    padding: 0 0 0 var(--space-6);
+    padding: 0;
     list-style: none;
-    font-family: var(--font-mono);
   }
-  .proof-track::before {
-    position: absolute;
-    top: 0.9rem;
-    bottom: 0.9rem;
-    left: 0.35rem;
-    width: 1px;
-    background: var(--border-accent);
-    content: '';
-  }
-  .proof-track__row {
-    position: relative;
+
+  .causal-steps li {
     display: grid;
-    grid-template-columns: minmax(5.8rem, 0.38fr) minmax(0, 1fr);
-    gap: var(--space-4);
-    min-width: 0;
+    grid-template-columns: 2rem minmax(0, 1fr) minmax(0, auto);
+    gap: var(--space-3);
+    align-items: baseline;
     padding-block: var(--space-4);
-    border-bottom: 1px solid var(--border-subtle);
+    border-block-start: 1px solid var(--line-faint);
   }
-  .proof-track__row::before {
-    position: absolute;
-    top: 1.35rem;
-    left: calc((var(--space-6) * -1) + 0.1rem);
-    width: 0.55rem;
-    height: 0.55rem;
-    border: 1px solid var(--color-accent-strong);
-    border-radius: 50%;
-    background: var(--color-surface-1);
-    content: '';
+
+  .causal-steps li:last-child {
+    border-block-end: 1px solid var(--line-faint);
   }
-  .proof-track__row--active::before {
-    background: var(--color-accent);
-    box-shadow: 0 0 0 4px rgb(239 202 120 / 12%);
+
+  .causal-step__number,
+  .causal-step__value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
-  .proof-track__time {
-    color: var(--color-accent-strong);
-    font-size: var(--font-size-sm);
+
+  .causal-step__number {
+    color: var(--color-action);
+    font-size: var(--type-label);
+  }
+
+  .causal-step__value {
+    color: var(--color-text-primary);
+    font-size: var(--type-small);
+    text-align: end;
+  }
+
+  .causal-events {
+    display: grid;
+    grid-template-columns: auto 1fr 0.65fr 1.35fr;
+    gap: var(--space-3);
+    align-items: center;
+    margin-block-start: var(--space-5);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+  }
+
+  .causal-events__caption {
+    color: var(--color-text-tertiary);
+  }
+
+  .causal-event {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .proof-track__event {
-    min-width: 0;
-    color: var(--color-text);
-    font-size: var(--font-size-body);
-    overflow-wrap: anywhere;
-  }
-  .proof-track__type {
-    display: block;
-    margin-top: var(--space-1);
-    color: var(--color-sky);
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.04em;
-  }
-  .hold-glyph {
+
+  .causal-event::before {
     display: inline-block;
-    width: 3.25rem;
-    height: 0.2rem;
-    margin-inline: var(--space-2);
-    vertical-align: middle;
-    background: var(--color-success);
-  }
-  .playback-stage__legend {
-    justify-content: flex-start;
-    margin-top: var(--space-5);
-    gap: var(--space-4);
-    letter-spacing: 0.03em;
-  }
-  .playback-stage__legend span {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .legend-dot {
-    display: inline-block;
-    width: 0.55rem;
-    height: 0.55rem;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-inline-end: var(--space-2);
     border: 1px solid currentColor;
+    content: '';
+  }
+
+  .causal-event--chord {
+    color: var(--color-action-soft);
+  }
+
+  .causal-event--chord::before {
+    border-radius: 0.1rem;
+  }
+
+  .causal-event--note {
+    color: var(--color-info);
+  }
+
+  .causal-event--note::before {
     border-radius: 50%;
   }
-  .legend-dot--chord {
-    border-radius: 0.1rem;
-    color: var(--color-accent);
+
+  .causal-event--hold {
+    color: var(--color-success);
   }
-  .legend-dot--note {
-    color: var(--color-sky);
-  }
-  .legend-dot--hold {
-    width: 1rem;
+
+  .causal-event--hold i {
+    display: inline-block;
+    width: 2.5rem;
     height: 0.2rem;
-    border: 0;
-    border-radius: 0;
-    background: var(--color-success);
+    margin-inline-start: var(--space-2);
+    vertical-align: middle;
+    background: currentColor;
   }
-  @media (max-width: 40rem) {
-    .proof-track__row {
-      grid-template-columns: max-content minmax(0, 1fr);
-      gap: var(--space-3);
+
+  @media (min-width: 64rem) {
+    .playback-proof__layout {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: var(--grid-gap);
+      align-items: start;
     }
-    .hold-glyph {
-      width: 2rem;
+
+    .playback-proof__intro {
+      padding-block-start: var(--space-2);
+    }
+  }
+
+  @container causal-diagram (width < 34rem) {
+    .causal-steps li {
+      grid-template-columns: 2rem minmax(0, 1fr);
+    }
+
+    .causal-step__value {
+      grid-column: 2;
+      text-align: start;
+    }
+
+    .causal-events {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .causal-events__caption {
+      grid-column: 1 / -1;
     }
   }
 </style>

@@ -13,6 +13,7 @@
   .section-shell {
     padding-block: var(--section-space-default);
     border-top: 1px solid var(--line-faint);
+    scroll-margin-top: 6rem;
   }
 
   .section-shell--compact {
@@ -21,6 +22,23 @@
 
   .section-shell--feature {
     padding-block: var(--section-space-feature);
+  }
+
+  .section-shell--proof {
+    padding-block: var(--section-xs);
+  }
+
+  .section-shell--open {
+    padding-block: var(--section-lg);
+  }
+
+  /* Product showcase peak: largest vertical breath on the page. */
+  .section-shell--peak {
+    padding-block: var(--section-xl);
+  }
+
+  .section-shell--utility {
+    padding-block: var(--section-sm);
   }
 
   /* First section under site header: pull content up without killing feature bottom space. */

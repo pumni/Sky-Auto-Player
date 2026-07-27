@@ -23,6 +23,12 @@ export interface HomeContent {
     riskNote: string;
     riskNoteLink: string;
   };
+  /** Dense transition strip under hero — product signals, not playback mechanism bullets. */
+  proofStrip: {
+    kicker: string;
+    metric: string;
+    signals: string[];
+  };
   playback: {
     kicker: string;
     title: string;

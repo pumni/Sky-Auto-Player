@@ -25,6 +25,16 @@ export const homeEn: HomeContent = {
     riskNote: 'Automated playback may conflict with Sky’s Terms of Service.',
     riskNoteLink: 'Use responsibly and at your own risk.',
   },
+  proofStrip: {
+    kicker: 'Performance profile',
+    metric: 'FRAME-SYNC / 60 FPS TARGET',
+    signals: [
+      'Windows SendInput only',
+      'Portable ZIP release',
+      'Open source, reviewable',
+      'Per-song timing profiles',
+    ],
+  },
   playback: {
     kicker: 'Built around the music',
     title: 'Timing is the instrument.',

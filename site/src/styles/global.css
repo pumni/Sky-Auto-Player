@@ -21,6 +21,7 @@
 
   body {
     min-width: 20rem;
+    overflow-x: clip;
     background: var(--color-page);
     color: var(--color-text-primary);
     font-family: var(--font-body);
@@ -58,6 +59,22 @@
 
   p {
     text-wrap: pretty;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  :lang(vi) {
+    --leading-display: 1.02;
+  }
+
+  ::selection {
+    background: var(--color-action);
+    color: var(--color-page);
   }
 
   :focus-visible {

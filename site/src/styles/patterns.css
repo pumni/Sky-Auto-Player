@@ -1,4 +1,21 @@
 @layer patterns {
+  .ui-section-intro {
+    max-inline-size: 42rem;
+  }
+
+  .ui-section-intro--narrow {
+    max-inline-size: 32rem;
+  }
+
+  .ui-section-intro--wide {
+    max-inline-size: 58rem;
+  }
+
+  .ui-section-intro--center {
+    margin-inline: auto;
+    text-align: center;
+  }
+
   .ui-kicker {
     margin-block-end: var(--space-2);
     color: var(--color-text-secondary);
@@ -11,19 +28,96 @@
 
   .ui-section-title {
     margin-block-end: var(--space-4);
+    text-wrap: balance;
   }
 
   .ui-section-copy {
     color: var(--color-text-tertiary);
   }
 
+  .ui-instrument-panel,
   .ui-instrument-surface {
+    --panel-accent: var(--color-action);
     border: 1px solid var(--line-default);
     border-radius: var(--radius-md);
     background:
       linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 22%),
       var(--color-surface-instrument);
     box-shadow: var(--shadow-instrument);
+  }
+
+  .ui-instrument-panel--active {
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 4%), transparent 24%), var(--color-surface-active);
+  }
+
+  .ui-instrument-panel--product {
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-stage);
+    box-shadow: var(--shadow-stage);
+  }
+
+  .constellation-mark {
+    display: block;
+    width: 7.5rem;
+    height: auto;
+    color: var(--color-action);
+  }
+
+  .ui-timing-rail {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 2rem;
+  }
+
+  .ui-timing-rail::before {
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: 1px;
+    background: var(--line-accent);
+    content: '';
+  }
+
+  .ui-timing-rail__node {
+    position: relative;
+    display: grid;
+    width: 1.85rem;
+    height: 1.85rem;
+    place-items: center;
+    border: 1px solid var(--line-accent);
+    border-radius: 50%;
+    background: var(--color-surface-instrument);
+    color: var(--color-action-soft);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+  }
+
+  .ui-timing-rail__node[data-state='active'] {
+    border-color: var(--color-action);
+    background: var(--color-action);
+    color: var(--color-page);
+  }
+
+  .ui-action-link {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-action);
+    font-weight: 650;
+  }
+
+  .ui-action-link::after {
+    content: '→';
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
+  .ui-action-link:hover::after,
+  .ui-action-link:focus-visible::after {
+    transform: translateX(3px);
   }
 
   .ui-data-row {
@@ -55,6 +149,10 @@
 
   .button:hover {
     transform: translateY(-1px);
+  }
+
+  .button:active {
+    transform: translateY(1px);
   }
 
   .button--primary {
@@ -108,7 +206,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .button:hover {
+    .button:hover,
+    .button:active {
       transform: none;
     }
   }

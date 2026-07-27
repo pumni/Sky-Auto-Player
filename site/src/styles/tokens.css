@@ -9,9 +9,12 @@
     --night-1: #0a0e14;
     --night-2: #111821;
     --night-3: #18212b;
+    --night-4: #202c37;
     --ink-0: #f4efe3;
     --ink-1: #b8b4ab;
     --ink-2: #92958f;
+    --ink-3: #6d726f;
+    --gold-0: #bd9447;
     --gold-1: #efca78;
     --gold-2: #f7dda2;
     --sky-1: #b8ccd6;
@@ -22,6 +25,7 @@
     --color-surface-quiet: var(--night-1);
     --color-surface-instrument: var(--night-2);
     --color-surface-active: var(--night-3);
+    --color-surface-stage: var(--night-4);
     --color-text-primary: var(--ink-0);
     --color-text-secondary: var(--ink-1);
     --color-text-tertiary: var(--ink-2);
@@ -33,6 +37,7 @@
 
     --line-faint: rgb(244 239 227 / 10%);
     --line-default: rgb(244 239 227 / 18%);
+    --line-strong: rgb(244 239 227 / 26%);
     --line-accent: rgb(239 202 120 / 34%);
 
     /* Compatibility aliases keep existing components stable during migration. */
@@ -48,6 +53,7 @@
     --color-danger: var(--color-warning);
     --border-subtle: var(--line-faint);
     --border-default: var(--line-default);
+    --border-strong: var(--line-strong);
     --border-accent: var(--line-accent);
 
     --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
@@ -104,6 +110,7 @@
     --radius-sm: 0.45rem;
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
+    --radius-pill: 999px;
     --radius-control: var(--radius-sm);
     --radius-panel: var(--radius-md);
     --container-max: 84rem;
@@ -124,6 +131,7 @@
     --ease-snap: cubic-bezier(0.2, 1.2, 0.3, 1);
     --shadow-console: 0 24px 80px rgb(0 0 0 / 34%);
     --shadow-instrument: inset 0 1px 0 rgb(255 255 255 / 5%), 0 32px 90px rgb(0 0 0 / 28%);
+    --shadow-stage: inset 0 1px 0 rgb(255 255 255 / 6%), 0 44px 110px rgb(0 0 0 / 34%);
   }
 }
 
@@ -134,9 +142,12 @@
       --night-1: oklch(14% 0.018 252);
       --night-2: oklch(18% 0.022 248);
       --night-3: oklch(22% 0.025 244);
+      --night-4: oklch(26% 0.028 240);
       --ink-0: oklch(96% 0.018 84);
       --ink-1: oklch(82% 0.014 82);
       --ink-2: oklch(68% 0.012 82);
+      --ink-3: oklch(57% 0.012 82);
+      --gold-0: oklch(65% 0.105 76);
       --gold-1: oklch(84% 0.105 84);
       --gold-2: oklch(90% 0.075 86);
       --sky-1: oklch(80% 0.045 224);
@@ -144,6 +155,7 @@
       --coral-1: oklch(77% 0.085 30);
       --line-faint: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
       --line-default: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
+      --line-strong: color-mix(in oklch, var(--color-text-primary) 24%, transparent);
       --line-accent: color-mix(in oklch, var(--color-action) 42%, transparent);
     }
   }

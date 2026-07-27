@@ -1,6 +1,7 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import Hero from './Hero.astro';
+import ProofStrip from './ProofStrip.astro';
 import PlaybackProof from './PlaybackProof.astro';
 import ComparisonTable from './ComparisonTable.astro';
 import ProductView from './ProductView.astro';
@@ -18,9 +19,10 @@ const { content } = Astro.props;
 ---
 
 <Hero data={content.hero} locale={content.locale} />
+<ProofStrip data={content} />
 <PlaybackProof data={content.playback} locale={content.locale} />
-<ComparisonTable data={content.comparison} locale={content.locale} />
 <ProductView data={content.product} locale={content.locale} />
+<ComparisonTable data={content.comparison} locale={content.locale} />
 <Steps data={content.steps} locale={content.locale} />
 <TechnicalTrust data={content.technical} locale={content.locale} />
 <Formats data={content.formats} locale={content.locale} />

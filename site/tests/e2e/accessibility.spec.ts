@@ -64,6 +64,13 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('main h1')).toBeVisible();
     await expect(page.locator('.hero__actions .button').first()).toBeVisible();
   });
+
+  test('timing stage keeps a complete static state with reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.timing-console')).not.toHaveClass(/is-playing/);
+    await expect(page.locator('.timing-event--active')).toHaveAttribute('aria-current', 'step');
+  });
   test('FAQ pages expose FAQPage JSON-LD and stable fonts', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/faq/');
     const jsonLd = JSON.parse(
