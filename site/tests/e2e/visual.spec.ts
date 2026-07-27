@@ -7,7 +7,10 @@ const visualCases = [
 ] as const;
 
 test.describe('visual QA baselines', () => {
-  test.skip(!!process.env.CI, 'Snapshots are generated locally on Windows, skip on CI Linux due to OS rendering differences');
+  test.skip(
+    !!process.env.CI,
+    'Snapshots are generated locally on Windows, skip on CI Linux due to OS rendering differences',
+  );
 
   for (const visualCase of visualCases) {
     test(visualCase.name, async ({ page }) => {
