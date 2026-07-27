@@ -227,6 +227,92 @@ def test_wake_error_probe() -> None:
     assert len(probe_errors) == 30
 
 
+def test_wake_error_probe_covers_heavy_tail_outliers() -> None:
+    """Effective spin threshold must cover the worst observed wake error.
+
+    Real hardware shows rare wake-error spikes >> p90 (Windows timer
+    coalescing batches, brief power-state transitions, transient DPC
+    latency). The pre-play probe samples only 30 sleeps, so a formula
+    based on p90 — which with n=30 sits at the 27th sample — silently
+    ignores the worst three outliers. Those outliers then leak through
+    the spin guard as late completions on the rare nights they strike
+    in production.
+
+    The heavy-tail-aware threshold uses the worst observed sample
+    (``max_wake + buffer``), restoring the original Phase-5 design
+    intent recorded in ``docs/archive/2026-06_rt-pipeline-extreme-
+    optimization-plan.md`` §Phase 5 (``p_max + 200``).
+    """
+
+    # Sleeper whose 28 sleeps overshoot 300 us and 2 sleeps overshoot 1500 us.
+    # After sorting (30 samples): [300]*28 + [1500]*2.
+    # Sorted index 27 = 300 (p90 under n=30) — the old p90+100 formula returns
+    # 700 (floor clamp); the worst outlier (1500) stays 800 us *outside* the
+    # spin guard. The new formula returns max(700, min(3000, 1500+200)) = 1700,
+    # fully absorbing the heavy tail.
+    class HeavyTailSleeper:
+        def __init__(self, clock: FakeClock) -> None:
+            self.clock = clock
+            self.sleeps: list[float] = []
+            self._call = 0
+
+        def sleep(self, seconds: float) -> None:
+            self.sleeps.append(seconds)
+            requested = int(seconds * 1_000_000)
+            # Two rare 1500-us wake errors interleaved with 28 × 300 us.
+            error = 1500 if self._call in (5, 22) else 300
+            self._call += 1
+            self.clock.time_us += max(1, requested + error)
+
+    song = Song(name="test_tail_probe", notes=())
+    actions = (
+        KeyAction(
+            kind=ActionKind.DOWN,
+            scan_codes=(ScanCode(1),),
+            at_us=Microseconds(50000),
+            reason="d1",
+        ),
+    )
+
+    clock = FakeClock()
+    backend = TimedBackend(clock)
+    sleeper = HeavyTailSleeper(clock)
+
+    engine = PlaybackEngine(
+        song=song,
+        actions=actions,
+        backend=backend,
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=sleeper,
+        sleep_policy=SleepPolicy(spin_threshold_us=-1),
+        use_dispatch_thread=False,
+        enable_adaptive_spin=True,
+        wait_strategy=TeleportSpinStrategy(),
+    )
+
+    res = engine.play()
+    assert res == PLAYBACK_FINISHED
+
+    probe_errors = engine.telemetry.runtime_options.get("probe_wake_errors_us")
+    assert isinstance(probe_errors, list)
+    assert sorted(probe_errors)[-1] == 1500, (
+        "probe should have observed at least one 1500-us wake outlier"
+    )
+
+    threshold = engine.effective_spin_threshold_us
+    assert threshold is not None, (
+        "probe must populate effective_spin_threshold_us when enable_adaptive_spin=True"
+    )
+    assert threshold >= 1500, (
+        f"effective_spin_threshold_us must cover the heaviest observed wake "
+        f"error (1500 us in this test); got {threshold}. The p90+100 "
+        f"formula leaves rare production outliers (Windows timer "
+        f"coalescing batches, DPC spikes) outside the spin guard."
+    )
+
+
 def test_probes_complete_before_perf_anchor() -> None:
     # Verify strict clock anchor ordering: probe sleeps happen BEFORE start_perf is captured
     class TracingClock(FakeClock):

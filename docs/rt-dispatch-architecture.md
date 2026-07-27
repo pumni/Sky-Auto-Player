@@ -90,8 +90,14 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   (no busy-loop while waiting for the blocking release).
 - **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
-  `effective_spin_threshold = clamp(spin_floor_us, 3000, p90(errors) + 100)` µs (default
-  `spin_floor_us = 700`, cap 3000 µs). Recorded in `runtime_options.probe_wake_errors_us`.
+  `effective_spin_threshold = clamp(spin_floor_us, 3000, max_wake_error + 200)` µs (default
+  `spin_floor_us = 700`, cap 3000 µs). The formula is **heavy-tail-aware**: it uses the worst
+  observed sample — not p90 — because p90 with n=30 sits at index 27 and silently ignores the
+  worst three outliers. Those rare spikes (Windows timer coalescing batches, brief DPC latency)
+  otherwise leak through the spin guard as late completions. Buffer 200 µs absorbs spin overshoot
+  on top of the worst sample. Restores the original Phase-5 design intent recorded in
+  `docs/archive/2026-06_rt-pipeline-extreme-optimization-plan.md` §Phase 5. Recorded in
+  `runtime_options.probe_wake_errors_us`.
 - **Cross-session EMA lead cache (Phase D):** `SendLatencyEstimator` exports/imports per-kind
   EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
   warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
@@ -102,9 +108,11 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   before the deadline to warm the CPU core without adding a separate blocking sleep cycle.
 - **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
   since the last reprobe, the dispatch thread re-probes timer wake error (8 × 2 ms) and applies
-  a new threshold with hysteresis (± 50 µs). Kill switch: `enable_spin_reprobe` (auto-off when
-  `enable_adaptive_spin = False`). Applied thresholds recorded in
-  `runtime_options.reprobe_applied_thresholds`.
+  a new threshold with hysteresis (± 50 µs). Uses the same `max_wake + 200` formula as the
+  pre-play probe so a mid-song re-applied threshold lands on the same shape (with n=8, the
+  formula reduces to p90 + 200 since the max is the last sorted element). Kill switch:
+  `enable_spin_reprobe` (auto-off when `enable_adaptive_spin = False`). Applied thresholds
+  recorded in `runtime_options.reprobe_applied_thresholds`.
 
 ## 4. Wait strategy
 

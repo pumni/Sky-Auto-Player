@@ -1013,6 +1013,12 @@ class DispatchLoop:
         Applies the new threshold only if the change exceeds REPROBE_HYSTERESIS_US.
         Never fired while paused or when enable_spin_reprobe / enable_adaptive_spin is off.
         Charge wall time is ~16 ms (8 × 2 ms) — negligible vs the 0.5 s gap floor.
+
+        Heavy-tail-aware (Fix A, mirrors ``PlaybackEngine._probe_timer_wake_error``):
+        same ``max_wake + 200`` formula so a mid-song re-probe lands on the same
+        threshold shape as the pre-play probe. With n=8 samples the formula
+        reduces to ``p90 + 200`` (max is the last sorted element); the buffer
+        keeps the guard above any outlier within the 3 ms cap.
         """
         wake_errors: list[int] = []
         for _ in range(REPROBE_SAMPLES):
@@ -1022,8 +1028,8 @@ class DispatchLoop:
             wake_errors.append((t1 - t0) - int(REPROBE_SLEEP_S * 1_000_000))
 
         wake_errors.sort()
-        p90 = wake_errors[int(len(wake_errors) * 0.9)]
-        candidate = max(self._spin_floor_us, min(3_000, p90 + 100))
+        max_wake = wake_errors[-1]
+        candidate = max(self._spin_floor_us, min(3_000, max_wake + 200))
 
         if abs(candidate - self.spin_threshold_us) >= REPROBE_HYSTERESIS_US:
             self.spin_threshold_us = candidate

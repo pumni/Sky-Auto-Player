@@ -661,6 +661,14 @@ class PlaybackEngine:
         the one-shot pre-play adaptive-spin probe (``enable_adaptive_spin``); a mid-song re-probe
         (Phase H) runs independently inside ``DispatchLoop._wait_until_runtime_deadline`` when long
         inter-note gaps allow safe budget use.
+
+        Heavy-tail-aware threshold (Fix A): the worst observed wake error — not just p90 — must
+        lie inside the spin guard. With n=30 samples, p90 sits at index 27 and silently ignores
+        the worst three outliers. Those rare spikes (Windows timer coalescing batches, brief DPC
+        latency) leak through the guard as late completions on the nights they strike. Buffer
+        is 200 µs over the worst sample; the 3 000 µs cap is the CPU-thrift safety documented
+        in docs/rt-dispatch-architecture.md §3. Restores the Phase-5 design intent recorded in
+        docs/archive/2026-06_rt-pipeline-extreme-optimization-plan.md §Phase 5 (``p_max + 200``).
         """
         wake_errors: list[int] = []
         for _ in range(30):
@@ -670,8 +678,8 @@ class PlaybackEngine:
             wake_errors.append((t1 - t0) - 2_000)
 
         wake_errors.sort()
-        p90 = wake_errors[int(len(wake_errors) * 0.9)]
-        threshold = max(self.spin_floor_us, min(3_000, p90 + 100))
+        max_wake = wake_errors[-1]
+        threshold = max(self.spin_floor_us, min(3_000, max_wake + 200))
         self.effective_spin_threshold_us = threshold
 
         self.telemetry.record_runtime_options(
