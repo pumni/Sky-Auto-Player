@@ -3,6 +3,7 @@
     background: var(--color-page);
     scroll-padding-top: 5.5rem;
     scroll-behavior: smooth;
+    scrollbar-gutter: stable;
   }
 
   @media (prefers-reduced-motion: reduce) {
