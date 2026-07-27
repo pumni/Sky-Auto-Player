@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -140,7 +140,7 @@ jobs:
           Write-Host "All required assets exist in RUNNER_TEMP."
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
@@ -150,7 +150,7 @@ jobs:
             ${{ runner.temp }}/MANIFEST.json
 
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: |
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
