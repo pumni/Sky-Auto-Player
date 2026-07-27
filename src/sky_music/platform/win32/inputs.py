@@ -975,7 +975,20 @@ def set_thread_priority(thread_handle: int, priority: int) -> bool:
 # dispatch thread so the OS does not park the core mid-spin under power-saving policies.
 # Soft hint only — never hard affinity (pinning one core can *increase* jitter if that core
 # is contended). See docs/rt-dispatch-architecture.md.
-ThreadPowerThrottling = 4
+#
+# THREAD_INFORMATION_CLASS (processthreadsapi.h) actual enum values:
+#   ThreadMemoryPriority      = 0
+#   ThreadAbsoluteCpuPriority = 1
+#   ThreadDynamicCodePolicy   = 2
+#   ThreadPowerThrottling     = 3   <– previously mis-declared as 4 (-= PROCESS value-)
+#   ThreadInformationClassMax = 4
+# Having `4` here made every SetThreadInformation(ThreadPowerThrottling) call on every Windows
+# build return ERROR_INVALID_PARAMETER (87) — silently, because the module swallows the failure
+# and returns False. With the correct value (=3), disable_thread_power_throttling() actually
+# disables EcoQoS so the spin floor is no longer stretched under battery/light-load.
+# (NB: ProcessPowerThrottling in PROCESS_INFORMATION_CLASS is indeed 4 — that's a *different*
+# enum for SetProcessInformation.)
+ThreadPowerThrottling = 3
 THREAD_POWER_THROTTLING_CURRENT_VERSION = 1
 THREAD_POWER_THROTTLING_EXECUTION_SPEED = 0x1
 

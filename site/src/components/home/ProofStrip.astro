@@ -33,13 +33,6 @@ const strip = data.proofStrip;
         ))
       }
     </ul>
-
-    <div
-      class="proof-strip__metadata"
-      aria-label={isVi ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'}
-    >
-      {data.hero.metadata.map((item) => <span>{item}</span>)}
-    </div>
   </div>
 </section>
 
@@ -67,7 +60,6 @@ const strip = data.proofStrip;
   }
 
   .proof-strip__metric,
-  .proof-strip__metadata,
   .proof-strip__index {
     color: var(--color-text-tertiary);
     font-family: var(--font-mono);
@@ -105,25 +97,7 @@ const strip = data.proofStrip;
     color: var(--color-action);
   }
 
-  .proof-strip__metadata {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-5);
-  }
 
-  .proof-strip__metadata span {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .proof-strip__metadata span::before {
-    width: 0.35rem;
-    height: 0.35rem;
-    border-radius: 50%;
-    background: var(--color-action);
-    content: '';
-  }
 
   @media (max-width: 48rem) {
     .proof-strip__capabilities {

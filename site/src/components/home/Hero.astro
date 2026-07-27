@@ -33,6 +33,9 @@ const { data, locale } = Astro.props;
           >{data.secondaryCta}</a
         >
       </div>
+      <div class="hero__meta" aria-label={locale === 'vi' ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'}>
+        {data.metadata.map((item) => <span>{item}</span>)}
+      </div>
       <p class="risk-note">
         {data.riskNote}{' '}
         <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}
@@ -71,7 +74,7 @@ const { data, locale } = Astro.props;
   }
 
   .hero__copy {
-    max-width: 38rem;
+    max-width: 42rem;
     position: relative;
     z-index: 2;
   }
@@ -102,6 +105,32 @@ const { data, locale } = Astro.props;
     flex-wrap: wrap;
     gap: var(--space-4);
     margin-block-end: var(--space-6);
+  }
+
+  .hero__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    margin-block-end: var(--space-5);
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .hero__meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .hero__meta span::before {
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: 50%;
+    background: var(--color-action);
+    content: '';
   }
 
   .risk-note {
@@ -226,12 +255,12 @@ const { data, locale } = Astro.props;
     }
 
     .hero__copy {
-      grid-column: 1 / span 5;
+      grid-column: 1 / span 6;
       padding-block-start: var(--space-6);
     }
 
     .hero__visual {
-      grid-column: 6 / -1;
+      grid-column: 7 / -1;
       padding-block-start: 0;
       margin-block-start: -3rem;
     }

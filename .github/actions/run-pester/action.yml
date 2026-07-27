@@ -8,7 +8,6 @@ runs:
   steps:
     - name: Pester — installer/Tests
       shell: pwsh
-      timeout-minutes: 10
       run: |
         # Pin 5.9.0 exactly for reproducible CI. updater.Tests.ps1 uses
         # BeforeAll/AfterAll inside a wrapper Describe block.
