@@ -73,29 +73,17 @@ const isVi = locale === 'vi';
       >
       <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
     </li>
-    <li
-      class="timing-event timing-event--chord"
-      data-event-index="4"
-      data-event-time="00:13.600"
-      style="--event-index: 4"
-    >
-      <span class="timing-event__time telemetry">00:13.600</span>
-      <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>A2 + C2</span
-      >
-      <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
-    </li>
   </ol>
-  {/* 15-key score grid: data-event must match event keys above (A1+B2+C3, D2, E3, A2+C2). */}
+  {/* 15-key score grid: data-event must match event keys above (A1+B2+C3, D2, E3). */}
   <div class="instrument-grid" aria-hidden="true">
     <span class="instrument-key" data-event="1">A1</span>
     <span class="instrument-key">B1</span>
     <span class="instrument-key">C1</span>
     <span class="instrument-key">D1</span>
     <span class="instrument-key">E1</span>
-    <span class="instrument-key" data-event="4">A2</span>
+    <span class="instrument-key">A2</span>
     <span class="instrument-key" data-event="1">B2</span>
-    <span class="instrument-key" data-event="4">C2</span>
+    <span class="instrument-key">C2</span>
     <span class="instrument-key" data-event="2">D2</span>
     <span class="instrument-key">E2</span>
     <span class="instrument-key">A3</span>
@@ -104,10 +92,6 @@ const isVi = locale === 'vi';
     <span class="instrument-key">D3</span>
     <span class="instrument-key is-active" data-event="3">E3</span>
   </div>
-  <button class="console__replay" type="button" data-timing-replay>
-    <span aria-hidden="true">↻</span>
-    {isVi ? 'XEM LẠI NHỊP' : 'REPLAY TIMING'}
-  </button>
   <span class="sr-only" aria-live="polite" data-timing-status>
     {isVi ? 'Trạng thái cuối: nốt ngân E3 tại 00:13.066' : 'Final state: held note E3 at 00:13.066'}
   </span>
@@ -120,7 +104,7 @@ const isVi = locale === 'vi';
     position: relative;
     min-width: 0;
     margin: 0;
-    padding: clamp(var(--space-4), 3cqi, var(--space-6));
+    padding: clamp(var(--space-3), 2.5cqi, var(--space-5));
     overflow: hidden;
     font-family: var(--font-mono);
     font-size: var(--type-small);
@@ -166,7 +150,7 @@ const isVi = locale === 'vi';
 
   .console__playhead {
     align-items: baseline;
-    margin-block-start: var(--space-6);
+    margin-block-start: var(--space-5);
     padding-block-end: var(--space-3);
     border-block-end: 1px solid var(--line-accent);
     color: var(--color-action-soft);
@@ -203,7 +187,7 @@ const isVi = locale === 'vi';
   .timing-console__events {
     display: grid;
     gap: 0;
-    margin-block: var(--space-5);
+    margin-block: var(--space-4);
     padding: 0;
     list-style: none;
   }
@@ -214,7 +198,7 @@ const isVi = locale === 'vi';
     gap: var(--space-3);
     align-items: center;
     min-width: 0;
-    padding-block: var(--space-4);
+    padding-block: var(--space-3);
     border-block-start: 1px solid var(--line-faint);
   }
 
@@ -308,7 +292,7 @@ const isVi = locale === 'vi';
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: clamp(0.28rem, 1vw, 0.55rem);
-    margin-block-start: var(--space-5);
+    margin-block-start: var(--space-4);
   }
 
   .instrument-key {
@@ -346,7 +330,7 @@ const isVi = locale === 'vi';
   }
 
   .console__replay {
-    min-height: 40px;
+    min-height: 44px;
     margin-block-start: var(--space-4);
     padding: 0;
     border: 0;
@@ -366,13 +350,24 @@ const isVi = locale === 'vi';
 
   @container timing-console (width < 34rem) {
     .timing-event {
-      grid-template-columns: max-content minmax(0, 1fr);
-      gap: var(--space-2);
+      grid-template-columns: max-content auto;
+      gap: var(--space-1) var(--space-3);
+    }
+
+    .timing-event__time {
+      grid-column: 1;
+      grid-row: 1;
     }
 
     .timing-event__kind {
       grid-column: 2;
+      grid-row: 1;
       justify-self: start;
+    }
+
+    .timing-event__keys {
+      grid-column: 1 / -1;
+      grid-row: 2;
     }
   }
 
@@ -442,7 +437,7 @@ const isVi = locale === 'vi';
       timingConsole.classList.add('is-playing');
       events.forEach((event) => event.classList.remove('is-active'));
       keys.forEach((key) => key.classList.remove('is-active'));
-      [1, 2, 3, 4].forEach((index, step) => {
+      [1, 2, 3].forEach((index, step) => {
         window.setTimeout(() => {
           if (currentRun !== runId) return;
           setActive(index);

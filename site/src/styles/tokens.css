@@ -60,7 +60,8 @@
     --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
     --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
 
-    --type-micro: clamp(0.72rem, 0.7rem + 0.08vw, 0.78rem);
+    --type-decorative: clamp(0.72rem, 0.7rem + 0.08vw, 0.78rem);
+    --type-micro: clamp(0.75rem, 0.74rem + 0.05vw, 0.8rem);
     --type-label: clamp(0.78rem, 0.76rem + 0.1vw, 0.86rem);
     --type-small: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
     --type-body: clamp(1rem, 0.97rem + 0.15vw, 1.1rem);

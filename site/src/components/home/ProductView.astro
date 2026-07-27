@@ -11,7 +11,7 @@ interface Props {
 const { data, locale } = Astro.props;
 ---
 
-<section class="product-showcase section-shell section-shell--peak" aria-labelledby="product-title">
+<section class="product-showcase section-shell section-shell--peak section-shell--bordered" aria-labelledby="product-title">
   <div class="product-showcase__atmosphere" aria-hidden="true"></div>
   <div class="container product-view__layout">
     <figure class="screenshot-frame ui-instrument-panel ui-instrument-panel--product">
@@ -38,8 +38,6 @@ const { data, locale } = Astro.props;
               : 'Sky Auto Player song picker'}
             width="1331"
             height="821"
-            loading="lazy"
-            decoding="async"
           />
         </picture>
       </a>
@@ -235,13 +233,12 @@ const { data, locale } = Astro.props;
     }
 
     .screenshot-frame {
-      grid-column: 1 / span 8;
-      margin-inline-start: clamp(-4rem, -3.5vw, -1rem);
+      grid-column: 1 / span 7;
       margin-inline-end: clamp(-1rem, -1vw, 0);
     }
 
     .product-view__copy {
-      grid-column: 9 / -1;
+      grid-column: 8 / -1;
       padding-inline-start: var(--space-2);
       padding-block: var(--space-6);
     }
@@ -260,12 +257,11 @@ const { data, locale } = Astro.props;
 
   @media (min-width: 80rem) {
     .screenshot-frame {
-      grid-column: 1 / span 9;
-      margin-inline-start: clamp(-5.5rem, -4vw, -1.5rem);
+      grid-column: 1 / span 8;
     }
 
     .product-view__copy {
-      grid-column: 10 / -1;
+      grid-column: 9 / -1;
     }
   }
 

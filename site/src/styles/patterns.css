@@ -26,6 +26,11 @@
     text-transform: uppercase;
   }
 
+  :lang(vi) .ui-kicker {
+    text-transform: none;
+    letter-spacing: 0.04em;
+  }
+
   .ui-section-title {
     margin-block-end: var(--space-4);
     text-wrap: balance;
@@ -92,7 +97,7 @@
     background: var(--color-surface-instrument);
     color: var(--color-action-soft);
     font-family: var(--font-mono);
-    font-size: var(--type-micro);
+    font-size: var(--type-decorative);
   }
 
   .ui-timing-rail__node[data-state='active'] {

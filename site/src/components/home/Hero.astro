@@ -46,20 +46,6 @@ const { data, locale } = Astro.props;
       <span class="hero__constellation" aria-hidden="true"><ConstellationMark /></span>
       <span class="hero__bridge" aria-hidden="true"></span>
       <TimingConsole locale={locale} />
-      <div
-        class="hero__stage-meta"
-        aria-label={locale === 'vi' ? 'Thông tin stage' : 'Stage metadata'}
-      >
-        <span>OPEN SOURCE / PORTABLE</span>
-        <span>WINDOWS / SENDINPUT</span>
-      </div>
-    </div>
-
-    <div class="hero__rail ui-timing-rail" aria-hidden="true">
-      <span class="ui-timing-rail__node" data-state="active">01</span>
-      <span class="ui-timing-rail__node">02</span>
-      <span class="ui-timing-rail__node">03</span>
-      <span class="hero__rail-label">PLAYHEAD / SCORE / INPUT</span>
     </div>
   </div>
 </section>
@@ -69,6 +55,7 @@ const { data, locale } = Astro.props;
     border-top: 0;
     position: relative;
     isolation: isolate;
+    overflow-x: clip;
   }
 
   .hero__layout {
@@ -245,8 +232,8 @@ const { data, locale } = Astro.props;
 
     .hero__visual {
       grid-column: 6 / -1;
-      margin-inline-end: clamp(-4.5rem, -4vw, -1.25rem);
-      padding-block-start: var(--space-2);
+      padding-block-start: 0;
+      margin-block-start: -3rem;
     }
 
     .hero__bridge {
@@ -255,19 +242,9 @@ const { data, locale } = Astro.props;
       width: 22%;
       top: 22%;
     }
-
-    .hero__rail {
-      grid-column: 4 / -1;
-      max-width: none;
-      margin-inline-start: clamp(0rem, 1vw, 1.5rem);
-    }
   }
 
   @media (min-width: 80rem) {
-    .hero__visual {
-      margin-inline-end: clamp(-6rem, -5vw, -2rem);
-    }
-
     .hero__visual::before {
       inset: -2% -16% -12% -8%;
     }

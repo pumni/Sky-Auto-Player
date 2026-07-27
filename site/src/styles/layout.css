@@ -12,8 +12,11 @@
 
   .section-shell {
     padding-block: var(--section-space-default);
-    border-top: 1px solid var(--line-faint);
     scroll-margin-top: 6rem;
+  }
+
+  .section-shell--bordered {
+    border-top: 1px solid var(--line-faint);
   }
 
   .section-shell--compact {

@@ -15,7 +15,6 @@ const isVi = locale === 'vi';
 <footer class="site-footer">
   <div class="container site-footer__layout">
     <div class="site-footer__identity">
-      <ConstellationMark />
       <p>
         {
           isVi
@@ -53,11 +52,6 @@ const isVi = locale === 'vi';
   .site-footer__identity {
     display: grid;
     gap: var(--space-4);
-  }
-
-  .site-footer__identity .constellation-mark {
-    width: 6rem;
-    opacity: 0.45;
   }
 
   .site-footer__identity p {
