@@ -510,14 +510,7 @@ class WinSendInputBackend(_TrackedKeyState):
             self.failed_release_keys.update(scan_codes)
             
     def release_all(self) -> ReleaseAllOutcome:
-        from sky_music.layouts import PHYSICAL_SCAN_CODES, VK_CODES
-        
-        # Build inverse map from scan code to VK code for active verification
-        scan_to_vk = {}
-        for char, sc in PHYSICAL_SCAN_CODES.items():
-            vk = VK_CODES.get(char)
-            if vk is not None:
-                scan_to_vk[sc] = vk
+        from sky_music.layouts import SCAN_TO_VK
                 
         # Form union of all tracked potentially active keys
         to_release = self.active_keys | self.possibly_active_keys | self.failed_release_keys
@@ -553,7 +546,7 @@ class WinSendInputBackend(_TrackedKeyState):
         # Active verification and emergency retry with backoff if keys are physically stuck
         stuck_scan_codes = []
         for sc in release_tuple:
-            vk = scan_to_vk.get(sc)
+            vk = SCAN_TO_VK.get(sc)
             if vk is not None:
                 try:
                     if self.inputs_module.is_virtual_key_down(vk):
@@ -575,7 +568,7 @@ class WinSendInputBackend(_TrackedKeyState):
                     # Verify again
                     still_stuck = []
                     for sc in stuck_scan_codes:
-                        vk = scan_to_vk.get(sc)
+                        vk = SCAN_TO_VK.get(sc)
                         if vk is not None and self.inputs_module.is_virtual_key_down(vk):
                             still_stuck.append(sc)
                     if not still_stuck:

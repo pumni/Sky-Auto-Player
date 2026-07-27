@@ -17,6 +17,16 @@ PHYSICAL_SCAN_CODES = {
     'n': 0x31, 'm': 0x32, ',': 0x33, '.': 0x34, '/': 0x35,
 }
 
+# Inverse map physical scan code -> VK code, built once. Frozen names + values at module load
+# — VK_CODES and PHYSICAL_SCAN_CODES are both process-wide constants, so the inverse is a true
+# constant too. Caller (WinSendInputBackend.release_all) used to rebuild this on every panic
+# release; exposing it here makes that release path O(keys) without the per-call dict-build.
+SCAN_TO_VK: dict[int, int] = {
+    sc: VK_CODES[char]
+    for char, sc in PHYSICAL_SCAN_CODES.items()
+    if char in VK_CODES
+}
+
 def _map_virtual_key(vk: int) -> int:
     from sky_music.platform.win32.inputs import map_virtual_key
 
