@@ -49,6 +49,9 @@ windows_version_info.txt
 .cache/
 .pytest_cache/
 .uv-cache/
+# pytest-benchmark storage (transient before/after measurements); committed
+# perf baselines live under docs/perf-baselines/ instead.
+.benchmarks/
 .tmp/
 .ruff_cache/
 

@@ -33,7 +33,12 @@ const { data, locale } = Astro.props;
           >{data.secondaryCta}</a
         >
       </div>
-      <div class="hero__meta" aria-label={locale === 'vi' ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'}>
+      <div
+        class="hero__meta"
+        aria-label={locale === 'vi'
+          ? 'Định dạng và thuộc tính đóng gói'
+          : 'Formats and packaging attributes'}
+      >
         {data.metadata.map((item) => <span>{item}</span>)}
       </div>
       <p class="risk-note">

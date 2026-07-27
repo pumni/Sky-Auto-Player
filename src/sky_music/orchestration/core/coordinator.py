@@ -238,11 +238,26 @@ class RuntimeDispatchCoordinator:
         return {status.value: counts.get(status, 0) for status in GENERATION_STATUSES}
 
     def pop_due_pending(self, now_us: int, lead_up: int = 0) -> tuple[PendingRelease, ...]:
-        if not self.pending_by_generation:
+        pending_map = self.pending_by_generation
+        if not pending_map:
             return ()
+
+        # Fast path: single pending generation is the dominant case in real songs
+        # (polyphony == 1 — one key held at a time). Avoids the list comprehension
+        # allocation, the sort (with a triple-key lambda), and the list→tuple
+        # conversion. Mirrors the single-vs-multi fast paths already present in
+        # ``request_releases``, ``activate_sent_downs`` and ``complete_releases``.
+        if len(pending_map) == 1:
+            pending = next(iter(pending_map.values()))
+            if pending.get_effective_release_us(lead_up) > now_us:
+                return ()
+            pending_map.pop(pending.generation_id, None)
+            self.pending_scan_codes.discard(pending.scan_code)
+            return (pending,)
+
         due = [
             pending
-            for pending in self.pending_by_generation.values()
+            for pending in pending_map.values()
             if pending.get_effective_release_us(lead_up) <= now_us
         ]
         if not due:
@@ -255,7 +270,7 @@ class RuntimeDispatchCoordinator:
             ),
         )
         for pending in due:
-            self.pending_by_generation.pop(pending.generation_id, None)
+            pending_map.pop(pending.generation_id, None)
             self.pending_scan_codes.discard(pending.scan_code)
         return tuple(due)
 

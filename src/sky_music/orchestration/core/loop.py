@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sky_music.domain.scheduler_types import ActionKind, KeyAction, Microseconds
@@ -486,6 +486,16 @@ class DispatchLoop:
         if not self.health_monitor.focus_is_active() and self.unfocused_send_hook is not None:
             self.unfocused_send_hook()
 
+        # Phase 3 outcome resolver: let the caller (e.g. _dispatch_down_batch) override
+        # the runtime_outcome label AFTER the send returned, based on send_result.success
+        # / sent-prefix. Resolving before construction (instead of ``dataclasses.replace``
+        # after) avoids a second frozen object allocation on the rare partial-send path,
+        # and keeps the dispatch_id / lead / completion timestamp intact alongside the
+        # relabelled outcome.
+        resolved_outcome = runtime_outcome
+        if outcome_resolver is not None:
+            resolved_outcome = outcome_resolver(action, send_result, runtime_outcome)
+
         result = ExecutionResult(
             event_index=idx,
             scheduled_us=action.at_us,
@@ -503,18 +513,9 @@ class DispatchLoop:
             visible_lateness_us=visible_lateness_us,
             sent_scan_codes=send_result.sent,
             skipped_scan_codes=send_result.skipped_duplicates,
-            runtime_outcome=runtime_outcome,
+            runtime_outcome=resolved_outcome,
             applied_lead_us=applied_lead_us,
         )
-        # Phase 3 outcome resolver: let the caller (e.g. _dispatch_down_batch) override
-        # the runtime_outcome label AFTER the send returned, based on send_result.success
-        # / sent-prefix. The record is frozen, so we use ``replace`` to construct a new one
-        # BEFORE ``telemetry.record`` consumes it — this keeps the dispatch_id / lead /
-        # completion timestamp intact alongside the relabelled outcome.
-        if outcome_resolver is not None:
-            resolved_outcome = outcome_resolver(action, send_result, runtime_outcome)
-            if resolved_outcome != runtime_outcome:
-                result = replace(result, runtime_outcome=resolved_outcome)
 
         dispatch_id = self._next_dispatch_id
         self._next_dispatch_id += 1
@@ -756,10 +757,17 @@ class DispatchLoop:
                 all_same_source = False
             scan_codes_list.append(release.scan_code)
             gen_ids_list.append(release.generation_id)
-        if len(scan_codes_list) != len(set(scan_codes_list)):
-            raise RuntimeError(
-                f"duplicate scan codes in pending releases: {scan_codes_list}"
-            )
+        # Invariant: a due release batch must never carry duplicate scan codes.
+        # Duplicates here signal internal coordinator corruption, not user input —
+        # so assert (stripped under ``python -O``, but the test suite is run without
+        # ``-O`` and forces the check) instead of eagerly building a ``set`` for a
+        # ``RuntimeError`` on every multi-key release batch. The coordinator
+        # enforces uniqueness at insert via ``pending_scan_codes`` /
+        # ``pending_by_generation`` (one entry per generation_id), so a violation
+        # is a coordinator-side bug, not a runtime input shape to handle.
+        assert len(scan_codes_list) == len(set(scan_codes_list)), (
+            f"duplicate scan codes in pending releases: {scan_codes_list}"
+        )
         deferred_by_us = max(0, max_deferral)
         reason = best.reason if all_same_source else "mixed_deferred_release"
         action = KeyAction(

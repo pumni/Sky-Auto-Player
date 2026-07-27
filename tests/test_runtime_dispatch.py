@@ -1325,3 +1325,96 @@ def test_chord_stagger_runtime_releases_every_down_and_finishes_clean():
     assert len(backend.active) == 0, "Not all keys were released!"
     # Assert no active generation remains when normal authored playback completes
     assert not coordinator.pending_by_generation
+
+
+def test_dispatch_pending_releases_asserts_on_duplicate_scan_codes() -> None:
+    """The multi-release dispatch path asserts uniqueness of the scan-code batch.
+
+    A duplicate scan code in a due ``PendingRelease`` batch is an internal
+    coordinator-invariant corruption, not user-shaped input. The check was
+    previously a ``RuntimeError`` that eagerly built a ``set`` per multi-key
+    release batch; it now lives as an ``assert`` so the production hot path
+    avoids the per-call set allocation while the test suite (which runs without
+    ``-O``) still enforces the invariant.
+    """
+    from sky_music.orchestration.core.coordinator import (
+        PendingRelease,
+        RuntimeDispatchCoordinator,
+        RuntimeSchedule,
+    )
+    from sky_music.orchestration.core.loop import DispatchLoop
+    from sky_music.orchestration.core.state import PlaybackState
+
+    # Two pending releases share the same scan_code but have distinct generation
+    # ids and source indices. Production never produces this state via
+    # ``request_releases`` (``pending_scan_codes`` rejects duplicates at insert),
+    # so we assemble it directly against the coordinator internals.
+    pending_a = PendingRelease(
+        generation_id=0,
+        scan_code=31,
+        source_action_index=0,
+        scheduled_release_us=1_000,
+        down_dispatch_started_us=0,
+        release_not_before_us=0,
+        reason="release",
+    )
+    pending_b = PendingRelease(
+        generation_id=1,
+        scan_code=31,  # duplicate scan code, distinct generation_id
+        source_action_index=1,
+        scheduled_release_us=1_000,
+        down_dispatch_started_us=0,
+        release_not_before_us=0,
+        reason="release",
+    )
+    empty_schedule = RuntimeSchedule(batches=(), generation_count=2)
+    coordinator = RuntimeDispatchCoordinator(empty_schedule, min_hold_us=0)
+    coordinator.pending_by_generation[0] = pending_a
+    coordinator.pending_by_generation[1] = pending_b
+    coordinator.pending_scan_codes.add(31)
+
+    clock = FakeClock()
+    clock.time_us = 1_000
+    sleeper = FakeSleeper(clock)
+
+    class _NullBackend:
+        sentinel = "called"
+
+        def key_up(self, scan_codes):
+            raise AssertionError("backend.key_up must not run before the invariant assert")
+
+    telemetry = TelemetryLogger(song_name="assert-test", enabled=False)
+
+    from sky_music.orchestration.core.loop import DispatchHealthMonitor
+
+    class _AlwaysFocusedFocus:
+        def is_active(self) -> bool:
+            return True
+
+    health = DispatchHealthMonitor(
+        backend=None,  # type: ignore[arg-type]
+        clock=clock,
+        focus_guard=_AlwaysFocusedFocus(),  # type: ignore[arg-type]
+        require_focus=False,
+    )
+
+    loop = DispatchLoop(
+        coordinator=coordinator,
+        clock=clock,
+        sleeper=sleeper,
+        wait_strategy=None,  # type: ignore[arg-type]
+        backend=_NullBackend(),  # type: ignore[arg-type]
+        telemetry=telemetry,
+        sleep_policy=SleepPolicy(spin_threshold_us=-1, poll_s=0.001),
+        health_monitor=health,
+        min_hold_us=0,
+        spin_threshold_us=-1,
+    )
+
+    state = PlaybackState(start_perf=0)
+    with pytest.raises(AssertionError, match="duplicate scan codes in pending releases"):
+        loop._dispatch_pending_releases(
+            (pending_a, pending_b),
+            state,
+            lead_up=0,
+        )
