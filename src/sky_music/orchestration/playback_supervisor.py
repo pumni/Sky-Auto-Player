@@ -116,8 +116,11 @@ class QueueCommandSource:
         self._commands = commands
 
     def poll(self) -> str | None:
-        if self._commands.empty():
-            return None
+        # ``empty()`` was a redundant advisory snapshot before ``get_nowait()``;
+        # the only correct check is the ``Empty`` exception the queue raises
+        # when the call lands in the empty window. Under no-GIL the extra
+        # synchronized ``empty()`` adds a few hundred ns of avoidable jitter
+        # on every control poll (5 ms cadence, ~200 Hz). Drop it.
         try:
             return self._commands.get_nowait()
         except queue.Empty:
