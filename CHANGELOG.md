@@ -4,6 +4,41 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.5] - 2026-07-29
+
+### Removed
+
+- **Retired the dual-publish legacy bridge.** Releases from this version on ship only the canonical triple (`Sky-Auto-Player-v<ver>.zip` + `.sha256` + `MANIFEST.json`); the legacy `Sky-Player-v<ver>.zip` bridge pair is no longer built or uploaded. The bridge (introduced in 2.4.2 to migrate pre-rename installs via the old `updater.bat`) was the sunset target of plan D3.
+- Removed the `build_legacy_bridge_dir` builder and its unconditional `--manifest` call site in `src/build_app.py`.
+- Removed the bridge stage / assert / attest / upload steps from `.github/workflows/release.yml`.
+
+### Changed
+
+- `installer/updater.ps1` `Select-ReleaseAssets` no longer falls back to a `Sky-Player-v<ver>.zip` asset pair; release ingest is canonical-only. `Resolve-PrimaryExe`, `Resolve-ProcessNames`, `updater.bat`, and `Resolve-StagingRoot` keep accepting a pre-existing `Sky-Player.exe` so already-bridged installs continue to update cleanly (D11 orphan-cleanup path).
+
+### Compatibility
+
+- **Pre-2.4.2 installs that never ran the bridge are stranded.** They must reinstall manually from the canonical `Sky-Auto-Player-v2.4.5.zip`, preserving `config.json`, `.env`, `songs/`, and `logs/`. Already-bridged installs (v2.4.2 → v2.4.4) keep updating transparently.
+
+### Fixed
+
+- Orchestration: the wait-spin-start offset now uses `effective_spin_threshold` so the cold-core warmup budget is reflected in `pre_send_spin_us` telemetry on the cold path.
+- Orchestration: HUD onset counters use `visible_lateness_us` (player-perceived onset) instead of call-entry `lateness_us`; release counters keep the bounded-retry metric.
+- Orchestration: `DirectProgressSink.publish()` forwards counters via `update_counters_batch`, restoring observability parity with the threaded snapshot sink.
+- Scheduler: the pre-play and mid-song spin probes use the worst observed wake error plus 200 µs instead of p90, blocking rare timer-coalescing spikes from leaking through the spin guard.
+- Build: `Sky-Auto-Player.spec` `optimize=1` comment corrected (Python strips `assert` at `optimize>=1`); a `--selftest-optimize` smoke step now fails the build if the frozen binary regresses to `__debug__ == True`.
+
+### Performance
+
+- Orchestration: `pop_due_pending` takes a single-key fast path for the dominant one-pending release case, skipping list comprehension / sort / tuple allocation.
+- Windows backend: `SCAN_TO_VK` inverse map cached at module load from `sky_music.layouts`; removes ~15 µs of per-call work from the abort path (`release_all` / panic pause / focus loss / quit / finished).
+
+### Refactor
+
+- Domain layer is purer: `SleepPolicy` construction moves from `domain/session_context` to orchestration / CLI / UI callers, and the calibration loader moves from `domain/scheduler_types` to `infrastructure/calibration_loader`. The domain now returns primitives; orchestration materialises the infrastructure shape.
+- Dead code dropped: unused `DispatchLoop.enable_event_wait` instance field; redundant `Queue.empty()` pre-check in `QueueCommandSource.poll` (few hundred ns of avoided jitter per control poll under no-GIL).
+- Tooling: `scripts/measure_dispatch_tail.py` rewritten for 3.14t (fail-fast under GIL-on / old interpreter, fixed seed for reproducible p50/p99, the four 3.14t axes replacing the GIL switch-interval matrix); a new `tests/bench_dispatch_send_pedantic.py` hot-path microbench pins the p50 ≥ 10% / p99 ≤ 5% gate future candidates must beat.
+
 ## [2.4.4] - 2026-07-25
 
 ### Fixed
