@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import gc
 import json
 import threading
 from collections.abc import Callable
@@ -24,6 +23,7 @@ from sky_music.infrastructure.focus import (
 from sky_music.infrastructure.realtime import (
     RealtimeProcessScope,
     _gil_enabled,
+    collect_gc_with_stats,
     create_realtime_sleeper,
 )
 from sky_music.infrastructure.timing import (
@@ -465,6 +465,7 @@ class PlaybackEngine:
             min_hold_us=self.min_hold_us,
             retain_records_after_save=retain_telemetry_records_after_save,
         )
+        self.gc_collection_stats: list[dict[str, int | str]] = []
         self.telemetry.record_runtime_options(
             {
                 "min_hold_assumes_fps": fps,
@@ -671,11 +672,28 @@ class PlaybackEngine:
         docs/archive/2026-06_rt-pipeline-extreme-optimization-plan.md §Phase 5 (``p_max + 200``).
         """
         wake_errors: list[int] = []
-        for _ in range(30):
-            t0 = self.clock.now_us()
-            sleeper.sleep(0.002)
-            t1 = self.clock.now_us()
-            wake_errors.append((t1 - t0) - 2_000)
+        try:
+            for _ in range(30):
+                t0 = self.clock.now_us()
+                sleeper.sleep(0.002)
+                t1 = self.clock.now_us()
+                wake_errors.append((t1 - t0) - 2_000)
+        except Exception as exc:
+            # A degraded probe must not turn a playable song into a failed
+            # playback. Keep the configured threshold and make degradation
+            # observable instead of fabricating a successful measurement.
+            threshold = self.sleep_policy.spin_threshold_us
+            self.effective_spin_threshold_us = threshold
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "adaptive_probe_error": type(exc).__name__,
+                    "adaptive_probe_thread_id": threading.get_ident(),
+                    "effective_spin_threshold_us": threshold,
+                    "enable_adaptive_spin": True,
+                }
+            )
+            return threshold
 
         wake_errors.sort()
         max_wake = wake_errors[-1]
@@ -688,6 +706,7 @@ class PlaybackEngine:
                 "probe_wake_errors_us": wake_errors,
                 "effective_spin_threshold_us": threshold,
                 "enable_adaptive_spin": True,
+                "adaptive_probe_thread_id": threading.get_ident(),
             }
         )
         return threshold
@@ -790,9 +809,7 @@ class PlaybackEngine:
                 else self.sleeper
             )
     
-            if self.enable_adaptive_spin:
-                self._probe_timer_wake_error(realtime_sleeper)
-            else:
+            if not self.enable_adaptive_spin:
                 self.telemetry.record_runtime_options(
                     {
                         **self.telemetry.runtime_options,
@@ -800,10 +817,17 @@ class PlaybackEngine:
                     }
                 )
 
-            with RealtimeProcessScope(
+            realtime_scope = RealtimeProcessScope(
                 enabled=self.enable_gc_pause,
                 enable_switch_interval_tuning=self.enable_switch_interval_tuning,
-            ):
+            )
+            with realtime_scope:
+                self.gc_collection_stats = list(realtime_scope._gc_collections)
+                # Direct playback owns the current execution context. Probe before
+                # creating its anchor; threaded playback probes inside the dispatch
+                # thread below, after timer and priority scopes are active.
+                if self.enable_adaptive_spin and not use_dispatch_thread:
+                    self._probe_timer_wake_error(realtime_sleeper)
                 state = PlaybackState(start_perf=self.clock.now_us())
 
                 dispatch_loop = self._build_dispatch_loop(coordinator, realtime_sleeper)
@@ -822,6 +846,11 @@ class PlaybackEngine:
                     enable_timer_guard=self.enable_timer_guard,
                     enable_event_wait=self.enable_event_wait,
                     enable_epoch_rebase=self.enable_epoch_rebase,
+                    adaptive_spin_probe=(
+                        (lambda: self._probe_timer_wake_error(realtime_sleeper))
+                        if self.enable_adaptive_spin and use_dispatch_thread
+                        else None
+                    ),
                 )
 
                 result = supervisor.run(
@@ -848,7 +877,10 @@ class PlaybackEngine:
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
-            
+            schedule_batch_count = (
+                len(self.runtime_schedule.batches) if self.runtime_schedule is not None else 0
+            )
+            cleared_array_cache_entries = 0
             dispatch_thread_stuck = False
             if supervisor is not None:
                 thread = getattr(supervisor, "dispatch_thread", None)
@@ -879,18 +911,31 @@ class PlaybackEngine:
                 with contextlib.suppress(Exception):
                     from sky_music.platform.win32 import inputs as _inputs_cleanup
 
-                    _inputs_cleanup.clear_array_cache()
+                    cleared_array_cache_entries = _inputs_cleanup.clear_array_cache()
             # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
             # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
             # the dispatch thread allocated during playback (ExecutionResult, batch tuples,
             # dispatch bookkeeping lists) plus the runtime_schedule edges dropped above. Note this
             # only reclaims cyclic/unreachable objects — the former big reachable holdout was
             # telemetry.records (kept alive via self.telemetry), which is now cleared inside
-            # telemetry.save(). Windows Working Set and pymalloc arenas may still not release the
-            # freed pages back to the OS promptly (sticky WS / arena reuse), so Task Manager RSS
-            # can plateau even after this collection — that is platform behaviour, not an app leak.
+            # telemetry.save(). Windows Working Set may still not release the
+            # freed pages back to the OS promptly (mimalloc page reuse and free-threaded QSBR), so
+            # Task Manager RSS can plateau even after this collection — that is platform behavior,
+            # not proof of an app leak. The collected value is an object count, not released bytes.
             with contextlib.suppress(Exception):
-                gc.collect()
+                post_gc = collect_gc_with_stats("post_play")
+                self.gc_collection_stats.append(
+                    {
+                        **post_gc,
+                        "schedule_batch_count": schedule_batch_count,
+                        # ``TelemetryLogger.save()`` clears the production
+                        # record list. Use the bounded session counter so this
+                        # remains evidence of records created, not records
+                        # retained after teardown.
+                        "telemetry_record_count": self.telemetry.record_stats()["accepted"],
+                        "input_array_cache_entries_cleared": cleared_array_cache_entries,
+                    }
+                )
 
             # Phase D: Persist lead estimator state for next session.
             if self.lead_cache_path and self.enable_adaptive_lead:

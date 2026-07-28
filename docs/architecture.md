@@ -34,7 +34,7 @@ The parser reads the JSON file, strictly validating timestamps and schemas. Unma
 ### Step 2: The AOT Scheduler (`build_key_actions`)
 Instead of calculating delays on the fly, the entire song is mapped out onto an absolute timeline in **microseconds** *before* playback begins.
 * **Tempo Scaling:** All timestamps are scaled by `tempo_scale` and converted to microseconds.
-* **Visibility Hold (`min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-in holds materialize purely as `round(profile_frames * frame_us)`. 
+* **Visibility Hold (`min_hold_us`):** Each note is held down long enough to survive the game's per-frame input sampling. With FPS selected, built-in frame-model holds materialize as `round(profile_frames * frame_us) + min_hold_margin_us`, where `frame_us = ceil(1_000_000 / fps)` and the profile margin defaults to 500 µs. Explicit `_us` overrides remain absolute; unframed fallbacks do not add the margin.
 * **Same-Key Feasibility:** If the same key repeats faster than the target hold, the previous hold is compressed down to `min_hold_us`. If the authored interval is below `min_hold_us`, the repeat is physically infeasible: `strict` mode rejects and recommends a slower tempo, while `degraded` mode keeps `min_hold_us` and schedules the down events, which will be resolved at runtime.
 
 ### Step 3: Runtime Intent Compilation
@@ -83,4 +83,4 @@ Running with the `--debug-csv` flag dumps detailed metrics for every event:
 * `observed_hold_us`: The actual duration the key was held, measured from down dispatch completion to up dispatch completion.
 
 ### Calibration Loop
-The orchestration layer analyzes percentiles of telemetry lateness. Users can run calibration via the CLI (`python src/main.py --auto-calibrate`) or interactively in the Textual UI by pressing `C`. Saving the calibration writes the optimal profile and FPS offsets directly to `config.json` to reduce scheduler jitter on their specific hardware.
+Calibration is a host-side input-delivery measurement, not a game/audio-onset measurement. The app creates an app-owned Win32 calibration window, injects strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with the native-call completion timestamp. The resulting evidence is stored in `.cache/input_latency.json` with UTC `sampled_at` metadata and the `injected_raw_input_delivery_proxy` evidence label. The loader consumes the bounded recommendation as a `min_hold_margin_us` input; it does not infer Sky frame sampling, render timing, audio onset, or an optimal profile/FPS offset, and it does not currently apply a freshness TTL.

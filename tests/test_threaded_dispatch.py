@@ -223,6 +223,14 @@ class StubDispatchLoop:
         self.sleeper = NoopSleeper()
         self.health_monitor = None
         self.start_perf_at_run: int | None = None
+        self.applied_spin_threshold_us: int | None = None
+        self.run_thread_id: int | None = None
+        self.ordering: list[str] | None = None
+
+    def set_spin_threshold_us(self, threshold_us: int) -> None:
+        self.applied_spin_threshold_us = threshold_us
+        if self.ordering is not None:
+            self.ordering.append("threshold")
 
     def run(
         self,
@@ -234,8 +242,142 @@ class StubDispatchLoop:
         total_time_us: int,
         command_event: int | None,
     ) -> str:
+        if self.ordering is not None:
+            self.ordering.append("run")
         self.start_perf_at_run = state.start_perf
+        self.run_thread_id = threading.get_ident()
         return "finished"
+
+
+def test_threaded_adaptive_probe_runs_on_dispatch_thread_before_rebase() -> None:
+    telemetry = TelemetryLogger("threaded-probe-context", enabled=True)
+    clock = StepClock((2_500,))
+    probe_thread_id: int | None = None
+    ordering: list[str] = []
+
+    def probe() -> int:
+        nonlocal probe_thread_id
+        probe_thread_id = threading.get_ident()
+        ordering.append("probe")
+        return 1_234
+
+    supervisor = PlaybackSupervisor(
+        controls=None,
+        focus_guard=BlockingFocusGuard(block_s=0.0),
+        require_focus=False,
+        renderer=None,
+        telemetry=telemetry,
+        sleep_policy=SleepPolicy(),
+        clock=clock,
+        sleeper=NoopSleeper(),
+        song_name="threaded-probe-context",
+        rt_priority_mode="off",
+        enable_timer_guard=False,
+        enable_epoch_rebase=True,
+        adaptive_spin_probe=probe,
+    )
+    dispatch_loop = StubDispatchLoop()
+    dispatch_loop.ordering = ordering
+
+    class TracingPlaybackState(PlaybackState):
+        def rebase_epoch(self, now_us: int) -> int:
+            ordering.append("rebase")
+            return super().rebase_epoch(now_us)
+
+    state = TracingPlaybackState(start_perf=1_000)
+
+    result = supervisor.run(
+        dispatch_loop=dispatch_loop,  # type: ignore[arg-type]
+        coordinator=None,  # type: ignore[arg-type]
+        state=state,
+        total_time_us=0,
+        use_dispatch_thread=True,
+    )
+
+    assert result == "finished"
+    assert probe_thread_id == dispatch_loop.run_thread_id
+    assert dispatch_loop.applied_spin_threshold_us == 1_234
+    assert state.start_perf == 2_500
+    assert telemetry.runtime_options["adaptive_probe_context"] == "dispatch_thread"
+    assert ordering == ["probe", "threshold", "rebase", "run"]
+
+
+def test_threaded_adaptive_probe_runs_inside_timer_and_priority_scopes(monkeypatch) -> None:
+    events: list[str] = []
+
+    class TraceScope:
+        outcome = None
+        power_throttling_disabled = False
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __enter__(self):
+            events.append(f"{self.name}_enter")
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb) -> None:
+            events.append(f"{self.name}_exit")
+
+    monkeypatch.setattr(inputs, "high_resolution_timer_scope", lambda: TraceScope("timer"))
+
+    class TracePriorityScope(TraceScope):
+        def __init__(self, _mode: str) -> None:
+            super().__init__("priority")
+
+    import sky_music.infrastructure.rt_priority as rt_priority
+
+    monkeypatch.setattr(rt_priority, "DispatchThreadPriorityScope", TracePriorityScope)
+
+    telemetry = TelemetryLogger("threaded-probe-scopes", enabled=True)
+    clock = StepClock((2_500,))
+
+    def probe() -> int:
+        events.append("probe")
+        return 1_234
+
+    supervisor = PlaybackSupervisor(
+        controls=None,
+        focus_guard=BlockingFocusGuard(block_s=0.0),
+        require_focus=False,
+        renderer=None,
+        telemetry=telemetry,
+        sleep_policy=SleepPolicy(),
+        clock=clock,
+        sleeper=NoopSleeper(),
+        song_name="threaded-probe-scopes",
+        rt_priority_mode="auto",
+        enable_timer_guard=True,
+        enable_epoch_rebase=True,
+        adaptive_spin_probe=probe,
+    )
+    dispatch_loop = StubDispatchLoop()
+    class ScopeTracingPlaybackState(PlaybackState):
+        def rebase_epoch(self, now_us: int) -> int:
+            events.append("rebase")
+            return super().rebase_epoch(now_us)
+
+    state = ScopeTracingPlaybackState(start_perf=1_000)
+    dispatch_loop.ordering = events
+
+    supervisor.run(
+        dispatch_loop=dispatch_loop,  # type: ignore[arg-type]
+        coordinator=None,  # type: ignore[arg-type]
+        state=state,
+        total_time_us=0,
+        use_dispatch_thread=True,
+    )
+
+    assert events == [
+        "timer_enter",
+        "priority_enter",
+        "probe",
+        "threshold",
+        "rebase",
+        "run",
+        "priority_exit",
+        "timer_exit",
+    ]
 
 
 class CpuBoundControls:
@@ -740,5 +882,3 @@ def test_threaded_dispatch_enable_event_wait(monkeypatch) -> None:
     summary = engine.telemetry.get_summary()
     assert summary is not None
     assert summary["runtime_options"]["enable_event_wait"] is True
-
-

@@ -308,6 +308,12 @@ class DispatchLoop:
         self._last_reprobe_elapsed_us: int = 0
         # Accumulated telemetry list of applied thresholds (capped at 32 entries).
         self._reprobe_applied_thresholds: list[int] = []
+        # Cooperative reprobe attempt: one sample per outer wait iteration.
+        self._reprobe_attempt_id = 0
+        self._reprobe_active = False
+        self._reprobe_sample_count = 0
+        self._reprobe_sample_max_error_us: int | None = None
+        self._reprobe_started_elapsed_us = 0
 
         self._next_dispatch_id = 0
         self._wait_spin_start_us = 0
@@ -324,6 +330,12 @@ class DispatchLoop:
         # ``is_active()`` may be cross-thread via the signal's own contract. Declared here
         # (not mid-``run()``) so the annotated assignment never overwrites a live signal.
         self._runtime_focus_signal: FocusSignal | None = None
+
+    def set_spin_threshold_us(self, threshold_us: int) -> None:
+        """Apply a probe result without coupling the core to its platform context."""
+        if isinstance(threshold_us, bool) or not isinstance(threshold_us, int):
+            raise TypeError("spin threshold must be an integer")
+        self.spin_threshold_us = threshold_us
 
     def _current_lead_up(self) -> int:
         if self.dispatch_lead_us > 0:
@@ -1060,17 +1072,10 @@ class DispatchLoop:
     def _run_mid_song_reprobe(self, elapsed_us: int) -> None:
         """Phase H: Re-probe timer wake error during a long inter-note gap.
 
-        Runs REPROBE_SAMPLES × REPROBE_SLEEP_S sleeps on the dispatch thread while
-        still inside a long wait window (caller guarantees remaining > REPROBE_MIN_GAP_US).
-        Applies the new threshold only if the change exceeds REPROBE_HYSTERESIS_US.
-        Never fired while paused or when enable_spin_reprobe / enable_adaptive_spin is off.
-        Charge wall time is ~16 ms (8 × 2 ms) — negligible vs the 0.5 s gap floor.
-
-        Heavy-tail-aware (Fix A, mirrors ``PlaybackEngine._probe_timer_wake_error``):
-        same ``max_wake + 200`` formula so a mid-song re-probe lands on the same
-        threshold shape as the pre-play probe. With n=8 samples the formula
-        reduces to ``p90 + 200`` (max is the last sorted element); the buffer
-        keeps the guard above any outlier within the 3 ms cap.
+        Compatibility helper for a caller that explicitly requests a complete
+        attempt. Production playback uses the cooperative state machine below:
+        one sample per outer wait iteration, with command/focus service between
+        samples. The candidate uses sample_max + 200, not a percentile estimate.
         """
         wake_errors: list[int] = []
         for _ in range(REPROBE_SAMPLES):
@@ -1079,9 +1084,7 @@ class DispatchLoop:
             t1 = self.clock.now_us()
             wake_errors.append((t1 - t0) - int(REPROBE_SLEEP_S * 1_000_000))
 
-        wake_errors.sort()
-        max_wake = wake_errors[-1]
-        candidate = max(self._spin_floor_us, min(3_000, max_wake + 200))
+        candidate = self._reprobe_candidate(wake_errors)
 
         if abs(candidate - self.spin_threshold_us) >= REPROBE_HYSTERESIS_US:
             self.spin_threshold_us = candidate
@@ -1092,6 +1095,55 @@ class DispatchLoop:
             self._reprobe_applied_thresholds = self._reprobe_applied_thresholds[-32:]
 
         self._last_reprobe_elapsed_us = elapsed_us
+
+    def _reprobe_candidate(self, wake_errors: list[int]) -> int:
+        if not wake_errors:
+            return self.spin_threshold_us
+        return max(self._spin_floor_us, min(3_000, max(wake_errors) + 200))
+
+    def _discard_mid_song_reprobe(self) -> None:
+        self._reprobe_active = False
+        self._reprobe_sample_count = 0
+        self._reprobe_sample_max_error_us = None
+        self._reprobe_started_elapsed_us = 0
+
+    def _begin_mid_song_reprobe(self, elapsed_us: int) -> None:
+        self._reprobe_attempt_id += 1
+        self._reprobe_active = True
+        self._reprobe_sample_count = 0
+        self._reprobe_sample_max_error_us = None
+        self._reprobe_started_elapsed_us = elapsed_us
+
+    def _advance_mid_song_reprobe(self, elapsed_us: int, remaining_us: int) -> bool:
+        if not self._reprobe_active:
+            return False
+        if remaining_us < REPROBE_MIN_GAP_US:
+            self._discard_mid_song_reprobe()
+            return False
+
+        t0 = self.clock.now_us()
+        self.sleeper.sleep(REPROBE_SLEEP_S)
+        t1 = self.clock.now_us()
+        error_us = (t1 - t0) - int(REPROBE_SLEEP_S * 1_000_000)
+        self._reprobe_sample_count += 1
+        if (
+            self._reprobe_sample_max_error_us is None
+            or error_us > self._reprobe_sample_max_error_us
+        ):
+            self._reprobe_sample_max_error_us = error_us
+
+        if self._reprobe_sample_count < REPROBE_SAMPLES:
+            return False
+
+        candidate = self._reprobe_candidate([self._reprobe_sample_max_error_us or 0])
+        if abs(candidate - self.spin_threshold_us) >= REPROBE_HYSTERESIS_US:
+            self.spin_threshold_us = candidate
+        self._reprobe_applied_thresholds.append(candidate)
+        if len(self._reprobe_applied_thresholds) > 32:
+            self._reprobe_applied_thresholds = self._reprobe_applied_thresholds[-32:]
+        self._last_reprobe_elapsed_us = self._reprobe_started_elapsed_us or elapsed_us
+        self._discard_mid_song_reprobe()
+        return True
 
     def _wait_until_runtime_deadline(
         self,
@@ -1164,13 +1216,59 @@ class DispatchLoop:
             #   • not paused / focus lost (checked via service state above)
             if (
                 self.enable_spin_reprobe
+                and not self._reprobe_active
                 and remaining_us >= REPROBE_MIN_GAP_US
                 and elapsed_us - self._last_reprobe_elapsed_us >= REPROBE_MIN_INTERVAL_US
                 and not state.is_paused()
             ):
-                self._run_mid_song_reprobe(elapsed_us)
-                # Re-read elapsed in case probe took ~16 ms wall time; remaining stays valid
-                # for the outer iteration — the loop will recompute on the next pass.
+                self._begin_mid_song_reprobe(elapsed_us)
+
+            if self._reprobe_active:
+                # Recompute the deadline before every sample. Service command
+                # and focus state immediately after this bounded 2 ms sample.
+                current_elapsed_us = state.get_elapsed_us(self.clock)
+                current_remaining_us = target_elapsed_us - current_elapsed_us
+                if state.is_paused() or current_remaining_us < REPROBE_MIN_GAP_US:
+                    self._discard_mid_song_reprobe()
+                else:
+                    self._advance_mid_song_reprobe(current_elapsed_us, current_remaining_us)
+                    # Cooperative reprobe boundary: always poll the queue after
+                    # each sample. ``_service_control_state`` intentionally
+                    # returns immediately while healthy playback is active, so
+                    # it cannot replace this unconditional poll.
+                    command = command_source.poll()
+                    cmd_res = self._handle_commands(
+                        command,
+                        state,
+                        total_time_us,
+                        progress_sink,
+                    )
+                    if cmd_res:
+                        self._discard_mid_song_reprobe()
+                        return cmd_res, last_runtime_poll_us, last_render_time_us, first_action_executed
+
+                    focus_transition = (
+                        self.health_monitor.require_focus and not focus_signal.is_active()
+                    )
+                    if command is not None or state.is_paused() or focus_transition:
+                        # Do not combine samples across a command/focus state
+                        # transition. Service pause/focus immediately; the next
+                        # outer iteration can start a fresh attempt if eligible.
+                        self._discard_mid_song_reprobe()
+                        wait_res, wait_cmd = self._process_wait_states(
+                            state,
+                            first_action_executed,
+                            total_time_us,
+                            command_source,
+                            focus_signal,
+                            progress_sink,
+                        )
+                        if wait_cmd:
+                            return wait_cmd, last_runtime_poll_us, last_render_time_us, first_action_executed
+                        if wait_res:
+                            continue
+                    # At most one probe sample per outer wait iteration.
+                    continue
 
 
 
@@ -1296,6 +1394,7 @@ class DispatchLoop:
         self._late_10ms = 0
         self._release_max_us = 0
         self._release_late_2ms = 0
+        self._discard_mid_song_reprobe()
         import collections
         self._latencies = collections.deque(maxlen=2000)
 

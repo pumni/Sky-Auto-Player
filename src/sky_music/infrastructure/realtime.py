@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import sys
+import time
 from dataclasses import dataclass
 from types import TracebackType
 from typing import ClassVar, Self
@@ -62,6 +63,21 @@ class WaitableTimerSleeper:
 DISPATCH_SWITCH_INTERVAL_S = 0.001
 
 
+def collect_gc_with_stats(phase: str) -> dict[str, int | str]:
+    """Collect cyclic garbage and return bounded lifecycle instrumentation.
+
+    ``collected`` is an object count, not a byte/RSS measurement. Working-set
+    behavior remains a benchmark concern, especially on free-threaded mimalloc.
+    """
+    started_ns = time.perf_counter_ns()
+    collected = gc.collect()
+    return {
+        "phase": phase,
+        "duration_us": (time.perf_counter_ns() - started_ns) // 1_000,
+        "collected": collected,
+    }
+
+
 def _gil_enabled() -> bool:
     """Return True when the GIL is active in the current interpreter.
 
@@ -91,6 +107,7 @@ class RealtimeProcessScope:
     __slots__ = (
         "_enable_switch_interval_tuning",
         "_enabled",
+        "_gc_collections",
         "_gc_was_enabled",
         "_old_switch_interval",
     )
@@ -104,6 +121,7 @@ class RealtimeProcessScope:
         self._enabled = enabled
         self._enable_switch_interval_tuning = enable_switch_interval_tuning
         self._gc_was_enabled = False
+        self._gc_collections: list[dict[str, int | str]] = []
         self._old_switch_interval: float | None = None
 
     def __enter__(self) -> Self:
@@ -112,7 +130,7 @@ class RealtimeProcessScope:
             self._gc_was_enabled = gc.isenabled()
             if self._gc_was_enabled:
                 with contextlib.suppress(Exception):
-                    gc.collect()
+                    self._gc_collections.append(collect_gc_with_stats("pre_play"))
                 gc.disable()
                 inputs.debug_log("[realtime] cyclic GC paused for dispatch")
         else:

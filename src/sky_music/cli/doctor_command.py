@@ -41,7 +41,8 @@ def run_doctor_command(
             return 1
         
         print("Creating calibration window. Please keep the window focused.")
-        print("Injecting down/up keystrokes and measuring raw input delivery...")
+        print("Injecting down/up keystrokes and measuring host-side Raw Input delivery...")
+        print("This is a SendInput -> app-owned WM_INPUT delivery proxy, not game/audio onset truth.")
         try:
             from sky_music.platform.win32.calibration import (
                 calibrate_input_latency_harness,

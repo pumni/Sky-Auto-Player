@@ -1147,7 +1147,7 @@ class PickerScreen(Screen[SongPickerResult]):
             PickerOption("no", "Cancel"),
         ]
         text = (
-            "This will measure your precise hardware keyboard latency.\n\n"
+            "This measures host-side injected Raw Input delivery, not Sky polling, rendering, or audio onset.\n\n"
             "1. A separate Windows window will open.\n"
             "2. Keep that window focused (click/tap it if needed).\n"
             "3. The app will simulate 200 keypresses to measure latency.\n"
@@ -1183,7 +1183,8 @@ class PickerScreen(Screen[SongPickerResult]):
                     "Calibration Complete",
                     f"Sampled Down Latency (us): p50={res['down_us']['p50']}, p90={res['down_us']['p90']}, p99={res['down_us']['p99']}\n"
                     f"Sampled Up Latency   (us): p50={res['up_us']['p50']}, p90={res['up_us']['p90']}, p99={res['up_us']['p99']}\n\n"
-                    "Calibration saved to .cache/input_latency.json successfully!",
+                "Calibration saved to .cache/input_latency.json successfully!\n\n"
+                "Evidence: injected_raw_input_delivery_proxy (SendInput -> app-owned WM_INPUT).",
                     theme_name=self.active_theme,
                 )
             )

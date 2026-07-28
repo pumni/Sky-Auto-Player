@@ -107,12 +107,26 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   `effective_spin_threshold` for the final precision wait. This expands the busy-spin window right
   before the deadline to warm the CPU core without adding a separate blocking sleep cycle.
 - **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
-  since the last reprobe, the dispatch thread re-probes timer wake error (8 × 2 ms) and applies
-  a new threshold with hysteresis (± 50 µs). Uses the same `max_wake + 200` formula as the
-  pre-play probe so a mid-song re-applied threshold lands on the same shape (with n=8, the
-  formula reduces to p90 + 200 since the max is the last sorted element). Kill switch:
-  `enable_spin_reprobe` (auto-off when `enable_adaptive_spin = False`). Applied thresholds
-  recorded in `runtime_options.reprobe_applied_thresholds`.
+  since the last reprobe, the dispatch thread starts an eight-sample cooperative attempt. It takes
+  at most one 2 ms sample per outer wait iteration and services command/focus state between
+  samples; pause, focus, stop, or an unsafe deadline discards the partial attempt. A candidate is
+  committed only after all eight samples using `sample_max + 200 µs`, floor/cap and ± 50 µs
+  hysteresis. The eight-sample maximum is not called p90. Kill switch: `enable_spin_reprobe`
+  (auto-off when `enable_adaptive_spin = False`). Applied thresholds are recorded in
+  `runtime_options.reprobe_applied_thresholds`.
+
+**Adaptive pre-play probe context.** In threaded playback, the 30-sample, 2 ms wake-error probe
+runs on the dispatch thread after the timer and priority scopes have entered and before the final
+epoch rebase. The result is applied to the loop before its first wait. Direct playback probes in
+its execution context before creating the playback anchor. A probe failure preserves the configured
+threshold and records the degradation; it does not abort playback. `sample_max + 200 µs`, the
+configured floor/cap, and the existing kill switch remain unchanged.
+
+**Calibration evidence boundary.** The latency calibration cache is an
+`injected_raw_input_delivery_proxy`: the app injects through Windows `SendInput` into an app-owned
+window and observes its `WM_INPUT` delivery. It does not measure Sky process polling, render-frame
+timing, or audio onset. `sampled_at` is UTC metadata and `evidence_kind` identifies this boundary;
+no freshness TTL is applied by the loader.
 
 ## 4. Wait strategy
 

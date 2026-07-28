@@ -47,6 +47,13 @@ $$\text{frame\_us} = \lceil 1,000,000 / \text{game\_fps} \rceil$$
 
 `min_hold_margin_us` (profile key, default **500 µs**, `0` restores the pure ratio model) covers the residual kernel delivery latency after `SendInput` returns (generally <0.5 ms) and any down-vs-up delivery asymmetry — the only sender-side mechanism that can *shorten* the game-observed hold. It is applied only in the frame-model branch; explicit `hold_us`/`min_hold_us` overrides win verbatim, and the `*_unframed_us` fallback (used when FPS is unknown or disabled) gets no margin because those values already carry ample slack. The margin is a per-device allowance (planned to become measured via input-delivery calibration), not a return of the retired arbitrary `release_latency_margin_us`.
 
+The optional Windows calibration cache is evidence of kind
+`injected_raw_input_delivery_proxy`: the app-owned calibration window receives keys injected
+through `SendInput`, and the harness correlates its `WM_INPUT` receipt with the native-call
+completion timestamp. This is a host delivery proxy only; it does not observe Sky polling, render
+frames, or audio onset. Its UTC `sampled_at` and evidence label are diagnostic metadata, and the
+loader applies no freshness TTL until repeated measurements establish a conservative policy.
+
 ### FPS Assumption vs Real Game FPS
 The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
 

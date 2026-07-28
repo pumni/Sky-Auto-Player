@@ -256,6 +256,7 @@ class TelemetryLogger:
         self._cleared_mid_play: bool = False
         self._dropped_count: int = 0
         self._attempted_record_count: int = 0
+        self._accepted_record_count: int = 0
         self._truncated: bool = False
         self._telemetry_capacity: int = _TELEMETRY_MAX_BUFFER
         self.backend_health: BackendHealth | None = None
@@ -378,6 +379,22 @@ class TelemetryLogger:
                 dispatch_lateness_us,
             )
         )
+        self._accepted_record_count += 1
+
+    def record_stats(self) -> dict[str, int]:
+        """Return bounded session counters independent of the retained list.
+
+        ``save()`` intentionally clears ``records`` in production.  Consumers
+        that need lifecycle evidence must use these counters instead of taking
+        the length of that post-save list.
+        """
+        return {
+            "attempted": self._attempted_record_count,
+            "accepted": self._accepted_record_count,
+            "written": self._csv_events_written,
+            "dropped": self._dropped_count,
+            "retained": len(self.records),
+        }
     def flush_if_large(self) -> bool:
         """Report a large buffer without mutating it on the dispatch thread.
 

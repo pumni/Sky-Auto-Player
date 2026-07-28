@@ -4,6 +4,7 @@ import contextlib
 import queue
 import threading
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from contextvars import Context
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from sky_music.infrastructure.focus import FocusGuard
 from sky_music.infrastructure.timing import Clock, Sleeper, SleepPolicy
 
 if TYPE_CHECKING:
-    from sky_music.orchestration.dispatch_loop import DispatchLoop
+    from sky_music.orchestration.core.loop import DispatchLoop
     from sky_music.orchestration.engine import PlaybackState
     from sky_music.orchestration.runtime_dispatch import RuntimeDispatchCoordinator
     from sky_music.orchestration.telemetry import TelemetryLogger
@@ -229,6 +230,7 @@ class PlaybackSupervisor:
         enable_event_wait: bool = False,
         # Default True mirrors PlaybackEngine / RuntimeState; only _run_threaded ever rebases.
         enable_epoch_rebase: bool = True,
+        adaptive_spin_probe: Callable[[], int] | None = None,
     ) -> None:
         self.controls = controls
         self.focus_guard = focus_guard
@@ -243,6 +245,7 @@ class PlaybackSupervisor:
         self.enable_timer_guard = enable_timer_guard
         self.enable_event_wait = enable_event_wait
         self.enable_epoch_rebase = enable_epoch_rebase
+        self.adaptive_spin_probe = adaptive_spin_probe
         # Set by _run_threaded when enable_epoch_rebase is True; read by the post-run
         # telemetry flush. Initialized to None so pyright can track it as int | None.
         self._epoch_rebase_us: int | None = None
@@ -363,6 +366,17 @@ class PlaybackSupervisor:
                             f"Acquired: {priority_scope.outcome.acquired}, "
                             f"power_throttling_disabled={priority_scope.power_throttling_disabled}, "
                             f"Detail: {priority_scope.outcome.detail}"
+                        )
+
+                    if self.adaptive_spin_probe is not None:
+                        threshold_us = self.adaptive_spin_probe()
+                        dispatch_loop.set_spin_threshold_us(threshold_us)
+                        self.telemetry.record_runtime_options(
+                            {
+                                **self.telemetry.runtime_options,
+                                "adaptive_probe_context": "dispatch_thread",
+                                "adaptive_probe_thread_id": threading.get_ident(),
+                            }
                         )
 
                     if self.enable_epoch_rebase:

@@ -30,6 +30,43 @@ def test_timing_profile_parsing():
     assert not hasattr(main.RUNTIME_STATE.timing_policy, "release_gap_us")
 
 
+def test_calibration_pending_sample_correlates_receipt_before_completion():
+    from sky_music.platform.win32.calibration import CalibrationHarness
+
+    harness = CalibrationHarness(scancode=0x1E)
+    sequence_id, completion_event = harness.begin_sample("down")
+    # WM_INPUT can arrive before the injecting thread publishes native return.
+    # The proxy latency is clamped at zero rather than producing a negative value.
+    harness.record_raw_input("down", 0x1E, receive_ns=900)
+    harness.record_raw_input("down", 0x1E, receive_ns=950)
+    assert not completion_event.is_set()
+
+    harness.publish_completion(sequence_id, completion_ns=1_000)
+    assert completion_event.is_set()
+    assert harness.finalize_sample(sequence_id, "down", timeout=0.0) is True
+    assert harness.down_latencies_us == [0.0]
+    assert harness.reordered_receipts == 1
+    assert harness.duplicate_receipts == 1
+
+
+def test_calibration_pending_sample_rejects_mismatch_and_timeout():
+    from sky_music.platform.win32.calibration import CalibrationHarness
+
+    harness = CalibrationHarness(scancode=0x1E)
+    sequence_id, _ = harness.begin_sample("up")
+    harness.record_raw_input("down", 0x1E, receive_ns=1_000)
+    harness.publish_completion(sequence_id, completion_ns=900)
+    assert harness.finalize_sample(sequence_id, "up", timeout=0.0) is False
+    assert harness.timed_out_samples == 1
+
+    # A late callback cannot poison the next sequence.
+    next_sequence_id, _ = harness.begin_sample("down")
+    harness.record_raw_input("up", 0x1E, receive_ns=2_000)
+    harness.publish_completion(next_sequence_id, completion_ns=1_900)
+    assert harness.finalize_sample(next_sequence_id, "down", timeout=0.0) is False
+    assert harness.mismatched_receipts == 2
+
+
 def test_local_precise_profile_from_builtin_defaults():
     parser = main.build_arg_parser()
     args = parser.parse_args(["--timing-profile", "local-precise"])

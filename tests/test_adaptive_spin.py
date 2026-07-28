@@ -227,6 +227,47 @@ def test_wake_error_probe() -> None:
     assert len(probe_errors) == 30
 
 
+def test_wake_error_probe_failure_preserves_configured_threshold() -> None:
+    class FailingOnceSleeper:
+        def __init__(self, clock: FakeClock) -> None:
+            self.clock = clock
+            self.calls = 0
+
+        def sleep(self, seconds: float) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("probe sleeper unavailable")
+            self.clock.time_us += max(1, int(seconds * 1_000_000))
+
+    clock = FakeClock()
+    sleeper = FailingOnceSleeper(clock)
+    engine = PlaybackEngine(
+        song=Song(name="probe-failure", notes=()),
+        actions=(
+            KeyAction(
+                kind=ActionKind.DOWN,
+                scan_codes=(ScanCode(1),),
+                at_us=Microseconds(0),
+                reason="probe-failure",
+            ),
+        ),
+        backend=TimedBackend(clock),
+        telemetry_enabled=True,
+        require_focus=False,
+        clock=clock,
+        sleeper=sleeper,
+        sleep_policy=SleepPolicy(spin_threshold_us=777),
+        use_dispatch_thread=False,
+        enable_adaptive_spin=True,
+        wait_strategy=TeleportSpinStrategy(),
+    )
+
+    assert engine.play() == PLAYBACK_FINISHED
+    assert engine.effective_spin_threshold_us == 777
+    assert engine.telemetry.runtime_options["adaptive_probe_error"] == "RuntimeError"
+    assert engine.telemetry.runtime_options["effective_spin_threshold_us"] == 777
+
+
 def test_wake_error_probe_covers_heavy_tail_outliers() -> None:
     """Effective spin threshold must cover the worst observed wake error.
 

@@ -15,6 +15,7 @@ deterministic fake clock + minimal backend so they run fast and reproducibly.
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -26,12 +27,14 @@ from sky_music.domain.scheduler_types import (
     Microseconds,
     ScanCode,
 )
+from sky_music.infrastructure import realtime
 from sky_music.infrastructure.backend import (
     BackendHealth,
     InputSendResult,
     ReleaseAllOutcome,
 )
 from sky_music.infrastructure.timing import SleepPolicy
+from sky_music.orchestration import engine as engine_module
 from sky_music.orchestration.engine import PlaybackEngine
 from sky_music.platform.win32 import inputs
 
@@ -118,7 +121,12 @@ def _song_actions() -> tuple[Song, tuple[KeyAction, ...]]:
     return Song(name="hygiene", notes=()), tuple(actions)
 
 
-def _run_engine(*, telemetry_enabled: bool, retain: bool = False) -> PlaybackEngine:
+def _run_engine(
+    *,
+    telemetry_enabled: bool,
+    retain: bool = False,
+    enable_gc_pause: bool = True,
+) -> PlaybackEngine:
     """Build + play a tiny engine; return it for post-play assertions."""
     clock = _FakeClock()
     song, actions = _song_actions()
@@ -133,6 +141,7 @@ def _run_engine(*, telemetry_enabled: bool, retain: bool = False) -> PlaybackEng
         sleep_policy=SleepPolicy(spin_threshold_us=-1),
         use_dispatch_thread=False,
         retain_telemetry_records_after_save=retain,
+        enable_gc_pause=enable_gc_pause,
     )
     engine.play()
     return engine
@@ -165,6 +174,10 @@ def test_telemetry_records_cleared_after_save_when_enabled(tmp_path: Path) -> No
     assert engine.play() == "finished"
 
     assert len(engine.telemetry.records) == 0, "records must be cleared after save()"
+    telemetry_stats = engine.telemetry.record_stats()
+    assert telemetry_stats["accepted"] > 0
+    assert telemetry_stats["written"] == telemetry_stats["accepted"]
+    assert telemetry_stats["retained"] == 0
     assert csv_path.exists(), "CSV must still be written despite records being cleared"
     summary_path = csv_path.with_suffix(".summary.json")
     assert summary_path.exists(), "companion summary JSON must be written"
@@ -208,6 +221,53 @@ def test_telemetry_disabled_keeps_records_empty() -> None:
     assert engine.telemetry.records == []
     # No save() ran → _last_summary was never set; get_summary() returns None.
     assert engine.telemetry.get_summary() is None
+    assert engine.telemetry.record_stats() == {
+        "attempted": 0,
+        "accepted": 0,
+        "written": 0,
+        "dropped": 0,
+        "retained": 0,
+    }
+
+
+def test_gc_stats_capture_pre_and_post_play_and_persist_record_count() -> None:
+    gc.enable()
+    engine = _run_engine(telemetry_enabled=True)
+
+    phases = [entry["phase"] for entry in engine.gc_collection_stats]
+    assert "pre_play" in phases
+    assert "post_play" in phases
+    post = next(entry for entry in engine.gc_collection_stats if entry["phase"] == "post_play")
+    assert post["telemetry_record_count"] == engine.telemetry.record_stats()["accepted"]
+    assert int(post["telemetry_record_count"]) > 0
+
+
+def test_gc_stats_skip_pre_play_collection_when_policy_disabled() -> None:
+    engine = _run_engine(telemetry_enabled=False, enable_gc_pause=False)
+
+    assert [entry["phase"] for entry in engine.gc_collection_stats] == ["post_play"]
+    assert engine.gc_collection_stats[0]["telemetry_record_count"] == 0
+
+
+def test_gc_teardown_exception_is_best_effort(monkeypatch) -> None:
+    def fail(_phase: str) -> dict[str, int | str]:
+        raise RuntimeError("simulated gc failure")
+
+    monkeypatch.setattr(realtime, "collect_gc_with_stats", fail)
+    monkeypatch.setattr(engine_module, "collect_gc_with_stats", fail)
+
+    engine = _run_engine(telemetry_enabled=False)
+
+    assert engine.gc_collection_stats == []
+
+
+def test_gc_stats_report_cache_entries_cleared(monkeypatch) -> None:
+    monkeypatch.setattr(inputs, "clear_array_cache", lambda: 7)
+
+    engine = _run_engine(telemetry_enabled=False)
+
+    post = next(entry for entry in engine.gc_collection_stats if entry["phase"] == "post_play")
+    assert post["input_array_cache_entries_cleared"] == 7
 
 
 def test_retain_flag_keeps_records_after_save(tmp_path: Path) -> None:

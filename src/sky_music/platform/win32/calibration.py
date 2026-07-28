@@ -3,7 +3,8 @@ import json
 import threading
 import time
 from ctypes import wintypes
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -212,6 +213,16 @@ kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
 _WND_PROC_REFS: list[Any] = []
 
 
+@dataclass(slots=True)
+class _PendingCalibrationSample:
+    sequence_id: int
+    event_kind: str
+    scancode: int
+    completion_ns: int | None = None
+    receive_ns: int | None = None
+    completion_event: threading.Event = field(default_factory=threading.Event)
+
+
 class CalibrationHarness:
     def __init__(self, scancode: int = 0x1E):
         self.scancode = scancode
@@ -219,11 +230,94 @@ class CalibrationHarness:
         self.injections_done = threading.Event()
         self.down_latencies_us: list[float] = []
         self.up_latencies_us: list[float] = []
-        self.last_send_time_ns: int = 0
-        self.last_send_type: str | None = None
-        self.input_event = threading.Event()
+        self.reordered_receipts = 0
+        self.duplicate_receipts = 0
+        self.mismatched_receipts = 0
+        self.timed_out_samples = 0
+        self._lock = threading.Lock()
+        self._next_sequence_id = 0
+        self._pending: _PendingCalibrationSample | None = None
         self.aborted = False
         self.abort_reason = ""
+
+    def begin_sample(self, event_kind: str) -> tuple[int, threading.Event]:
+        """Publish the expected sample before the native SendInput call."""
+        with self._lock:
+            if self._pending is not None:
+                raise RuntimeError("calibration sample already pending")
+            self._next_sequence_id += 1
+            sample = _PendingCalibrationSample(
+                sequence_id=self._next_sequence_id,
+                event_kind=event_kind,
+                scancode=self.scancode,
+            )
+            self._pending = sample
+            return sample.sequence_id, sample.completion_event
+
+    def publish_completion(self, sequence_id: int, completion_ns: int) -> None:
+        """Publish the native completion timestamp before any bookkeeping."""
+        with self._lock:
+            sample = self._pending
+            if sample is None or sample.sequence_id != sequence_id:
+                return
+            sample.completion_ns = completion_ns
+            if sample.receive_ns is not None:
+                sample.completion_event.set()
+
+    def cancel_sample(self, sequence_id: int) -> None:
+        with self._lock:
+            if self._pending is not None and self._pending.sequence_id == sequence_id:
+                self._pending = None
+
+    def record_raw_input(self, event_kind: str, scancode: int, receive_ns: int) -> None:
+        """Associate one validated WM_INPUT receipt with its exact pending sample."""
+        with self._lock:
+            sample = self._pending
+            if sample is None or sample.scancode != scancode or sample.event_kind != event_kind:
+                self.mismatched_receipts += 1
+                return
+            if sample.receive_ns is not None:
+                self.duplicate_receipts += 1
+                return
+            sample.receive_ns = receive_ns
+            if sample.completion_ns is None:
+                self.reordered_receipts += 1
+            else:
+                sample.completion_event.set()
+
+    def finalize_sample(self, sequence_id: int, event_kind: str, timeout: float = 1.0) -> bool:
+        """Finalize only when completion and receipt belong to the same sequence."""
+        with self._lock:
+            sample = self._pending
+            sample_event = (
+                sample.completion_event
+                if sample is not None and sample.sequence_id == sequence_id
+                else None
+            )
+        if sample_event is None or not sample_event.wait(timeout=timeout):
+            with self._lock:
+                if self._pending is not None and self._pending.sequence_id == sequence_id:
+                    self._pending = None
+                    self.timed_out_samples += 1
+            return False
+
+        with self._lock:
+            sample = self._pending
+            if (
+                sample is None
+                or sample.sequence_id != sequence_id
+                or sample.event_kind != event_kind
+                or sample.completion_ns is None
+                or sample.receive_ns is None
+            ):
+                return False
+            latency_us = max(0.0, sample.receive_ns - sample.completion_ns) / 1000.0
+            if event_kind == "down":
+                self.down_latencies_us.append(latency_us)
+            else:
+                self.up_latencies_us.append(latency_us)
+            self._pending = None
+            return True
 
 
 def percentile(data: list[float], pct: float) -> float:
@@ -267,8 +361,7 @@ def run_calibration_loop(harness: CalibrationHarness) -> None:
                 harness.abort_reason = "Window lost focus during calibration."
                 break
 
-            harness.input_event.clear()
-            harness.last_send_type = "down"
+            sequence_id, _completion_event = harness.begin_sample("down")
 
             inputs_array = (INPUT * 1)()
             inputs_array[0].type = INPUT_KEYBOARD
@@ -282,14 +375,15 @@ def run_calibration_loop(harness: CalibrationHarness) -> None:
             res = user32.SendInput(1, inputs_array, ctypes.sizeof(INPUT))
             t_send = time.perf_counter_ns()
             if res != 1:
+                harness.cancel_sample(sequence_id)
                 harness.aborted = True
                 harness.abort_reason = f"SendInput failed with return code {res}."
                 break
 
-            harness.last_send_time_ns = t_send
+            harness.publish_completion(sequence_id, t_send)
 
             # Wait for WM_INPUT confirmation
-            if not harness.input_event.wait(timeout=1.0):
+            if not harness.finalize_sample(sequence_id, "down", timeout=1.0):
                 harness.aborted = True
                 harness.abort_reason = "Timeout waiting for raw input Down event."
                 break
@@ -303,21 +397,21 @@ def run_calibration_loop(harness: CalibrationHarness) -> None:
                 harness.abort_reason = "Window lost focus during calibration."
                 break
 
-            harness.input_event.clear()
-            harness.last_send_type = "up"
+            sequence_id, _completion_event = harness.begin_sample("up")
 
             inputs_array[0].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
 
             res = user32.SendInput(1, inputs_array, ctypes.sizeof(INPUT))
             t_send = time.perf_counter_ns()
             if res != 1:
+                harness.cancel_sample(sequence_id)
                 harness.aborted = True
                 harness.abort_reason = f"SendInput failed with return code {res}."
                 break
 
-            harness.last_send_time_ns = t_send
+            harness.publish_completion(sequence_id, t_send)
 
-            if not harness.input_event.wait(timeout=1.0):
+            if not harness.finalize_sample(sequence_id, "up", timeout=1.0):
                 harness.aborted = True
                 harness.abort_reason = "Timeout waiting for raw input Up event."
                 break
@@ -337,8 +431,10 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
     
     # We must keep references to delegates so they aren't garbage collected
     def wnd_proc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        t_recv = time.perf_counter_ns()
         if msg == WM_INPUT:
+            # Timestamp receipt before parsing; correlation happens only after the
+            # Raw Input payload has been strictly validated.
+            t_recv = time.perf_counter_ns()
             cbSize = wintypes.UINT()
             user32.GetRawInputData(
                 lparam,
@@ -361,18 +457,11 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
                         kb = raw.keyboard
                         if kb.MakeCode == harness.scancode:
                             is_up = bool(kb.Flags & 1)
-                            if is_up and harness.last_send_type == "up":
-                                # ns delta / 1000 → microseconds
-                                latency = float(t_recv - harness.last_send_time_ns) / 1000.0
-                                harness.up_latencies_us.append(latency)
-                                harness.input_event.set()
-                            elif not is_up and harness.last_send_type == "down":
-                                latency = float(t_recv - harness.last_send_time_ns) / 1000.0
-                                harness.down_latencies_us.append(latency)
-                                harness.input_event.set()
-                                # Progress text is only drawn on WM_PAINT; without this the
-                                # window stays at "0 / 200" until a resize/uncover forces paint.
-                                user32.InvalidateRect(hwnd, None, True)
+                            event_kind = "up" if is_up else "down"
+                            harness.record_raw_input(event_kind, int(kb.MakeCode), t_recv)
+                            # Progress text is only drawn on WM_PAINT; without this the
+                            # window stays at "0 / 200" until a resize/uncover forces paint.
+                            user32.InvalidateRect(hwnd, None, True)
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
         if msg == WM_PAINT:
@@ -493,6 +582,8 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
 
     result = {
         "version": 1,
+        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "source_formula_version": 1,
         "down_us": {
             "p50": round(percentile(down_lat, 50.0)),
             "p90": round(percentile(down_lat, 90.0)),
@@ -503,8 +594,13 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
             "p90": round(percentile(up_lat, 90.0)),
             "p99": round(percentile(up_lat, 99.0)),
         },
-        "sampled_at": datetime.now().isoformat(),
+        "sampled_at": datetime.now(UTC).isoformat(),
         "n": len(down_lat),
+        "sample_count": len(down_lat),
+        "reordered_receipts": harness.reordered_receipts,
+        "duplicate_receipts": harness.duplicate_receipts,
+        "mismatched_receipts": harness.mismatched_receipts,
+        "timed_out_samples": harness.timed_out_samples,
     }
 
     # Save to .cache/input_latency.json
