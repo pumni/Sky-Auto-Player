@@ -386,3 +386,15 @@ def test_engine_play_clears_array_cache_in_finally() -> None:
     _ = _run_engine(telemetry_enabled=False)
 
     assert len(inputs._ARRAY_CACHE) == 0, "engine.play() finally must clear the array cache"
+
+
+def test_engine_exposes_bounded_prewarm_diagnostics() -> None:
+    inputs._ARRAY_CACHE.clear()
+    inputs._INPUT_CACHE.clear()
+    with patch.object(inputs.user32, "SendInput", lambda n, arr, sz: n):
+        inputs.prewarm_input_arrays([((0x15,), False), ((0x15, 0x16), True)])
+
+    engine = _run_engine(telemetry_enabled=False)
+
+    assert engine.prewarm_diagnostics["last_clear_cache_entries"] == 2
+    assert engine.prewarm_diagnostics["last_clear_cache_slots"] == 3

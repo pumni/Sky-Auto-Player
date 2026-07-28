@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -466,6 +467,7 @@ class PlaybackEngine:
             retain_records_after_save=retain_telemetry_records_after_save,
         )
         self.gc_collection_stats: list[dict[str, int | str]] = []
+        self.prewarm_diagnostics: dict[str, int | dict[str, int]] = {}
         self.telemetry.record_runtime_options(
             {
                 "min_hold_assumes_fps": fps,
@@ -719,6 +721,7 @@ class PlaybackEngine:
             from sky_music.platform.win32 import inputs as _inputs_diag
 
             _inputs_diag.reset_send_diagnostics()
+            _inputs_diag.reset_prewarm_diagnostics()
             if self.telemetry.schedule_summary is not None:
                 _inputs_diag.set_schedule_diagnostics(
                     min_gap=self.telemetry.schedule_summary.get("min_same_key_up_gap_us"),
@@ -761,24 +764,34 @@ class PlaybackEngine:
                     from sky_music.platform.win32 import inputs
     
                     shapes_to_prewarm: set[tuple[tuple[int, ...], bool]] = set()
+                    shape_frequencies: Counter[tuple[tuple[int, ...], bool]] = Counter()
                     # Phase 8 (M4): Prewarm both down shapes and exact multi-key up shapes
                     # from the schedule. (Document cap: win32 inputs.py caps at _ARRAY_CACHE_MAX = 8192).
                     for batch in self.runtime_schedule.batches:
-                        if len(shapes_to_prewarm) >= 8192:
-                            break
                         shape = tuple(i.scan_code for i in batch.intents)
                         is_up = batch.kind == "up"
-                        shapes_to_prewarm.add((shape, is_up))
+                        shape_key = (shape, is_up)
+                        if shape_key not in shapes_to_prewarm:
+                            if len(shapes_to_prewarm) >= 8192:
+                                break
+                            shapes_to_prewarm.add(shape_key)
+                        shape_frequencies[shape_key] += 1
                     
                     distinct_keys = set()
                     for action in self.actions:
                         distinct_keys.update(action.scan_codes)
                     for sc in distinct_keys:
-                        if len(shapes_to_prewarm) >= 8192:
-                            break
-                        shapes_to_prewarm.add(((sc,), True))
+                        shape_key = ((sc,), True)
+                        if shape_key not in shapes_to_prewarm:
+                            if len(shapes_to_prewarm) >= 8192:
+                                break
+                            shapes_to_prewarm.add(shape_key)
+                        shape_frequencies[shape_key] += 1
     
-                    inputs.prewarm_input_arrays(shapes_to_prewarm)
+                    inputs.prewarm_input_arrays(
+                        shapes_to_prewarm,
+                        shape_frequencies=shape_frequencies,
+                    )
                 except Exception:
                     pass
     
@@ -912,6 +925,7 @@ class PlaybackEngine:
                     from sky_music.platform.win32 import inputs as _inputs_cleanup
 
                     cleared_array_cache_entries = _inputs_cleanup.clear_array_cache()
+                    self.prewarm_diagnostics = _inputs_cleanup.get_prewarm_diagnostics()
             # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
             # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
             # the dispatch thread allocated during playback (ExecutionResult, batch tuples,

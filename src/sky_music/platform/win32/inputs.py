@@ -3,9 +3,9 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -451,6 +451,68 @@ _ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDi
 _ARRAY_CACHE_MAX = 8192
 _CACHE_LOCK = threading.RLock()
 
+
+@dataclass(slots=True)
+class PrewarmDiagnostics:
+    """Bounded observability for exact-shape prewarm and lazy cache misses.
+
+    These counters are lifecycle instrumentation, not part of the timed send
+    contract. Shape keys contain only scan-code values and direction; no local
+    paths or user data are recorded.
+    """
+
+    unique_down_shape_count: int = 0
+    unique_up_shape_count: int = 0
+    total_input_slots: int = 0
+    approx_payload_bytes: int = 0
+    prewarm_duration_us: int = 0
+    shape_frequency: dict[str, int] = field(default_factory=dict)
+    cache_miss_count: int = 0
+    lazy_build_count: int = 0
+    lazy_build_duration_us_total: int = 0
+    lazy_build_duration_us_max: int = 0
+    first_hit_lazy_build_duration_us: int = 0
+    last_clear_cache_entries: int = 0
+    last_clear_cache_slots: int = 0
+    last_clear_cache_duration_us: int = 0
+
+    def reset(self) -> None:
+        self.unique_down_shape_count = 0
+        self.unique_up_shape_count = 0
+        self.total_input_slots = 0
+        self.approx_payload_bytes = 0
+        self.prewarm_duration_us = 0
+        self.shape_frequency.clear()
+        self.cache_miss_count = 0
+        self.lazy_build_count = 0
+        self.lazy_build_duration_us_total = 0
+        self.lazy_build_duration_us_max = 0
+        self.first_hit_lazy_build_duration_us = 0
+        self.last_clear_cache_entries = 0
+        self.last_clear_cache_slots = 0
+        self.last_clear_cache_duration_us = 0
+
+    def snapshot(self) -> dict[str, int | dict[str, int]]:
+        return {
+            "unique_down_shape_count": self.unique_down_shape_count,
+            "unique_up_shape_count": self.unique_up_shape_count,
+            "total_input_slots": self.total_input_slots,
+            "approx_payload_bytes": self.approx_payload_bytes,
+            "prewarm_duration_us": self.prewarm_duration_us,
+            "shape_frequency": dict(self.shape_frequency),
+            "cache_miss_count": self.cache_miss_count,
+            "lazy_build_count": self.lazy_build_count,
+            "lazy_build_duration_us_total": self.lazy_build_duration_us_total,
+            "lazy_build_duration_us_max": self.lazy_build_duration_us_max,
+            "first_hit_lazy_build_duration_us": self.first_hit_lazy_build_duration_us,
+            "last_clear_cache_entries": self.last_clear_cache_entries,
+            "last_clear_cache_slots": self.last_clear_cache_slots,
+            "last_clear_cache_duration_us": self.last_clear_cache_duration_us,
+        }
+
+
+_PREWARM_DIAG = PrewarmDiagnostics()
+
 # Partial-send diagnostics.
 #
 # SendInput is supposed to inject a chord's keys in one contiguous batch whose inserted events
@@ -555,8 +617,44 @@ def _cached_key_input(scan_code: int, flags: int) -> INPUT:
             _INPUT_CACHE[cache_key] = cached
     return cached
 
-def prewarm_input_arrays(shapes: Iterable[tuple[tuple[int, ...], bool]]) -> None:
-    for scan_codes_tuple, is_up in shapes:
+def _shape_label(scan_codes_tuple: tuple[int, ...], is_up: bool) -> str:
+    direction = "up" if is_up else "down"
+    return f"{direction}:{','.join(str(scan_code) for scan_code in scan_codes_tuple)}"
+
+
+def reset_prewarm_diagnostics() -> None:
+    """Reset lifecycle prewarm counters before a new playback session."""
+    _PREWARM_DIAG.reset()
+
+
+def get_prewarm_diagnostics() -> dict[str, int | dict[str, int]]:
+    """Return a bounded snapshot of prewarm/cache observability."""
+    return _PREWARM_DIAG.snapshot()
+
+
+def prewarm_input_arrays(
+    shapes: Iterable[tuple[tuple[int, ...], bool]],
+    *,
+    shape_frequencies: Mapping[tuple[tuple[int, ...], bool], int] | None = None,
+) -> None:
+    started_ns = time.perf_counter_ns()
+    shape_list = list(shapes)
+    unique_shapes = set(shape_list)
+    frequencies = (
+        {shape: max(0, int(count)) for shape, count in shape_frequencies.items() if shape in unique_shapes}
+        if shape_frequencies is not None
+        else {shape: shape_list.count(shape) for shape in unique_shapes}
+    )
+    _PREWARM_DIAG.unique_down_shape_count = sum(not is_up for _, is_up in unique_shapes)
+    _PREWARM_DIAG.unique_up_shape_count = sum(is_up for _, is_up in unique_shapes)
+    _PREWARM_DIAG.total_input_slots = sum(len(scan_codes) for scan_codes, _ in unique_shapes)
+    _PREWARM_DIAG.approx_payload_bytes = _PREWARM_DIAG.total_input_slots * _INPUT_SIZE
+    _PREWARM_DIAG.shape_frequency = {
+        _shape_label(scan_codes, is_up): frequencies[(scan_codes, is_up)]
+        for scan_codes, is_up in unique_shapes
+    }
+
+    for scan_codes_tuple, is_up in unique_shapes:
         flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if is_up else 0)
         cache_key = (scan_codes_tuple, flags)
         with _CACHE_LOCK:
@@ -565,6 +663,9 @@ def prewarm_input_arrays(shapes: Iterable[tuple[tuple[int, ...], bool]]) -> None
                     _ARRAY_CACHE.popitem(last=False)
                 key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
                 _ARRAY_CACHE[cache_key] = (INPUT * len(scan_codes_tuple))(*key_inputs)
+    _PREWARM_DIAG.prewarm_duration_us = max(
+        0, (time.perf_counter_ns() - started_ns) // 1_000
+    )
 
 
 def clear_array_cache() -> int:
@@ -576,9 +677,16 @@ def clear_array_cache() -> int:
     fixed-size table (~15 scan codes × {down, up}) reused on the next prewarm, and
     rebuilding INPUT structs is the bulk of per-event Python cost.
     """
+    started_ns = time.perf_counter_ns()
     with _CACHE_LOCK:
         n = len(_ARRAY_CACHE)
+        slots = sum(len(input_array) for input_array in _ARRAY_CACHE.values())
         _ARRAY_CACHE.clear()
+    _PREWARM_DIAG.last_clear_cache_entries = n
+    _PREWARM_DIAG.last_clear_cache_slots = slots
+    _PREWARM_DIAG.last_clear_cache_duration_us = max(
+        0, (time.perf_counter_ns() - started_ns) // 1_000
+    )
     return n
 
 def _lookup_or_build_input_array(
@@ -594,11 +702,22 @@ def _lookup_or_build_input_array(
     with _CACHE_LOCK:
         input_array = _ARRAY_CACHE.get(cache_key)
         if input_array is None:
+            build_started_ns = time.perf_counter_ns()
             if len(_ARRAY_CACHE) >= _ARRAY_CACHE_MAX:
                 _ARRAY_CACHE.popitem(last=False)
             key_inputs = [_cached_key_input(sc, flags) for sc in scan_codes_tuple]
             input_array = (INPUT * n)(*key_inputs)
             _ARRAY_CACHE[cache_key] = input_array
+            build_duration_us = max(0, (time.perf_counter_ns() - build_started_ns) // 1_000)
+            _PREWARM_DIAG.cache_miss_count += 1
+            _PREWARM_DIAG.lazy_build_count += 1
+            _PREWARM_DIAG.lazy_build_duration_us_total += build_duration_us
+            _PREWARM_DIAG.lazy_build_duration_us_max = max(
+                _PREWARM_DIAG.lazy_build_duration_us_max,
+                build_duration_us,
+            )
+            if _PREWARM_DIAG.lazy_build_count == 1:
+                _PREWARM_DIAG.first_hit_lazy_build_duration_us = build_duration_us
     return input_array
 
 

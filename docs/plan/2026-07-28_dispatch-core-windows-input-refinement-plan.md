@@ -1,6 +1,6 @@
 # Dispatch Core & Windows Input Refinement Plan
 
-> **Status:** PROPOSED — NOT IMPLEMENTED  
+> **Status:** PROPOSED — EVIDENCE RECORDED; CONDITIONAL CANDIDATES NOT SHIPPED
 > **Ngày lập:** 2026-07-28  
 > **Snapshot được review:** `main` tại
 > `e9f4fa422cfec95f61c94ba768979d7e84554afd`  
@@ -919,7 +919,136 @@ AI phải dừng và xin hướng dẫn nếu:
 - Danh sách candidate `GO`, `NO-GO`, `DEFER`, không che giấu negative result.
 - Diff normative docs tương ứng với behavior.
 
-## 25. Primary references
+## 25. Evidence execution record — 2026-07-28
+
+The remaining gated work was measured with the isolated harness
+[`scripts/bench_remaining_plan.py`](../../scripts/bench_remaining_plan.py). The
+harness uses the current telemetry/estimator contracts and local prototypes; it
+does not change production defaults, input technology, lead-cache schema or
+power policy.
+
+### Environment and reproducibility
+
+- Windows host, CPython `3.14.3` free-threading build, runtime GIL disabled.
+- Repro command:
+
+  ```powershell
+  uv run --env-file .env python scripts/bench_remaining_plan.py
+  ```
+
+- Phase 7 was repeated three times per mode and reported median values. The
+  external process monitor measured approximately 24.4–24.5 MB peak working
+  set for each short isolated run; this monitor did not provide a useful
+  mode-to-mode delta, so `tracemalloc` is the differential memory evidence.
+
+### Phase 6 — M2 strict sender-result contract
+
+Command:
+
+```powershell
+uv run --env-file .env pytest tests/bench_backend_result_normalization.py tests/bench_dispatch_send_pedantic.py -m slow --benchmark-only --benchmark-disable-gc -q
+```
+
+Result: `3 passed`. The observed baseline remained approximately 500 ns median
+for cached lookup, 3.2 µs for cold array build and 1.5 µs for the compatibility
+shim. The scaffold has no strict-candidate arm and no live end-to-end CPU/tail
+measurement, so the ≥5% isolated and ≥1% end-to-end gate cannot be established.
+
+Decision: **NO-GO / DEFER**. Keep the compatibility shim.
+
+### Phase 7 — M3 telemetry detail levels
+
+Synthetic `100,000` dispatches, three-run median:
+
+| Mode | Wall time | Process CPU | `tracemalloc` peak | Retained records |
+|---|---:|---:|---:|---:|
+| `off` | 407,612 µs | 406,250 µs | 3,683 B | 0 |
+| bounded summary prototype | 232,000 µs | 218,750 µs | 1,752 B | 0 |
+| `full` | 1,444,660 µs | 1,421,875 µs | 46,555,602 B | 100,000 |
+
+The prototype demonstrates fixed-memory and lower CPU cost versus `full`, but
+the current product has no user-facing detail-level contract, no declared
+quantile error bounds, and the HUD already uses bounded `ProgressCounters`
+without full telemetry. The benchmark therefore proves prototype mechanics,
+not sufficient product ROI or a production-compatible schema.
+
+Decision: **DEFER** M3 behavior. Do not add a summary mode or change the
+default until the use case, exact metrics/error bounds and save/export contract
+are specified. The current full/off behavior remains unchanged.
+
+### Phase 8B — M4 budgeted prewarm policy
+
+The existing exact-shape path was measured against three corpora. The policy
+column below is an illustrative `2,048` total-`INPUT`-slot budget only; it is
+not a proposed default threshold.
+
+| Corpus | Events | Unique shapes | Precision slots | Prewarm | Budgeted slots | Budgeted event misses |
+|---|---:|---:|---:|---:|---:|---:|
+| few repeated | 100,000 | 4 | 6 | 1,527 µs | 2,048 | 0 |
+| thousands unique | 10,000 | 10,000 | 10,000 | 5,590,952 µs | 2,048 | 15,904 |
+| mixed hot/cold | 100,000 | 8,004 | 8,006 | 3,142,535 µs | 2,048 | 57,910 |
+
+The budget saves payload slots only for high-diversity corpora and produces a
+large lazy-miss surface. No timed-send p99/max or missed-deadline evidence was
+collected for a production budget candidate, and the threshold is not derived
+from a representative song corpus.
+
+Decision: **DEFER** M4 policy. Keep Phase 8A diagnostics and exact-shape
+precision default; do not ship a budgeted mode.
+
+### Phase 9 — L1 lead-cache cross-mode experiment
+
+The current estimator state was seeded in an `800/400 µs` context, exported and
+cross-loaded into synthetic contexts. First-ten-note absolute completion-error
+proxies were compared with a cold estimator:
+
+| Context | Stale p99/max | Cold p99/max | Stale worse? |
+|---|---:|---:|---|
+| matching AC/high priority | 0/0 µs | 800/800 µs | No |
+| battery/fallback priority | 800/800 µs | 1,600/1,600 µs | No |
+| timer fallback | 400/400 µs | 1,200/1,200 µs | No |
+| low-latency power state | 600/600 µs | 200/200 µs | **Yes** |
+
+The result is mixed: stale state is beneficial in several synthetic transitions
+but is 3× worse at p99 in the low-latency transition. It is not a Windows live
+measurement and does not include real timer/priority/power outcomes or the
+required convergence sample distribution.
+
+Decision: **DEFER** schema v3/fingerprint activation. Keep schema v2 and use
+diagnostic evidence only; do not add guessed invalidation rules.
+
+### Phase 10 — L2 runtime power policy
+
+Host observation at measurement time:
+
+- active Windows plan: `Balanced`;
+- `GetSystemPowerStatus`: `ACLineStatus=1`, `BatteryFlag=1`, battery level 100%;
+- a live battery run was not available without changing physical/system power
+  state, which was intentionally not performed.
+
+No AC/battery cross-product with visible lateness, wakeups, RSS, priority/power
+outcomes and missed-deadline distribution can therefore be claimed. No timing
+profile semantics or power behavior was changed.
+
+Decision: **AWAITING EVIDENCE / DEFER** the RFC behavior candidate. A future
+run must collect the required AC and battery distributions before any policy
+axis or automatic selection is implemented.
+
+### Remaining-phase decision summary
+
+| Candidate | Evidence status | Production action |
+|---|---|---|
+| M2 strict sender result | insufficient candidate/E2E gate | retain shim |
+| M3 telemetry summary | prototype positive, product contract incomplete | defer behavior |
+| M4 budgeted prewarm | high-diversity memory benefit but large miss surface | retain precision default |
+| L1 lead-cache v3 | mixed synthetic cross-mode result | retain schema v2 |
+| L2 power policy | AC-only observation; battery Pareto missing | defer RFC behavior |
+
+No conditional candidate is promoted to `GO` by this packet. Phase 8A
+observability remains the only optional instrumentation shipped from this
+evidence pass.
+
+## 26. Primary references
 
 - [`AGENTS.md`](../../AGENTS.md)
 - [`SECURITY.md`](../../SECURITY.md)
@@ -940,4 +1069,3 @@ AI phải dừng và xin hướng dẫn nếu:
   <https://docs.python.org/3.14/howto/free-threading-python.html>
 - Python 3.14 `gc`:
   <https://docs.python.org/3.14/library/gc.html>
-

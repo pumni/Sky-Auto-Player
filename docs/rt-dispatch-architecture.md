@@ -199,3 +199,13 @@ cleanest send tail of all runs.
 ## 8. Telemetry and Memory Hygiene
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
+
+**Prewarm observability.** Before a threaded playback dispatch loop starts, the
+engine keeps the existing exact-shape prewarm behavior and cache cap. The
+platform cache reports bounded lifecycle counters for unique down/up shapes,
+prewarmed `INPUT` slots and approximate payload bytes, schedule shape
+frequency, prewarm duration, lazy cache misses/first-hit build duration, and
+the entries/slots cleared at teardown. These counters are diagnostic only;
+they do not impose a payload budget or change cache representation. Working-set
+and RSS claims remain benchmark evidence, not an inference from cache-entry or
+`gc.collect()` counts.
