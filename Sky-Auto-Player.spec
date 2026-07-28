@@ -74,8 +74,16 @@ a = Analysis(
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
-    # optimize=1: strips docstrings and __debug__-only blocks; preserves
-    # assert statements (safe — see C1 audit in docs/main-path-cleanup-and-build-quality-plan.md).
+    # optimize=1: removes docstrings and __debug__-only blocks. NOTE — assert
+    # statements are NOT preserved at optimize>=1 (Python compiles them out
+    # along with __debug__). The duplicate-release check at
+    # ``orchestration/core/loop.py`` is a debug/source invariant; production
+    # correctness relies on the coordinator's uniqueness guard
+    # (``pending_scan_codes`` / ``pending_by_generation``) at insert time,
+    # not on the dispatch-time assertion. ``build_app.run_smoke_test`` invokes
+    # ``--selftest-optimize`` after packaging so a regression in this contract
+    # cannot ship silently. Add an explicit runtime guard only if P0 mandates
+    # it — separate patch + benchmark, never on the frozen-build hot path.
     optimize=1,
 )
 

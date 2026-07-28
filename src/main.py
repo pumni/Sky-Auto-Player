@@ -589,6 +589,39 @@ def _run_textual_selftest() -> int:
     print("Textual selftest OK: rapidfuzz imported and SkyPickerApp mounted headlessly.")
     return 0
 
+
+def _run_optimize_selftest() -> int:
+    """Headless frozen-exe smoke test for the spec ``optimize=1`` contract.
+
+    The PyInstaller spec at ``Sky-Auto-Player.spec:77-79`` strips docstrings
+    and ``__debug__``-only blocks (``assert`` is NOT preserved at
+    ``optimize>=1``). This selftest prints ``sys.flags.optimize`` and the
+    ``__debug__`` flag, then exits non-zero when ``__debug__ is True`` so the
+    frozen-build smoke step in ``src/build_app.py`` catches a regression
+    before the release ships.
+
+    Return values:
+        0 — release build, ``__debug__`` is False (Python invoked with ``-O``
+            or bytecode compiled with ``optimize>=1``). Contract holds.
+        1 — dev / pytest build, ``__debug__`` is True. The freeze contract
+            would not hold for a packaged binary in this state.
+
+    The release-mode pass path is exercised by ``build_app.run_smoke_test``
+    on the actual frozen binary; this unit test exercises only the
+    fail-fast contract.
+    """
+    print(f"sys.flags.optimize: {sys.flags.optimize}")
+    print(f"__debug__: {bool(__debug__)}")
+    if __debug__:
+        print(
+            "selftest-optimize FAILED: __debug__ is True (assert statements "
+            "would not be stripped in a frozen build at optimize=1).",
+            file=sys.stderr,
+        )
+        return 1
+    print("selftest-optimize OK: __debug__ is False (assert statements stripped as spec requires).")
+    return 0
+
 def build_playback_controls(args: argparse.Namespace) -> PlaybackControls:
     if args.disable_hotkeys:
         return PlaybackControls(
@@ -772,6 +805,9 @@ def main() -> int:
 
     if "--selftest-textual" in sys.argv:
         return _run_textual_selftest()
+
+    if "--selftest-optimize" in sys.argv:
+        return _run_optimize_selftest()
 
     if sys.platform == 'win32':
         try:

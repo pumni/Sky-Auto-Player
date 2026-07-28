@@ -128,26 +128,40 @@ def run_smoke_test(exe_path: Path) -> bool:
         print(f"[!] Missing executable: {exe_path}")
         return False
 
-    print(f"[+] Running Smoke Test: {exe_path} --selftest-textual")
-    try:
-        result = subprocess.run(
-            [str(exe_path), "--selftest-textual"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(exe_path.parent),
-        )
-    except Exception as exc:
-        print(f"[!] Error while running Smoke Test: {exc}")
-        return False
+    # Each smoke step is a thin wrapper around the corresponding ``--selftest-*``
+    # branch in ``src/main.py``. Adding a step here also requires wiring the
+    # branch in main() and a unit test in ``tests/test_selftest_*.py``.
+    smoke_steps = [
+        (
+            "--selftest-textual",
+            "Textual picker headless mount + rapidfuzz import",
+        ),
+        (
+            "--selftest-optimize",
+            "frozen build optimization contract (assert strips at optimize>=1)",
+        ),
+    ]
+    for flag, description in smoke_steps:
+        print(f"[+] Running Smoke Test: {exe_path} {flag}  ({description})")
+        try:
+            result = subprocess.run(
+                [str(exe_path), flag],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(exe_path.parent),
+            )
+        except Exception as exc:
+            print(f"[!] Error while running Smoke Test ({flag}): {exc}")
+            return False
 
-    if result.returncode == 0:
-        print("[v] Smoke Test SUCCEEDED.")
-        return True
+        if result.returncode != 0:
+            print(f"[!] Smoke Test FAILED for {flag} (rc={result.returncode}).")
+            print(result.stderr or result.stdout)
+            return False
 
-    print("[!] Smoke Test FAILED!")
-    print(result.stderr or result.stdout)
-    return False
+    print("[v] Smoke Test SUCCEEDED.")
+    return True
 
 
 def _hash_file(path: Path) -> str:
