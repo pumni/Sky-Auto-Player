@@ -254,7 +254,14 @@ class DispatchLoop:
         focus_restore_grace_us: int = 100_000,
         late_pulse_drop_threshold_us: int | None = None,
         same_key_conflict_policy: str = "degraded",
-        enable_event_wait: bool = False,
+        # ``enable_event_wait`` is intentionally retained as a no-op kwarg
+        # for source-compatibility with downstream callers that still pass
+        # it. The polling-vs-event decision is driven by ``command_event``
+        # (None ⇒ polled) supplied by the supervisor, not by this boolean.
+        # The instance field was removed -- the kwarg remains so callers
+        # continue to compile. Will be removed in a later release after
+        # downstream callers stop passing it. See plan §8 Patch C2.
+        enable_event_wait: bool = False,  # noqa: ARG002
         dispatch_lead_us: int = 0,
         estimator: LeadEstimator | None = None,
         unfocused_send_hook: Callable[[], None] | None = None,
@@ -275,7 +282,6 @@ class DispatchLoop:
         self.focus_restore_grace_us = focus_restore_grace_us
         self.late_pulse_drop_threshold_us = late_pulse_drop_threshold_us
         self.same_key_conflict_policy = same_key_conflict_policy
-        self.enable_event_wait = enable_event_wait
         self.dispatch_lead_us = dispatch_lead_us
         self.estimator: LeadEstimator = estimator if estimator is not None else _NullEstimator()
         # Injected by engine → platform note_send_while_unfocused (no platform import here).
