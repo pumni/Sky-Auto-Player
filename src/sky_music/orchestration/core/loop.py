@@ -356,6 +356,44 @@ class DispatchLoop:
             recent_latencies_us=latencies,
         )
 
+    def _observe_exec_result(self, exec_result: ExecutionResult | None) -> None:
+        """Update the running totals the HUD/ProgressCounters reads from.
+
+        Onset (kind='down') counters use ``visible_lateness_us`` (completion_us
+        - scheduled_us — the player-perceived onset), not the sender call-entry
+        lateness; the latter stays in the raw ``ExecutionResult`` record for
+        Python-prologue analysis. Release (kind='up') counters continue to use
+        ``lateness_us`` — the release path's metric is the bounded-retry
+        contract, not game-observed onset.
+
+        Deferred releases (``runtime_outcome == 'deferred_release'``) bypass
+        both buckets, mirroring the production guard that kept this logic
+        inside the run() closure before the method was extracted for testing.
+        """
+        if exec_result is None:
+            return
+        if exec_result.runtime_outcome == "deferred_release":
+            return
+        if exec_result.kind == "down":
+            metric = exec_result.visible_lateness_us
+            clamped = max(0, metric)
+            if clamped > self._max_lateness_us:
+                self._max_lateness_us = clamped
+            if clamped > 2000:
+                self._late_2ms += 1
+            if clamped > 5000:
+                self._late_5ms += 1
+            if clamped > 10000:
+                self._late_10ms += 1
+            self._latencies.append(metric)
+        else:
+            lateness_us = exec_result.lateness_us
+            clamped = max(0, lateness_us)
+            if clamped > self._release_max_us:
+                self._release_max_us = clamped
+            if clamped > 2000:
+                self._release_late_2ms += 1
+
     def _abort_input_safe(
         self,
         reason: str,
@@ -1255,28 +1293,6 @@ class DispatchLoop:
         import collections
         self._latencies = collections.deque(maxlen=2000)
 
-        def observe_result(exec_result: ExecutionResult | None) -> None:
-            if exec_result is None:
-                return
-            if exec_result.runtime_outcome != "deferred_release":
-                lateness_us = exec_result.lateness_us
-                clamped = max(0, lateness_us)
-                if exec_result.kind == "down":
-                    if clamped > self._max_lateness_us:
-                        self._max_lateness_us = clamped
-                    if clamped > 2000:
-                        self._late_2ms += 1
-                    if clamped > 5000:
-                        self._late_5ms += 1
-                    if clamped > 10000:
-                        self._late_10ms += 1
-                    self._latencies.append(lateness_us)
-                else:
-                    if clamped > self._release_max_us:
-                        self._release_max_us = clamped
-                    if clamped > 2000:
-                        self._release_late_2ms += 1
-
         # Defined once (not per loop iteration) so the hot dispatch window never allocates a
         # fresh closure per note. ``first_action_executed`` is captured by reference, so the
         # loop's own reassignment of it (from the wait-deadline return) and this closure's
@@ -1285,7 +1301,7 @@ class DispatchLoop:
             nonlocal first_action_executed
             if result is not None:
                 first_action_executed = True
-            observe_result(result)
+            self._observe_exec_result(result)
 
         final_abort_reason = "error"  # default for any exception path not explicitly classified
 
