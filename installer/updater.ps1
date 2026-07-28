@@ -122,19 +122,11 @@ function Resolve-ProcessNames {
 function Select-ReleaseAssets($Assets, [string]$Version) {
     $autoZip = "Sky-Auto-Player-v$Version.zip"
     $autoSha = "Sky-Auto-Player-v$Version.zip.sha256"
-    $legacyZip = "Sky-Player-v$Version.zip"
-    $legacySha = "Sky-Player-v$Version.zip.sha256"
 
     $hasAutoZip = $Assets | Where-Object { $_.name -eq $autoZip } | Select-Object -First 1
     $hasAutoSha = $Assets | Where-Object { $_.name -eq $autoSha } | Select-Object -First 1
     if ($hasAutoZip -and $hasAutoSha) {
         return @{ ZipAsset = $hasAutoZip; ShaAsset = $hasAutoSha }
-    }
-
-    $hasLegacyZip = $Assets | Where-Object { $_.name -eq $legacyZip } | Select-Object -First 1
-    $hasLegacySha = $Assets | Where-Object { $_.name -eq $legacySha } | Select-Object -First 1
-    if ($hasLegacyZip -and $hasLegacySha) {
-        return @{ ZipAsset = $hasLegacyZip; ShaAsset = $hasLegacySha }
     }
 
     throw "Select-ReleaseAssets: missing zip or sha256 for version $Version"
@@ -1003,11 +995,7 @@ try {
 }
 
 # --- Verify exact staged file set and executable integrity ---
-$expectedExecutable = if ($zipName -like 'Sky-Player-*') {
-    'Sky-Player.exe'
-} else {
-    'Sky-Auto-Player.exe'
-}
+$expectedExecutable = 'Sky-Auto-Player.exe'
 try {
     $verifiedManifest = Get-VerifiedManifest `
         -StagingRoot $StagingRoot `

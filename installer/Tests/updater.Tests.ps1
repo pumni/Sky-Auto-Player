@@ -696,34 +696,29 @@ Describe "updater.ps1" {
     }
 
     Describe "Select-ReleaseAssets" {
-        It "Select-ReleaseAssets prefers canonical pair" {
+        It "Select-ReleaseAssets returns canonical pair" {
             $assets = @(
-                @{ name = "Sky-Auto-Player-v2.4.2.zip"; browser_download_url = "http://a/zip" },
-                @{ name = "Sky-Auto-Player-v2.4.2.zip.sha256"; browser_download_url = "http://a/sha" },
-                @{ name = "Sky-Player-v2.4.2.zip"; browser_download_url = "http://b/zip" },
-                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+                @{ name = "Sky-Auto-Player-v2.4.5.zip"; browser_download_url = "http://a/zip" },
+                @{ name = "Sky-Auto-Player-v2.4.5.zip.sha256"; browser_download_url = "http://a/sha" }
             )
-            $result = Select-ReleaseAssets -Assets $assets -Version "2.4.2"
-            $result.ZipAsset.name | Should -Be "Sky-Auto-Player-v2.4.2.zip"
-            $result.ShaAsset.name | Should -Be "Sky-Auto-Player-v2.4.2.zip.sha256"
+            $result = Select-ReleaseAssets -Assets $assets -Version "2.4.5"
+            $result.ZipAsset.name | Should -Be "Sky-Auto-Player-v2.4.5.zip"
+            $result.ShaAsset.name | Should -Be "Sky-Auto-Player-v2.4.5.zip.sha256"
         }
 
-        It "Select-ReleaseAssets falls back to legacy pair" {
+        It "Select-ReleaseAssets throws when zip missing" {
             $assets = @(
-                @{ name = "Sky-Player-v2.4.2.zip"; browser_download_url = "http://b/zip" },
-                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+                @{ name = "Sky-Auto-Player-v2.4.5.zip.sha256"; browser_download_url = "http://a/sha" }
             )
-            $result = Select-ReleaseAssets -Assets $assets -Version "2.4.2"
-            $result.ZipAsset.name | Should -Be "Sky-Player-v2.4.2.zip"
-            $result.ShaAsset.name | Should -Be "Sky-Player-v2.4.2.zip.sha256"
+            { Select-ReleaseAssets -Assets $assets -Version "2.4.5" } | Should -Throw
         }
 
-        It "Select-ReleaseAssets refuses mixed pairs" {
+        It "Select-ReleaseAssets throws on legacy Sky-Player asset" {
             $assets = @(
-                @{ name = "Sky-Auto-Player-v2.4.2.zip"; browser_download_url = "http://a/zip" },
-                @{ name = "Sky-Player-v2.4.2.zip.sha256"; browser_download_url = "http://b/sha" }
+                @{ name = "Sky-Player-v2.4.5.zip"; browser_download_url = "http://b/zip" },
+                @{ name = "Sky-Player-v2.4.5.zip.sha256"; browser_download_url = "http://b/sha" }
             )
-            { Select-ReleaseAssets -Assets $assets -Version "2.4.2" } | Should -Throw
+            { Select-ReleaseAssets -Assets $assets -Version "2.4.5" } | Should -Throw
         }
     }
 

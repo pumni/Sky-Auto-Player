@@ -73,7 +73,7 @@ self-updates while running** — applying an update is one explicit step:
 3. Reopen `Sky-Auto-Player.exe`.
 
 > [!NOTE]
-> **Pre-2.4.2 Migration:** If your installation is named `Sky-Player` (v2.4.1 or earlier), simply run your existing `updater.bat` once. It will automatically download the legacy bridge update, migrating you to the new `Sky-Auto-Player.exe` and the new updater scripts.
+> **Pre-2.4.2 Migration (historical):** The legacy bridge update (`Sky-Player-v<ver>.zip`) was available from v2.4.2 through v2.4.4 so pre-rename `Sky-Player` installs could run their existing `updater.bat` once to migrate. The bridge was **retired in v2.4.5**. If you are still on v2.4.1 or earlier and never ran the bridge, download the canonical `Sky-Auto-Player-v<ver>.zip` manually, extract it next to the old install, and copy across your `config.json`, `.env`, `songs/`, and `logs/`.
 
 The updater verifies SHA256 before touching any file, rolls back failed copies transactionally,
 and never replaces your `config.json` or `songs/` folder. Pre-release builds:

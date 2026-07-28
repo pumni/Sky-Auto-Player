@@ -139,7 +139,6 @@ def format_update_banner(update: UpdateInfo, current_version: str) -> str:
         f"Sky Auto Player v{latest} is now available.",
         f"You are running v{current_version}.",
         "To update: close Sky Auto Player, run updater.bat, reopen.",
-        "(If you still have Sky-Player.exe, run updater.bat once to migrate)",
         ""
     ]
     

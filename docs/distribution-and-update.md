@@ -1,6 +1,6 @@
 # Distribution and Update Model
 
-This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player. It tracks the `pyproject.toml` `[project].version` (currently 2.4.4) and is the reference for contributors handling packaging or update logic. Update this header whenever the release version bumps — the rules below apply to every shipped release, not a specific point release.
+This document explains the distribution model, update architecture, and lifecycle rules for Sky Auto Player. It tracks the `pyproject.toml` `[project].version` (currently 2.4.5) and is the reference for contributors handling packaging or update logic. Update this header whenever the release version bumps — the rules below apply to every shipped release, not a specific point release.
 
 ## 1. Model Overview
 
@@ -12,14 +12,12 @@ To ensure stability and eliminate in-use file replacement complexities, **in-app
 
 ## 2. Release Artefact Contract
 
-Our CI pipeline (defined in `.github/workflows/release.yml`) builds exactly five assets on every tag push matching `v*` during the legacy bridge window:
+Our CI pipeline (defined in `.github/workflows/release.yml`) builds exactly three assets on every tag push matching `v*`:
 1. `Sky-Auto-Player-v<version>.zip` — The canonical portable application.
 2. `Sky-Auto-Player-v<version>.zip.sha256` — The cryptographic sidecar.
 3. `MANIFEST.json` — Canonical release metadata.
-4. `Sky-Player-v<version>.zip` — The legacy bridge portable application.
-5. `Sky-Player-v<version>.zip.sha256` — The cryptographic sidecar for the legacy bridge zip.
 
-**Note on Sunset (D3):** The legacy bridge assets (`Sky-Player-*`) are published to support users migrating from pre-2.4.2 versions. This dual-publish bridge is a temporary transition path and will be sunset no earlier than the first 2.5.0 release (with at least 30 days notice in the CHANGELOG).
+**Sunset (effective v2.4.5):** The dual-publish legacy bridge (`Sky-Player-v<ver>.zip` + sidecar), established in v2.4.2 to migrate pre-rename `Sky-Player.exe` installs via the old `updater.bat`, has been removed. Releases from v2.4.5 onwards publish the canonical triple only. Pre-2.4.2 installs that never received the bridge must reinstall manually from the canonical zip. The dual-**exe** accept in `updater.bat` / `installer/updater.ps1` (`Resolve-PrimaryExe`, `Resolve-ProcessNames`, `Resolve-StagingRoot`) is **retained** so already-bridged installs that still carry a `Sky-Player.exe` keep updating cleanly until orphan cleanup drops it.
 
 **Crucial Invariant:** The Git tag version must perfectly match the version specified in `pyproject.toml`. The release workflow enforces this and will fail the build if they diverge.
 
@@ -41,9 +39,9 @@ The external updater (`updater.bat` delegating to `installer/updater.ps1`) enfor
 
 The script **MUST start with a UTF-8 BOM** (`EF BB BF`).  `updater.bat` falls back to `powershell.exe` (Windows PowerShell 5.1, the inbox shell on every Windows machine) when `pwsh` is not installed.  PS 5.1 reads BOM-less `.ps1` files with the system ANSI codepage (Windows-1252 on en-US hosts), so any non-ASCII byte — em-dash `—` (`E2 80 94`), `§` (`C2 A7`), smart quotes — gets mis-decoded as `â€"` / `Â§` and breaks the parser, fail-closing the entire external update path.
 
-### 3.2. Pre-2.4.2 Migration (The Bridge)
+### 3.2. Pre-2.4.2 Migration (Historical)
 
-Users on older installations named "Sky-Player" (v2.4.1 or earlier) can seamlessly migrate to the new "Sky Auto Player" identity. To migrate, users simply run their existing `updater.bat` once after v2.4.2 is published. The old updater will download the legacy bridge zip, which contains the new `Sky-Auto-Player.exe` and the new updater scripts. Subsequent updates will then follow the canonical `Sky-Auto-Player-v*.zip` path automatically.
+Users on older installations named "Sky-Player" (v2.4.1 or earlier) who ran their existing `updater.bat` during the v2.4.2–v2.4.4 migration window received the legacy bridge zip and migrated onto the new `Sky-Auto-Player.exe` plus the new updater scripts. From v2.4.5 the legacy bridge zip is no longer published. Pre-2.4.2 installs that never ran the bridge must reinstall manually from the canonical `Sky-Auto-Player-v<ver>.zip` (preserve `config.json`, `.env`, `songs/`, `logs/` by extracting into a sibling directory and copying across). Already-bridged installs continue to update through the canonical path automatically; their residual `Sky-Player.exe` is orphaned and may be removed.
 
 ## 4. Channel Switching
 
