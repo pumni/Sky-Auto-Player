@@ -47,7 +47,21 @@ class RuntimeSessionState:
 
     def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
         self.session = session
-        self.timing_policy = session.resolve_effective_policy(cfg)
+        # Resolve the device-calibrated margin once at session build time
+        # and inject the primitives into the domain session. The
+        # calibration loader lives in ``infrastructure/`` so the domain
+        # session stays filesystem-free (AGENTS.md Architecture Invariants).
+        from sky_music.infrastructure.calibration_loader import (
+            load_calibrated_margin_recommendation,
+        )
+        calibrated_margin_us, calibrated_margin_source = (
+            load_calibrated_margin_recommendation()
+        )
+        self.timing_policy = session.resolve_effective_policy(
+            cfg,
+            calibrated_margin_us=calibrated_margin_us,
+            calibrated_margin_source=calibrated_margin_source,
+        )
         self.sleep_policy = session.resolve_sleep_policy(cfg, spin_threshold_us=spin_threshold_us)
         self.scan_code_mode = session.scan_code_mode
         self.tempo_scale = session.tempo_scale

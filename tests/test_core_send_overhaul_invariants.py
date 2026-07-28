@@ -4,7 +4,9 @@ import json
 from unittest.mock import patch
 
 from sky_music.domain.domain import Song
-from sky_music.domain.scheduler_types import get_calibrated_margin_recommendation
+from sky_music.infrastructure.calibration_loader import (
+    load_calibrated_margin_recommendation,
+)
 from sky_music.infrastructure.timing import Clock
 from sky_music.infrastructure.wait_strategy import HybridWaitStrategy
 from sky_music.orchestration.engine import PlaybackEngine
@@ -79,36 +81,44 @@ def test_hybrid_wait_strategy_spin_does_not_sleep():
 
 
 def test_calibrated_margin_recommendation_poison_cases(tmp_path, monkeypatch):
-    """Invariant: get_calibrated_margin_recommendation handles corrupted or missing cache gracefully."""
+    """Invariant: load_calibrated_margin_recommendation handles corrupted or missing cache gracefully."""
     monkeypatch.chdir(tmp_path)
-    
-    # Missing file -> None
-    assert get_calibrated_margin_recommendation() is None
-    
-    # Corrupted file -> None
+
+    # Missing file -> (None, "default_500")
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == "default_500"
+
+    # Corrupted file -> (None, "default_500")
     cache_dir = tmp_path / ".cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "input_latency.json"
     cache_file.write_text("{invalid_json", encoding="utf-8")
-    assert get_calibrated_margin_recommendation() is None
-    
-    # Absurd values -> None
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == "default_500"
+
+    # Absurd values -> (None, "default_500")
     cache_data_absurd = {
         "version": 1,
         "down_us": {"p50": 200000, "p90": 300000, "p99": 400000},
         "up_us": {"p50": 100},
     }
     cache_file.write_text(json.dumps(cache_data_absurd), encoding="utf-8")
-    assert get_calibrated_margin_recommendation() is None
-    
-    # Wrong version -> None
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == "default_500"
+
+    # Wrong version -> (None, "default_500")
     cache_data_v2 = {
         "version": 2,
         "down_us": {"p50": 200, "p90": 300, "p99": 400},
         "up_us": {"p50": 100},
     }
     cache_file.write_text(json.dumps(cache_data_v2), encoding="utf-8")
-    assert get_calibrated_margin_recommendation() is None
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == "default_500"
 
 
 def test_telemetry_summary_game_observed_default():

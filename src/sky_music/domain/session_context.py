@@ -128,7 +128,13 @@ class PlaybackSessionContext:
             self.policy_overrides,
         )
 
-    def _base_timing_policy(self, cfg: AppConfig | None = None) -> TimingPolicy:
+    def _base_timing_policy(
+        self,
+        cfg: AppConfig | None = None,
+        *,
+        calibrated_margin_us: int | None = None,
+        calibrated_margin_source: str = "default_500",
+    ) -> TimingPolicy:
         cfg = cfg or load_config()
         p_dict = dict(profile_dict_for(cfg, self.profile_name))
 
@@ -153,23 +159,42 @@ class PlaybackSessionContext:
 
         p_dict.update(self.policy_overrides)
 
-        policy = TimingPolicy.from_dict(p_dict)
+        policy = TimingPolicy.from_dict(
+            p_dict,
+            calibrated_margin_us=calibrated_margin_us,
+            calibrated_margin_source=calibrated_margin_source,
+        )
         if self.same_key_conflict_policy != policy.same_key_conflict_policy:
             return TimingPolicy.from_dict(
-                {**p_dict, "same_key_conflict_policy": self.same_key_conflict_policy}
+                {**p_dict, "same_key_conflict_policy": self.same_key_conflict_policy},
+                calibrated_margin_us=calibrated_margin_us,
+                calibrated_margin_source=calibrated_margin_source,
             )
         return policy
 
-    def resolve_effective_policy(self, cfg: AppConfig | None = None) -> FrameTimingPolicy:
+    def resolve_effective_policy(
+        self,
+        cfg: AppConfig | None = None,
+        *,
+        calibrated_margin_us: int | None = None,
+        calibrated_margin_source: str = "default_500",
+    ) -> FrameTimingPolicy:
         """Profile dict + CLI overrides + frame-aware scaling (single entry point).
 
-        Pure: no console output.
+        Pure: no console output. ``calibrated_margin_us`` and
+        ``calibrated_margin_source`` are forwarded from the orchestration
+        caller that resolved ``.cache/input_latency.json`` once at session
+        build time (see ``infrastructure.calibration_loader``).
         """
         cfg = cfg or load_config()
 
         effective_self = self
 
-        base = effective_self._base_timing_policy(cfg)
+        base = effective_self._base_timing_policy(
+            cfg,
+            calibrated_margin_us=calibrated_margin_us,
+            calibrated_margin_source=calibrated_margin_source,
+        )
 
         return FrameTimingPolicy.from_timing_policy(
             base,

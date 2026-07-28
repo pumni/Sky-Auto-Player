@@ -22,39 +22,6 @@ class KeyAction:
     reason: str = "note"
 
 
-def get_calibrated_margin_recommendation() -> int | None:
-    import json
-    from pathlib import Path
-    path = Path(".cache/input_latency.json")
-    if not path.exists():
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or data.get("version") != 1:
-            return None
-        down_us = data.get("down_us")
-        up_us = data.get("up_us")
-        if not isinstance(down_us, dict) or not isinstance(up_us, dict):
-            return None
-        p99_down = down_us.get("p99")
-        p50_up = up_us.get("p50")
-        if not isinstance(p99_down, (int, float)) or not isinstance(p50_up, (int, float)):
-            return None
-        if p99_down < 0 or p50_up < 0 or p99_down > 100_000 or p50_up > 100_000:
-            return None
-        n = data.get("n")
-        if not isinstance(n, int) or isinstance(n, bool) or n < 50:
-            return None
-        # Recommended formula: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
-        # Put this comment for human review: margin_rec = clamp(300, 2000, p99(down_delivery) - p50(up_delivery) + 100)
-        margin_rec = p99_down - p50_up + 100
-        margin_rec = max(300.0, min(2000.0, margin_rec))
-        return round(margin_rec)
-    except Exception:
-        return None
-
-
 @dataclass(frozen=True, slots=True)
 class TimingPolicy:
     hold_us: Microseconds
@@ -92,7 +59,24 @@ class TimingPolicy:
     min_hold_margin_source: str = "default_500"
 
     @classmethod
-    def from_dict(cls, p_dict: dict, **kwargs) -> TimingPolicy:
+    def from_dict(
+        cls,
+        p_dict: dict,
+        *,
+        calibrated_margin_us: int | None = None,
+        calibrated_margin_source: str = "default_500",
+        **kwargs,
+    ) -> TimingPolicy:
+        """Build a ``TimingPolicy`` from a profile dict.
+
+        ``calibrated_margin_us`` and ``calibrated_margin_source`` are
+        injected by the orchestration caller — the calibration loader
+        (in ``sky_music.infrastructure.calibration_loader``) reads the
+        device-cache artefact at session-build time and passes the
+        primitives here so this domain module stays filesystem-free
+        (AGENTS.md Architecture Invariants). When the caller does not
+        inject, the function falls back to the constant 500 µs.
+        """
         from sky_music.config import DEFAULT_TIMING_PROFILES
         base = DEFAULT_TIMING_PROFILES["balanced"]
         declares_hold = any(
@@ -161,14 +145,12 @@ class TimingPolicy:
         if "min_hold_margin_us" in p_dict:
             min_hold_margin_us = max(0, int(p_dict["min_hold_margin_us"]))
             min_hold_margin_source = "profile_override"
+        elif calibrated_margin_us is not None:
+            min_hold_margin_us = calibrated_margin_us
+            min_hold_margin_source = calibrated_margin_source
         else:
-            calibrated = get_calibrated_margin_recommendation()
-            if calibrated is not None:
-                min_hold_margin_us = calibrated
-                min_hold_margin_source = "device_cache"
-            else:
-                min_hold_margin_us = 500
-                min_hold_margin_source = "default_500"
+            min_hold_margin_us = 500
+            min_hold_margin_source = "default_500"
 
 
 

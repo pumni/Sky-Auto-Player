@@ -520,28 +520,38 @@ def test_apply_calibration_uses_explicit_summary_path(tmp_path, monkeypatch):
 
 def test_calibrated_margin_resolution(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    from sky_music.domain.scheduler_types import (
-        TimingPolicy,
-        get_calibrated_margin_recommendation,
+    from sky_music.domain.scheduler_types import TimingPolicy
+    from sky_music.infrastructure.calibration_loader import (
+        SOURCE_DEFAULT_500,
+        SOURCE_DEVICE_CACHE,
+        load_calibrated_margin_recommendation,
     )
-    
-    # 1. No file exists -> returns None, policy defaults to 500
-    assert get_calibrated_margin_recommendation() is None
+
+    # 1. No file exists -> returns (None, default), policy without
+    # injection defaults to 500.
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == SOURCE_DEFAULT_500
     p = TimingPolicy.from_dict({})
     assert p.min_hold_margin_us == 500
-    
-    # 2. Corrupt or unversioned file exists -> returns None, policy defaults to 500
+    assert p.min_hold_margin_source == "default_500"
+
+    # 2. Corrupt or unversioned file exists -> returns fallback.
     cache_dir = tmp_path / ".cache"
     cache_dir.mkdir(exist_ok=True)
     cache_file = cache_dir / "input_latency.json"
-    
+
     cache_file.write_text('{"bad": "json"', encoding="utf-8")
-    assert get_calibrated_margin_recommendation() is None
-    
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == SOURCE_DEFAULT_500
+
     cache_file.write_text('{"version": 2}', encoding="utf-8")
-    assert get_calibrated_margin_recommendation() is None
-    
-    # 3. Valid file exists -> recommendation correctly resolved and clamped
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == SOURCE_DEFAULT_500
+
+    # 3. Valid file exists -> recommendation correctly resolved and clamped.
     # down p99 = 400, up p50 = 100 -> formula: 400 - 100 + 100 = 400
     cache_data = {
         "version": 1,
@@ -550,15 +560,24 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
-    assert get_calibrated_margin_recommendation() == 400
-    
-    p = TimingPolicy.from_dict({})
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin == 400
+    assert source == SOURCE_DEVICE_CACHE
+
+    # The orchestration caller injects margin + source into the policy.
+    p = TimingPolicy.from_dict(
+        {},
+        calibrated_margin_us=margin,
+        calibrated_margin_source=source,
+    )
     assert p.min_hold_margin_us == 400
-    
-    # 4. Explicit profile value overrides recommendation
+    assert p.min_hold_margin_source == SOURCE_DEVICE_CACHE
+
+    # 4. Explicit profile value overrides the injected recommendation.
     p_explicit = TimingPolicy.from_dict({"min_hold_margin_us": 600})
     assert p_explicit.min_hold_margin_us == 600
-    
+    assert p_explicit.min_hold_margin_source == "profile_override"
+
     # 5. Clamping test: formula gives 100 - 300 + 100 = -100 -> clamped to 300
     cache_data_clamp_low = {
         "version": 1,
@@ -567,8 +586,9 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data_clamp_low), encoding="utf-8")
-    assert get_calibrated_margin_recommendation() == 300
-    
+    margin, _ = load_calibrated_margin_recommendation()
+    assert margin == 300
+
     # Clamping test: formula gives 2500 - 100 + 100 = 2500 -> clamped to 2000
     cache_data_clamp_high = {
         "version": 1,
@@ -577,7 +597,8 @@ def test_calibrated_margin_resolution(tmp_path, monkeypatch):
         "n": 200,
     }
     cache_file.write_text(json.dumps(cache_data_clamp_high), encoding="utf-8")
-    assert get_calibrated_margin_recommendation() == 2000
+    margin, _ = load_calibrated_margin_recommendation()
+    assert margin == 2000
 
 
 def test_calibrated_margin_rejects_low_sample_count(tmp_path, monkeypatch):
@@ -595,8 +616,12 @@ def test_calibrated_margin_rejects_low_sample_count(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    from sky_music.domain.scheduler_types import get_calibrated_margin_recommendation
-    assert get_calibrated_margin_recommendation() is None
+    from sky_music.infrastructure.calibration_loader import (
+        load_calibrated_margin_recommendation,
+    )
+    margin, source = load_calibrated_margin_recommendation()
+    assert margin is None
+    assert source == "default_500"
 
 
 def test_doctor_calibration_command_fails_if_sky_running(monkeypatch):
