@@ -27,6 +27,7 @@ from sky_music.domain.session_context import (
     merge_session_with_overrides,
 )
 from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.runtime_session import (
     RUNTIME_STATE,
     PlaybackOverrides,
@@ -426,7 +427,8 @@ def play_selected_song(
     current_tempo = session.tempo_scale
 
     active_policy = session.resolve_effective_policy(user_cfg)
-    active_sleep_policy = session.resolve_sleep_policy(user_cfg)
+    _spin_us, _poll_s = session.resolve_sleep_policy(user_cfg)
+    active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
 
     # build_key_actions builds DefaultNoteResolver(profile) when resolver is None; that
     # single resolver now handles both physical and mapped scan-code modes.
@@ -503,7 +505,8 @@ def play_selected_song(
         if new_profile is not None and canonical_profile_name(new_profile) != session.profile_name:
             session = session.with_profile(new_profile)
             active_policy = session.resolve_effective_policy(user_cfg)
-            active_sleep_policy = session.resolve_sleep_policy(user_cfg)
+            _spin_us, _poll_s = session.resolve_sleep_policy(user_cfg)
+            active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
             current_profile = session.display_profile_label()
 
             sched_meta = build_schedule(session, active_policy, current_tempo)

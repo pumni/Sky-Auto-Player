@@ -53,7 +53,8 @@ def prepare_playback(
 
     current_tempo = session.tempo_scale
     active_policy = session.resolve_effective_policy(cfg)
-    active_sleep_policy = session.resolve_sleep_policy(cfg)
+    _spin_us, _poll_s = session.resolve_sleep_policy(cfg)
+    active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
 
     try:
         sched_meta = build_key_actions(

@@ -54,6 +54,7 @@ class RuntimeSessionState:
         from sky_music.infrastructure.calibration_loader import (
             load_calibrated_margin_recommendation,
         )
+        from sky_music.infrastructure.timing import SleepPolicy
         calibrated_margin_us, calibrated_margin_source = (
             load_calibrated_margin_recommendation()
         )
@@ -62,7 +63,12 @@ class RuntimeSessionState:
             calibrated_margin_us=calibrated_margin_us,
             calibrated_margin_source=calibrated_margin_source,
         )
-        self.sleep_policy = session.resolve_sleep_policy(cfg, spin_threshold_us=spin_threshold_us)
+        # Domain returns primitives; orchestration owns the SleepPolicy materialisation
+        # so domain stays infrastructure-free.
+        spin, poll_s = session.resolve_sleep_policy(
+            cfg, spin_threshold_us=spin_threshold_us
+        )
+        self.sleep_policy = SleepPolicy(spin_threshold_us=spin, poll_s=poll_s)
         self.scan_code_mode = session.scan_code_mode
         self.tempo_scale = session.tempo_scale
         self.timing_profile_name = session.display_profile_label()

@@ -8,10 +8,10 @@ Sky Auto Player is built on a modern, strictly-layered **Domain-Driven Design (D
 
 The codebase is divided into four distinct layers:
 
-1. **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond [scheduler](../src/sky_music/domain/scheduler.py).
-2. **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline), the [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) (which manages key generations and anchor timing), and the telemetry/calibration modules.
-3. **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes window focus tracking, hotkey listeners, real-time sleeper utilities, and MMCSS registrations.
-4. **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes.
+1. **Domain (`sky_music/domain/`):** Pure Python, zero side-effects. Contains immutable models (`Song`, `Note`), the strict JSON parser, and the Ahead-Of-Time (AOT) microsecond [scheduler](../src/sky_music/domain/scheduler.py). Domain returns primitives across the layer boundary: `PlaybackSessionContext.resolve_effective_policy` and `resolve_sleep_policy` return `(calibrated_margin_us, source_label)` and `(spin_threshold_us, poll_s)` respectively, leaving materialisation of `SleepPolicy` to the orchestration caller.
+2. **Orchestration (`sky_music/orchestration/`):** The real-time heart of the app. Contains the `PlaybackEngine` (which consumes the timeline), the [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) (which manages key generations and anchor timing), and the telemetry/calibration modules. Orchestration resolves the device-calibrated margin via `infrastructure.calibration_loader.load_calibrated_margin_recommendation` once at session build time and constructs `SleepPolicy` from the domain primitives.
+3. **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes window focus tracking, hotkey listeners, real-time sleeper utilities, MMCSS registrations, and the device-calibration loader (`.cache/input_latency.json` consumer). May import `platform/` but must not be imported by `domain/`.
+4. **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes. The only place Win32 ctypes may live.
 
 ---
 

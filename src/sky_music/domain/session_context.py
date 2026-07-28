@@ -16,7 +16,6 @@ from sky_music.config import (
     spin_threshold_for_profile,
 )
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
-from sky_music.infrastructure.timing import SleepPolicy
 
 if TYPE_CHECKING:
     from sky_music.orchestration.calibration import CalibrationRecommendation
@@ -208,14 +207,22 @@ class PlaybackSessionContext:
         self,
         cfg: AppConfig | None = None,
         spin_threshold_us: int | None = None,
-    ) -> SleepPolicy:
+    ) -> tuple[int, float]:
+        """Return ``(spin_threshold_us, poll_s)`` primitives.
+
+        The orchestration caller (and any CLI/Textual plumbing) is
+        responsible for materialising the infrastructure ``SleepPolicy``
+        dataclass from these primitives -- ``domain`` no longer imports
+        ``sky_music.infrastructure.timing`` so the layer boundary stays
+        clean (AGENTS.md Architecture Invariants).
+        """
         cfg = cfg or load_config()
         spin = (
             spin_threshold_us
             if spin_threshold_us is not None
             else spin_threshold_for_profile(cfg, self.profile_name)
         )
-        return SleepPolicy(spin_threshold_us=spin, poll_s=0.025)
+        return int(spin), 0.025
 
 
 def merge_session_with_overrides(
