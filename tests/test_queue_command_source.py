@@ -47,17 +47,18 @@ def test_poll_under_concurrent_producer_consumer() -> None:
     duplicate events against the legacy ``empty()``-then-``get_nowait()``
     shape.
     """
-    q: queue.Queue[int] = queue.Queue()
+    q: queue.Queue[str] = queue.Queue()
     src = QueueCommandSource(q)
     total = 5_000
-    produced: list[int] = []
+    produced: list[str] = []
 
     def producer() -> None:
         for i in range(total):
-            q.put(i)
-            produced.append(i)
+            v = str(i)
+            q.put(v)
+            produced.append(v)
 
-    consumed: list[int] = []
+    consumed: list[str] = []
 
     def consumer() -> None:
         while True:
@@ -68,7 +69,7 @@ def test_poll_under_concurrent_producer_consumer() -> None:
                 if len(consumed) >= total:
                     return
                 continue
-            consumed.append(int(cmd))
+            consumed.append(cmd)
 
     t_prod = threading.Thread(target=producer)
     t_cons = threading.Thread(target=consumer)
@@ -80,7 +81,7 @@ def test_poll_under_concurrent_producer_consumer() -> None:
         f"consumer saw {len(consumed)}/{total} commands -- "
         f"simplified poll dropped events"
     )
-    assert sorted(consumed) == list(range(total)), (
+    assert sorted([int(x) for x in consumed]) == list(range(total)), (
         "consumer received commands out of order or with duplicates"
     )
 

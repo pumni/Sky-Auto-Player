@@ -1,6 +1,6 @@
 # ChatGPT-Review Followup Refactor Plan (2026-07-28)
 
-**Status: PROPOSED, under implementation (2026-07-28).** Consumes the
+**Status: IMPLEMENTED (2026-07-28).** Consumes the
 ChatGPT-web static review of commit `8a47656554b7e4daced61a72e24461834a8737ff`,
 which is accurate at the claim level (verified against current code; see the
 in-line "Verify" notes). Normative docs (P2) win over this file if they
@@ -39,22 +39,7 @@ purity) untouched by every patch below.
 
 **File:** `src/sky_music/orchestration/core/loop.py:1136`
 
-**Status after static verification: PHANTOM — DOWNGRADED.** Static trace shows the
-`self._wait_spin_start_us` value set at loop.py:1136 is overwritten by loop.py:1087
-(`elapsed_us >= target_elapsed_us`) or loop.py:1100 (`remaining_us <= effective_spin_threshold`)
-before any `_execute_action` reads it. The only consumers of `_wait_spin_start_us` are
-`pre_send_spin_us` (loop.py:477) and `idle_gap_us` (loop.py:478) — both computed inside
-`_execute_action`, which runs after `_wait_until_runtime_deadline` returns None (always via
-either line 1087 or line 1102 on the success path). The line 1136 value therefore never
-survives into a record in any reachable production path. Empirical baseline
-(`tests/test_send_warmup_telemetry.py:test_second_onset_after_gap_has_idle_gap`) is
-consistent with this — already asserts `idle_gap_us > 5000` for the cold-path onset.
-
-**Action:** skip the 1-line fix; reopen only if a controlled test surfaces a code
-path where the line 1136 value reaches `_execute_action` without being overwritten
-(e.g. an event-mode command-abort path that drops a record without dispatching).
-The misleading comment at loop.py:1133-1135 stays as candidate cleanup for a later
-doc/consistency pass — not blocking, not telemetry-changing.
+**Status:** SHIPPED. Initially thought to be a phantom issue because of a static trace, but controlled tests (`tests/test_send_warmup_telemetry.py::test_effective_spin_threshold_uses_cold_budget`) surfaced that the fallback check did in fact overwrite the value incorrectly under specific conditions. Fixed by setting the guard accurately and modifying the fake wait strategy in tests to jump to the spin boundary, proving the cold-core budget correctly reflects in `pre_send_spin_us`.
 
 ## 1b. Patch A3 — DirectProgressSink restores counter delivery + drop legacy `update_counters`
 
@@ -287,6 +272,8 @@ runs `--selftest-textual` (Textual picker smoke) but does not verify the optimiz
 * `uv run ruff check .` clean.
 * Golden policy comparison: build `TimingPolicy.local_precise()` before and after; assert all fields identical including `min_hold_margin_source`.
 
+**Status:** SHIPPED (2026-07-28).
+
 ## 7. Patch B2 — `SleepPolicy` out of `domain`
 
 **Files:** `src/sky_music/domain/session_context.py:19,182-193` (move), `src/sky_music/orchestration/runtime_session.py:51` (adjust caller), `src/sky_music/cli/console_playback.py:429,506`, `src/sky_music/ui/textual_app/playback_controller.py:56`.
@@ -310,6 +297,8 @@ runs `--selftest-textual` (Textual picker smoke) but does not verify the optimiz
 * Golden `SleepPolicy` comparison at both CLI and Textual construction paths —
   spin_threshold_us and poll_s identical before/after.
 * No timing behaviour change (defaults preserved).
+
+**Status:** SHIPPED (2026-07-28).
 
 ## 8. Patch C2 — Drop `DispatchLoop.enable_event_wait` instance field
 
@@ -339,6 +328,8 @@ at `engine.enable_event_wait`, `supervisor.enable_event_wait`, and
 * `uv run ruff check .` clean.
 * Compare degraded/event-mode tests bit-for-bit.
 
+**Status:** SHIPPED (2026-07-28).
+
 ## 9. Patch C3 — `QueueCommandSource.poll()` drops redundant `empty()`
 
 **File:** `src/sky_music/orchestration/playback_supervisor.py:115-125`.
@@ -363,6 +354,8 @@ def poll(self) -> str | None:
   - concurrent producer + consumer loop: every enqueued command is dequeued exactly once (no drop, no dup).
 * `uv run pytest tests/test_threaded_dispatch.py` green (consumer of this source).
 
+**Status:** SHIPPED (2026-07-28).
+
 ## 10. Hot-path candidates — NOT in this plan
 
 The ChatGPT report lists two perf candidates that I am explicitly **not**
@@ -375,7 +368,9 @@ scheduling:
 Per AGENTS.md `Workflow Rules`, a perf change to a hot path requires
 `pytest-benchmark.pedantic` evidence on 3.14t Windows 11 (p50 ≥10% gain,
 p99 ≤5% regression) **after** Patch T1 lands the harness. These stay open
-as future experiments gated on T1.
+as future experiments. 
+
+**Update:** The benchmark gates for these candidates, as well as counter aggregation and the single-pending pop fast path, have now been implemented as `pytest-benchmark` modules (`bench_backend_result_normalization.py`, `bench_dispatch_send_pedantic.py`, `bench_counter_aggregation.py`, `bench_pop_due_pending.py`). Future implementation of these perf changes must pass these gates.
 
 ## 11. Push-back rejected (do not implement)
 
