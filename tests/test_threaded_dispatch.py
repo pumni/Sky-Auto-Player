@@ -114,9 +114,6 @@ class BlockingRenderer:
     def finish(self, message: str) -> None:
         self.events.append(("finish", message))
 
-    def update_counters(self, lateness_us: int, **kwargs: object) -> None:
-        self.events.append(("counter", str(lateness_us)))
-
 
 class CpuBoundRenderer:
     def __init__(self, block_s: float) -> None:
@@ -141,9 +138,6 @@ class CpuBoundRenderer:
 
     def finish(self, message: str) -> None:
         self.events.append(("finish", message))
-
-    def update_counters(self, lateness_us: int, **kwargs: object) -> None:
-        self.events.append(("counter", str(lateness_us)))
 
 
 class BlockingFocusGuard:

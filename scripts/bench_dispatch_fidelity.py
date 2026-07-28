@@ -81,12 +81,6 @@ class _NullProgressSink:
     def finish(self, message: str) -> None:
         pass
 
-    # Pre-refactor ``run()`` may also call ``update_counters`` inline per
-    # dispatch; define as a no-op so the null sink supports both pre- and
-    # post-refactor code paths.
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        pass
-
 
 class _NoOpWaitStrategy:
     """Drives the fake clock straight to the deadline without sleeping."""

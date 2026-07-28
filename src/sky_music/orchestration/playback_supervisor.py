@@ -78,7 +78,10 @@ class DirectProgressSink:
         force: bool = False,
         counters: ProgressCounters | None = None,
     ) -> None:
-        _ = counters
+        if counters is not None and self.renderer is not None and hasattr(
+            self.renderer, "update_counters_batch"
+        ):
+            self.renderer.update_counters_batch(counters)
         if self.renderer is None:
             return
         self.renderer.render(
@@ -94,10 +97,6 @@ class DirectProgressSink:
     def finish(self, message: str) -> None:
         if self.renderer is not None:
             self.renderer.finish(message)
-
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        if self.renderer is not None and hasattr(self.renderer, "update_counters"):
-            self.renderer.update_counters(lateness_us, kind=kind)
 
 
 @dataclass(frozen=True, slots=True)

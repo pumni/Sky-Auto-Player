@@ -321,9 +321,6 @@ def test_run_wires_runtime_focus_signal_not_none() -> None:
         def publish(self, **kwargs: object) -> None:
             return
 
-        def update_counters(self, *args: object, **kwargs: object) -> None:
-            return
-
         def finish(self, message: str = "") -> None:
             return
 

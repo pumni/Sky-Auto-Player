@@ -78,9 +78,6 @@ class MockProgressSink:
         
     def finish(self, message: str) -> None:
         pass
-        
-    def update_counters(self, lateness_us: int, kind: str = "down") -> None:
-        pass
 
 def create_song(notes):
     return Song(name="test", notes=tuple(notes))

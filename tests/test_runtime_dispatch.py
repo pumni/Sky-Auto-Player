@@ -111,9 +111,6 @@ class CaptureRenderer:
     def finish(self, message: str) -> None:
         return
 
-    def update_counters(self, lateness_us: int, **kwargs: object) -> None:
-        return
-
 
 @dataclass(frozen=True, slots=True)
 class TimedCall:
