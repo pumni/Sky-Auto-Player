@@ -1177,7 +1177,7 @@ class DispatchLoop:
             # Event-mode spin happens inside wait_until_us; record the nominal spin start so
             # pre_send_spin_us reflects the guard spin (the high-res sleeper wakes within the guard
             # of target, so actual spin start is within tens of µs of this).
-            self._wait_spin_start_us = target_elapsed_us - self.spin_threshold_us
+            self._wait_spin_start_us = target_elapsed_us - effective_spin_threshold
             
             woken_by_event = self.wait_strategy.wait_until_us(
                 target_system_us=target_system_us,

@@ -71,3 +71,64 @@ def test_summary_exposes_send_warmup_split() -> None:
     )
     for key in ("send_duration_cold_us", "send_duration_warm_us", "idle_gap_us", "pre_send_spin_us"):
         assert key in warmup and "p99_us" in warmup[key]
+
+def test_effective_spin_threshold_uses_cold_budget() -> None:
+    class FakeWaitStrategy:
+        def spin_until_us(self, target_system_us: int, clock) -> None:
+            if hasattr(clock, "advance_to"):
+                clock.advance_to(target_system_us)
+
+        def wait_until_us(
+            self,
+            target_system_us: int,
+            clock,
+            sleeper,
+            spin_threshold_us: int,
+            policy: SleepPolicy,
+            command_event: int | None = None,
+        ) -> bool:
+            # Advance to exactly the spin boundary so the caller drops into its spin phase
+            if hasattr(clock, "advance_to"):
+                clock.advance_to(target_system_us - spin_threshold_us)
+            return False
+
+    class ControlledClock:
+        def __init__(self):
+            self.current_us = 0
+            self._ns_based = False
+
+        def now_us(self) -> int:
+            return self.current_us
+
+        def advance_to(self, target_us: int) -> None:
+            self.current_us = target_us
+
+    clock = ControlledClock()
+    
+    engine = PlaybackEngine(
+        song=Song(name="cold-budget", notes=()),
+        actions=(
+            _action(0, "down", 21),
+            _action(2_000, "up", 21),
+            _action(40_000, "down", 22),
+            _action(42_000, "up", 22),
+        ),
+        backend=DryRunBackend(),
+        telemetry_enabled=True,
+        require_focus=False,
+        sleep_policy=SleepPolicy(spin_threshold_us=700),
+        use_dispatch_thread=False,
+        retain_telemetry_records_after_save=True,
+        wait_strategy=FakeWaitStrategy(),
+        clock=clock,
+    )
+    # Set core warmup budget. Note that PlaybackEngine doesn't accept core_warmup_budget_us 
+    # directly, it's defined on DispatchLoop (which defaults to 200). We just use the default.
+    
+    engine.play()
+    
+    # 2nd down at 40ms follows a ~38ms gap (> 20ms cold threshold).
+    # spin_threshold_us (700) + cold_budget (200) = 900
+    downs = [r for r in engine.telemetry.records if r["kind"] == "down" and r.get("sent_scan_codes")]
+    assert len(downs) >= 2
+    assert downs[1]["pre_send_spin_us"] == 900
