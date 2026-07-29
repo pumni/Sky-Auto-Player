@@ -76,8 +76,21 @@ async def _run_app_test_renders() -> PlaybackApp:
     
     async with app.run_test() as pilot:
         await pilot.pause(0.2)
-        # verify widgets
+        # Poll for the snapshot to reach ``#time-info`` instead of asserting against a fixed
+        # 0.2 s pause: ``PlaybackApp`` runs ``engine.play()`` on a worker thread that calls
+        # ``renderer.render(current=2.0, ...)`` the moment it enters, and the UI thread polls
+        # the snapshot every 0.1 s (``set_interval(0.1, self._poll)``). Under CI load the
+        # first ``_poll`` can land after the 0.2 s pause closes, leaving the widget at its
+        # initial ``0:00`` value — a Textual scheduling race, not a regression. Wait until
+        # the worker has rendered AND the 0.1 s poll has propagated the snapshot to the
+        # widget, capped at 2 s so the test still fails fast if the wiring breaks.
         time_widget = app.query_one("#time-info", Static)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            rendered = str(time_widget.render())
+            if "0:02 / 0:05" in rendered:
+                break
+            await pilot.pause(0.05)
         assert "0:02 / 0:05" in str(time_widget.render())
         
         status_widget = app.query_one("#status-info", Static)

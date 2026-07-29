@@ -677,10 +677,22 @@ def test_search_debouncing_behavior(monkeypatch) -> None:
             
             await pilot.click("#search")
             await pilot.press("a")
+            # ``pilot.press`` does not guarantee the downstream ``on_input_changed`` has
+            # dispatched by the time it returns — Textual's test pilot pumps the key event
+            # into the message queue, but the ``Input.Changed`` message it produces can still
+            # be in flight when the assertion fires, leaving ``_search_timer`` at its pre-
+            # keystroke ``None``. Poll for the timer to make the test deterministic across
+            # CI scheduling jitter instead of asserting against a fixed pause. Capped at
+            # 2 s so the test still fails fast if the debounce wiring actually breaks.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if app._search_timer is not None:
+                    break
+                await pilot.pause(0.02)
             assert app._search_timer is not None
             
-            app.action_confirm()
-            assert app._search_timer is None
+        app.action_confirm()
+        assert app._search_timer is None
 
     app = run_picker(_run_app(actions))
     assert app.return_value is not None
