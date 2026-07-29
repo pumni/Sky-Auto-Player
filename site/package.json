@@ -15,8 +15,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify:dist": "bun scripts/verify-dist.mjs",
-    "test:e2e": "playwright test",
-    "test:update": "playwright test --update-snapshots",
+    "test:e2e": "bun scripts/run-e2e.mjs",
+    "test:update": "bun scripts/run-e2e.mjs --update-snapshots=all",
     "astro": "astro"
   },
   "dependencies": {

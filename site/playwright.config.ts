@@ -1,8 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// CI workflows build first; local `bun run test:e2e` must build so preview has dist/.
-const previewCommand = process.env.CI ? 'bun run preview' : 'bun run build && bun run preview';
-
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -17,10 +14,4 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: previewCommand,
-    url: 'http://localhost:4321/Sky-Auto-Player/',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
 });
