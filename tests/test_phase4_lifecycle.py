@@ -195,4 +195,135 @@ def test_shutdown_timeout_resource_safe_when_dispatch_thread_stuck(monkeypatch):
     assert "is_alive" in events
     # If thread is still alive, we must NOT close handles or declare safe!
     assert "close" not in events
+    # Lifecycle contract (fix for the SHUTDOWN_TIMEOUT teardown race): the supervisor must
+    # publish the live thread handle AND mark it NOT-terminated so the engine finally block
+    # can skip clear_array_cache/close/collect_gc_without having to re-derive liveness.
+    assert supervisor.dispatch_thread is not None
+    assert supervisor.dispatch_thread_terminated is False
+
+
+def test_supervisor_direct_mode_publishes_no_thread_handle() -> None:
+    """Direct (non-threaded) mode publishes ``dispatch_thread=None, terminated=True``.
+
+    Lets the engine finally block run the full teardown path without worrying about a
+    dispatch thread that does not exist.
+    """
+    from unittest.mock import Mock
+
+    from sky_music.infrastructure.timing import SleepPolicy
+    from sky_music.orchestration.core.ports import PLAYBACK_FINISHED
+
+    class ImmediateDispatchLoop:
+        def __init__(self) -> None:
+            self.sleeper = Mock()
+
+        def run(self, *args, **kwargs) -> str:
+            return PLAYBACK_FINISHED
+
+    supervisor = PlaybackSupervisor(
+        controls=None,
+        focus_guard=Mock(),
+        require_focus=False,
+        renderer=Mock(),
+        telemetry=Mock(spec=["runtime_options", "record_runtime_options"]),
+        sleep_policy=SleepPolicy(),
+        clock=Mock(),
+        sleeper=Mock(),
+        song_name="direct",
+    )
+    supervisor.telemetry.runtime_options = {}
+    result = supervisor.run(
+        dispatch_loop=ImmediateDispatchLoop(),  # type: ignore
+        coordinator=Mock(),  # type: ignore
+        state=Mock(),  # type: ignore
+        total_time_us=1000,
+        use_dispatch_thread=False,
+    )
+    assert result == PLAYBACK_FINISHED
+    assert supervisor.dispatch_thread is None
+    assert supervisor.dispatch_thread_terminated is True
+
+
+def test_engine_skips_teardown_on_shutdown_timeout(monkeypatch) -> None:
+    """Engine finally block must NOT clear the INPUT cache / close the realtime sleeper /
+    drop per-song state / gc.collect() when PlaybackSupervisor reports the dispatch thread
+    is still alive (PLAYBACK_SHUTDOWN_TIMEOUT branch).
+
+    Regression guard for the lifecycle teardown race in review of main@7c548527 §1: the
+    previous code used ``getattr(supervisor, "dispatch_thread", None)`` which always returned
+    None, so the engine tore down shared resources while the dispatch thread was still using
+    them.
+    """
+    from unittest.mock import Mock
+
+    from sky_music.domain import Song
+    from sky_music.domain.scheduler_types import KeyAction, Microseconds, ScanCode
+    from sky_music.infrastructure.backend import DryRunBackend
+    from sky_music.orchestration.engine import PLAYBACK_SHUTDOWN_TIMEOUT, PlaybackEngine
+    from sky_music.platform.win32 import inputs
+
+    # A stuck supervisor fake: returns PLAYBACK_SHUTDOWN_TIMEOUT and reports the thread as
+    # still alive, so the engine finally block should skip teardown.
+    class StuckSupervisor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.dispatch_thread = Mock()
+            self.dispatch_thread.is_alive.return_value = True
+            self.dispatch_thread_terminated = False
+
+        def run(self, **kwargs) -> str:
+            return PLAYBACK_SHUTDOWN_TIMEOUT
+
+    monkeypatch.setattr(
+        "sky_music.orchestration.engine.PlaybackSupervisor", StuckSupervisor
+    )
+
+    clear_calls: list[int] = []
+    orig_clear = inputs.clear_array_cache
+
+    def spy_clear() -> int:
+        clear_calls.append(len(clear_calls))
+        return orig_clear()
+
+    monkeypatch.setattr(inputs, "clear_array_cache", spy_clear)
+
+    # Build engine in threaded-mode-equivalent config but with a backend that needs no Windows.
+    # ``_should_use_dispatch_thread`` is patched to True so we occupy the threaded path; the
+    # StuckSupervisor stands in before any real thread starts.
+    engine = PlaybackEngine(
+        song=Song(name="lifecycle", notes=()),
+        actions=(
+            KeyAction(
+                kind="down",  # type: ignore[arg-type]
+                scan_codes=(ScanCode(21),),
+                at_us=Microseconds(0),
+                reason="lifecycle-test",
+            ),
+            KeyAction(
+                kind="up",  # type: ignore[arg-type]
+                scan_codes=(ScanCode(21),),
+                at_us=Microseconds(100_000),
+                reason="lifecycle-test",
+            ),
+        ),
+        backend=DryRunBackend(),
+        controls=None,
+        renderer=None,
+        require_focus=False,
+        use_dispatch_thread=True,
+        lead_cache_path=None,
+    )
+    monkeypatch.setattr(engine, "_should_use_dispatch_thread", lambda: True)
+
+    result = engine.play()
+    assert result == PLAYBACK_SHUTDOWN_TIMEOUT
+
+    # The teardown path MUST NOT have been entered: clear_array_cache must not be called and
+    # the engine must still hold its runtime_schedule (poisoned-but-intact state — a follow-up
+    # play() would rebuild; the orphaned dispatch thread can still read its coordinator).
+    assert clear_calls == [], (
+        f"clear_array_cache must NOT run on PLAYBACK_SHUTDOWN_TIMEOUT; got {clear_calls}"
+    )
+    assert engine.runtime_schedule is not None, "runtime_schedule must be retained on stuck path"
+    assert engine._runtime_coordinator is not None, "coordinator must be retained on stuck path"
+
 

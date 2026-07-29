@@ -21,6 +21,9 @@ def test_idle_warmup_skipped_when_pending_release_due():
     fake_release.generation = 1
     coordinator.pop_due_pending.side_effect = [(fake_release,), ()] # due now, then empty
     coordinator.pop_due_authored.return_value = []
+    # The dispatch loop now drains scalar (``pop_next_due_authored``); make the mock
+    # coordinator return None so the while-loop exits immediately.
+    coordinator.pop_next_due_authored.return_value = None
     
     real_clock = Mock()
     real_clock.now_us.side_effect = [2000, 2000, 2000, 2000, 2000, 2000, 2000] 
@@ -92,6 +95,7 @@ def test_idle_warmup_uses_effective_deadline_when_future():
     
     coordinator.pop_due_pending.return_value = []
     coordinator.pop_due_authored.return_value = []
+    coordinator.pop_next_due_authored.return_value = None
     
     real_clock = Mock()
     real_clock.now_us.side_effect = [1000, 1000, 1000, 1000, 1000, 1000, 1000]

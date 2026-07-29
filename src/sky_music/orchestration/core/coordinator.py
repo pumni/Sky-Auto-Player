@@ -299,6 +299,52 @@ class RuntimeDispatchCoordinator:
             self.cursor += 1
         return tuple(due)
 
+    def pop_next_due_authored(
+        self,
+        now_us: int,
+        dispatch_lead_us: int = 0,
+        *,
+        lead_for_batch: Callable[[RuntimeActionBatch], int] | None = None,
+    ) -> tuple[RuntimeActionBatch, int] | None:
+        """Pop the next single due authored batch atomically, or ``None`` when nothing is due.
+
+        Scalar drain alternative to ``pop_due_authored`` for the RT dispatch loop (review of
+        main@7c548527 §1.4). ``pop_due_authored`` materialises a ``list`` then a ``tuple`` of
+        every due batch BEFORE the first one is sent — even on the healthy single-batch path
+        this costs a list+tuple allocation, and on a catch-up burst the sender must scan and
+        materialise the whole overdue fan before its first send, compounding lateness. This
+        method pops ONE batch (the lowest-index authored batch still due) per call, so the
+        caller drains in a tight ``while:`` loop and starts sending batch 1 immediately.
+
+        Contract preserved from ``pop_due_authored``:
+          * Authored ordering is preserved — the cursor advances monotonically by schedule
+            index, so the iteration sequence is identical to ``pop_due_authored``'s tuple order.
+          * Per-batch lead is captured at pop time via ``lead_for_batch`` (the same
+            snapshot-when-popped semantics the adaptive lead estimator depends on).
+          * Early-pop blocking (``_early_pop_blocked``) returns ``None`` rather than breaking;
+            the caller stops iterating, matching the legacy ``break`` behaviour.
+          * Pending-release priority is unchanged: those are handled by ``pop_due_pending``
+            which the loop calls separately before re-querying this method.
+
+        Single-writer only: like ``pop_due_authored``, this method mutates ``self.cursor``
+        and is called from the dispatch thread alone, so no internal synchronisation is
+        required (free-threaded Python is comfortable with this — the contract forbids
+        cross-thread iterator sharing, which is exactly why this is a regular method
+        returning a value and not a long-lived generator).
+        """
+        if self.cursor >= len(self.schedule.batches):
+            return None
+        batch = self.schedule.batches[self.cursor]
+        lead = dispatch_lead_us
+        if lead_for_batch is not None:
+            lead = lead_for_batch(batch)
+        if batch.scheduled_us > now_us + lead:
+            return None
+        if batch.scheduled_us > now_us and self._early_pop_blocked(batch):
+            return None
+        self.cursor += 1
+        return batch, lead
+
     def activate_sent_downs(
         self,
         intents: tuple[RuntimeKeyIntent, ...],

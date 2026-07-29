@@ -449,6 +449,10 @@ _INPUT_CACHE: dict[tuple[int, int], INPUT] = {}
 # and real songs stay far below the 8 192 capacity — see core dispatch plan §6.2.
 _ARRAY_CACHE: OrderedDict[tuple[tuple[int, ...], int], ctypes.Array] = OrderedDict()
 _ARRAY_CACHE_MAX = 8192
+# Public alias so callers (PlaybackEngine prewarm admission) read the cap from its owner
+# instead of replicating the literal. Review of main@7c548527 §3: hardcoding the cap in two
+# places allowed the engine to drift away from the cache's real eviction threshold.
+ARRAY_CACHE_MAX: int = _ARRAY_CACHE_MAX
 _CACHE_LOCK = threading.RLock()
 
 

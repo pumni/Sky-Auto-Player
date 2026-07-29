@@ -257,12 +257,19 @@ def test_adaptive_lead_integration() -> None:
     down_records = [r for r in records if r.kind == "down"]
     assert len(down_records) == 7
     
-    # First 6 downs pop early due to falling behind (d5 and d6 pop together when count was 4).
-    # d7 is scheduled far enough ahead that it pops in a separate batch AFTER count reached 5+.
-    for r in down_records[:6]:
+    # First 5 downs pop early (COLD) due to falling behind: d1–d4 fill count_down[1] to 4,
+    # still under ``SendLatencyEstimator._SEED_SAMPLES`` (=5), so ``get_lead_us`` returns 0.
+    # Under the scalar drain (``pop_next_due_authored``) introduced in the review of
+    # main@7c548527 §1.4, d5 still pops while count is 4 — its lead is 0 too. d5's dispatch
+    # then bumps count_down[1] to 5, seeding the EMA at 800 (warm), so d6 and d7 pop with
+    # lead=800. (The legacy fan-pop tuple path computed every fan batch's lead BEFORE any
+    # dispatch in the fan updated the estimator, so d5 AND d6 both saw cold → 0; the scalar
+    # drain lets the estimator advance between pops in the same drain, which is the more
+    # responsive adaptive-lead behaviour the scalar-drain refactor enables.)
+    for r in down_records[:5]:
         assert r.applied_lead_us == 0
-        
-    # 7th down: lead_down retrieved when count was >= 5
+    # 6th and 7th downs: lead popped after the estimator seeded (count_down[1] ≥ 5, warm).
+    assert down_records[5].applied_lead_us == 800
     assert down_records[6].applied_lead_us == 800
 
 

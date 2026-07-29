@@ -27,6 +27,12 @@ SCAN_TO_VK: dict[int, int] = {
     if char in VK_CODES
 }
 
+# The 15 physical Sky scan codes as a canonical tuple, inlay order. Used by the watchdog
+# subprocess so the panic-release path (``watchdog.panic_release_all``) does not maintain its
+# own separated hand-coded list that can drift from ``PHYSICAL_SCAN_CODES`` (review of main
+# @7c548527 §"Comment drift watchdog hardcode 15 scan codes").
+SKY_15_SCAN_CODES: tuple[int, ...] = tuple(PHYSICAL_SCAN_CODES.values())
+
 def _map_virtual_key(vk: int) -> int:
     from sky_music.platform.win32.inputs import map_virtual_key
 

@@ -201,11 +201,17 @@ cleanest send tail of all runs.
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
-engine keeps the existing exact-shape prewarm behavior and cache cap. The
-platform cache reports bounded lifecycle counters for unique down/up shapes,
-prewarmed `INPUT` slots and approximate payload bytes, schedule shape
-frequency, prewarm duration, lazy cache misses/first-hit build duration, and
-the entries/slots cleared at teardown. These counters are diagnostic only;
-they do not impose a payload budget or change cache representation. Working-set
-and RSS claims remain benchmark evidence, not an inference from cache-entry or
-`gc.collect()` counts.
+engine prewarms the platform INPUT cache in two passes under the cache cap
+(imported from `inputs.ARRAY_CACHE_MAX`). The first pass reserves singleton-up
+slots for every distinct scan code in the schedule — singleton releases are the
+common case on the dispatch hot path (a held-down chord resolves per-down,
+respectively multitimbral up keyups also express as singletons) and must not be
+admitted only opportunistically. The second pass then admits authored multi-key
+shapes by descending frequency (`Counter` of the schedule's shape histogram),
+up to the remaining budget. This keeps the platform cache's bounded lifecycle
+counters — unique down/up shapes, prewarmed `INPUT` slots, approximate payload
+bytes, schedule shape frequency, prewarm duration, lazy cache misses/first-hit
+build duration, and entries/slots cleared at teardown — meaningful as admission
+diagnostics. The counters remain diagnostic only; they do not impose a payload
+budget or change cache representation. Working-set and RSS claims remain
+benchmark evidence, not an inference from cache-entry or `gc.collect()` counts.

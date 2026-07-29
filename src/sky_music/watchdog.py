@@ -1,73 +1,116 @@
 """
 Watchdog subprocess to ensure keys are released if the main process crashes or stalls.
+
+Stuck-key safety contract (review of main@7c548527 §2):
+    * EOF (parent pipe closed) — parent process died or exited. We treat this as a crash and
+      immediately release all 15 Sky keys, idempotently with the parent's own atexit cleanup.
+      Belt-and-braces: if the parent's release_all already ran, the extra KEYUP is a no-op.
+    * Stall (parent alive but no heartbeat bytes for an extended window) — we require
+      multiple consecutive poll discoveries of an aged heartbeat before panicking, so a brief
+      scheduling hiccup or one late heartbeat flush (the legacy 250 ms slack) cannot fire a
+      full-15 KEYUP while the dispatch thread is still mid-note.
+
+Telemetry is emitted to ``stderr`` on panic with ``panic_reason`` (``eof`` / ``stall`` /
+``read_error``) and the heartbeat age at the panic instant. The parent captures stderr via
+``subprocess.DEVNULL`` by default, so this is forensic-only — it surfaces only when the
+parent routes watchdog stderr somewhere observable.
 """
 import contextlib
 import sys
 import threading
 import time
 
+from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.platform.win32.inputs import send_scan_code_batch
 
-# The 15 fixed scan codes for Sky
-# 'y': 0x15, 'u': 0x16, 'i': 0x17, 'o': 0x18, 'p': 0x19
-# 'h': 0x23, 'j': 0x24, 'k': 0x25, 'l': 0x26, ';': 0x27
-# 'n': 0x31, 'm': 0x32, ',': 0x33, '.': 0x34, '/': 0x35
-SKY_15_SCAN_CODES = (
-    0x15, 0x16, 0x17, 0x18, 0x19,
-    0x23, 0x24, 0x25, 0x26, 0x27,
-    0x31, 0x32, 0x33, 0x34, 0x35,
-)
+# Heartbeat cadence the parent promises (``backend.py`` heartbeat thread sleeps
+# ``HEARTBEAT_INTERVAL_S`` between writes). Documented here so the stall threshold can be
+# expressed in heartbeat counts rather than opaque absolute seconds.
+HEARTBEAT_INTERVAL_S = 0.5
 
-TIMEOUT_SEC = 0.75
+# Stall detection: age > STALL_AFTER_S AND ticked past STALL_TICK_THRESHOLD consecutive poll
+# observations of that age. ``STALL_AFTER_S = 3 × heartbeat`` means a single late heartbeat
+# flush (the dominant jitter source under load) cannot by itself reach the threshold — we
+# need three full heartbeats to be absent before we even start counting consecutive ticks.
+STALL_AFTER_S = HEARTBEAT_INTERVAL_S * 3  # 1.5s
+
+# Number of 50ms poll ticks at-or-above STALL_AFTER_S required to confirm a real stall.
+# With STALL_AFTER_S = 1.5s and STALL_TICK_THRESHOLD = 4 (4 × 50ms = 200ms), the effective
+# minimum heartbeat age at panic is ~1.7s — 3 missing heartbeats plus a tolerance band to
+# absorb the reader thread's own scheduling delay. The previous 0.75s single-shot stall
+# threshold had only ~250 ms of slack before firing; this restores real-world resilience
+# while keeping panic latency bounded for true stalls.
+STALL_TICK_THRESHOLD = 4
+POLL_INTERVAL_S = 0.05
+
 
 def panic_release_all() -> None:
-    """Send KEYUP for all 15 scan codes."""
+    """Send KEYUP for all 15 Sky scan codes. Idempotent and best-effort."""
     with contextlib.suppress(Exception):
         send_scan_code_batch(SKY_15_SCAN_CODES, key_up=True)
 
+
 def main() -> None:
-    # We read from stdin. The parent writes a byte (heartbeat) periodically.
-    # If the parent dies, stdin hits EOF.
-    # If the parent hangs, stdin stays open but no bytes arrive, triggering timeout.
-    
+    # Single release path used by all three panic triggers. ``panic_state`` is a closure
+    # over mutable forensic fields so ``main`` stays free of object attributes.
+    panic_state: dict[str, str | float] = {"reason": "", "heartbeat_age_s": 0.0}
+    panic_event = threading.Event()
+
     last_heartbeat = time.monotonic()
-    stop_event = threading.Event()
-    
-    def read_loop():
+
+    def trigger_panic(reason: str) -> None:
+        # Capture age at first observation; subsequent triggers from the polling loop
+        # would overwrite with a later (and even larger) age so keep the earliest.
+        if panic_state["reason"] == "":
+            panic_state["reason"] = reason
+            panic_state["heartbeat_age_s"] = time.monotonic() - last_heartbeat
+        panic_event.set()
+
+    def read_loop() -> None:
         nonlocal last_heartbeat
         while True:
             try:
-                # Read 1 byte. This blocks until a byte is available or EOF.
-                # read1() is unbuffered, but sys.stdin.buffer.read1 might not be available
-                # or work reliably on Windows pipes without hanging. 
-                # Actually, sys.stdin.buffer.read(1) works fine.
+                # read(1) blocks until a byte arrives or the pipe is closed (EOF).
                 b = sys.stdin.buffer.read(1)
                 if not b:
-                    # EOF (parent process died or closed pipe)
-                    stop_event.set()
-                    break
+                    # EOF: parent gone — release straight away. Best-effort duplicate of the
+                    # parent's own atexit release; KEYUP on already-up keys is a no-op.
+                    trigger_panic("eof")
+                    return
                 last_heartbeat = time.monotonic()
             except Exception:
-                stop_event.set()
-                break
+                trigger_panic("read_error")
+                return
 
-    t = threading.Thread(target=read_loop, daemon=True)
-    t.start()
+    reader = threading.Thread(target=read_loop, daemon=True)
+    reader.start()
 
-    panicked = False
-    while not stop_event.is_set():
+    stall_ticks = 0
+    while not panic_event.is_set():
         now = time.monotonic()
-        if now - last_heartbeat > TIMEOUT_SEC:
-            # Parent stalled! Panic!
-            panic_release_all()
-            panicked = True
-            break
-        time.sleep(0.05)
-        
-    if not panicked:
-        # We exited cleanly due to EOF (parent exited gracefully and closed pipe)
-        # We can still ensure everything is released just in case, but usually parent does it.
-        pass
+        age = now - last_heartbeat
+        if age > STALL_AFTER_S:
+            stall_ticks += 1
+            if stall_ticks >= STALL_TICK_THRESHOLD:
+                trigger_panic("stall")
+                break
+        else:
+            # Reset on any fresh observation that age is still healthy — a single late tick
+            # inside the threshold must not bank a false-positive streak across a recovery.
+            stall_ticks = 0
+        time.sleep(POLL_INTERVAL_S)
+
+    if panic_event.is_set():
+        panic_release_all()
+        # Forensic telemetry: stderr is parent-discarded by default but harmless to write.
+        with contextlib.suppress(Exception):
+            reason = panic_state["reason"]
+            age = float(panic_state["heartbeat_age_s"])
+            sys.stderr.write(
+                f"[watchdog] panic_reason={reason} heartbeat_age={age:.3f}s\n"
+            )
+            sys.stderr.flush()
+
 
 if __name__ == "__main__":
     main()

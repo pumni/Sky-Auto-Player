@@ -398,8 +398,15 @@ class TelemetryLogger:
     def flush_if_large(self) -> bool:
         """Report a large buffer without mutating it on the dispatch thread.
 
-        Detail export is deferred to ``save()`` at the playback lifecycle edge.
-        The hard cap in ``record()`` remains the memory bound.
+        Naming debt (review of main@7c548527 §"Comment drift"): the legacy name suggests
+        an I/O flush, but the implementation deliberately returns a boolean only. The
+        dispatch thread must never own file I/O (an RT invariant — a CSV write mid-song
+        is jitter that derailed note timing). ``save()`` owns the actual flush at the
+        playback-lifecycle edge, and ``record_pause``/process_wait_states paths consult
+        this probe to decide whether to trigger the off-dispatch write path. Returning
+        ``True`` here means "the in-memory record buffer has crossed the soft threshold;
+        consider flushing off-thread" — implementations may rotate it to ``save()`` at
+        the next safe point.
         """
         return self.enabled and len(self.records) >= _TELEMETRY_FLUSH_CHUNK
 

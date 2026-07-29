@@ -803,6 +803,32 @@ def main() -> int:
         # Ensure the working directory is the exe's folder so relative paths work
         os.chdir(Path(sys.executable).parent)
 
+    # Free-threaded-runtime fail-fast (review of main@7c548527 §3): refuses playback
+    # before erecting the UI/backend if the interpreter is not a true GIL-disabled build.
+    # Architecture invariant (AGENTS.md): the dispatch loop and the Textual UI thread must
+    # not contend on the GIL, so a misconfigured runtime is a configuration error that
+    # produces user-visible behaviour we can't reason about. Surfaced early with a banner
+    # so the user gets an actionable message instead of degraded playback.
+    from sky_music.infrastructure.realtime import (
+        FreeThreadedRuntimeError,
+        assert_free_threaded_runtime,
+    )
+    try:
+        assert_free_threaded_runtime()
+    except FreeThreadedRuntimeError as exc:
+        print(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║   Sky Auto Player — free-threaded Python required           ║\n"
+            "╠══════════════════════════════════════════════════════════════╣\n"
+            f"║  {str(exc)[:60]:<60}  ║\n"
+            "║  Install CPython 3.14t (free-threaded) and re-launch.       ║\n"
+            "║  See docs/architecture.md for the invariant rationale.       ║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n",
+            file=sys.stderr,
+        )
+        _wait_key_and_exit(2)
+
     if "--selftest-textual" in sys.argv:
         return _run_textual_selftest()
 

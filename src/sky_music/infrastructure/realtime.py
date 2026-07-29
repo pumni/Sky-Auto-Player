@@ -89,6 +89,50 @@ def _gil_enabled() -> bool:
     return bool(probe()) if probe is not None else True
 
 
+class FreeThreadedRuntimeError(RuntimeError):
+    """Raised when the running interpreter is not a true free-threaded runtime.
+
+    Architecture invariant (AGENTS.md): ``.python-version`` ↔
+    ``pyproject.toml requires-python`` pin the free-threaded build because the
+    dispatch loop and the Textual UI thread must not contend on the GIL. This
+    guard verifies both halves of the invariant at startup:
+      * the BUILD is free-threaded (``Py_GIL_DISABLED`` == 1);
+      * the RUNTIME has the GIL disabled (``sys._is_gil_enabled()`` is False).
+    A free-threaded build can still enable the GIL at runtime (a startup flag, an
+    incompatible C extension that re-enables it, or even a script that toggles it
+    via ``_gil_enabled._internal_set_enabled``). Telemetry-only handling lets those
+    cases run silently under the GIL, defeating the pair invariant; we instead refuse
+    before constructing the UI or backend so the user gets a clear actionable error.
+    """
+
+
+def assert_free_threaded_runtime() -> None:
+    """Abort playback startup unless the interpreter is genuinely GIL-disabled.
+
+    Called from ``main()`` once, before the UI / backend are constructed. Raises
+    ``FreeThreadedRuntimeError`` (which the caller converts to a banner + non-zero exit)
+    when either half of the free-threaded invariant fails:
+      * build is not free-threaded (``Py_GIL_DISABLED`` missing or != 1), OR
+      * build is free-threaded but the GIL was re-enabled at runtime.
+    """
+    import sysconfig
+
+    build_disabled = sysconfig.get_config_var("Py_GIL_DISABLED")
+    if build_disabled != 1:
+        raise FreeThreadedRuntimeError(
+            "Sky Auto-Player requires a free-threaded CPython build "
+            "(Py_GIL_DISABLED == 1); the current interpreter is not one. "
+            "Install Python 3.14t (free-threaded) — see docs/architecture.md."
+        )
+    if _gil_enabled():
+        raise FreeThreadedRuntimeError(
+            "Sky Auto-Player requires the GIL to be disabled at runtime, but "
+            "sys._is_gil_enabled() returned True. The interpreter is a free-threaded "
+            "build but the GIL was re-enabled (startup flag, an incompatible extension, "
+            "or an explicit toggle). Re-launch without forcing the GIL back on."
+        )
+
+
 class RealtimeProcessScope:
     """Pause cyclic GC for the duration of dispatch, reverting on exit.
 

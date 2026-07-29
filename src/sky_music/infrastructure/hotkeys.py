@@ -80,6 +80,18 @@ class PlaybackControls:
         if not self.enabled:
             return None
 
+        # Snapshot the three modifier virtual-key states ONCE per poll tick instead of
+        # once per hotkey. Review of main@7c548527 §1.5: every ``is_hotkey_down`` call
+        # re-queried Ctrl/Alt/Shift via ``GetAsyncKeyState``, so a 5-hotkey poll issued up
+        # to 20 Win32 calls/tick (≈ 2 000 calls/s during playback at the 10 ms cadence).
+        # The snapshotted modifiers are passed into ``_eval_hotkey_with_modifiers`` for
+        # each binding, leaving exactly 3 + 5 = 8 calls/tick — a 60 % syscall reduction at
+        # no behavioural or safety-policy cost (the modifier flags are READ-ONLY state and
+        # cannot change between bindings within a single GetAsyncKeyState-coherent tick).
+        ctrl_down = is_virtual_key_down(VK_CONTROL)
+        alt_down = is_virtual_key_down(VK_MENU)
+        shift_down = is_virtual_key_down(VK_SHIFT)
+
         for action, hotkey in (
             ("quit", self.quit),
             ("skip", self.skip),
@@ -87,7 +99,9 @@ class PlaybackControls:
             ("refocus", self.refocus),
             ("panic", self.panic),
         ):
-            is_down = is_hotkey_down(hotkey)
+            is_down = _eval_hotkey_with_modifiers(
+                hotkey, ctrl_down=ctrl_down, alt_down=alt_down, shift_down=shift_down
+            )
 
             if is_down and not self._was_down.get(action, False):
                 self._was_down[action] = True
@@ -97,31 +111,46 @@ class PlaybackControls:
 
         return None
 
-def is_hotkey_down(hotkey: HotkeyBinding) -> bool:
-    """Check if a hotkey is currently pressed.
+def _eval_hotkey_with_modifiers(
+    hotkey: HotkeyBinding, *, ctrl_down: bool, alt_down: bool, shift_down: bool
+) -> bool:
+    """Evaluate a hotkey against caller-snapshotted modifier states.
 
-    Required modifiers must be held; extra modifiers are ignored unless
-    the hotkey itself has no modifiers (to avoid false positives with
-    Ctrl+something accidentally triggering plain-key hotkeys).
+    Same gating policy as ``is_hotkey_down``:
+      * Required modifiers must be held.
+      * For plain (no-modifier) hotkeys, ALL modifier flags must be clear — prevents
+        Ctrl+F8 from accidentally firing a plain-F8 binding.
     """
-    ctrl_down = is_virtual_key_down(VK_CONTROL)
-    alt_down = is_virtual_key_down(VK_MENU)
-    shift_down = is_virtual_key_down(VK_SHIFT)
-
-    # Required modifiers must be held
     if hotkey.ctrl and not ctrl_down:
         return False
     if hotkey.alt and not alt_down:
         return False
     if hotkey.shift and not shift_down:
         return False
-
-    # For plain (no-modifier) hotkeys, require that no modifier is held
-    # to prevent Ctrl+F8 accidentally triggering the plain F8 hotkey.
     if not hotkey.has_modifier and (ctrl_down or alt_down or shift_down):
         return False
-
     return is_virtual_key_down(hotkey.key_code)
+
+def is_hotkey_down(hotkey: HotkeyBinding) -> bool:
+    """Check if a hotkey is currently pressed.
+
+    Required modifiers must be held; extra modifiers are ignored unless
+    the hotkey itself has no modifiers (to avoid false positives with
+    Ctrl+something accidentally triggering plain-key hotkeys).
+
+    Single-call entry point for one-shot callers (e.g. the debug-toggle poll in
+    ``playback_app``). The per-tick ``PlaybackControls.poll`` path snapshots every
+    modifier once and routes through ``_eval_hotkey_with_modifiers`` instead of this
+    function (review of main@7c548527 §1.5: removes ~ 60 % of redundant GetAsyncKeyState
+    syscalls during playback). Out-of-loop callers who evaluate multiple hotkeys should
+    prefer snapshotting + ``_eval_hotkey_with_modifiers`` themselves.
+    """
+    ctrl_down = is_virtual_key_down(VK_CONTROL)
+    alt_down = is_virtual_key_down(VK_MENU)
+    shift_down = is_virtual_key_down(VK_SHIFT)
+    return _eval_hotkey_with_modifiers(
+        hotkey, ctrl_down=ctrl_down, alt_down=alt_down, shift_down=shift_down
+    )
 
 def parse_hotkey(value: str) -> HotkeyBinding:
     raw = value.strip()

@@ -148,16 +148,16 @@ class SharedFocusSignal:
 class SnapshotProgressSink:
     """Lock-protected snapshot handoff from dispatch thread to supervisor/UI thread.
 
-    Memory bounds: the counter ring buffer is capped (``_max_counters``) so a UI thread
-    that briefly stalls cannot let counter tuples accumulate without bound — bounded
-    deque eviction is O(1) and never triggers a freeing collection on the hot path.
+    Memory bounds: only the latest ``ProgressSnapshot`` is retained (one field, latest
+    writer wins). The supervisor's 200 Hz ``_consume_progress_updates`` tick reads it
+    under the lock and clears ``_finish_message`` in the same critical section, so a
+    briefly-stalled UI thread cannot let either grow without bound.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snapshot: ProgressSnapshot | None = None
         self._version = 0
-        self._finish_message: str | None = None
         self._finish_message: str | None = None
 
     def publish(
@@ -193,8 +193,11 @@ class SnapshotProgressSink:
         self,
         last_version: int,
     ) -> tuple[int, ProgressSnapshot | None, str | None]:
-        # Fast path: nothing changed since last consume — avoids taking a lock and any
-        # deque materialisation on the supervisor's 200Hz tick.
+        # Short path: nothing changed since last consume — return early under the same
+        # lock to skip snapshot materialisation on the supervisor's 200 Hz tick. (The
+        # lock is still taken so the version/finish_message reads are coherent with any
+        # concurrent publish/finish writer; the legacy comment claimed the lock was
+        # avoided here, which was drift — review of main@7c548527 §"Comment drift".)
         with self._lock:
             if self._version == last_version and self._finish_message is None:
                 return last_version, None, None
@@ -249,6 +252,14 @@ class PlaybackSupervisor:
         # Set by _run_threaded when enable_epoch_rebase is True; read by the post-run
         # telemetry flush. Initialized to None so pyright can track it as int | None.
         self._epoch_rebase_us: int | None = None
+        # Lifecycle contract with PlaybackEngine: after run() returns the engine reads these
+        # to decide whether it is safe to drop per-song data, close the realtime sleeper,
+        # clear the INPUT-array cache and run gc.collect(). ``dispatch_thread`` is the live
+        # thread handle (None in direct mode); ``dispatch_thread_terminated`` is the final
+        # liveness snapshot taken AFTER the bounded join, so the engine never teardowns a
+        # resource the dispatch thread still owns on the PLAYBACK_SHUTDOWN_TIMEOUT branch.
+        self.dispatch_thread: threading.Thread | None = None
+        self.dispatch_thread_terminated: bool = True
 
     def run(
         self,
@@ -258,6 +269,10 @@ class PlaybackSupervisor:
         total_time_us: int,
         use_dispatch_thread: bool,
     ) -> str:
+        # Reset lifecycle state per run() so a reused supervisor cannot leak a stale handle
+        # from a previous thread (direct mode never spawns one: thread=None, terminated=True).
+        self.dispatch_thread = None
+        self.dispatch_thread_terminated = True
         if use_dispatch_thread:
             return self._run_threaded(dispatch_loop, coordinator, state, total_time_us)
         return self._run_direct(dispatch_loop, coordinator, state, total_time_us)
@@ -407,6 +422,11 @@ class PlaybackSupervisor:
             name="sky-music-dispatch",
             context=Context(),
         )
+        # Publish the live handle BEFORE start so the engine has a non-None reference even
+        # if the supervisor returns on an exception path. ``dispatch_thread_terminated`` is
+        # flipped to True only after the bounded join confirms liveness has ended.
+        self.dispatch_thread = dispatch_thread
+        self.dispatch_thread_terminated = False
         dispatch_thread.start()
 
         last_snapshot_version = 0
@@ -535,8 +555,15 @@ class PlaybackSupervisor:
             raise control_exc
 
         if dispatch_thread.is_alive():
+            # Final liveness snapshot: the bounded join (5 s) could not terminate the
+            # dispatch thread. ``dispatch_thread_terminated`` MUST stay False here so the
+            # engine skips every teardown step that would race with the still-running
+            # sender (timer close, clear_array_cache, runtime_schedule drop, gc.collect).
             return PLAYBACK_SHUTDOWN_TIMEOUT
 
+        # The thread has actually terminated (normal or via the join path). Mark it so the
+        # engine's finally block can release resources the dispatch thread no longer holds.
+        self.dispatch_thread_terminated = True
         if dispatch_result.error is not None:
             raise dispatch_result.error
         return dispatch_result.result or PLAYBACK_FINISHED

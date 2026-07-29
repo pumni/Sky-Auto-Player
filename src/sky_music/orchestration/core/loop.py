@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -125,7 +126,16 @@ class DispatchHealthMonitor:
 
         self._send_duration_window: deque[int] = deque(maxlen=64)
         self._send_over_warn_count = 0
-        self._input_path_degraded = False
+        # Cross-thread visibility (review of main@7c548527 §3 "Cross-thread HUD flag"):
+        # ``input_path_degraded`` is written by the dispatch thread when its 1-second
+        # sustained-warn window trips, then read by the supervisor thread at publish
+        # (see PlaybackSupervisor._run_threaded periodic-progress publish and refocus
+        # path). The flag is monotonic (False → True, never reverted). We back it with
+        # a ``threading.Event`` so the cross-thread read is an explicit, documented
+        # synchronization primitive per CPython free-threading guidance, instead of the
+        # implicit "bare bool happens to be atomic on this interpreter" assumption the
+        # legacy code relied on. Behaviour is unchanged: a single-shot monotonic flag.
+        self._input_path_degraded_event = threading.Event()
         self._input_path_warn_started_us: int | None = None
 
         self._backend_health_snapshot_interval_us = 100_000
@@ -207,11 +217,14 @@ class DispatchHealthMonitor:
             self._input_path_warn_started_us = elapsed_us
             return
         if elapsed_us - self._input_path_warn_started_us >= 1_000_000:
-            self._input_path_degraded = True
+            # Monotonic trip — only ever turns the degraded flag on. Backed by a
+            # ``threading.Event`` so the cross-thread HUD reader (supervisor publish path)
+            # uses an explicit synchronization primitive per free-threaded guidance.
+            self._input_path_degraded_event.set()
 
     @property
     def input_path_degraded(self) -> bool:
-        return self._input_path_degraded
+        return self._input_path_degraded_event.is_set()
 
 
 class _NullEstimator:
@@ -1355,9 +1368,22 @@ class DispatchLoop:
             if observe is not None:
                 observe(result)  # type: ignore[operator]
 
-        for batch, pop_lead in self.coordinator.pop_due_authored(
-            now_us, lead_for_batch=self._down_lead_for_batch
-        ):
+        # Scalar drain (review of main@7c548527 §1.4): pop ONE authored batch per iteration
+        # instead of materialising the whole overdue tuple before batch 1 is sent. Avoids a
+        # list+tuple allocation on the healthy single-batch path AND stops compounding
+        # catch-up latency on overload bursts where the sender must otherwise scan the whole
+        # due fan before its first SendInput. Per-batch lead is still snapshotted at pop time
+        # via lead_for_batch; authored ordering is preserved because the coordinator advances
+        # its cursor monotonically — same observable order as the legacy tuple, iterated
+        # eagerly on the dispatch thread. Free-threaded-safe: this is a regular method
+        # returning a value, not a long-lived generator shared across threads.
+        while True:
+            nxt = self.coordinator.pop_next_due_authored(
+                now_us, lead_for_batch=self._down_lead_for_batch
+            )
+            if nxt is None:
+                break
+            batch, pop_lead = nxt
             if batch.kind == "up":
                 self._request_up_batch(batch, state)
                 newly_due = self.coordinator.pop_due_pending(state.get_elapsed_us(self.clock), lead_up)

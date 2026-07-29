@@ -762,32 +762,59 @@ class PlaybackEngine:
             if self._should_use_dispatch_thread():
                 try:
                     from sky_music.platform.win32 import inputs
-    
+
+                    # Prewarm admission order (review of main@7c548527 §3): mandatory
+                    # singleton-up shapes (one per distinct Sky scan code) MUST be reserved
+                    # FIRST so the cap is never exhausted by authored batch shapes before the
+                    # runtime singleton-up uniqueness requirements are met. A release can be
+                    # authoritatively split into singletons mid-session (release_all,
+                    # panic_release, partial-send recovery); if that singleton shape is not in
+                    # the cache the dispatch thread routes through the lazy build path
+                    # (_CACHE_LOCK acquisition + ctypes array build + diagnostics update on the
+                    # RT path) — exactly the work prewarm exists to remove.
+                    #
+                    # Authorised batch shapes are then admitted under the remaining cap,
+                    # prioritised by frequency (already-built Counter) so a heavy polyphony
+                    # tail cannot crowd out a hot chord on the first beat. The cap itself is
+                    # imported from the cache owner (inputs.ARRAY_CACHE_MAX); see also
+                    # ``_ARRAY_CACHE`` LRU popitem(last=False) eviction at the platform layer.
+                    cache_cap = inputs.ARRAY_CACHE_MAX
                     shapes_to_prewarm: set[tuple[tuple[int, ...], bool]] = set()
                     shape_frequencies: Counter[tuple[tuple[int, ...], bool]] = Counter()
-                    # Phase 8 (M4): Prewarm both down shapes and exact multi-key up shapes
-                    # from the schedule. (Document cap: win32 inputs.py caps at _ARRAY_CACHE_MAX = 8192).
+
+                    distinct_keys = set()
+                    for action in self.actions:
+                        distinct_keys.update(action.scan_codes)
+                    for sc in sorted(distinct_keys):
+                        shape_key = ((sc,), True)
+                        shapes_to_prewarm.add(shape_key)
+                        if len(shapes_to_prewarm) >= cache_cap:
+                            break
+
+                    # Build authored candidate list with frequencies in schedule order
+                    # (Counter preserves insertion order, so equal-frequency candidates
+                    # retain first-seen order; the sort below is stable on equal keys).
+                    authored_candidates: list[tuple[tuple[int, ...], bool]] = []
+                    seen: set[tuple[tuple[int, ...], bool]] = set()
                     for batch in self.runtime_schedule.batches:
                         shape = tuple(i.scan_code for i in batch.intents)
                         is_up = batch.kind == "up"
                         shape_key = (shape, is_up)
-                        if shape_key not in shapes_to_prewarm:
-                            if len(shapes_to_prewarm) >= 8192:
-                                break
-                            shapes_to_prewarm.add(shape_key)
                         shape_frequencies[shape_key] += 1
-                    
-                    distinct_keys = set()
-                    for action in self.actions:
-                        distinct_keys.update(action.scan_codes)
-                    for sc in distinct_keys:
-                        shape_key = ((sc,), True)
-                        if shape_key not in shapes_to_prewarm:
-                            if len(shapes_to_prewarm) >= 8192:
-                                break
-                            shapes_to_prewarm.add(shape_key)
-                        shape_frequencies[shape_key] += 1
-    
+                        if shape_key not in seen:
+                            seen.add(shape_key)
+                            authored_candidates.append(shape_key)
+                    # Mandatory singleton-ups may already be authored (melodic up batches):
+                    # count them in shape_frequencies so frequency diagnostics stay correct.
+                    for sc in sorted(distinct_keys):
+                        shape_frequencies[((sc,), True)] += 1
+
+                    authored_candidates.sort(key=lambda s: -shape_frequencies[s])
+                    for shape_key in authored_candidates:
+                        if len(shapes_to_prewarm) >= cache_cap:
+                            break
+                        shapes_to_prewarm.add(shape_key)
+
                     inputs.prewarm_input_arrays(
                         shapes_to_prewarm,
                         shape_frequencies=shape_frequencies,
@@ -890,80 +917,108 @@ class PlaybackEngine:
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
+            # Lifecycle contract with PlaybackSupervisor (fix for the SHUTDOWN_TIMEOUT leak):
+            # ``dispatch_thread_terminated`` is the supervisor's authoritative final-liveness
+            # snapshot taken AFTER its bounded join. The legacy attr check (thread.is_alive())
+            # is kept as a defensive fallback so the engine degrades gracefully if a future
+            # supervisor refactor forgets to publish the boolean. When stuck==True, EVERY
+            # teardown step that races with the still-running sender is skipped — closing the
+            # waitable timer handle, dropping the INPUT-array cache, nulling runtime state
+            # that the dispatch thread's coordinator still references, and forcing gc.collect()
+            # while the dispatch thread may still be allocating. The engine is effectively
+            # poisoned for a second play() in that case; the next process start recovers.
+            supervisor_thread_terminated = True
+            if supervisor is not None:
+                supervisor_thread_terminated = bool(
+                    getattr(supervisor, "dispatch_thread_terminated", True)
+                )
+                if not supervisor_thread_terminated:
+                    # Defensive fallback: if the supervisor forgot to set the boolean, re-derive
+                    # from the live handle. ``dispatch_thread`` is None in direct mode (already
+                    # covered by True default above).
+                    thread = getattr(supervisor, "dispatch_thread", None)
+                    if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                        supervisor_thread_terminated = False
+            dispatch_thread_stuck = not supervisor_thread_terminated
             schedule_batch_count = (
                 len(self.runtime_schedule.batches) if self.runtime_schedule is not None else 0
             )
             cleared_array_cache_entries = 0
-            dispatch_thread_stuck = False
-            if supervisor is not None:
-                thread = getattr(supervisor, "dispatch_thread", None)
-                if thread is not None and getattr(thread, "is_alive", lambda: False)():
-                    dispatch_thread_stuck = True
-                    
-            if not dispatch_thread_stuck and realtime_sleeper is not self.sleeper:
-                close = getattr(realtime_sleeper, "close", None)
-                if close is not None:
-                    close()
 
-            # Release the per-song data so a UI that keeps the engine instance alive between
-            # playback sessions doesn't pin the compiled schedule + runtime coordinator in RSS.
-            # ``self.actions`` is the persistent source of truth and stays; ``runtime_schedule``
-            # is rebuilt on the next ``play()`` call (cheap vs. a song's playback time). The
-            # dispatch thread holds its own local coordinator reference and has already cleaned
-            # up its local telemetry / dispatch bookkeeping by the time this finally runs.
-            self._runtime_coordinator = None
-            self._compat_loop = None
-            self.runtime_schedule = None
-            # Drop the prebuilt INPUT-array cache so a session running many songs back-to-back
-            # doesn't accumulate up to ~8192 cached chord-shaped ctypes arrays. Safe to clear
-            # here because the dispatch thread has already joined (supervisor.run returned before
-            # this finally); the next play() rebuilds the cache from prewarm_input_arrays before
-            # the dispatch thread starts. _INPUT_CACHE (per-key structs) is intentionally kept
-            # by clear_array_cache. Best-effort; non-Windows/test platforms must not abort teardown.
-            if not dispatch_thread_stuck:
+            if dispatch_thread_stuck:
+                # LEAVE all per-song + shared state untouched: the dispatch thread is alive and
+                # owns the waitable timer, the INPUT-array cache, and its coordinator. Any
+                # further write here (telemetry record, cache clear, gc.collect, lead-cache write)
+                # may race with the still-running sender — the engine is effectively poisoned for
+                # a second play() in this state; the next process start recovers. We deliberately
+                # do NOT record to telemetry either, since TelemetryLogger is shared mutable state
+                # that the dispatch thread also writes from its hot path.
+                pass
+            else:
+                if realtime_sleeper is not self.sleeper:
+                    close = getattr(realtime_sleeper, "close", None)
+                    if close is not None:
+                        close()
+
+                # Release the per-song data so a UI that keeps the engine instance alive between
+                # playback sessions doesn't pin the compiled schedule + runtime coordinator in RSS.
+                # ``self.actions`` is the persistent source of truth and stays; ``runtime_schedule``
+                # is rebuilt on the next ``play()`` call (cheap vs. a song's playback time). Safe here
+                # because the dispatch thread has terminated (supervisor.dispatch_thread_terminated): it
+                # no longer reads the coordinator, the schedule it was built from, or the INPUT cache.
+                self._runtime_coordinator = None
+                self._compat_loop = None
+                self.runtime_schedule = None
+                # Drop the prebuilt INPUT-array cache so a session running many songs back-to-back
+                # doesn't accumulate up to ~8192 cached chord-shaped ctypes arrays. Safe to clear
+                # here because the dispatch thread has already joined (supervisor.run returned before
+                # this finally AND dispatch_thread_terminated is True); the next play() rebuilds the
+                # cache from prewarm_input_arrays before the dispatch thread starts. _INPUT_CACHE
+                # (per-key structs) is intentionally kept by clear_array_cache. Best-effort; non-
+                # Windows/test platforms must not abort teardown.
                 with contextlib.suppress(Exception):
                     from sky_music.platform.win32 import inputs as _inputs_cleanup
 
                     cleared_array_cache_entries = _inputs_cleanup.clear_array_cache()
                     self.prewarm_diagnostics = _inputs_cleanup.get_prewarm_diagnostics()
-            # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
-            # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
-            # the dispatch thread allocated during playback (ExecutionResult, batch tuples,
-            # dispatch bookkeeping lists) plus the runtime_schedule edges dropped above. Note this
-            # only reclaims cyclic/unreachable objects — the former big reachable holdout was
-            # telemetry.records (kept alive via self.telemetry), which is now cleared inside
-            # telemetry.save(). Windows Working Set may still not release the
-            # freed pages back to the OS promptly (mimalloc page reuse and free-threaded QSBR), so
-            # Task Manager RSS can plateau even after this collection — that is platform behavior,
-            # not proof of an app leak. The collected value is an object count, not released bytes.
-            with contextlib.suppress(Exception):
-                post_gc = collect_gc_with_stats("post_play")
-                self.gc_collection_stats.append(
-                    {
-                        **post_gc,
-                        "schedule_batch_count": schedule_batch_count,
-                        # ``TelemetryLogger.save()`` clears the production
-                        # record list. Use the bounded session counter so this
-                        # remains evidence of records created, not records
-                        # retained after teardown.
-                        "telemetry_record_count": self.telemetry.record_stats()["accepted"],
-                        "input_array_cache_entries_cleared": cleared_array_cache_entries,
-                    }
-                )
-
-            # Phase D: Persist lead estimator state for next session.
-            if self.lead_cache_path and self.enable_adaptive_lead:
-                try:
-                    cache_file = Path(self.lead_cache_path)
-                    cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = cache_file.with_suffix(".tmp")
-                    tmp.write_text(
-                        json.dumps(self.estimator.export_state(), indent=2),
-                        encoding="utf-8",
+                # Force-collect once here (unconditional, not gated on enable_gc_pause) so the cyclic
+                # GC sweep re-enabled by RealtimeProcessScope.__exit__ frees the unreachable garbage
+                # the dispatch thread allocated during playback (ExecutionResult, batch tuples,
+                # dispatch bookkeeping lists) plus the runtime_schedule edges dropped above. Note this
+                # only reclaims cyclic/unreachable objects — the former big reachable holdout was
+                # telemetry.records (kept alive via self.telemetry), which is now cleared inside
+                # telemetry.save(). Windows Working Set may still not release the
+                # freed pages back to the OS promptly (mimalloc page reuse and free-threaded QSBR), so
+                # Task Manager RSS can plateau even after this collection — that is platform behavior,
+                # not proof of an app leak. The collected value is an object count, not released bytes.
+                with contextlib.suppress(Exception):
+                    post_gc = collect_gc_with_stats("post_play")
+                    self.gc_collection_stats.append(
+                        {
+                            **post_gc,
+                            "schedule_batch_count": schedule_batch_count,
+                            # ``TelemetryLogger.save()`` clears the production
+                            # record list. Use the bounded session counter so this
+                            # remains evidence of records created, not records
+                            # retained after teardown.
+                            "telemetry_record_count": self.telemetry.record_stats()["accepted"],
+                            "input_array_cache_entries_cleared": cleared_array_cache_entries,
+                        }
                     )
-                    tmp.replace(cache_file)
-                except Exception:
-                    pass
+
+                # Phase D: Persist lead estimator state for next session.
+                if self.lead_cache_path and self.enable_adaptive_lead:
+                    try:
+                        cache_file = Path(self.lead_cache_path)
+                        cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        tmp = cache_file.with_suffix(".tmp")
+                        tmp.write_text(
+                            json.dumps(self.estimator.export_state(), indent=2),
+                            encoding="utf-8",
+                        )
+                        tmp.replace(cache_file)
+                    except Exception:
+                        pass
 
     # Picker workers use these thread-name prefixes; none may be alive once playback starts.
     _PICKER_WORKER_THREAD_PREFIXES = (

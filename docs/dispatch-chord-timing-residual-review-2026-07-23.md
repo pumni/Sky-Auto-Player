@@ -165,6 +165,25 @@ Required outcome:
 - timeout becomes an explicit fatal lifecycle result;
 - no attempt is made to kill a Python thread or send input from the control thread.
 
+> **Resolution note (2026-07-29).** The join-timeout ownership contract is now
+> fully enforced. `PlaybackSupervisor` carries an authoritative
+> `dispatch_thread_terminated` flag (set `False` only while the dispatch thread
+> is known to be running, set `True` on cooperative join, on exception-path
+> cancel, and on `PLAYBACK_SHUTDOWN_TIMEOUT`). The engine's teardown `finally`
+> block reads this flag and gates **every** owned teardown step — realtime
+> sleeper close, `INPUT`-array cache clear, `runtime_coordinator` /
+> `compat_loop` / `runtime_schedule` reference drop, `gc.collect()` and lead
+> cache write — on `not dispatch_thread_stuck`. The timer-only handle leak that
+> the older partial fix left in place is also closed: the supervisor no longer
+> closes `command_event` until the dispatch thread is observably terminated.
+> The lifecycle test (`tests/test_phase4_lifecycle.py`) exercises both the
+> cooperative-consume fake and a direct-mode contract test that asserts the
+> engine finally block skips teardown when `dispatch_thread_terminated` is
+> `False`. Covering test: `test_engine_finally_skips_teardown_when_dispatch_thread_not_terminated`.
+> The earlier 2026-07-23 plan that shipped a weaker version of this fix (leaving
+> only the command event open + returning the token) is now superseded by the
+> stricter all-teardown-gated contract documented here.
+
 ### R3 — Medium-high: lead-cache import is not closed under export
 
 `SendLatencyEstimator.update_completion_error()` legally produces negative residual
