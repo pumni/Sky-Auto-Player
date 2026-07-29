@@ -98,13 +98,17 @@ export const homeEn: HomeContent = {
     description:
       'Sky Auto Player runs as a separate Windows application and sends standard input events. Its source is public, so the implementation can be reviewed directly.',
     ledger: [
-      { term: 'Input', definition: 'Windows SendInput' },
-      { term: 'Process', definition: 'Separate application' },
-      { term: 'Game memory', definition: 'Not inspected' },
-      { term: 'Code injection', definition: 'Not used' },
-      { term: 'Game files', definition: 'Not modified' },
-      { term: 'License', definition: 'GNU GPL v3.0' },
-      { term: 'Updates', definition: 'Explicit updater with checksum verification' },
+      { term: 'Input', definition: 'Windows SendInput', state: 'yes' },
+      { term: 'Process', definition: 'Separate application', state: 'info' },
+      { term: 'Game memory', definition: 'Not inspected', state: 'no' },
+      { term: 'Code injection', definition: 'Not used', state: 'no' },
+      { term: 'Game files', definition: 'Not modified', state: 'no' },
+      { term: 'License', definition: 'GNU GPL v3.0', state: 'info' },
+      {
+        term: 'Updates',
+        definition: 'Explicit updater with checksum verification',
+        state: 'info',
+      },
     ],
     notice:
       'Terms of Service: These technical boundaries do not guarantee account safety. Automated music playback may still conflict with Sky’s Terms of Service. Use the tool responsibly and at your own risk.',

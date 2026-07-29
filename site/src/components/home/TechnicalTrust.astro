@@ -1,5 +1,6 @@
 ---
 import type { HomeContent } from '../../data/home.types';
+import { withBase } from '../../utils/urls';
 import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
@@ -33,12 +34,19 @@ const { data, locale } = Astro.props;
                 {item.term}
               </dt>
               <dd>{item.definition}</dd>
+              <dd class:list={['ledger-row__state', `ledger-row__state--${item.state}`]}>
+                {item.state === 'yes' ? 'YES' : item.state === 'no' ? 'NO' : 'INFO'}
+              </dd>
             </div>
           ))
         }
       </dl>
       <p class="notice">
-        <span class="notice__label">{locale === 'vi' ? 'LƯU Ý' : 'NOTICE'}</span>{data.notice}
+        <span class="notice__label">{locale === 'vi' ? 'LƯU Ý' : 'NOTICE'}</span>
+        <span>{data.notice}</span>
+        <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}>
+          {locale === 'vi' ? 'Đọc hướng dẫn về rủi ro tài khoản' : 'Read the account-risk guidance'}
+        </a>
       </p>
     </div>
   </div>
@@ -56,14 +64,14 @@ const { data, locale } = Astro.props;
 
   .technical-ledger {
     display: grid;
-    grid-template-columns: minmax(8rem, 0.35fr) minmax(0, 0.65fr);
+    grid-template-columns: minmax(8rem, 0.35fr) minmax(0, 0.65fr) auto;
     margin: 0 0 var(--space-6);
     border-block-start: 1px solid var(--line-default);
   }
 
   .ledger-row {
     display: grid;
-    grid-template-columns: minmax(8rem, 0.35fr) minmax(0, 0.65fr);
+    grid-template-columns: minmax(8rem, 0.35fr) minmax(0, 0.65fr) auto;
     grid-column: 1 / -1;
     align-items: baseline;
     gap: var(--space-5);
@@ -99,6 +107,23 @@ const { data, locale } = Astro.props;
     border-radius: 50%;
   }
 
+  .ledger-row__state {
+    min-width: 3.2rem;
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.06em;
+    text-align: end;
+  }
+
+  .ledger-row__state--yes {
+    color: var(--color-success);
+  }
+
+  .ledger-row__state--no {
+    color: var(--color-info);
+  }
+
   .ledger-row dd {
     color: var(--color-text-secondary);
   }
@@ -120,6 +145,14 @@ const { data, locale } = Astro.props;
     letter-spacing: 0.08em;
   }
 
+  .notice a {
+    width: fit-content;
+    min-height: 44px;
+    align-content: center;
+    color: var(--color-text-primary);
+    text-decoration: underline;
+  }
+
   @media (min-width: 64rem) {
     .technical-trust__layout {
       grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
@@ -129,7 +162,7 @@ const { data, locale } = Astro.props;
 
   @media (max-width: 40rem) {
     .technical-ledger {
-      grid-template-columns: minmax(7rem, 0.4fr) minmax(0, 0.6fr);
+      grid-template-columns: minmax(6.5rem, 0.4fr) minmax(0, 0.6fr) auto;
     }
 
     .ledger-row {

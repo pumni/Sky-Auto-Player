@@ -104,6 +104,10 @@ const { data, locale } = Astro.props;
     background: color-mix(in oklch, var(--color-page) 55%, transparent);
   }
 
+  .comparison-table td:first-child {
+    border-inline-start: 1px dashed var(--line-default);
+  }
+
   .comparison-table th:last-child,
   .comparison-table td:last-child {
     border-inline-start: 1px solid var(--line-accent);
@@ -120,6 +124,7 @@ const { data, locale } = Astro.props;
   .comparison-table td:last-child {
     color: var(--color-text-primary);
     background: color-mix(in oklch, var(--color-surface-active) 32%, transparent);
+    box-shadow: inset 2px 0 0 var(--line-accent);
   }
 
   .comparison-table__player {
@@ -185,6 +190,7 @@ const { data, locale } = Astro.props;
     .comparison-table td:last-child {
       border-inline-start: 0;
       background: transparent;
+      box-shadow: none;
     }
 
     .comparison-table__node {

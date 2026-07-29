@@ -92,6 +92,9 @@ const isVi = locale === 'vi';
     <span class="instrument-key">D3</span>
     <span class="instrument-key is-active" data-event="3">E3</span>
   </div>
+  <button class="console__replay" type="button" data-timing-replay>
+    {isVi ? 'Phát lại minh họa' : 'Replay illustration'}
+  </button>
   <span class="sr-only" aria-live="polite" data-timing-status>
     {isVi ? 'Trạng thái cuối: nốt ngân E3 tại 00:13.066' : 'Final state: held note E3 at 00:13.066'}
   </span>
@@ -105,7 +108,7 @@ const isVi = locale === 'vi';
     min-width: 0;
     margin: 0;
     padding: clamp(var(--space-3), 2.5cqi, var(--space-5));
-    overflow: hidden;
+    overflow: clip;
     font-family: var(--font-mono);
     font-size: var(--type-small);
   }
@@ -213,6 +216,10 @@ const isVi = locale === 'vi';
   .timing-console.is-playing .timing-event.is-active {
     opacity: 1;
     background: color-mix(in oklch, var(--color-action) 8%, transparent);
+  }
+
+  .timing-console:not(.is-playing) .timing-event:not([aria-current='step']) {
+    color: var(--color-text-tertiary);
   }
 
   .timing-event--active {
@@ -348,7 +355,7 @@ const isVi = locale === 'vi';
     color: var(--color-action-soft);
   }
 
-  @container timing-console (width < 34rem) {
+  @container timing-console (width < 30rem) {
     .timing-event {
       grid-template-columns: max-content auto;
       gap: var(--space-1) var(--space-3);
@@ -368,6 +375,12 @@ const isVi = locale === 'vi';
     .timing-event__keys {
       grid-column: 1 / -1;
       grid-row: 2;
+    }
+  }
+
+  @container timing-console (width >= 24rem) {
+    .instrument-key {
+      aspect-ratio: 2.2 / 1;
     }
   }
 
@@ -403,14 +416,21 @@ const isVi = locale === 'vi';
 <script>
   const timingConsole = document.querySelector<HTMLElement>('.timing-console');
 
-  if (timingConsole) {
+  if (timingConsole && timingConsole.dataset.timingEnhanced !== 'true') {
+    timingConsole.dataset.timingEnhanced = 'true';
     const events = Array.from(timingConsole.querySelectorAll<HTMLElement>('.timing-event'));
     const keys = Array.from(timingConsole.querySelectorAll<HTMLElement>('.instrument-key'));
     const marker = timingConsole.querySelector<HTMLElement>('.console__playhead-marker');
     const status = timingConsole.querySelector<HTMLElement>('[data-timing-status]');
     const replay = timingConsole.querySelector<HTMLButtonElement>('[data-timing-replay]');
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     let runId = 0;
+    let timers: number[] = [];
+
+    const clearTimers = () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers = [];
+    };
 
     const setActive = (index: number) => {
       const event = events.find((item) => item.dataset.eventIndex === String(index));
@@ -429,25 +449,56 @@ const isVi = locale === 'vi';
     const runSequence = () => {
       runId += 1;
       const currentRun = runId;
-      if (reducedMotion) {
+      clearTimers();
+      if (motionQuery.matches || document.hidden) {
         timingConsole.classList.remove('is-playing');
         setActive(3);
         return;
       }
       timingConsole.classList.add('is-playing');
       events.forEach((event) => event.classList.remove('is-active'));
+      events.forEach((event) => event.removeAttribute('aria-current'));
       keys.forEach((key) => key.classList.remove('is-active'));
+      marker?.style.setProperty('--playhead-progress', '0');
+      if (status) {
+        status.textContent =
+          timingConsole.ownerDocument.documentElement.lang === 'vi'
+            ? 'Sẵn sàng phát minh họa'
+            : 'Ready to play illustration';
+      }
       [1, 2, 3].forEach((index, step) => {
-        window.setTimeout(() => {
+        const timer = window.setTimeout(() => {
           if (currentRun !== runId) return;
           setActive(index);
-        }, step * 720);
+        }, [650, 1450, 2300][step]);
+        timers.push(timer);
       });
+      timers.push(
+        window.setTimeout(() => {
+          if (currentRun !== runId) return;
+          timingConsole.classList.remove('is-playing');
+        }, 3000),
+      );
     };
 
     setActive(3);
     replay?.addEventListener('click', runSequence);
-    if (!('IntersectionObserver' in window)) runSequence();
+    const finishSequence = () => {
+      runId += 1;
+      clearTimers();
+      timingConsole.classList.remove('is-playing');
+      setActive(3);
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) finishSequence();
+    });
+    motionQuery.addEventListener?.('change', (event) => {
+      if (event.matches) finishSequence();
+    });
+
+    if (motionQuery.matches) finishSequence();
+    else if (!('IntersectionObserver' in window)) runSequence();
     else {
       const observer = new IntersectionObserver(
         ([entry]) => {

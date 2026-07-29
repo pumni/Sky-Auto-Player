@@ -121,9 +121,14 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
     transition: transform var(--duration-fast) var(--ease-standard);
   }
 
-  .faq-teasers__link:hover .faq-teasers__go,
   .faq-teasers__link:focus-visible .faq-teasers__go {
     transform: translateX(3px);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .faq-teasers__link:hover .faq-teasers__go {
+      transform: translateX(3px);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

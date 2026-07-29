@@ -49,10 +49,30 @@ test.describe('accessibility and responsive contracts', () => {
       'srcset',
       /picker-mobile\.webp/,
     );
+    await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
+      'width',
+      '1095',
+    );
+    await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
+      'height',
+      '821',
+    );
+    await expect(page.locator('.screenshot-frame__caption-meta')).toHaveText('WEBP · FULL SIZE');
     await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute(
       'href',
       /sky-auto-player-mark\.svg/,
     );
+  });
+
+  test('header sticky behavior begins with desktop navigation', async ({ page }) => {
+    await page.setViewportSize({ width: 1023, height: 900 });
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.site-header')).toHaveCSS('position', 'relative');
+    await expect(page.locator('.menu-toggle')).toBeVisible();
+
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await expect(page.locator('.site-header')).toHaveCSS('position', 'sticky');
+    await expect(page.locator('.menu-toggle')).toBeHidden();
   });
 
   test('homepage remains usable at 200 percent zoom', async ({ page }) => {
@@ -65,11 +85,244 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.hero__actions .button').first()).toBeVisible();
   });
 
+  test('visible microcopy keeps a readable 12px floor', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/Sky-Auto-Player/');
+    const sizes = await page
+      .locator(
+        [
+          '.ui-kicker',
+          '.hero__annotation',
+          '.proof-strip__index',
+          '.screenshot-frame figcaption',
+          '.ledger-row__state',
+          '.final-cta__eyebrow',
+        ].join(','),
+      )
+      .evaluateAll((elements) =>
+        elements
+          .filter((element) => {
+            const style = getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+          })
+          .map((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+      );
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(12);
+  });
+
+  test('keyboard focus stays visible and Vietnamese display text keeps its diacritics', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/vi/');
+    await expect(page.locator('main h1')).toHaveText('Chơi bản nhạc, không chơi bàn phím.');
+
+    const primaryAction = page.locator('.hero__actions .button').first();
+    await primaryAction.focus();
+    await expect(primaryAction).toBeFocused();
+    const focusStyle = await primaryAction.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        outlineStyle: style.outlineStyle,
+        outlineWidth: Number.parseFloat(style.outlineWidth),
+      };
+    });
+    expect(focusStyle.outlineStyle).not.toBe('none');
+    expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
+  });
+
   test('timing stage keeps a complete static state with reduced motion', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/Sky-Auto-Player/');
     await expect(page.locator('.timing-console')).not.toHaveClass(/is-playing/);
     await expect(page.locator('.timing-event--active')).toHaveAttribute('aria-current', 'step');
+    await page.locator('[data-timing-replay]').click();
+    await expect(page.locator('.timing-console')).not.toHaveClass(/is-playing/);
+    await expect(page.locator('.timing-event[data-event-index="3"]')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+  });
+
+  test('timing illustration replays once and keeps event-to-key state legible', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const console = page.locator('[data-timing-console]');
+    const replay = page.locator('[data-timing-replay]');
+    await expect(replay).toHaveAccessibleName('Replay illustration');
+    await replay.click();
+    await expect(console).toHaveClass(/is-playing/);
+    await expect(console.locator('.timing-event[aria-current="step"]')).toHaveCount(0);
+    await expect(console.locator('.timing-event[data-event-index="1"]')).toHaveAttribute(
+      'aria-current',
+      'step',
+      { timeout: 1500 },
+    );
+    await expect(console).not.toHaveClass(/is-playing/, { timeout: 4000 });
+    await expect(console.locator('.timing-event[data-event-index="3"]')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+  });
+
+  test('mobile timing console shows only the relevant key excerpt', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.instrument-key:visible')).toHaveCount(5);
+    await expect(page.locator('.timing-console__events > li')).toHaveCount(3);
+  });
+
+  test('proof transition and causal score keep list semantics without nested panels', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.proof-strip__capabilities > li')).toHaveCount(4);
+    await expect(page.locator('.causal-steps > li')).toHaveCount(3);
+    await expect(page.locator('.causal-diagram')).not.toHaveClass(/ui-instrument/);
+  });
+
+  test('desktop product screenshot carries more visual weight than the timing console', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/Sky-Auto-Player/');
+    const screenshotWidth = await page
+      .locator('.screenshot-frame img')
+      .evaluate((element) => element.getBoundingClientRect().width);
+    const consoleWidth = await page
+      .locator('.timing-console')
+      .evaluate((element) => element.getBoundingClientRect().width);
+    expect(screenshotWidth).toBeGreaterThan(consoleWidth);
+    expect(screenshotWidth).toBeGreaterThan(850);
+  });
+
+  test('desktop hero copy and timing console keep separate layout bounds', async ({ page }) => {
+    for (const width of [1280, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/Sky-Auto-Player/');
+      const headerBox = await page.locator('.site-header').boundingBox();
+      const heroBox = await page.locator('.hero').boundingBox();
+      const copyBox = await page.locator('.hero__copy').boundingBox();
+      const consoleBox = await page.locator('.timing-console').boundingBox();
+
+      expect(headerBox).not.toBeNull();
+      expect(heroBox).not.toBeNull();
+      expect(copyBox).not.toBeNull();
+      expect(consoleBox).not.toBeNull();
+      expect(heroBox!.y - (headerBox!.y + headerBox!.height)).toBeLessThanOrEqual(48);
+      expect(
+        consoleBox!.y - (headerBox!.y + headerBox!.height),
+        `timing console offset below header at ${width}px`,
+      ).toBeLessThanOrEqual(80);
+      expect(copyBox!.x + copyBox!.width).toBeLessThan(consoleBox!.x);
+      expect(consoleBox!.height, `timing console height at ${width}px`).toBeLessThan(600);
+    }
+  });
+
+  test('comparison and how-it-works preserve table and ordered-list semantics', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const table = page.locator('.comparison-table');
+    await expect(table.locator('caption')).toHaveCount(1);
+    await expect(table.locator('thead th[scope="col"]')).toHaveCount(2);
+    await expect(table.locator('tbody tr')).toHaveCount(4);
+    await expect(page.locator('ol.steps > li')).toHaveCount(3);
+  });
+
+  test('step and format labels do not collide with their copy', async ({ page }) => {
+    for (const width of [768, 1024, 1280, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/Sky-Auto-Player/');
+
+      const stepCollisions = await page.locator('.step').evaluateAll((steps) =>
+        steps.map((step) => {
+          const label = step.querySelector('.step__number')!.getBoundingClientRect();
+          const copy = step.querySelector('.step__copy')!.getBoundingClientRect();
+          const overlapsHorizontally = label.left < copy.right && label.right > copy.left;
+          const overlapsVertically = label.top < copy.bottom && label.bottom > copy.top;
+          return overlapsHorizontally && overlapsVertically;
+        }),
+      );
+      expect(stepCollisions, `step collision state at ${width}px`).not.toContain(true);
+
+      const formatCollisions = await page.locator('.format-row').evaluateAll((rows) =>
+        rows.map((row) => {
+          const extension = row.querySelector('.format-row__extension')!;
+          const extensionBox = extension.getBoundingClientRect();
+          const copyBox = row.querySelector('.format-row__copy')!.getBoundingClientRect();
+          const tagsBox = row.querySelector('.format-row__tags')!.getBoundingClientRect();
+          const intersects = (first: DOMRect, second: DOMRect) =>
+            first.left < second.right &&
+            first.right > second.left &&
+            first.top < second.bottom &&
+            first.bottom > second.top;
+          return {
+            extensionCopy: intersects(extensionBox, copyBox),
+            copyTags: intersects(copyBox, tagsBox),
+            extensionOverflow: extension.scrollWidth > extension.clientWidth + 1,
+          };
+        }),
+      );
+      expect(formatCollisions, `format collision state at ${width}px`).not.toContainEqual(
+        expect.objectContaining({
+          extensionCopy: true,
+        }),
+      );
+      expect(formatCollisions, `format tag collision state at ${width}px`).not.toContainEqual(
+        expect.objectContaining({
+          copyTags: true,
+        }),
+      );
+      expect(formatCollisions, `format label overflow state at ${width}px`).not.toContainEqual(
+        expect.objectContaining({
+          extensionOverflow: true,
+        }),
+      );
+    }
+  });
+
+  test('technical boundary exposes explicit states and a visible risk link', async ({ page }) => {
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.ledger-row__state--yes')).toHaveCount(1);
+    await expect(page.locator('.ledger-row__state--no')).toHaveCount(3);
+    await expect(page.locator('.notice a')).toHaveAttribute('href', /faq\/#account-safety$/);
+    await expect(page.locator('.technical-section')).not.toContainText('100% safe');
+  });
+
+  test('final measure and footer retain clear actions and brand closure', async ({ page }) => {
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('.final-cta__measure')).toContainText('M.12 / READY');
+    await expect(page.locator('.final-cta__actions a')).toHaveCount(2);
+    await expect(page.locator('.site-footer__brand img')).toHaveAttribute(
+      'src',
+      /sky-auto-player-mark\.svg/,
+    );
+  });
+
+  test('core content and navigation remain available without JavaScript', async ({ browser }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('main h1')).toBeVisible();
+    await expect(page.locator('.timing-event[aria-current="step"]')).toBeVisible();
+    await expect(page.locator('.site-nav')).toBeVisible();
+    await expect(page.locator('.menu-toggle')).toBeHidden();
+    await context.close();
+  });
+
+  test('published routes do not emit console or page errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    page.on('pageerror', (error) => errors.push(error.message));
+    for (const route of ['/', '/faq/', '/vi/', '/vi/faq/']) {
+      await page.goto(`/Sky-Auto-Player${route}`);
+    }
+    expect(errors).toEqual([]);
   });
   test('FAQ pages expose FAQPage JSON-LD and stable fonts', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/faq/');

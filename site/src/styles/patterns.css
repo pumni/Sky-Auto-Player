@@ -40,6 +40,72 @@
     color: var(--color-text-tertiary);
   }
 
+  .ui-editorial-rule {
+    border: 0;
+    border-block-start: 1px solid var(--line-faint);
+  }
+
+  .ui-score-line {
+    --score-line-color: var(--line-accent);
+    position: relative;
+    display: block;
+    min-height: 1.5rem;
+  }
+
+  .ui-score-line::before {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    height: 1px;
+    background: var(--score-line-color);
+    content: '';
+  }
+
+  .ui-score-node {
+    position: absolute;
+    top: 50%;
+    display: block;
+    width: 0.65rem;
+    height: 0.65rem;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    background: var(--color-page);
+    color: var(--color-action);
+    transform: translate(-50%, -50%);
+  }
+
+  .ui-score-node--info {
+    color: var(--color-info);
+  }
+
+  .ui-score-node--complete {
+    color: var(--color-success);
+  }
+
+  .ui-score-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--color-action);
+  }
+
+  .ui-product-stage {
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-stage);
+    box-shadow: var(--shadow-stage);
+  }
+
+  .ui-data-ledger {
+    border-block-start: 1px solid var(--line-default);
+  }
+
+  .ui-data-ledger > * {
+    border-block-end: 1px solid var(--line-faint);
+  }
+
   .ui-instrument-panel,
   .ui-instrument-surface {
     --panel-accent: var(--color-action);
@@ -120,7 +186,6 @@
     transition: transform var(--duration-fast) var(--ease-standard);
   }
 
-  .ui-action-link:hover::after,
   .ui-action-link:focus-visible::after {
     transform: translateX(3px);
   }
@@ -150,10 +215,6 @@
       border-color var(--duration-fast) var(--ease-standard),
       color var(--duration-fast) var(--ease-standard),
       transform var(--duration-fast) var(--ease-standard);
-  }
-
-  .button:hover {
-    transform: translateY(-1px);
   }
 
   .button:active {
@@ -208,6 +269,16 @@
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .ui-action-link:hover::after {
+      transform: translateX(3px);
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

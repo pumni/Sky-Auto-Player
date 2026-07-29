@@ -14,10 +14,16 @@ const { data, locale } = Astro.props;
 ---
 
 <section
-  class="hero section-shell section-shell--feature section-shell--after-header"
+  class="hero section-shell section-shell--opening section-shell--after-header"
   aria-labelledby="hero-title"
 >
   <div class="container hero__layout">
+    <span class="hero__timestamp" aria-hidden="true">00:13.066</span>
+    <span class="hero__score-spine ui-score-line" aria-hidden="true">
+      <i class="ui-score-node"></i>
+      <i class="ui-score-node ui-score-node--info"></i>
+      <i class="ui-score-playhead"></i>
+    </span>
     <div class="hero__copy">
       <Kicker>{data.kicker}</Kicker>
       <h1 id="hero-title">
@@ -52,7 +58,6 @@ const { data, locale } = Astro.props;
     <div class="hero__visual">
       <span class="hero__score-lines" aria-hidden="true"></span>
       <span class="hero__constellation" aria-hidden="true"><ConstellationMark /></span>
-      <span class="hero__bridge" aria-hidden="true"></span>
       <TimingConsole locale={locale} />
     </div>
   </div>
@@ -67,6 +72,7 @@ const { data, locale } = Astro.props;
   }
 
   .hero__layout {
+    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-6);
@@ -79,14 +85,15 @@ const { data, locale } = Astro.props;
   }
 
   .hero__copy {
-    max-width: 42rem;
     position: relative;
     z-index: 2;
+    max-width: 42rem;
   }
 
   .hero h1 {
-    max-width: 10ch;
+    max-width: 9.5ch;
     margin-block: var(--space-4) var(--space-5);
+    font-size: clamp(3rem, 4.7vw, 5.5rem);
   }
 
   .hero h1 span {
@@ -151,12 +158,50 @@ const { data, locale } = Astro.props;
   .hero__visual {
     position: relative;
     isolation: isolate;
+    width: min(100%, 46rem);
+    margin-inline: auto;
     padding-block: var(--space-5);
   }
 
-  .hero__visual > :not(.hero__score-lines):not(.hero__bridge) {
+  .hero__visual > :not(.hero__score-lines) {
     position: relative;
     z-index: 1;
+  }
+
+  .hero__timestamp {
+    position: absolute;
+    top: clamp(6rem, 13vw, 10rem);
+    right: 0;
+    z-index: 0;
+    color: var(--ink-3);
+    font-family: var(--font-mono);
+    font-size: var(--type-display-metric);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.06em;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .hero__score-spine {
+    position: absolute;
+    top: clamp(13.5rem, 25vw, 18rem);
+    right: 2%;
+    left: 38%;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .hero__score-spine .ui-score-node:first-child {
+    left: 4%;
+  }
+
+  .hero__score-spine .ui-score-node--info {
+    left: 72%;
+  }
+
+  .hero__score-spine .ui-score-playhead {
+    left: 88%;
   }
 
   .hero__score-lines {
@@ -173,30 +218,12 @@ const { data, locale } = Astro.props;
     mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
   }
 
-  .hero__bridge {
-    position: absolute;
-    top: 18%;
-    left: -12%;
-    width: 18%;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--line-accent));
-    pointer-events: none;
-    opacity: 0;
-  }
-
   .hero__visual::before {
     position: absolute;
     inset: 0 -14% -10% -6%;
     z-index: -1;
     border: 1px solid var(--line-faint);
-    background:
-      radial-gradient(circle at 42% 40%, rgb(110 180 201 / 9%), transparent 48%),
-      radial-gradient(
-        circle at 78% 18%,
-        color-mix(in oklch, var(--color-action) 8%, transparent),
-        transparent 28%
-      ),
-      var(--color-surface-quiet);
+    background: var(--color-surface-quiet);
     content: '';
     clip-path: polygon(3% 0, 100% 0, 100% 90%, 96% 100%, 0 100%, 0 8%);
     opacity: 0.88;
@@ -252,7 +279,7 @@ const { data, locale } = Astro.props;
     letter-spacing: 0.08em;
   }
 
-  @media (min-width: 64rem) {
+  @media (min-width: 72rem) {
     .hero__layout {
       grid-template-columns: repeat(12, minmax(0, 1fr));
       gap: var(--grid-gap);
@@ -260,21 +287,18 @@ const { data, locale } = Astro.props;
     }
 
     .hero__copy {
-      grid-column: 1 / span 6;
-      padding-block-start: var(--space-6);
+      grid-column: 1 / span 5;
+      grid-row: 1;
+      padding-block-start: var(--space-4);
     }
 
     .hero__visual {
       grid-column: 7 / -1;
+      grid-row: 1;
+      width: auto;
+      margin-block-start: -2rem;
+      margin-inline: 0;
       padding-block-start: 0;
-      margin-block-start: -3rem;
-    }
-
-    .hero__bridge {
-      opacity: 1;
-      left: -18%;
-      width: 22%;
-      top: 22%;
     }
   }
 
@@ -285,6 +309,11 @@ const { data, locale } = Astro.props;
   }
 
   @media (max-width: 40rem) {
+    .hero__timestamp,
+    .hero__score-spine {
+      display: none;
+    }
+
     .hero__actions {
       flex-direction: column;
       align-items: stretch;

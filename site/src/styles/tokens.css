@@ -106,6 +106,12 @@
     --section-space-compact: var(--section-sm);
     --section-space-default: var(--section-md);
     --section-space-feature: var(--section-lg);
+    --section-space-opening: var(--section-lg);
+    --section-space-transition: var(--section-xs);
+    --section-space-explanation: var(--section-lg);
+    --section-space-product: var(--section-xl);
+    --section-space-utility: var(--section-sm);
+    --section-space-closure: var(--section-lg);
 
     --radius-xs: 0.25rem;
     --radius-sm: 0.45rem;

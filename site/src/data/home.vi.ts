@@ -16,7 +16,7 @@ export const homeVi: HomeContent = {
   },
   hero: {
     kicker: 'Trình phát nhạc tự động cho Sky · Windows 10/11',
-    titleLines: ['Chơi bản nhạc.', 'Không phải bàn phím.'],
+    titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
       'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân được phát đúng thời điểm.',
     primaryCta: 'Tải xuống cho Windows',
@@ -98,13 +98,17 @@ export const homeVi: HomeContent = {
     description:
       'Sky Auto Player chạy như một ứng dụng Windows độc lập và gửi các sự kiện đầu vào tiêu chuẩn. Mã nguồn được công khai để mọi người có thể trực tiếp kiểm tra cách triển khai.',
     ledger: [
-      { term: 'Đầu vào', definition: 'Windows SendInput' },
-      { term: 'Tiến trình', definition: 'Ứng dụng độc lập' },
-      { term: 'Bộ nhớ game', definition: 'Không được đọc/kiểm tra' },
-      { term: 'Inject code', definition: 'Không sử dụng' },
-      { term: 'File game', definition: 'Không sửa đổi' },
-      { term: 'Giấy phép', definition: 'GNU GPL v3.0' },
-      { term: 'Cập nhật', definition: 'Trình cập nhật riêng có xác minh checksum' },
+      { term: 'Đầu vào', definition: 'Windows SendInput', state: 'yes' },
+      { term: 'Tiến trình', definition: 'Ứng dụng độc lập', state: 'info' },
+      { term: 'Bộ nhớ game', definition: 'Không được đọc/kiểm tra', state: 'no' },
+      { term: 'Inject code', definition: 'Không sử dụng', state: 'no' },
+      { term: 'File game', definition: 'Không sửa đổi', state: 'no' },
+      { term: 'Giấy phép', definition: 'GNU GPL v3.0', state: 'info' },
+      {
+        term: 'Cập nhật',
+        definition: 'Trình cập nhật riêng có xác minh checksum',
+        state: 'info',
+      },
     ],
     notice:
       'Điều khoản Dịch vụ: Các giới hạn kỹ thuật trên không bảo đảm an toàn cho tài khoản. Tự động phát nhạc vẫn có thể xung đột với Điều khoản Dịch vụ của Sky. Hãy dùng công cụ có trách nhiệm và tự chịu rủi ro.',

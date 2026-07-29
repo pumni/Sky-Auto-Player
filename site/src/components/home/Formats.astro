@@ -45,7 +45,7 @@ const { data } = Astro.props;
     gap: var(--space-7);
   }
 
-  @media (min-width: 64rem) {
+  @media (min-width: 72rem) {
     .formats__layout {
       grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
       gap: var(--grid-gap);
@@ -67,10 +67,14 @@ const { data } = Astro.props;
   }
 
   .format-row__extension {
+    min-width: 0;
     color: var(--color-action-soft);
     font-family: var(--font-mono);
-    font-size: var(--type-h3);
+    font-size: clamp(2.25rem, 3.25vw, 3.25rem);
     font-variant-numeric: tabular-nums;
+    letter-spacing: -0.08em;
+    line-height: 1;
+    white-space: nowrap;
   }
 
   .format-row__copy {
@@ -89,16 +93,23 @@ const { data } = Astro.props;
   }
 
   .format-row__tags {
+    min-width: 0;
     color: var(--color-info);
     font-family: var(--font-mono);
     font-size: var(--type-micro);
     letter-spacing: 0.06em;
+    overflow-wrap: anywhere;
   }
 
-  @media (min-width: 40rem) {
+  @media (min-width: 52rem) {
     .format-row {
-      grid-template-columns: minmax(5rem, 0.25fr) minmax(0, 1fr) minmax(10rem, 0.45fr);
+      grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr) minmax(8rem, max-content);
       gap: var(--space-5);
+    }
+
+    .format-row__tags {
+      justify-self: end;
+      text-align: end;
     }
   }
 </style>

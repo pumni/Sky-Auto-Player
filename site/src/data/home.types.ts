@@ -58,7 +58,7 @@ export interface HomeContent {
     kicker: string;
     title: string;
     description: string;
-    ledger: { term: string; definition: string }[];
+    ledger: { term: string; definition: string; state: 'yes' | 'no' | 'info' }[];
     notice: string;
   };
   formats: {

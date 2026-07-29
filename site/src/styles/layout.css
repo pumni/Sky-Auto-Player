@@ -28,25 +28,37 @@
   }
 
   .section-shell--proof {
-    padding-block: var(--section-xs);
+    padding-block: var(--section-space-transition);
   }
 
   .section-shell--open {
-    padding-block: var(--section-lg);
+    padding-block: var(--section-space-explanation);
   }
 
   /* Product showcase peak: largest vertical breath on the page. */
   .section-shell--peak {
-    padding-block: var(--section-xl);
+    padding-block: var(--section-space-product);
   }
 
   .section-shell--utility {
-    padding-block: var(--section-sm);
+    padding-block: var(--section-space-utility);
   }
 
   /* First section under site header: pull content up without killing feature bottom space. */
   .section-shell--after-header {
     padding-top: clamp(2.25rem, 3.5vw, 3.25rem);
+  }
+
+  .section-shell--opening {
+    padding-block: var(--section-space-opening);
+  }
+
+  .section-shell--opening.section-shell--after-header {
+    padding-top: clamp(1.25rem, 2.5vw, 2.5rem);
+  }
+
+  .section-shell--closure {
+    padding-block: var(--section-space-closure);
   }
 
   .text-measure-body {

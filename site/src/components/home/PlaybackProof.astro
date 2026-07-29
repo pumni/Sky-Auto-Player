@@ -29,7 +29,7 @@ const diagramLabels = isVi
       </ul>
     </div>
 
-    <div class="causal-diagram ui-instrument-surface">
+    <div class="causal-diagram">
       <div class="causal-diagram__header">
         <span>{isVi ? 'MÔ HÌNH NGUYÊN NHÂN' : 'CAUSAL TIMING MODEL'}</span>
         <span class="causal-diagram__status"
@@ -112,16 +112,15 @@ const diagramLabels = isVi
 
   .causal-diagram {
     position: relative;
-    overflow: hidden;
-    padding: clamp(var(--space-5), 4vw, var(--space-7));
+    padding-block: var(--space-2);
     container: causal-diagram / inline-size;
   }
 
   .causal-diagram::after {
     position: absolute;
     top: 0;
-    right: 14%;
-    width: 5rem;
+    right: 0;
+    width: 18%;
     height: 1px;
     background: var(--color-action);
     content: '';
@@ -152,7 +151,7 @@ const diagramLabels = isVi
     position: relative;
     display: flex;
     justify-content: space-between;
-    margin-block: var(--space-7) var(--space-3);
+    margin-block: var(--space-8) var(--space-3);
   }
 
   .causal-diagram__line {
@@ -172,7 +171,7 @@ const diagramLabels = isVi
     place-items: center;
     border: 1px solid var(--color-action);
     border-radius: 50%;
-    background: var(--color-surface-instrument);
+    background: var(--color-page);
     color: var(--color-action-soft);
     font-family: var(--font-mono);
     font-size: var(--type-micro);
@@ -190,6 +189,7 @@ const diagramLabels = isVi
 
   .causal-steps {
     display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0;
     margin: 0;
     padding: 0;
@@ -198,11 +198,16 @@ const diagramLabels = isVi
 
   .causal-steps li {
     display: grid;
-    grid-template-columns: 2rem minmax(0, 1fr) minmax(0, auto);
-    gap: var(--space-3);
-    align-items: baseline;
-    padding-block: var(--space-4);
+    gap: var(--space-2);
+    align-content: start;
+    padding: var(--space-4);
     border-block-start: 1px solid var(--line-faint);
+    border-inline-start: 1px solid var(--line-faint);
+  }
+
+  .causal-steps li:first-child {
+    padding-inline-start: 0;
+    border-inline-start: 0;
   }
 
   .causal-steps li:last-child {
@@ -223,7 +228,6 @@ const diagramLabels = isVi
   .causal-step__value {
     color: var(--color-text-primary);
     font-size: var(--type-small);
-    text-align: end;
   }
 
   .causal-events {
@@ -299,13 +303,25 @@ const diagramLabels = isVi
   }
 
   @container causal-diagram (width < 34rem) {
+    .causal-diagram__lane {
+      display: none;
+    }
+
+    .causal-steps {
+      grid-template-columns: 1fr;
+      margin-block-start: var(--space-5);
+      border-inline-start: 1px solid var(--line-accent);
+    }
+
     .causal-steps li {
       grid-template-columns: 2rem minmax(0, 1fr);
+      margin-inline-start: -1px;
+      padding-inline: var(--space-4) 0;
+      border-inline-start: 1px solid var(--line-faint);
     }
 
     .causal-step__value {
       grid-column: 2;
-      text-align: start;
     }
 
     .causal-events {

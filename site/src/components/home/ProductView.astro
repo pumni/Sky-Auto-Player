@@ -17,7 +17,7 @@ const { data, locale } = Astro.props;
 >
   <div class="product-showcase__atmosphere" aria-hidden="true"></div>
   <div class="container product-view__layout">
-    <figure class="screenshot-frame ui-instrument-panel ui-instrument-panel--product">
+    <figure class="screenshot-frame ui-product-stage">
       <div class="screenshot-frame__bar">
         <span>SKY AUTO PLAYER / PICKER</span>
         <span>PRODUCT PROOF / PORTABLE</span>
@@ -33,6 +33,8 @@ const { data, locale } = Astro.props;
           <source
             media="(max-width: 40rem)"
             srcset={withBase('/assets/images/picker-mobile.webp')}
+            width="1095"
+            height="821"
           />
           <img
             src={withBase('/assets/images/picker.webp')}
@@ -48,7 +50,7 @@ const { data, locale } = Astro.props;
         <span
           >{locale === 'vi' ? 'Trình chọn điều khiển bằng bàn phím' : 'Keyboard-first picker'}</span
         >
-        <span class="screenshot-frame__caption-meta">PNG · FULL SIZE</span>
+        <span class="screenshot-frame__caption-meta">WEBP · FULL SIZE</span>
       </figcaption>
     </figure>
 
@@ -82,16 +84,9 @@ const { data, locale } = Astro.props;
 <style>
   .product-showcase {
     position: relative;
-    overflow: hidden;
+    overflow: clip;
     border-block: 1px solid var(--line-default);
-    background:
-      radial-gradient(circle at 18% 38%, rgb(110 180 201 / 7%), transparent 36rem),
-      radial-gradient(
-        circle at 86% 12%,
-        color-mix(in oklch, var(--color-action) 6%, transparent),
-        transparent 28rem
-      ),
-      var(--color-surface-quiet);
+    background: var(--color-surface-quiet);
     isolation: isolate;
   }
 
@@ -236,12 +231,12 @@ const { data, locale } = Astro.props;
     }
 
     .screenshot-frame {
-      grid-column: 1 / span 7;
+      grid-column: 1 / span 8;
       margin-inline-end: clamp(-1rem, -1vw, 0);
     }
 
     .product-view__copy {
-      grid-column: 8 / -1;
+      grid-column: 9 / -1;
       padding-inline-start: var(--space-2);
       padding-block: var(--space-6);
     }
@@ -260,11 +255,12 @@ const { data, locale } = Astro.props;
 
   @media (min-width: 80rem) {
     .screenshot-frame {
-      grid-column: 1 / span 8;
+      grid-column: 1 / span 9;
+      margin-inline-start: clamp(-2rem, -1.5vw, -0.75rem);
     }
 
     .product-view__copy {
-      grid-column: 9 / -1;
+      grid-column: 10 / -1;
     }
   }
 

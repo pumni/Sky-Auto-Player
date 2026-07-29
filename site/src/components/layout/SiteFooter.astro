@@ -14,6 +14,16 @@ const isVi = locale === 'vi';
 <footer class="site-footer">
   <div class="container site-footer__layout">
     <div class="site-footer__identity">
+      <span class="site-footer__brand">
+        <img
+          src={withBase('/assets/sky-auto-player-mark.svg')}
+          alt=""
+          width="24"
+          height="24"
+          aria-hidden="true"
+        />
+        <span>Sky Auto Player</span>
+      </span>
       <p>
         {
           isVi
@@ -27,7 +37,7 @@ const isVi = locale === 'vi';
       <a href={SITE.repositoryUrl}>GitHub</a>
       <a href={`${SITE.repositoryUrl}/releases`}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
       <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
-      <a href={`${SITE.repositoryUrl}/discussions`}>Discussions</a>
+      <a href={`${SITE.repositoryUrl}/issues`}>Issues</a>
       <a href={withBase(isVi ? '/' : '/vi/')}>{isVi ? 'English' : 'Tiếng Việt'}</a>
     </nav>
   </div>
@@ -50,11 +60,24 @@ const isVi = locale === 'vi';
 
   .site-footer__identity {
     display: grid;
-    gap: var(--space-4);
+    gap: var(--space-3);
   }
 
   .site-footer__identity p {
     max-inline-size: 34rem;
+  }
+
+  .site-footer__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-text-primary);
+    font-weight: 650;
+  }
+
+  .site-footer__brand img {
+    width: 24px;
+    height: 24px;
   }
 
   .site-footer__links {
@@ -65,6 +88,9 @@ const isVi = locale === 'vi';
   }
 
   .site-footer__links a {
+    display: inline-flex;
+    min-height: 32px;
+    align-items: center;
     color: var(--color-text-secondary);
   }
 

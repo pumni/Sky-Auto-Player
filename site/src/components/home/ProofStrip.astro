@@ -23,11 +23,9 @@ const strip = data.proofStrip;
 
     <ul class="proof-strip__capabilities" aria-label={isVi ? 'Tín hiệu chính' : 'Key signals'}>
       {
-        strip.signals.map((signal, index) => (
+        strip.signals.map((signal) => (
           <li>
-            <span class="proof-strip__index" aria-hidden="true">
-              {String(index + 1).padStart(2, '0')}
-            </span>
+            <span class="proof-strip__node" aria-hidden="true" />
             <span>{signal}</span>
           </li>
         ))
@@ -59,8 +57,7 @@ const strip = data.proofStrip;
     margin: 0;
   }
 
-  .proof-strip__metric,
-  .proof-strip__index {
+  .proof-strip__metric {
     color: var(--color-text-tertiary);
     font-family: var(--font-mono);
     font-size: var(--type-micro);
@@ -88,24 +85,39 @@ const strip = data.proofStrip;
     gap: var(--space-3);
     align-items: baseline;
     min-width: 0;
+    padding-inline-start: var(--space-4);
+    border-inline-start: 1px solid var(--line-faint);
     color: var(--color-text-primary);
     font-size: var(--type-small);
     font-weight: 600;
   }
 
-  .proof-strip__index {
-    color: var(--color-action);
+  .proof-strip__capabilities li:first-child {
+    padding-inline-start: 0;
+    border-inline-start: 0;
+  }
+
+  .proof-strip__node {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 50%;
+    background: var(--color-action);
   }
 
   @media (max-width: 48rem) {
     .proof-strip__capabilities {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .proof-strip__capabilities li:nth-child(odd) {
+      padding-inline-start: 0;
+      border-inline-start: 0;
+    }
   }
 
   @media (max-width: 30rem) {
-    .proof-strip__capabilities {
-      grid-template-columns: 1fr;
+    .proof-strip__capabilities li {
+      font-size: var(--type-label);
     }
   }
 </style>

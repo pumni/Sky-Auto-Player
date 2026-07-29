@@ -22,7 +22,6 @@
 
   body {
     min-width: 20rem;
-    overflow-x: clip;
     background: var(--color-page);
     color: var(--color-text-primary);
     font-family: var(--font-body);
@@ -40,6 +39,17 @@
     font-weight: 600;
     line-height: var(--leading-heading);
     text-wrap: balance;
+  }
+
+  .ui-heading--narrative {
+    font-family: var(--font-display);
+    font-weight: 600;
+  }
+
+  .ui-heading--technical {
+    font-family: var(--font-body);
+    font-weight: 650;
+    letter-spacing: -0.025em;
   }
 
   h1 {

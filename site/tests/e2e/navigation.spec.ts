@@ -65,4 +65,15 @@ test.describe('navigation and route contracts', () => {
     await nav.locator('a[href*="how-it-works"]').click();
     await expect(nav).not.toHaveClass(/is-open/);
   });
+
+  test('tablet menu keeps the primary download action available', async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.goto('/Sky-Auto-Player/');
+    await page.locator('.menu-toggle').click();
+    await expect(page.locator('.nav-download')).toBeVisible();
+    await expect(page.locator('.nav-download')).toHaveAttribute(
+      'href',
+      'https://github.com/pumni/Sky-Auto-Player/releases/latest',
+    );
+  });
 });

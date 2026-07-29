@@ -11,8 +11,15 @@ interface Props {
 const { data, locale } = Astro.props;
 ---
 
-<section class="final-cta section-shell section-shell--feature" aria-labelledby="final-title">
+<section class="final-cta section-shell section-shell--closure" aria-labelledby="final-title">
   <div class="container final-cta__layout">
+    <div class="final-cta__measure" aria-hidden="true">
+      <span>M.12 / READY</span>
+      <span class="final-cta__score ui-score-line">
+        <i class="ui-score-node ui-score-node--complete"></i>
+        <i class="ui-score-playhead"></i>
+      </span>
+    </div>
     <div class="final-cta__copy">
       <p class="final-cta__eyebrow">
         {locale === 'vi' ? 'SẴN SÀNG CHO MÀN TRÌNH DIỄN' : 'READY FOR THE PERFORMANCE'}
@@ -44,9 +51,31 @@ const { data, locale } = Astro.props;
   }
 
   .final-cta__copy,
-  .final-cta__actions {
+  .final-cta__actions,
+  .final-cta__measure {
     position: relative;
     z-index: 1;
+  }
+
+  .final-cta__measure {
+    display: grid;
+    grid-template-columns: auto minmax(5rem, 1fr);
+    grid-column: 1 / -1;
+    gap: var(--space-5);
+    align-items: center;
+    max-width: 36rem;
+    color: var(--color-success);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    letter-spacing: 0.08em;
+  }
+
+  .final-cta__score .ui-score-node {
+    left: 22%;
+  }
+
+  .final-cta__score .ui-score-playhead {
+    left: 76%;
   }
 
   .final-cta__eyebrow,
@@ -112,6 +141,11 @@ const { data, locale } = Astro.props;
   }
 
   @media (max-width: 40rem) {
+    .final-cta__measure {
+      grid-template-columns: 1fr;
+      gap: var(--space-2);
+    }
+
     .final-cta__actions {
       flex-direction: column;
       align-items: stretch;

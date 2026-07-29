@@ -96,6 +96,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   }
 
   .brand {
+    position: relative;
     display: inline-flex;
     min-width: 0;
     align-items: center;
@@ -114,6 +115,24 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     width: 32px;
     height: 32px;
     flex: 0 0 auto;
+  }
+
+  .brand::after {
+    position: absolute;
+    right: 0;
+    bottom: -0.25rem;
+    left: 2.5rem;
+    height: 1px;
+    background: var(--line-accent);
+    content: '';
+    transform: scaleX(0.18);
+    transform-origin: left;
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
+  .brand:hover::after,
+  .brand:focus-visible::after {
+    transform: scaleX(1);
   }
 
   .site-nav {
@@ -269,7 +288,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       display: none;
     }
 
-    .menu-toggle {
+    :global(.js) .menu-toggle {
       display: block;
     }
 
@@ -278,13 +297,17 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       top: 100%;
       right: 0;
       left: 0;
-      display: none;
+      display: flex;
       flex-direction: column;
       align-items: stretch;
       gap: 0;
       padding: var(--space-3) var(--gutter) var(--space-5);
       border-bottom: 1px solid var(--line-default);
       background: var(--color-page);
+    }
+
+    :global(.js) .site-nav {
+      display: none;
     }
 
     :global(.js) .site-nav.is-open {
@@ -303,13 +326,6 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       align-self: flex-start;
       margin-block-start: var(--space-2);
     }
-  }
-
-  @media (max-width: 26.25rem) {
-    .brand > span:last-child {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
 
     .nav-download {
       display: inline-flex;
@@ -317,12 +333,25 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     }
   }
 
-  @media (min-width: 80rem) {
+  @media (max-width: 26.25rem) {
+    .brand > span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  @media (min-width: 64rem) {
     .site-header {
       position: sticky;
       top: 0;
-      background: color-mix(in oklch, var(--color-page) 94%, transparent);
-      backdrop-filter: blur(12px);
+      background: var(--color-page);
+    }
+
+    @supports (backdrop-filter: blur(1px)) {
+      .site-header {
+        background: color-mix(in oklch, var(--color-page) 94%, transparent);
+        backdrop-filter: blur(12px);
+      }
     }
   }
 </style>
@@ -332,9 +361,10 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
   const toggle = document.querySelector<HTMLButtonElement>('.menu-toggle');
   const nav = document.querySelector<HTMLElement>('.site-nav');
-  const desktopQuery = window.matchMedia('(min-width: 64.01rem)');
+  const desktopQuery = window.matchMedia('(min-width: 64rem)');
 
-  if (toggle && nav) {
+  if (toggle && nav && toggle.dataset.menuEnhanced !== 'true') {
+    toggle.dataset.menuEnhanced = 'true';
     const getLinks = () => Array.from(nav.querySelectorAll<HTMLAnchorElement>('a'));
 
     const closeMenu = (returnFocus = false) => {
@@ -392,8 +422,9 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       }
     });
 
-    desktopQuery.addEventListener('change', (event) => {
+    const handleDesktopChange = (event: MediaQueryListEvent | MediaQueryList) => {
       if (event.matches) closeMenu();
-    });
+    };
+    desktopQuery.addEventListener('change', handleDesktopChange);
   }
 </script>
