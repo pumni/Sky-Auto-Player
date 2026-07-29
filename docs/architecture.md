@@ -13,6 +13,24 @@ The codebase is divided into four distinct layers:
 3. **Infrastructure (`sky_music/infrastructure/`):** Bridging code. Includes window focus tracking, hotkey listeners, real-time sleeper utilities, MMCSS registrations, and the device-calibration loader (`.cache/input_latency.json` consumer). May import `platform/` but must not be imported by `domain/`.
 4. **Platform (`sky_music/platform/win32/`):** OS-specific implementations. Translates abstract actions into `SendInput` API calls using physical hardware scan codes. The only place Win32 ctypes may live.
 
+> **Composition-root exception (review of main@7c548527 §"Governance mismatch của 4-layer DDD").**
+> The strict layering above is enforced at the `domain/` and orchestration **core** boundaries
+> by `tests/test_core_boundary.py` (no `import` of `sky_music.platform.*`, `sky_music.ui.*`, or
+> `sky_music.infrastructure.focus` may appear under `orchestration/core/`). The composition-root
+> modules — `orchestration/engine.py` (`PlaybackEngine`) and
+> `orchestration/playback_supervisor.py` (`PlaybackSupervisor`) — are the ONE place where
+> `platform.win32.inputs` is imported back across the layer boundary, and only to wire
+> platform-owned handles through the injected ports/closures that the dispatch core consumes:
+> the high-resolution waitable timer, the command auto-reset event (`create_auto_reset_event` /
+> `set_event` / `close_handle`), the cheap HWND-only foreground probe
+> (`is_foreground_cached_hwnd`), and the unfocused-send / diagnostics-log hooks. This is a
+> deliberate dependency-injection seam — the composition root owns lifecycle and forwards
+> platform access by injection, so `orchestration/core/` (the real-time loop, coordinator,
+> state, ports) stays platform-free. `infrastructure/` already imports `platform/` under the
+> same rationale (backend glue, real-time sleeper, focus guard). Other orchestration modules
+> must not grow a direct `platform/` import; widening the exception would belong in
+> `infrastructure/` or a dedicated bootstrap module instead.
+
 ---
 
 ## 2. The Playback Pipeline

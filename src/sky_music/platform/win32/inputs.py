@@ -640,23 +640,40 @@ def prewarm_input_arrays(
     shapes: Iterable[tuple[tuple[int, ...], bool]],
     *,
     shape_frequencies: Mapping[tuple[tuple[int, ...], bool], int] | None = None,
+    record_frequency_diag: bool = True,
 ) -> None:
+    """Prewarm INPUT arrays for the given shapes; record bounded diagnostics.
+
+    Diagnostics are lifecycle instrumentation, not part of the send contract.
+    ``shape_frequency`` (a per-shape string-keyed dict, kept on
+    ``_PREWARM_DIAG`` for the summary path) is built ONLY when
+    ``record_frequency_diag`` — production callers pass telemetry/debug flag so
+    the dict is skipped when off (review of main@7c548527 §"Prewarm frequency
+    diagnostics quá nặng so với chức năng": telemetry defaults off, so the dict
+    was pure heap overhead on every session). The remaining lifecycle counters
+    (unique down/up shape counts, total input slots, payload bytes, prewarm
+    duration) stay cheap and stay recorded so post-play memory hygiene tests
+    still observe occupancy.
+    """
     started_ns = time.perf_counter_ns()
     shape_list = list(shapes)
     unique_shapes = set(shape_list)
-    frequencies = (
-        {shape: max(0, int(count)) for shape, count in shape_frequencies.items() if shape in unique_shapes}
-        if shape_frequencies is not None
-        else {shape: shape_list.count(shape) for shape in unique_shapes}
-    )
+    if record_frequency_diag:
+        frequencies = (
+            {shape: max(0, int(count)) for shape, count in shape_frequencies.items() if shape in unique_shapes}
+            if shape_frequencies is not None
+            else {shape: shape_list.count(shape) for shape in unique_shapes}
+        )
+        _PREWARM_DIAG.shape_frequency = {
+            _shape_label(scan_codes, is_up): frequencies[(scan_codes, is_up)]
+            for scan_codes, is_up in unique_shapes
+        }
+    else:
+        _PREWARM_DIAG.shape_frequency.clear()
     _PREWARM_DIAG.unique_down_shape_count = sum(not is_up for _, is_up in unique_shapes)
     _PREWARM_DIAG.unique_up_shape_count = sum(is_up for _, is_up in unique_shapes)
     _PREWARM_DIAG.total_input_slots = sum(len(scan_codes) for scan_codes, _ in unique_shapes)
     _PREWARM_DIAG.approx_payload_bytes = _PREWARM_DIAG.total_input_slots * _INPUT_SIZE
-    _PREWARM_DIAG.shape_frequency = {
-        _shape_label(scan_codes, is_up): frequencies[(scan_codes, is_up)]
-        for scan_codes, is_up in unique_shapes
-    }
 
     for scan_codes_tuple, is_up in unique_shapes:
         flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if is_up else 0)

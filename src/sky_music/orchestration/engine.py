@@ -14,7 +14,6 @@ from sky_music.domain.scheduler_types import ActionKind, KeyAction
 from sky_music.infrastructure.backend import (
     InputBackend,
     ReleaseAllOutcome,
-    WinSendInputBackend,
 )
 from sky_music.infrastructure.focus import (
     FocusGuard,
@@ -493,10 +492,14 @@ class PlaybackEngine:
         self.clock = clock if clock is not None else PerfCounterClock()
         self.sleeper = sleeper if sleeper is not None else RealSleeper()
         self.sleep_policy = sleep_policy if sleep_policy is not None else SleepPolicy()
-        # Align WinSendInputBackend send_completed_us with the playback clock (A6a).
-        # isinstance — not getattr — so the contract stays explicit until Phase 4 ports.
-        if isinstance(self.backend, WinSendInputBackend):
-            self.backend.set_clock(self.clock)
+        # Align send_completed_us with the playback clock (finding A6a). Called through the
+        # ``InputBackend`` Protocol; ``_TrackedKeyState.set_clock`` is a no-op default so
+        # test/DryRun backends inherit the dispatch timeline clock only when they override it.
+        # (review of main@7c548527 §"Abstraction contract bypassed by concrete type check":
+        # the legacy ``isinstance(self.backend, WinSendInputBackend)`` gate made the protocol
+        # declaration meaningless and denied the clock to any other backend with completion-
+        # clock support. Phase 4 §7.2 promoted ``set_clock`` onto the Protocol; call it here.)
+        self.backend.set_clock(self.clock)
 
         # Inject standard FocusGuard depending on requirements
         if focus_guard is None:
@@ -815,9 +818,21 @@ class PlaybackEngine:
                             break
                         shapes_to_prewarm.add(shape_key)
 
+                    # ``shape_frequency`` diag is heap overhead the session retains on
+                    # ``_PREWARM_DIAG`` purely for the telemetry/debug summary path (review
+                    # of main@7c548527 §"Prewarm frequency diagnostics quá nặng so với chức
+                    # năng"). Telemetry defaults off, so skip the string-keyed dict build
+                    # when neither telemetry nor --debug-playback is enabled; ``Counter``
+                    # above is a local scope used only for the frequency-based admission
+                    # sort and drops with the play() frame. The remaining cheap occupancy
+                    # counters (unique down/up shape counts, prewarm duration) stay recorded.
+                    record_freq = bool(self.telemetry.enabled) or bool(
+                        getattr(inputs, "PLAYBACK_DEBUG", False)
+                    )
                     inputs.prewarm_input_arrays(
                         shapes_to_prewarm,
-                        shape_frequencies=shape_frequencies,
+                        shape_frequencies=shape_frequencies if record_freq else None,
+                        record_frequency_diag=record_freq,
                     )
                 except Exception:
                     pass
