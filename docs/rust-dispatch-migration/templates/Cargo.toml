@@ -1,0 +1,30 @@
+[workspace]
+members = [
+  "crates/sky_dispatch_core",
+  "crates/sky_dispatch_win32",
+  "crates/sky_player_rs",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+
+[workspace.dependencies]
+pyo3 = { version = "=0.29.0", features = ["extension-module"] }
+windows-sys = { version = "=0.61.2" }
+thiserror = "2"
+smallvec = "1"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+overflow-checks = true
+strip = "symbols"

@@ -1,0 +1,9 @@
+stateDiagram-v2
+    [*] --> New
+    New --> Prepared: prepare validated
+    Prepared --> Running: start
+    Running --> Terminal: finished/quit/skip/error
+    Running --> Poisoned: join timeout
+    Terminal --> Closed: close/take result
+    Poisoned --> Poisoned: retain owned resources
+    Closed --> [*]

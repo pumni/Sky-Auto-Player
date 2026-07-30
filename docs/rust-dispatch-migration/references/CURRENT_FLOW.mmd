@@ -1,0 +1,17 @@
+flowchart TD
+    A[KeyAction tuple] --> B[compile_runtime_intents]
+    B --> C[RuntimeSchedule]
+    C --> D[PlaybackEngine prewarm/setup]
+    D --> E[PlaybackSupervisor]
+    E --> F[Control/UI thread]
+    E --> G[Python dispatch thread]
+    F -->|queue + event| G
+    F -->|SharedFocusSignal| G
+    G --> H[DispatchLoop wait]
+    H --> I[drain pending releases first]
+    I --> J[scalar authored drain]
+    J --> K[Tracked InputBackend]
+    K --> L[ctypes SendInput]
+    L --> M[completion timestamp]
+    M --> N[Coordinator transition]
+    N --> O[Python telemetry]

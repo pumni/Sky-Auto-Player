@@ -1,0 +1,18 @@
+flowchart TD
+    A[Python scheduler/actions] --> B[PyO3 prepare]
+    B --> C[Rust compile generations + packet table]
+    C --> D[DispatchSession start]
+    D --> E[Rust dispatch worker]
+    F[Python UI supervisor] -->|bounded commands + SetEvent| E
+    F -->|atomic focus + HWND| E
+    E --> G[QPC/timer/event/final spin]
+    G --> H[pending releases first]
+    H --> I[scalar authored drain]
+    I --> J[Rust tracked backend]
+    J --> K[windows-sys SendInput]
+    K --> L[immediate completion QPC]
+    L --> M[Native coordinator + estimator + telemetry]
+    M --> N[Latest progress snapshot]
+    N -->|pull ~30Hz| F
+    M --> O[WorkerResult after join]
+    O -->|PyO3 native DTO conversion| F
