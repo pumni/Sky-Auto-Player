@@ -32,6 +32,7 @@ const OUTCOME_SHUTDOWN_TIMEOUT: u8 = 5;
 const PAUSED_POLL_US: u64 = 2_000;
 const SEND_COLD_THRESHOLD_US: u64 = 20_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
+const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
@@ -726,7 +727,7 @@ fn run_worker(
     let mut last_spin_probe_us = qpc_now_us();
     let mut last_send_elapsed_us = 0;
     let mut pending_pre_send_spin_us = 0;
-    let mut send_duration_window = VecDeque::with_capacity(64);
+    let mut send_duration_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
     let mut send_over_warn_count = 0usize;
     let mut input_path_warn_started_us = None;
     // Epoch is captured only after all worker-owned real-time resources exist.
@@ -820,10 +821,14 @@ fn run_worker(
                 last_send_elapsed_us = completed_effective;
                 coordinator.complete_releases(&due_pending, &result.sent, &[]);
                 if config.enable_adaptive_lead {
-                    estimator.update(
+                    update_estimator_after_send(
+                        &mut estimator,
                         ActionKind::Up,
                         result.send_completed_us.saturating_sub(started_us),
                         result.sent.len(),
+                        result.sent.len(),
+                        lead_up,
+                        0,
                     );
                 }
                 let bookkeeping_completed_us = qpc_now_us();
@@ -1072,13 +1077,13 @@ fn run_worker(
                             completed_effective,
                         );
                         if config.enable_adaptive_lead {
-                            estimator.update(
+                            update_estimator_after_send(
+                                &mut estimator,
                                 ActionKind::Down,
                                 result.send_completed_us.saturating_sub(started_us),
+                                result.sent.len(),
                                 playable.len(),
-                            );
-                            estimator.update_completion_error(
-                                ActionKind::Down,
+                                lead_down,
                                 signed_delta(completed_effective, batch.scheduled_us),
                             );
                         }
@@ -1362,6 +1367,24 @@ fn record_lateness(
     let _ = latency_tx.try_send(lateness_us);
 }
 
+fn update_estimator_after_send(
+    estimator: &mut SendLatencyEstimator,
+    kind: ActionKind,
+    duration_us: u64,
+    sent_count: usize,
+    authored_polyphony: usize,
+    applied_lead_us: u64,
+    completion_error_us: i64,
+) {
+    if sent_count == 0 {
+        return;
+    }
+    estimator.update(kind, duration_us, authored_polyphony);
+    if kind == ActionKind::Down && applied_lead_us > 0 {
+        estimator.update_completion_error(kind, completion_error_us);
+    }
+}
+
 fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     let delta = lhs as i128 - rhs as i128;
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
@@ -1385,14 +1408,15 @@ fn record_input_path_health(
     if warn_us == 0 {
         return;
     }
-    let evicted = (window.len() == 64).then(|| window[0]);
-    if let Some(value) = evicted
+    if window.len() == INPUT_PATH_WINDOW_CAPACITY
+        && let Some(value) = window.pop_front()
         && value > warn_us
     {
         *over_warn_count = over_warn_count.saturating_sub(1);
     }
     let value = send_duration_us;
     window.push_back(value);
+    debug_assert!(window.len() <= INPUT_PATH_WINDOW_CAPACITY);
     if value > warn_us {
         *over_warn_count += 1;
     }
@@ -1425,7 +1449,7 @@ fn focus_gate_matches(
     if !require_focus {
         return true;
     }
-    let hwnd_matches = target_hwnd == 0 || foreground_matches;
+    let hwnd_matches = target_hwnd != 0 && foreground_matches;
     validated_focus_active && hwnd_matches
 }
 
@@ -1457,7 +1481,12 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
 
 #[cfg(test)]
 mod tests {
-    use super::{focus_gate_matches, record_input_path_health};
+    use super::{
+        INPUT_PATH_WINDOW_CAPACITY, focus_gate_matches, record_input_path_health,
+        update_estimator_after_send,
+    };
+    use sky_dispatch_core::estimator::SendLatencyEstimator;
+    use sky_dispatch_core::model::ActionKind;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1466,7 +1495,7 @@ mod tests {
         assert!(!focus_gate_matches(true, false, 123, true));
         assert!(!focus_gate_matches(true, true, 123, false));
         assert!(focus_gate_matches(true, true, 123, true));
-        assert!(focus_gate_matches(true, true, 0, false));
+        assert!(!focus_gate_matches(true, true, 0, false));
         assert!(focus_gate_matches(false, false, 123, false));
     }
 
@@ -1490,5 +1519,62 @@ mod tests {
         }
 
         assert!(degraded.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
+        let mut window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
+        let mut over_warn = 0;
+        let mut started = None;
+        let degraded = AtomicBool::new(false);
+
+        for _ in 0..10_000 {
+            record_input_path_health(
+                400,
+                0,
+                300,
+                &mut window,
+                &mut over_warn,
+                &mut started,
+                &degraded,
+            );
+        }
+
+        assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
+        assert_eq!(window.capacity(), INPUT_PATH_WINDOW_CAPACITY);
+        assert_eq!(over_warn, INPUT_PATH_WINDOW_CAPACITY);
+
+        for _ in 0..INPUT_PATH_WINDOW_CAPACITY {
+            record_input_path_health(
+                100,
+                0,
+                300,
+                &mut window,
+                &mut over_warn,
+                &mut started,
+                &degraded,
+            );
+        }
+
+        assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
+        assert_eq!(over_warn, 0);
+    }
+
+    #[test]
+    fn failed_send_does_not_seed_estimator_or_residual() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
+
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120);
+        let state = estimator.export_state();
+        assert_eq!(state.count_down[3], 0);
+        assert_eq!(state.count_residual, 0);
+
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120);
+        let state = estimator.export_state();
+        assert_eq!(state.count_down[3], 1);
+        assert_eq!(state.count_residual, 0);
+
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120);
+        assert_eq!(estimator.export_state().count_residual, 1);
     }
 }

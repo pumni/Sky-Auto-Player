@@ -71,6 +71,8 @@ def main() -> int:
             print("[build_rust_wheel] WARNING: Interpreter has GIL enabled!", file=sys.stderr)
 
     cargo_manifest = rust_dir / "crates" / "sky_player_rs" / "Cargo.toml"
+    expected_commit = expected_build_commit(repo_root)
+    print(f"[build_rust_wheel] Expected build commit: {expected_commit}")
     print(f"[build_rust_wheel] Building wheel via maturin (manifest={cargo_manifest})...")
 
     cmd = [
@@ -85,7 +87,10 @@ def main() -> int:
         sys.executable,
     ]
 
-    res = subprocess.run(cmd, cwd=str(repo_root), check=False)
+    build_env = os.environ.copy()
+    build_env["GITHUB_SHA"] = expected_commit
+    build_env["SKY_NATIVE_BUILD_COMMIT"] = expected_commit
+    res = subprocess.run(cmd, cwd=str(repo_root), env=build_env, check=False)
     if res.returncode != 0:
         print(f"[build_rust_wheel] ERROR: maturin build failed with code {res.returncode}", file=sys.stderr)
         return res.returncode
@@ -108,9 +113,6 @@ def main() -> int:
     except (ValueError, RuntimeError) as exc:
         print(f"[build_rust_wheel] ERROR: invalid wheel ABI: {exc}", file=sys.stderr)
         return 1
-
-    expected_commit = expected_build_commit(repo_root)
-    print(f"[build_rust_wheel] Expected build commit: {expected_commit}")
 
     # Install only the wheel under test into a fresh environment. A failed
     # reinstall must never be satisfied by a previously installed extension.

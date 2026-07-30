@@ -11,6 +11,7 @@ import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
 from sky_music.domain.scheduler_types import ActionKind
 from sky_music.orchestration.engine import SendLatencyEstimator
+from sky_music.platform.win32 import inputs
 
 
 def test_native_dispatch_session_lifecycle() -> None:
@@ -162,7 +163,11 @@ def test_native_dispatch_focus_gate_uses_interruptible_pause() -> None:
     assert snap["is_paused"] is True
     assert snap["active_count"] == 0
 
-    session.update_focus(True)
+    foreground_raw = inputs.user32.GetForegroundWindow()
+    if not foreground_raw:
+        pytest.skip("Windows has no foreground window for the strict focus-gate test")
+    foreground_hwnd = int(foreground_raw)
+    session.update_focus(True, hwnd=foreground_hwnd)
     deadline = time.perf_counter() + 0.2
     while time.perf_counter() < deadline:
         snap = cast(dict[str, Any], session.snapshot())
