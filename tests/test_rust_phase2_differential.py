@@ -6,8 +6,10 @@ Compares Rust simulation traces against Python RuntimeDispatchCoordinator semant
 from __future__ import annotations
 
 import json
+import random
 from typing import Any, cast
 
+import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
 from sky_music.domain.scheduler_types import (
@@ -167,3 +169,64 @@ def test_rust_differential_conflicts_and_stale() -> None:
     rs_res = cast(dict[str, Any], json.loads(rs_json))
 
     assert rs_res == py_res
+
+
+def test_rust_differential_seeded_schedule_corpus() -> None:
+    rng = random.Random(20260730)
+    allowed = [1, 2, 3, 4]
+
+    for case_index in range(100):
+        at_us = 0
+        generated: list[KeyAction] = []
+        for action_index in range(rng.randint(1, 40)):
+            at_us += rng.randint(0, 2_000)
+            scans = tuple(
+                ScanCode(value)
+                for value in rng.sample(allowed, rng.randint(1, len(allowed)))
+            )
+            generated.append(
+                KeyAction(
+                    at_us=Microseconds(at_us),
+                    kind=ActionKind(rng.choice(("down", "up"))),
+                    scan_codes=scans,
+                    reason=f"case-{case_index}-action-{action_index}",
+                )
+            )
+        actions = tuple(generated)
+        min_hold_us = rng.randint(0, 5_000)
+        send_latency_us = rng.randint(0, 500)
+
+        py_result = _py_simulate(
+            actions,
+            allowed,
+            min_hold_us,
+            send_latency_us,
+        )
+        rust_inputs = [
+            (index, action.kind, int(action.at_us), list(action.scan_codes), action.reason)
+            for index, action in enumerate(actions)
+        ]
+        rust_result = cast(
+            dict[str, Any],
+            json.loads(
+                cast(
+                    str,
+                    sky_player_rs.simulate_schedule_rs(  # type: ignore[attr-defined]
+                        rust_inputs,
+                        allowed,
+                        min_hold_us,
+                        send_latency_us,
+                    ),
+                )
+            ),
+        )
+
+        assert rust_result == py_result, f"differential mismatch in case {case_index}"
+
+
+def test_rust_simulation_rejects_bool_timing_values() -> None:
+    actions = [(0, "down", 0, [1], "note")]
+    with pytest.raises(TypeError, match="not bool"):
+        sky_player_rs.simulate_schedule_rs(actions, [1], True, 0)  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="not bool"):
+        sky_player_rs.simulate_schedule_rs(actions, [1], 0, True)  # type: ignore[attr-defined]

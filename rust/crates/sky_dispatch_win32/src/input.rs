@@ -7,10 +7,49 @@ use std::fmt;
 pub const SKY_PLAYER_SIGNATURE: usize = 0x5C1B9111;
 
 pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
-    2, 3, 4, 5, 6, // 1 2 3 4 5
-    16, 17, 18, 19, 20, // Q W E R T
-    30, 31, 32, 33, 34, // A S D F G
+    0x15, 0x16, 0x17, 0x18, 0x19, // Y U I O P
+    0x23, 0x24, 0x25, 0x26, 0x27, // H J K L ;
+    0x31, 0x32, 0x33, 0x34, 0x35, // N M , . /
 ];
+
+fn virtual_key_for_scan_code(scan_code: u16) -> Option<i32> {
+    Some(match scan_code {
+        0x15 => 0x59, // Y
+        0x16 => 0x55, // U
+        0x17 => 0x49, // I
+        0x18 => 0x4F, // O
+        0x19 => 0x50, // P
+        0x23 => 0x48, // H
+        0x24 => 0x4A, // J
+        0x25 => 0x4B, // K
+        0x26 => 0x4C, // L
+        0x27 => 0xBA, // ;
+        0x31 => 0x4E, // N
+        0x32 => 0x4D, // M
+        0x33 => 0xBC, // ,
+        0x34 => 0xBE, // .
+        0x35 => 0xBF, // /
+        _ => return None,
+    })
+}
+
+fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
+    let virtual_key = virtual_key_for_scan_code(scan_code)?;
+    #[cfg(windows)]
+    {
+        // SAFETY: GetAsyncKeyState accepts any virtual-key integer and does not
+        // retain pointers or transfer ownership.
+        let state = unsafe {
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(virtual_key)
+        };
+        Some((state as u16 & 0x8000) != 0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = virtual_key;
+        None
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformSendResult {
@@ -202,7 +241,6 @@ pub fn emit_up(scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool) {
 
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
-#[derive(Default)]
 pub struct TrackedKeyState {
     pub active_keys: HashSet<u16>,
     pub possibly_active_keys: HashSet<u16>,
@@ -211,6 +249,20 @@ pub struct TrackedKeyState {
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub custom_emitter: Option<CustomEmitterFn>,
+}
+
+impl Default for TrackedKeyState {
+    fn default() -> Self {
+        Self {
+            active_keys: HashSet::with_capacity(15),
+            possibly_active_keys: HashSet::with_capacity(15),
+            failed_release_keys: HashSet::with_capacity(15),
+            last_error: None,
+            keys_dropped: 0,
+            chord_split_events: 0,
+            custom_emitter: None,
+        }
+    }
 }
 
 impl fmt::Debug for TrackedKeyState {
@@ -308,6 +360,17 @@ impl TrackedKeyState {
         if !success && !sent.is_empty() {
             self.chord_split_events += 1;
         }
+        if success {
+            if self.failed_release_keys.is_empty() {
+                self.last_error = None;
+            }
+        } else {
+            self.last_error = Some(format!(
+                "partial note-on: {} of {} keys dropped",
+                dropped,
+                to_send.len()
+            ));
+        }
 
         InputSendResult {
             sent,
@@ -337,7 +400,10 @@ impl TrackedKeyState {
         let mut already_released: SmallVec<[u16; 15]> = SmallVec::new();
 
         for &sc in scan_codes {
-            if self.active_keys.contains(&sc) || self.possibly_active_keys.contains(&sc) {
+            if self.active_keys.contains(&sc)
+                || self.possibly_active_keys.contains(&sc)
+                || self.failed_release_keys.contains(&sc)
+            {
                 to_release.push(sc);
             } else {
                 already_released.push(sc);
@@ -373,6 +439,8 @@ impl TrackedKeyState {
                 sent.len(),
                 to_release.len()
             ));
+        } else if self.failed_release_keys.is_empty() {
+            self.last_error = None;
         }
 
         InputSendResult {
@@ -419,33 +487,136 @@ impl TrackedKeyState {
             }
         }
 
-        if released_successfully {
+        let mut verification_inconclusive = false;
+        let mut stuck = Vec::new();
+        if self.custom_emitter.is_none() {
+            for &scan_code in &attempted {
+                match is_scan_code_physically_down(scan_code) {
+                    Some(true) => stuck.push(scan_code),
+                    Some(false) => {}
+                    None => verification_inconclusive = true,
+                }
+            }
+        }
+
+        if !stuck.is_empty() {
+            for delay_ms in [50, 100] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let _ = self.do_emit_up(&stuck);
+                stuck.retain(|&scan_code| {
+                    is_scan_code_physically_down(scan_code).unwrap_or_else(|| {
+                        verification_inconclusive = true;
+                        true
+                    })
+                });
+                if stuck.is_empty() {
+                    released_successfully = true;
+                    break;
+                }
+            }
+        }
+
+        if released_successfully && stuck.is_empty() {
             self.active_keys.clear();
             self.possibly_active_keys.clear();
             self.failed_release_keys.clear();
-            ReleaseAllOutcome {
+            self.last_error = None;
+            return ReleaseAllOutcome {
                 attempted,
                 released_successfully: true,
                 stuck_keys: Vec::new(),
-                verification_inconclusive: false,
-            }
-        } else {
+                verification_inconclusive,
+            };
+        }
+
+        if stuck.is_empty() {
             self.failed_release_keys.extend(&attempted);
-            let mut stuck: Vec<u16> = self.failed_release_keys.iter().copied().collect();
-            stuck.sort_unstable();
-            ReleaseAllOutcome {
-                attempted,
-                released_successfully: false,
-                stuck_keys: stuck,
-                verification_inconclusive: true,
-            }
+        } else {
+            self.failed_release_keys.extend(&stuck);
+        }
+        self.last_error = Some("tracked release incomplete".to_string());
+        let mut reported_stuck: Vec<u16> = self.failed_release_keys.iter().copied().collect();
+        reported_stuck.sort_unstable();
+        ReleaseAllOutcome {
+            attempted,
+            released_successfully: false,
+            stuck_keys: reported_stuck,
+            verification_inconclusive: verification_inconclusive || stuck.is_empty(),
         }
     }
 
     pub fn release_all_full_instrument(&mut self) -> ReleaseAllOutcome {
-        let outcome = self.release_all();
-        let _ = self.do_emit_up(&PHYSICAL_INSTRUMENT_SCAN_CODES);
-        outcome
+        let _tracked_outcome = self.release_all();
+        let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
+        let (sent, _completed_us, send_success) = self.do_emit_up(&attempted);
+        let mut release_successful = send_success;
+        let mut verification_inconclusive = false;
+        let mut stuck: Vec<u16> = attempted
+            .iter()
+            .copied()
+            .filter(|scan_code| !sent.contains(scan_code))
+            .collect();
+
+        if self.custom_emitter.is_none() {
+            for &scan_code in &attempted {
+                match is_scan_code_physically_down(scan_code) {
+                    Some(true) if !stuck.contains(&scan_code) => stuck.push(scan_code),
+                    Some(_) => {}
+                    None => verification_inconclusive = true,
+                }
+            }
+        }
+
+        if !stuck.is_empty() {
+            for delay_ms in [50, 100] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let (retry_sent, _, _) = self.do_emit_up(&stuck);
+                stuck.retain(|scan_code| {
+                    if !retry_sent.contains(scan_code) {
+                        return true;
+                    }
+                    if self.custom_emitter.is_some() {
+                        return false;
+                    }
+                    is_scan_code_physically_down(*scan_code).unwrap_or_else(|| {
+                        verification_inconclusive = true;
+                        true
+                    })
+                });
+                if stuck.is_empty() {
+                    release_successful = true;
+                    break;
+                }
+            }
+        }
+
+        if release_successful && stuck.is_empty() {
+            self.active_keys.clear();
+            self.possibly_active_keys.clear();
+            self.failed_release_keys.clear();
+            self.last_error = None;
+            return ReleaseAllOutcome {
+                attempted,
+                released_successfully: true,
+                stuck_keys: Vec::new(),
+                verification_inconclusive,
+            };
+        }
+
+        self.failed_release_keys.extend(&stuck);
+        self.last_error = Some(format!(
+            "full-instrument release incomplete: {}/{} keys unresolved",
+            stuck.len(),
+            attempted.len()
+        ));
+        let mut reported_stuck: Vec<u16> = self.failed_release_keys.iter().copied().collect();
+        reported_stuck.sort_unstable();
+        ReleaseAllOutcome {
+            attempted,
+            released_successfully: false,
+            stuck_keys: reported_stuck,
+            verification_inconclusive,
+        }
     }
 }
 
@@ -509,5 +680,42 @@ mod tests {
             assert_eq!(sleeps, expected_sleeps);
             assert_eq!(success, expected_success);
         }
+    }
+
+    #[test]
+    fn instrument_scan_codes_and_virtual_key_mapping_match_python_layout() {
+        assert_eq!(
+            PHYSICAL_INSTRUMENT_SCAN_CODES,
+            [
+                0x15, 0x16, 0x17, 0x18, 0x19, 0x23, 0x24, 0x25, 0x26, 0x27, 0x31, 0x32, 0x33, 0x34,
+                0x35,
+            ]
+        );
+        let virtual_keys: Vec<i32> = PHYSICAL_INSTRUMENT_SCAN_CODES
+            .iter()
+            .map(|&scan_code| virtual_key_for_scan_code(scan_code).unwrap())
+            .collect();
+        assert_eq!(
+            virtual_keys,
+            [
+                0x59, 0x55, 0x49, 0x4F, 0x50, 0x48, 0x4A, 0x4B, 0x4C, 0xBA, 0x4E, 0x4D, 0xBC, 0xBE,
+                0xBF,
+            ]
+        );
+    }
+
+    #[test]
+    fn full_instrument_release_reports_unreleased_keys() {
+        let mut state = TrackedKeyState::with_emitter(|codes, key_up| PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: if key_up { 0 } else { codes.len() as u32 },
+            completed_us: 10,
+            win32_error: 5,
+        });
+        let outcome = state.release_all_full_instrument();
+        assert!(!outcome.released_successfully);
+        assert_eq!(outcome.attempted, PHYSICAL_INSTRUMENT_SCAN_CODES);
+        assert_eq!(outcome.stuck_keys, PHYSICAL_INSTRUMENT_SCAN_CODES);
+        assert_eq!(state.failed_release_keys.len(), 15);
     }
 }

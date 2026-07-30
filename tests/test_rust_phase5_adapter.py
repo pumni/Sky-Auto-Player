@@ -33,23 +33,23 @@ def test_rust_input_adapter_lifecycle() -> None:
     health = adapter.get_health()
     assert health.active_count == 0
 
-    res_down = adapter.key_down((2, 3))
+    res_down = adapter.key_down((0x15, 0x16))
     assert res_down.success is True
-    assert res_down.sent == (2, 3)
+    assert res_down.sent == (0x15, 0x16)
 
     health = adapter.get_health()
     assert health.active_count == 2
 
-    res_up = adapter.key_up((2,))
+    res_up = adapter.key_up((0x15,))
     assert res_up.success is True
-    assert res_up.sent == (2,)
+    assert res_up.sent == (0x15,)
 
     health = adapter.get_health()
     assert health.active_count == 1
 
     rel_out = adapter.release_all()
     assert rel_out.released_successfully is True
-    assert rel_out.attempted == (3,)
+    assert rel_out.attempted == (0x16,)
 
     health = adapter.get_health()
     assert health.active_count == 0

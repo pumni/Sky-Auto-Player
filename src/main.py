@@ -622,6 +622,44 @@ def _run_optimize_selftest() -> int:
     print("selftest-optimize OK: __debug__ is False (assert statements stripped as spec requires).")
     return 0
 
+
+def _run_rust_selftest() -> int:
+    """Verify the frozen native module with a mock worker that sends no input."""
+    try:
+        import sky_player_rs
+
+        from sky_music.orchestration.core.ports import (
+            RUST_DISPATCH_SCHEMA_VERSION,
+        )
+
+        info = sky_player_rs.build_info()  # type: ignore[attr-defined]
+        if (
+            info.get("schema_version") != RUST_DISPATCH_SCHEMA_VERSION
+            or info.get("free_threaded") is not True
+        ):
+            raise RuntimeError(f"unexpected native build metadata: {info!r}")
+        session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+            [
+                (0, "down", 0, [0x15], "selftest"),
+                (1, "up", 1_000, [0x15], "selftest"),
+            ],
+            [0x15],
+            min_hold_us=0,
+            mock_backend=True,
+        )
+        session.start()
+        if session.join(timeout_ms=5_000) is not True:
+            raise RuntimeError("native mock session did not terminate")
+        snapshot = session.snapshot()
+        if snapshot.get("status") != "finished":
+            raise RuntimeError(f"unexpected native terminal snapshot: {snapshot!r}")
+    except Exception as exc:
+        print(f"Rust selftest failed: {exc}", file=sys.stderr)
+        return 1
+    print("Rust selftest OK: native module imported and mock worker terminated cleanly.")
+    return 0
+
+
 def build_playback_controls(args: argparse.Namespace) -> PlaybackControls:
     if args.disable_hotkeys:
         return PlaybackControls(
@@ -834,6 +872,9 @@ def main() -> int:
 
     if "--selftest-optimize" in sys.argv:
         return _run_optimize_selftest()
+
+    if "--selftest-rust" in sys.argv:
+        return _run_rust_selftest()
 
     if sys.platform == 'win32':
         try:

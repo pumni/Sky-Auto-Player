@@ -3,10 +3,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod clock;
+pub mod event;
+pub mod focus;
 pub mod input;
 pub mod mmcss;
+pub mod power;
 pub mod sleeper;
 pub mod timer;
+pub mod wait;
 
 pub fn win32_available() -> bool {
     cfg!(windows)

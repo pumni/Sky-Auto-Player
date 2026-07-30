@@ -108,6 +108,52 @@ def check_calibration_cache() -> dict:
     return status
 
 
+def check_native_dispatch() -> dict[str, Any]:
+    """Report native module/toolchain/ABI status without making Rust mandatory."""
+    from sky_music.orchestration.native_dispatch import (
+        is_native_dispatch_available,
+        native_dispatch_explicitly_requested,
+        python_dispatch_explicitly_requested,
+    )
+
+    explicitly_enabled = (
+        native_dispatch_explicitly_requested()
+        and not python_dispatch_explicitly_requested()
+    )
+    status: dict[str, Any] = {
+        "ok": False,
+        "required": explicitly_enabled,
+        "enabled": explicitly_enabled,
+        "available": False,
+        "msg": "",
+    }
+    try:
+        import sky_player_rs
+
+        info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
+        status.update(info)
+        status["available"] = is_native_dispatch_available()
+        status["ok"] = status["available"]
+        mode = "enabled" if explicitly_enabled else "installed (soak opt-in is off)"
+        status["msg"] = (
+            f"Rust dispatch {mode}; core={info.get('rust_core_version', 'unknown')}, "
+            f"rustc={info.get('rustc_version', 'unknown')}, "
+            f"PyO3={info.get('pyo3_version', 'unknown')}, "
+            f"ABI={info.get('native_abi', 'unknown')}, "
+            f"schema={info.get('native_schema_version', 'unknown')}, "
+            f"commit={info.get('native_build_commit', 'unknown')}."
+        )
+        if not status["available"]:
+            status["msg"] += " Module metadata or no-GIL/Win32 compatibility check failed."
+    except (ImportError, AttributeError, RuntimeError, TypeError) as exc:
+        status["msg"] = (
+            "Rust dispatch module is unavailable"
+            + (" but was explicitly requested" if explicitly_enabled else "")
+            + f": {exc}"
+        )
+    return status
+
+
 def check_sky_foreground() -> dict:
     """Checks whether the Sky window is currently the foreground (active) window."""
     status = {"ok": True, "msg": ""}
@@ -148,7 +194,7 @@ def run_all_doctor_checks() -> bool:
     print("-" * 60)
     
     # 1. Sky Window + Foreground
-    print("[1/7] Sky Window Detection:")
+    print("[1/8] Sky Window Detection:")
     win_diag = check_sky_window()
     print(f"      Status: {'OK' if win_diag['ok'] else 'FAILED'}")
     print(f"      Details: {win_diag['msg']}")
@@ -158,46 +204,57 @@ def run_all_doctor_checks() -> bool:
     print("-" * 60)
     
     # 2. Timer Resolution Check
-    print("[2/7] Multimedia High-Precision Timers:")
+    print("[2/8] Multimedia High-Precision Timers:")
     time_diag = check_timer_resolution()
     print(f"      Status: {'OK' if time_diag['ok'] else 'FAILED'}")
     print(f"      Details: {time_diag['msg']}")
     print("-" * 60)
     
     # 3. Calibration Cache Check
-    print("[3/7] Calibration Cache:")
+    print("[3/8] Calibration Cache:")
     cal_diag = check_calibration_cache()
     print(f"      Status: {'OK' if cal_diag['ok'] else 'ADVISORY'}")
     print(f"      Details: {cal_diag['msg']}")
     print("-" * 60)
     
     # 4. Note Key Mapping Check
-    print("[4/7] Note Mapping Configuration:")
+    print("[4/8] Note Mapping Configuration:")
     kb_diag = check_keyboard_layout()
     print(f"      Status: {'OK' if kb_diag['ok'] else 'FAILED'}")
     print(f"      Details: {kb_diag['msg']}")
     print("-" * 60)
     
     # 5. Preflight Key Conflict Check
-    print("[5/7] Keyboard Preflight Checks:")
+    print("[5/8] Keyboard Preflight Checks:")
     conflict_diag = check_physical_keys_held()
     print(f"      Status: {'OK' if conflict_diag['ok'] else 'WARNING'}")
     print(f"      Details: {conflict_diag['msg']}")
     print("-" * 60)
 
-    # 6. FPS Advisory
-    print("[6/7] FPS Configuration:")
+    # 6. Native dispatch diagnostics
+    print("[6/8] Native Rust Dispatch:")
+    native_diag = check_native_dispatch()
+    native_label = "OK" if native_diag["ok"] else (
+        "FAILED" if native_diag["required"] else "ADVISORY"
+    )
+    print(f"      Status: {native_label}")
+    print(f"      Details: {native_diag['msg']}")
+    print("-" * 60)
+
+    # 7. FPS Advisory
+    print("[7/8] FPS Configuration:")
     print_fps_advisory()
     print("-" * 60)
 
-    # 7. Input Latency Calibration Cache (redundant path hint)
-    print("[7/7] Preflight Summary:")
-    print("      Run `--doctor-calibrate` if calibration cache is missing (see check 3/7).")
+    # 8. Input Latency Calibration Cache (redundant path hint)
+    print("[8/8] Preflight Summary:")
+    print("      Run `--doctor-calibrate` if calibration cache is missing (see check 3/8).")
     print("=" * 60)
     
     all_ok = (
         win_diag["ok"] and fg_diag["ok"] and time_diag["ok"]
         and cal_diag["ok"] and kb_diag["ok"] and conflict_diag["ok"]
+        and (native_diag["ok"] or not native_diag["required"])
     )
     if all_ok:
         print("Result: ALL CHECKS PASSED — ready for precise playback.")

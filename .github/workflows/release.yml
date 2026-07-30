@@ -46,6 +46,14 @@ jobs:
       - name: Security — AGENTS.md P0 audit
         run: uv run --env-file .env python scripts/audit_security_mandates.py
 
+      - name: Rust — format, lint, tests, and native wheel
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+          cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+          uv run --env-file .env python scripts/build_rust_wheel.py
+
       - name: Tests — full
         run: uv run pytest
 
@@ -54,14 +62,6 @@ jobs:
 
       - name: Pester — installer tests
         uses: ./.github/actions/run-pester
-
-      - name: Rust wheel precheck (only when rust/ exists)
-        run: |
-          if (Test-Path rust) {
-            uv run --env-file .env python scripts/build_rust_wheel.py
-          } else {
-            Write-Host "rust/ absent — skipping rust precheck (no-op per AGENTS.md §Build Environment)."
-          }
 
       - name: Assert tag version equals pyproject.toml
         id: verlock

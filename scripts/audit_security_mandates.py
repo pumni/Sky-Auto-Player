@@ -1,9 +1,9 @@
 """Audit Sky Auto Player's source tree for AGENTS.md P0 security-mandate violations.
 
 Mirrors the static guard `scripts/audit_free_threaded_wheels.py` plays for the
-build pre-check. Walks ``src/`` with a single ``ast`` pass per file and flags
-anything that, even if dormant or in dead code, crosses an AGENTS.md security
-mandate:
+build pre-check. Walks Python under ``src/`` with an ``ast`` pass and Rust
+under ``rust/`` with a conservative lexical pass. It flags anything that,
+even if dormant or in dead code, crosses an AGENTS.md security mandate:
 
     P0.1 NO GAME TAMPERING    — hooks, injection, process tampering
     P0.2 SENDINPUT ONLY       — only `user32.SendInput` family is legal
@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 NAME: str = "Sky Auto Player"
-SOURCE_ROOT: Path = Path("src")
+PYTHON_SOURCE_ROOT: Path = Path("src")
+RUST_SOURCE_ROOT: Path = Path("rust")
 BASELINE_PATH: Path = Path(".config") / "security_audit_baseline.json"
 
 FORBIDDEN_CALL_NAMES: frozenset[str] = frozenset(
@@ -38,21 +40,25 @@ FORBIDDEN_CALL_NAMES: frozenset[str] = frozenset(
         "SetWindowsHookEx", "SetWindowsHookExA", "SetWindowsHookExW",
         "SetWinEventHook",
         "ReadProcessMemory", "WriteProcessMemory",
-        "VirtualProtectEx", "VirtualQueryEx",
+        "NtReadVirtualMemory", "NtWriteVirtualMemory",
+        "VirtualAllocEx", "VirtualFreeEx", "VirtualProtectEx", "VirtualQueryEx",
         "CreateRemoteThread", "CreateRemoteThreadEx",
+        "NtCreateThreadEx", "RtlCreateUserThread", "QueueUserAPC",
+        "GetThreadContext", "SetThreadContext", "SuspendThread",
         "DebugActiveProcess", "DebugActiveProcessStop",
         "ContinueDebugEvent", "WaitForDebugEvent",
         "NtQueryInformationProcess",
+        "keybd_event", "mouse_event",
     }
 )
 ALLOWED_CALL_NAMES: frozenset[str] = frozenset(
     {
         "SendInput", "SendInputA", "SendInputW",
-        "keybd_event", "mouse_event",
     }
 )
 FORBIDDEN_IMPORT_NAMES: frozenset[str] = frozenset(
     {
+        "keyboard", "mouse", "pynput", "pyautogui",
         "pymem", "pyinject", "memory_kernel",
         "win32api",  # imported under win32api.* — kept loose; detect per-name below
     }
@@ -225,16 +231,78 @@ def audit_source_tree(source_root: Path) -> list[Finding]:
     return findings
 
 
+def _strip_rust_comments(source: str) -> str:
+    """Remove Rust comments while preserving line numbers for findings."""
+
+    source = re.sub(
+        r"/\*.*?\*/",
+        lambda match: "\n" * match.group(0).count("\n"),
+        source,
+        flags=re.DOTALL,
+    )
+    return "\n".join(line.split("//", 1)[0] for line in source.splitlines())
+
+
+def scan_rust_file(path: Path) -> list[Finding]:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"  [error] cannot read {path}: {exc}")
+        return []
+
+    code = _strip_rust_comments(source)
+    forbidden_pattern = re.compile(
+        rf"\b({'|'.join(re.escape(name) for name in sorted(FORBIDDEN_CALL_NAMES))})\b"
+    )
+    dll_pattern = re.compile(
+        rf"(?i)\b({'|'.join(re.escape(name) for name in sorted(FORBIDDEN_DLL_NAMES))})\b"
+    )
+
+    findings: list[Finding] = []
+    for line_number, line in enumerate(code.splitlines(), start=1):
+        for match in forbidden_pattern.finditer(line):
+            name = match.group(1)
+            findings.append(
+                Finding(
+                    path,
+                    line_number,
+                    f"forbidden-call:{name}",
+                    f"`{name}` violates AGENTS.md P0 (SendInput-only / no tampering).",
+                )
+            )
+        if match := dll_pattern.search(line):
+            findings.append(
+                Finding(
+                    path,
+                    line_number,
+                    "forbidden-dll-load",
+                    f"Rust reference to `{match.group(1)}` is process-tampering adjacent.",
+                )
+            )
+    return findings
+
+
+def audit_rust_tree(source_root: Path) -> list[Finding]:
+    if not source_root.exists():
+        return []
+    findings: list[Finding] = []
+    for path in sorted(source_root.rglob("*.rs")):
+        findings.extend(scan_rust_file(path))
+    return findings
+
+
 def main() -> int:
     print(f"=== {NAME}: AGENTS.md P0 security-mandate audit ===\n")
-    print(f"Scanning:        {SOURCE_ROOT.resolve()}")
+    print(f"Python source:   {PYTHON_SOURCE_ROOT.resolve()}")
+    print(f"Rust source:     {RUST_SOURCE_ROOT.resolve()}")
     print(f"Baseline file:   {BASELINE_PATH.resolve() or '(missing)'}\n")
 
-    findings = audit_source_tree(SOURCE_ROOT)
+    findings = audit_source_tree(PYTHON_SOURCE_ROOT)
+    findings.extend(audit_rust_tree(RUST_SOURCE_ROOT))
     baseline = load_baseline(BASELINE_PATH)
 
     if not findings:
-        print("[OK] No forbidden Windows API references in src/.")
+        print("[OK] No forbidden Windows API references in src/ or rust/.")
         return 0
 
     print("Findings:")

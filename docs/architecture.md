@@ -74,10 +74,13 @@ To achieve microsecond accuracy on Windows, the dispatch thread employs:
 3. **Precise Sleeper:** Wakes up early using coarse sleeps, yields using `sleep(0)`, and busy-waits (spins) for the final `spin_threshold_us` to hit deadlines precisely.
 
 ### Step 6: Native Rust Dispatch Engine (`sky_player_rs`)
-Under Python 3.14 free-threaded (no-GIL), hot-path dispatch logic is executed directly inside native Rust (`rust/` workspace):
+Under Python 3.14 free-threaded (no-GIL), the opt-in migration path executes the hot dispatch loop directly inside the native Rust workspace:
 * **Workspace Structure:** `crates/sky_dispatch_core` (pure Rust domain logic, `#![forbid(unsafe_code)]`), `crates/sky_dispatch_win32` (Windows `SendInput`, QPC clock, MMCSS, Waitable Timer, Sleeper), and `crates/sky_player_rs` (PyO3 FFI extension with `#[pyo3::pymodule(gil_used = false)]`).
-* **Native Thread Loop (`NativeDispatchSession`):** Runs the real-time metronome loop on a dedicated OS background thread, completely bypassing CPython interpreter lock overhead.
-* **Feature Flag & Fallback:** Controlled by `SKY_USE_RUST_DISPATCH` (default `1` when `sky_player_rs` is built). Automatically degrades to Python `RuntimeDispatchCoordinator` / `WinSendInputBackend` if native extension is disabled or absent.
+* **Native Thread Loop (`DispatchSession`):** A dedicated OS thread solely owns the Rust coordinator, estimator, waitable timer, command event, MMCSS/thread-priority and EcoQoS guards, tracked-key backend, and bounded telemetry buffer. Python only pushes commands/focus and pulls snapshots/results after crossing `orchestration/native_dispatch.py`.
+* **Current rollout:** `SKY_USE_RUST_DISPATCH=1` opts the real Windows sender into Rust for Phase-5/6 Windows E2E and soak. Python remains the default until the Phase-7 soak/sign-off gate is satisfied. An explicitly selected native path fails closed if the exact `cp314t` extension is unavailable; `SKY_USE_PYTHON_DISPATCH=1` is the diagnostic rollback switch.
+* **Lifecycle:** Commands wake an auto-reset event (event handle index 0, timer index 1), pause/focus paths release before coordinator cancellation, panic performs a full-instrument release, worker panics are contained, and a join timeout permanently poisons the session without dropping live handles.
+* **Packaging gate:** release CI builds and imports the version-specific wheel before Python tests. The frozen executable runs `--selftest-rust`, which imports the bundled module and completes a mock worker without emitting real input.
+* **Diagnostics:** `--doctor` reports native availability, enabled state, Rust core/rustc/PyO3 versions, `cp314t` ABI, schema, and build commit. Native telemetry records the selected implementation plus the same build metadata.
 
 ---
 

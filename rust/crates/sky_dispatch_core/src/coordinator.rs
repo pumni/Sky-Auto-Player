@@ -1,6 +1,7 @@
 //! Runtime dispatch coordinator managing generation status transitions and release eligibility.
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
 use crate::model::*;
@@ -95,12 +96,12 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             cursor: 0,
-            active_by_scan_code: HashMap::new(),
-            status_by_generation: HashMap::new(),
-            terminal_counts: HashMap::new(),
+            active_by_scan_code: HashMap::with_capacity(MAX_KEYS),
+            status_by_generation: HashMap::with_capacity(MAX_KEYS),
+            terminal_counts: HashMap::with_capacity(ALL_GENERATION_STATUSES.len()),
             generation_count,
-            pending_by_generation: HashMap::new(),
-            pending_scan_codes: HashSet::new(),
+            pending_by_generation: HashMap::with_capacity(MAX_KEYS),
+            pending_scan_codes: HashSet::with_capacity(MAX_KEYS),
         }
     }
 
@@ -183,23 +184,27 @@ impl RuntimeDispatchCoordinator {
         result
     }
 
-    pub fn pop_due_pending(&mut self, now_us: u64, lead_up: u64) -> Vec<PendingRelease> {
+    pub fn pop_due_pending(
+        &mut self,
+        now_us: u64,
+        lead_up: u64,
+    ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
         if self.pending_by_generation.is_empty() {
-            return Vec::new();
+            return SmallVec::new();
         }
 
         if self.pending_by_generation.len() == 1 {
             let gen_id = *self.pending_by_generation.keys().next().unwrap();
             let pending = self.pending_by_generation.get(&gen_id).unwrap();
             if pending.get_effective_release_us(lead_up) > now_us {
-                return Vec::new();
+                return SmallVec::new();
             }
             let pending = self.pending_by_generation.remove(&gen_id).unwrap();
             self.pending_scan_codes.remove(&pending.scan_code);
-            return vec![pending];
+            return std::iter::once(pending).collect();
         }
 
-        let mut due: Vec<PendingRelease> = self
+        let mut due: SmallVec<[PendingRelease; MAX_KEYS]> = self
             .pending_by_generation
             .values()
             .filter(|p| p.get_effective_release_us(lead_up) <= now_us)
@@ -207,7 +212,7 @@ impl RuntimeDispatchCoordinator {
             .collect();
 
         if due.is_empty() {
-            return Vec::new();
+            return SmallVec::new();
         }
 
         due.sort_by_key(|p| {
@@ -245,6 +250,19 @@ impl RuntimeDispatchCoordinator {
         let popped = self.schedule.batches[self.cursor].clone();
         self.cursor += 1;
         Some((popped, lead))
+    }
+
+    /// Put back the most recently popped authored batch when a final
+    /// platform-side safety gate blocks dispatch before any key transition.
+    pub fn restore_last_popped_authored(&mut self, batch: &RuntimeBatch) -> bool {
+        let Some(previous_cursor) = self.cursor.checked_sub(1) else {
+            return false;
+        };
+        if self.schedule.batches[previous_cursor].packet_id != batch.packet_id {
+            return false;
+        }
+        self.cursor = previous_cursor;
+        true
     }
 
     pub fn activate_sent_downs(
@@ -285,12 +303,11 @@ impl RuntimeDispatchCoordinator {
             return;
         }
 
-        let sent_set: HashSet<u16> = sent_scan_codes.iter().copied().collect();
         for intent in intents {
             let Some(generation_id) = intent.generation_id else {
                 continue;
             };
-            if !sent_set.contains(&intent.scan_code) {
+            if !sent_scan_codes.contains(&intent.scan_code) {
                 self.terminalize(generation_id, GenerationStatus::DroppedBackend);
                 continue;
             }
@@ -315,12 +332,15 @@ impl RuntimeDispatchCoordinator {
     pub fn split_down_intents(
         &mut self,
         intents: &[RuntimeKeyIntent],
-    ) -> (Vec<RuntimeKeyIntent>, Vec<RuntimeKeyIntent>) {
+    ) -> (
+        SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
+        SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
+    ) {
         if self.active_by_scan_code.is_empty() {
-            return (intents.to_vec(), Vec::new());
+            return (intents.iter().cloned().collect(), SmallVec::new());
         }
-        let mut playable = Vec::new();
-        let mut conflicts = Vec::new();
+        let mut playable = SmallVec::new();
+        let mut conflicts = SmallVec::new();
 
         for intent in intents {
             if self.active_by_scan_code.contains_key(&intent.scan_code) {
@@ -346,18 +366,21 @@ impl RuntimeDispatchCoordinator {
     pub fn request_releases(
         &mut self,
         intents: &[RuntimeKeyIntent],
-    ) -> (Vec<PendingRelease>, Vec<RuntimeKeyIntent>) {
+    ) -> (
+        SmallVec<[PendingRelease; MAX_KEYS]>,
+        SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
+    ) {
         if intents.len() == 1 {
             let intent = &intents[0];
             let Some(generation_id) = intent.generation_id else {
-                return (Vec::new(), vec![intent.clone()]);
+                return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
             let active = self.active_by_scan_code.get(&intent.scan_code);
             let Some(active) = active else {
-                return (Vec::new(), vec![intent.clone()]);
+                return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
             if active.generation_id != generation_id {
-                return (Vec::new(), vec![intent.clone()]);
+                return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             }
 
             let pending = PendingRelease {
@@ -376,11 +399,11 @@ impl RuntimeDispatchCoordinator {
             self.pending_scan_codes.insert(intent.scan_code);
             self.status_by_generation
                 .insert(generation_id, GenerationStatus::ReleasePending);
-            return (vec![pending], Vec::new());
+            return (std::iter::once(pending).collect(), SmallVec::new());
         }
 
-        let mut requested = Vec::new();
-        let mut suppressed = Vec::new();
+        let mut requested = SmallVec::new();
+        let mut suppressed = SmallVec::new();
 
         for intent in intents {
             let Some(generation_id) = intent.generation_id else {
@@ -425,12 +448,9 @@ impl RuntimeDispatchCoordinator {
         sent_scan_codes: &[u16],
         skipped_scan_codes: &[u16],
     ) {
-        let sent_set: HashSet<u16> = sent_scan_codes.iter().copied().collect();
-        let skipped_set: HashSet<u16> = skipped_scan_codes.iter().copied().collect();
-
         for pending in releases {
-            let in_sent = sent_set.contains(&pending.scan_code);
-            let in_skipped = skipped_set.contains(&pending.scan_code);
+            let in_sent = sent_scan_codes.contains(&pending.scan_code);
+            let in_skipped = skipped_scan_codes.contains(&pending.scan_code);
             if !in_sent && !in_skipped {
                 continue;
             }

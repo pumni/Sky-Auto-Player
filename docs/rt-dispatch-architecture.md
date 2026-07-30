@@ -1,6 +1,6 @@
-# RT Dispatch Architecture (post Phase-6 decomposition)
+# RT Dispatch Architecture (Python oracle + native migration path)
 
-Status: CURRENT — graduated to production defaults 2026-06-11.
+Status: CURRENT — Python is the production oracle; Rust Phase 5/6 is opt-in pending soak.
 History: built by `archive/2026-06_rt-pipeline-extreme-optimization-plan.md`; A/B numbers in
 `perf-baselines/2026-06-baseline.md`.
 
@@ -14,7 +14,10 @@ The game registers a key press iff the key is observed held for **at least 1 gam
 
 ```
 PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle only
- ├─ compile_runtime_intents → RuntimeSchedule        per-key generations (core/coordinator.py)
+ ├─ native_dispatch.RustDispatchRuntime              single Python/native composition seam
+ │   └─ sky_player_rs.DispatchSession                worker owns core/wait/backend/telemetry
+ ├─ Python rollback/oracle path:
+ │   ├─ compile_runtime_intents → RuntimeSchedule    per-key generations (core/coordinator.py)
  ├─ SendLatencyEstimator                             per-kind EMA of SendInput durations
  ├─ wake-error probe (pre start_perf)                derives effective spin threshold
  ├─ RealtimeProcessScope (infrastructure/realtime)   gc.collect→gc.disable + setswitchinterval(1ms)
@@ -24,7 +27,7 @@ PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle o
  │   ├─ HybridWaitStrategy (infrastructure/wait_strategy.py)
  │   ├─ DispatchHealthMonitor                        focus cache, backend-health cache, input-path p95
  │   └─ InputBackend → send_scan_code_batch_trusted  cached INPUT arrays → user32.SendInput
- └─ PlaybackSupervisor (orchestration/playback_supervisor.py)  control thread:
+ │   └─ PlaybackSupervisor (orchestration/playback_supervisor.py)  control thread:
      command queue + command event, focus polling, progress consumption/publishing,
      DispatchThreadPriorityScope (infrastructure/rt_priority.py) on the dispatch thread
 ```
@@ -35,9 +38,10 @@ thread owns controls/focus/rendering and must never call into the backend
 
 ### 2.1 The `orchestration/core/` package (the isolated dispatch seam)
 
-The real-time core lives in `orchestration/core/` — a platform-free package that is the exact
-seam the future Rust worker (`rust-migration-plan.md`) replaces. `orchestration/dispatch_loop.py`
-and `orchestration/runtime_dispatch.py` remain as thin re-export shims for backward compatibility.
+The Python reference core lives in `orchestration/core/`; the native worker replaces this seam
+when `SKY_USE_RUST_DISPATCH=1`. `orchestration/dispatch_loop.py` and
+`orchestration/runtime_dispatch.py` remain thin re-export shims and the differential oracle.
+The native adapter must not duplicate coordinator state, calculate deadlines, or call SendInput.
 
 - `core/loop.py` — `DispatchLoop` + `DispatchHealthMonitor`.
 - `core/coordinator.py` — `RuntimeDispatchCoordinator` (schedule → batches, generation tracking).
@@ -67,7 +71,7 @@ Cross-thread display reads go through `elapsed_snapshot_us()` — protected by a
 | `DispatchLoop` Phase-2 pre-down gate | shared runtime `FocusSignal` (`SharedFocusSignal`, sampled by the supervisor) **plus**, in threaded mode, a fresh injected cheap HWND-only recheck (`is_foreground_cached_hwnd`: `GetForegroundWindow()==sky`, no `OpenProcess`) | every down batch (including the first note) |
 | `DispatchHealthMonitor.focus_is_active` (post-send diagnostic) | runtime `FocusSignal` if set, else injected cheap HWND-only probe (`is_foreground_cached_hwnd`) — no process lookup | 2 ms TTL |
 
-The dispatch thread never issues the full process-name check; a live HWND cannot change the process
+Neither dispatch worker issues the full process-name check; a live HWND cannot change the process
 behind it, so the cheap compare is safe and staleness is bounded by the full checks' 20–50 ms cadence.
 The pre-down gate's fresh HWND recheck (wired only in threaded mode, where the `SharedFocusSignal`
 is 20–50 ms stale) closes the alt-tab race in which a down would inject into the window the user just
@@ -146,6 +150,14 @@ on commands and focus transitions. In event mode the supervisor also publishes t
 "playing" progress (the loop sleeps whole inter-note gaps); pause/focus states are still published
 by the loop itself. Direct (non-threaded) mode always runs polled.
 
+The Rust equivalent is `sky_dispatch_win32::wait::HybridWaiter`. It creates the event before the
+worker starts, orders `[command_event, timer]`, uses a bounded degraded poll, and keeps handle
+ownership in RAII wrappers. Its adaptive probe runs after timer/priority acquisition and before
+the playback epoch. If the high-resolution timer is unavailable or disabled, a worker-owned
+1 ms timer-resolution guard is acquired and restored; the effective wait mode is exposed as
+`runtime_options.wait_strategy_acquired`. The Python strategy remains the deterministic oracle
+and rollback path.
+
 Test seam: deterministic tests inject a `HybridWaitStrategy` subclass whose `spin_until_us`
 advances their fake clock (`wait_strategy` parameter on `PlaybackEngine`). Production code never
 special-cases fake clocks.
@@ -157,6 +169,18 @@ special-cases fake clocks.
 "Games", plus `AvSetMmThreadPriority(HIGH)`) then `SetThreadPriority` HIGHEST →
 off. (`TIME_CRITICAL` is strictly an explicit expert mode, never an auto fallback). **Never a process priority class** (user mandate). The acquired
 tier is recorded in telemetry `runtime_options.rt_priority_acquired`.
+The Rust `MmcssGuard::acquire` implements the same per-thread ladder and restoration; it never
+changes process priority or affinity. A separate worker-owned RAII guard disables per-thread
+EcoQoS/execution-speed throttling on supported Windows versions and restores the prior state at
+worker teardown.
+
+### 5.1 Native rollout boundary
+
+The native implementation is intentionally not the default yet. `SKY_USE_RUST_DISPATCH=1`
+selects it only for the real Windows backend with the production clock/sleeper/thread mode.
+Dry-run, fake-clock tests, and explicit `SKY_USE_PYTHON_DISPATCH=1` use the Python oracle.
+Phase 7 may invert the default only after Windows E2E, frozen-app, timing, stuck-key, and agreed
+soak gates are recorded; extension absence must never silently change an explicitly selected run.
 
 ## 6. Production defaults & kill switches
 
@@ -199,6 +223,11 @@ cleanest send tail of all runs.
 ## 8. Telemetry and Memory Hygiene
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
+
+The Rust path reserves its retain-first record buffer before the playback epoch. Per-record
+scan/generation fields use inline storage and reasons remain compact IDs on the worker; reason
+strings and JSON are materialized only after terminal join. This preserves the existing CSV
+fields and outcome strings without per-send heap allocation or disk I/O.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
 engine prewarms the platform INPUT cache in two passes under the cache cap

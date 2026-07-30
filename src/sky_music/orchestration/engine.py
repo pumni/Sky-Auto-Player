@@ -12,6 +12,7 @@ from sky_music.config import RtPriorityMode
 from sky_music.domain.domain import Song
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
 from sky_music.infrastructure.backend import (
+    BackendHealth,
     InputBackend,
     ReleaseAllOutcome,
 )
@@ -34,6 +35,7 @@ from sky_music.infrastructure.timing import (
     SleepPolicy,
 )
 from sky_music.infrastructure.wait_strategy import HybridWaitStrategy, WaitStrategy
+from sky_music.orchestration.core.ports import RUST_DISPATCH_SCHEMA_VERSION
 
 # Re-exports kept for compatibility: the decomposition (Phase 6) moved these out of engine.py but
 # callers and tests still import them from here.
@@ -559,6 +561,144 @@ class PlaybackEngine:
             and self.backend.__class__.__name__ != "DryRunBackend"
         )
 
+    def _should_use_native_dispatch(self) -> bool:
+        """Select Rust only for the real Windows production sender path."""
+        from sky_music.infrastructure.backend import WinSendInputBackend
+        from sky_music.orchestration.native_dispatch import (
+            is_native_dispatch_available,
+            native_dispatch_explicitly_requested,
+            python_dispatch_explicitly_requested,
+        )
+
+        if python_dispatch_explicitly_requested():
+            return False
+        if not native_dispatch_explicitly_requested():
+            return False
+        eligible = (
+            isinstance(self.backend, WinSendInputBackend)
+            and isinstance(self.clock, PerfCounterClock)
+            and isinstance(self.sleeper, RealSleeper)
+            and self.use_dispatch_thread
+        )
+        if eligible and not is_native_dispatch_available():
+            raise RuntimeError(
+                "Native Rust dispatch is unavailable. Reinstall the application, or set "
+                "SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+            )
+        return eligible
+
+    def _play_native(self) -> str:
+        from sky_music.orchestration.native_dispatch import RustDispatchRuntime
+
+        runtime = RustDispatchRuntime(
+            actions=self.actions,
+            song_name=self.song.name,
+            min_hold_us=self.min_hold_us,
+            max_lead_us=max(self.dispatch_lead_us, 2_000),
+            dispatch_lead_us=self.dispatch_lead_us,
+            focus_restore_grace_us=self.focus_restore_grace_us,
+            spin_threshold_us=self.current_spin_threshold_us,
+            core_warmup_budget_us=200,
+            late_pulse_drop_threshold_us=self.late_pulse_drop_threshold_us,
+            same_key_conflict_policy=self.same_key_conflict_policy,
+            telemetry_enabled=self.telemetry.enabled,
+            rt_priority_mode=self.rt_priority_mode,
+            enable_waitable_timer=self.enable_waitable_timer,
+            enable_event_wait=self.enable_event_wait,
+            enable_adaptive_spin=self.enable_adaptive_spin,
+            spin_floor_us=self.spin_floor_us,
+            enable_adaptive_lead=self.enable_adaptive_lead,
+            estimator_state_json=(
+                json.dumps(self.estimator.export_state())
+                if self.enable_adaptive_lead
+                else None
+            ),
+            require_focus=self.require_focus,
+            focus_guard=self.focus_guard,
+            controls=self.controls,
+            renderer=self.renderer,
+            poll_s=self.sleep_policy.poll_s,
+        )
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "dispatch_backend": "rust",
+                "rust_dispatch_schema_version": RUST_DISPATCH_SCHEMA_VERSION,
+            }
+        )
+        outcome, snapshot, native_telemetry, estimator_state_json = runtime.run()
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "dispatch_backend": "rust",
+                "rust_dispatch_schema_version": snapshot["schema_version"],
+                "rust_native_build_version": snapshot["native_build_version"],
+                "rust_native_build_commit": snapshot["native_build_commit"],
+                "rustc_version": snapshot["rustc_version"],
+                "pyo3_version": snapshot["pyo3_version"],
+                "native_abi": snapshot["native_abi"],
+                "rt_priority_acquired": snapshot["rt_priority_acquired"],
+                "effective_spin_threshold_us": snapshot["effective_spin_threshold_us"],
+                "wait_strategy_acquired": snapshot["wait_strategy_acquired"],
+                "power_throttling_disabled": snapshot[
+                    "power_throttling_disabled"
+                ],
+            }
+        )
+        self.telemetry.record_backend_health(
+            BackendHealth(
+                active_count=int(snapshot["active_count"]),
+                possibly_active_count=int(snapshot["possibly_active_count"]),
+                failed_release_count=int(snapshot["failed_release_count"]),
+                last_error=snapshot["last_error"],
+                keys_dropped=int(snapshot["keys_dropped"]),
+                chord_split_events=int(snapshot["chord_split_events"]),
+            )
+        )
+        self.telemetry.record_generation_status_counts(
+            {
+                str(status): int(count)
+                for status, count in snapshot["generation_status_counts"].items()
+            }
+        )
+        self.telemetry.record_abort_counts(
+            {
+                str(reason): int(count)
+                for reason, count in snapshot["abort_counts_by_reason"].items()
+            }
+        )
+        if snapshot["release_outcome"] is not None:
+            native_release = snapshot["release_outcome"]
+            self.telemetry.record_release_outcome(
+                ReleaseAllOutcome(
+                    attempted=tuple(int(value) for value in native_release["attempted"]),
+                    released_successfully=bool(
+                        native_release["released_successfully"]
+                    ),
+                    stuck_keys=tuple(
+                        int(value) for value in native_release["stuck_keys"]
+                    ),
+                    verification_inconclusive=bool(
+                        native_release["verification_inconclusive"]
+                    ),
+                )
+            )
+        self.telemetry.ingest_native_output(native_telemetry)
+        self.telemetry.save()
+        if (
+            self.lead_cache_path
+            and self.enable_adaptive_lead
+            and estimator_state_json is not None
+        ):
+            with contextlib.suppress(OSError, ValueError):
+                cache_file = Path(self.lead_cache_path)
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                temporary = cache_file.with_suffix(".tmp")
+                temporary.write_text(estimator_state_json, encoding="utf-8")
+                temporary.replace(cache_file)
+        self._input_path_degraded = bool(snapshot["keys_dropped"])
+        return outcome
+
     def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:
         outcome = self.backend.release_all()
         if self._runtime_coordinator is not None:
@@ -741,6 +881,9 @@ class PlaybackEngine:
         # ``__init__`` (max_poly = max(6, max_chord)), so it remains correctly sized.
         if self.runtime_schedule is None:
             self.runtime_schedule = compile_runtime_intents(self.actions)
+
+        if self._should_use_native_dispatch():
+            return self._play_native()
 
         realtime_sleeper: Sleeper | None = self.sleeper
         supervisor = None

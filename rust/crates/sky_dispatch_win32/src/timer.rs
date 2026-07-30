@@ -5,6 +5,40 @@ pub struct WaitableTimer {
     handle: windows_sys::Win32::Foundation::HANDLE,
 }
 
+pub struct TimerResolutionGuard {
+    active: bool,
+}
+
+impl TimerResolutionGuard {
+    pub fn acquire_1ms() -> Option<Self> {
+        #[cfg(windows)]
+        {
+            // SAFETY: timeBeginPeriod has no pointer parameters; a successful
+            // request is paired exactly once with timeEndPeriod in Drop.
+            let active = unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) }
+                == windows_sys::Win32::Media::TIMERR_NOERROR;
+            active.then_some(Self { active })
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+}
+
+impl Drop for TimerResolutionGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.active {
+            // SAFETY: this exactly balances this guard's successful 1 ms
+            // timeBeginPeriod request.
+            unsafe {
+                windows_sys::Win32::Media::timeEndPeriod(1);
+            }
+        }
+    }
+}
+
 impl WaitableTimer {
     pub fn new() -> Option<Self> {
         #[cfg(windows)]
@@ -40,23 +74,9 @@ impl WaitableTimer {
         }
         #[cfg(windows)]
         {
-            use windows_sys::Win32::System::Threading::{
-                INFINITE, SetWaitableTimer, WaitForSingleObject,
-            };
+            use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
-            let Some(ticks_100ns) = us.checked_mul(10) else {
-                return false;
-            };
-            let Ok(ticks_100ns) = i64::try_from(ticks_100ns) else {
-                return false;
-            };
-            let due_time_100ns = -ticks_100ns;
-            // SAFETY: the handle is a live waitable timer and the due-time
-            // pointer remains valid for the duration of this call.
-            let armed = unsafe {
-                SetWaitableTimer(self.handle, &due_time_100ns, 0, None, std::ptr::null(), 0)
-            };
-            if armed == 0 {
+            if !self.arm_relative_us(us) {
                 return false;
             }
             // SAFETY: waiting borrows the live handle without transferring it.
@@ -68,6 +88,27 @@ impl WaitableTimer {
             std::thread::sleep(std::time::Duration::from_micros(us));
             true
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn arm_relative_us(&self, us: u64) -> bool {
+        use windows_sys::Win32::System::Threading::SetWaitableTimer;
+
+        let Some(ticks_100ns) = us.checked_mul(10) else {
+            return false;
+        };
+        let Ok(ticks_100ns) = i64::try_from(ticks_100ns) else {
+            return false;
+        };
+        let due_time_100ns = -ticks_100ns;
+        // SAFETY: the handle is a live waitable timer and the due-time
+        // pointer remains valid for the duration of this call.
+        unsafe { SetWaitableTimer(self.handle, &due_time_100ns, 0, None, std::ptr::null(), 0) != 0 }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn raw_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.handle
     }
 }
 

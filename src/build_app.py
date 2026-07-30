@@ -140,6 +140,10 @@ def run_smoke_test(exe_path: Path) -> bool:
             "--selftest-optimize",
             "frozen build optimization contract (assert strips at optimize>=1)",
         ),
+        (
+            "--selftest-rust",
+            "native Rust module import + mock dispatch worker",
+        ),
     ]
     for flag, description in smoke_steps:
         print(f"[+] Running Smoke Test: {exe_path} {flag}  ({description})")

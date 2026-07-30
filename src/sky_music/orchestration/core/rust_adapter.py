@@ -6,7 +6,6 @@ Wraps native Rust structs/functions (sky_player_rs) behind Python core protocol 
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from sky_music.infrastructure.backend import (
@@ -16,35 +15,23 @@ from sky_music.infrastructure.backend import (
     ReleaseAllOutcome,
 )
 
-_RUST_AVAILABLE: bool | None = None
-
 
 def is_rust_dispatch_available() -> bool:
-    """Return True if sky_player_rs is installed and free-threaded build is valid."""
-    global _RUST_AVAILABLE
-    if _RUST_AVAILABLE is not None:
-        return _RUST_AVAILABLE
+    """Compatibility alias for the single native-dispatch availability check."""
+    from sky_music.orchestration.native_dispatch import (
+        is_native_dispatch_available,
+        python_dispatch_explicitly_requested,
+    )
 
-    env_flag = os.environ.get("SKY_USE_RUST_DISPATCH", "1").lower()
-    if env_flag in ("0", "false", "off", "no"):
-        _RUST_AVAILABLE = False
-        return False
-
-    try:
-        import sky_player_rs
-
-        info = sky_player_rs.build_info()  # type: ignore[attr-defined]
-        _RUST_AVAILABLE = bool(info.get("free_threaded", False))
-    except Exception:
-        _RUST_AVAILABLE = False
-
-    return _RUST_AVAILABLE
+    return not python_dispatch_explicitly_requested() and is_native_dispatch_available()
 
 
 def reset_rust_availability_cache() -> None:
-    """Reset cached availability check for unit testing."""
-    global _RUST_AVAILABLE
-    _RUST_AVAILABLE = None
+    from sky_music.orchestration.native_dispatch import (
+        reset_native_dispatch_availability_cache,
+    )
+
+    reset_native_dispatch_availability_cache()
 
 
 class RustInputAdapter(InputBackend):

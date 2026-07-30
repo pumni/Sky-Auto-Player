@@ -381,6 +381,63 @@ class TelemetryLogger:
         )
         self._accepted_record_count += 1
 
+    def ingest_native_output(self, output: dict[str, Any]) -> None:
+        """Ingest a terminal retain-first buffer produced by the Rust worker."""
+        if not self.enabled:
+            return
+        records = output.get("records")
+        attempted = output.get("attempted")
+        dropped = output.get("dropped")
+        if (
+            not isinstance(records, list)
+            or not isinstance(attempted, int)
+            or isinstance(attempted, bool)
+            or not isinstance(dropped, int)
+            or isinstance(dropped, bool)
+            or attempted < 0
+            or dropped < 0
+        ):
+            raise ValueError("invalid native telemetry envelope")
+
+        self._attempted_record_count += attempted
+        self._dropped_count += dropped
+        for row in records:
+            if not isinstance(row, dict):
+                raise ValueError("invalid native telemetry record")
+            if len(self.records) >= self._telemetry_capacity:
+                self._dropped_count += 1
+                self._truncated = True
+                continue
+            self.records.append(
+                TelemetryRecord(
+                    self.song_name,
+                    int(row["event_index"]),
+                    str(row["kind"]),
+                    int(row["scheduled_us"]),
+                    int(row["actual_us"]),
+                    int(row["lateness_us"]),
+                    int(row["send_duration_us"]),
+                    tuple(int(value) for value in row["scan_codes"]),
+                    str(row["reason"]),
+                    int(row["dispatch_id"]),
+                    int(row["dispatch_completed_us"]),
+                    tuple(int(value) for value in row["sent_scan_codes"]),
+                    tuple(int(value) for value in row["skipped_scan_codes"]),
+                    tuple(int(value) for value in row["generation_ids"]),
+                    str(row["runtime_outcome"]),
+                    int(row["deferred_by_us"]),
+                    int(row["pre_send_spin_us"]),
+                    int(row["idle_gap_us"]),
+                    int(row["visible_lateness_us"]),
+                    int(row["applied_lead_us"]),
+                    int(row["send_duration_pure_us"]),
+                    int(row["bookkeeping_us"]),
+                    int(row["dispatch_lateness_us"]),
+                )
+            )
+            self._accepted_record_count += 1
+        self._truncated = self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
+
     def record_stats(self) -> dict[str, int]:
         """Return bounded session counters independent of the retained list.
 
@@ -513,6 +570,13 @@ class TelemetryLogger:
         """
         key = reason
         self.abort_counts_by_reason[key] = self.abort_counts_by_reason.get(key, 0) + 1
+
+    def record_abort_counts(self, counts: dict[str, int]) -> None:
+        """Replace abort counters with a validated terminal native snapshot."""
+        self.abort_counts_by_reason = {
+            str(reason): max(0, int(count))
+            for reason, count in counts.items()
+        }
 
     def record_release_outcome(self, outcome) -> None:
         """Stores the final release_all outcome at the end of playback."""

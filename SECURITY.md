@@ -17,11 +17,14 @@ Sky Auto Player **never**:
 - attaches a debugger to any other process;
 - bypasses anti-cheat.
 
-The only hooks explicitly forbidden by the P0 audit, including keyboard hooks on any process — not just the game.
+The P0 audit forbids hooks on any process, including keyboard hooks — not just
+hooks targeting the game.
 
 ### 2. SENDINPUT ONLY
 
-The only mechanism used to send keystrokes is `user32.SendInput` (and the legacy `keybd_event` / `mouse_event` siblings). No third-party keyboard module (`python-keyboard`, `pynput`, etc.) is loaded.
+The only mechanism used to send keystrokes is `user32.SendInput`. Legacy
+`keybd_event` / `mouse_event` calls and third-party input modules
+(`python-keyboard`, `pynput`, etc.) are forbidden.
 
 ### 3. STRICT VALIDATION
 
@@ -29,7 +32,7 @@ Every CLI argument, config field, song file, hotkey binding, and timing profile 
 
 ## Auditing
 
-The P0 mandates are enforced both **by review** (every PR must pass CI) and **by automation** (`scripts/audit_security_mandates.py` runs as a CI gate on every push and pull request). Any new code that adds a forbidden API call — hook, memory read, remote thread, debug attach — fails CI immediately. Historical exceptions, if any, are listed in `.config/security_audit_baseline.json` with a justification and a tracking reference.
+The P0 mandates are enforced both **by review** (every PR must pass CI) and **by automation** (`scripts/audit_security_mandates.py` runs as a CI gate on every push and pull request). The audit scans both Python under `src/` and Rust under `rust/`. Any new code that adds a forbidden API call — hook, memory read, remote thread, debug attach — fails CI immediately. Historical exceptions, if any, are listed in `.config/security_audit_baseline.json` with a justification and a tracking reference.
 
 To run the audit locally:
 

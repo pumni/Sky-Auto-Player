@@ -74,7 +74,7 @@ pub struct RuntimeBatch {
     pub kind: ActionKind,
     pub scheduled_us: u64,
     pub reason_id: ReasonId,
-    pub intents: SmallVec<[RuntimeKeyIntent; 8]>,
+    pub intents: SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
     pub packet_id: PacketId,
 }
 

@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+from importlib.util import find_spec
 from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
 
@@ -44,13 +45,18 @@ datas += tmp_ret[0]
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-try:
-    tmp_ret = collect_all('sky_player_rs')
-    datas += tmp_ret[0]
-    binaries += tmp_ret[1]
-    hiddenimports += tmp_ret[2]
-except Exception:
-    pass
+# The Rust dispatcher is a required release artifact even while runtime
+# selection remains opt-in. Collection must fail closed if its wheel was not
+# built by scripts/build_rust_wheel.py.
+if find_spec('sky_player_rs') is None:
+    raise RuntimeError(
+        'sky_player_rs is required; run scripts/build_rust_wheel.py before packaging'
+    )
+tmp_ret = collect_all('sky_player_rs')
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+hiddenimports.append('sky_player_rs')
 
 block_cipher = None
 

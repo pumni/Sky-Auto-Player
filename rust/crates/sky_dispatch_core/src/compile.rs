@@ -123,7 +123,7 @@ pub fn compile_runtime_intents(
         previous_source_index = Some(action.source_action_index);
         previous_scheduled_us = Some(action.scheduled_us);
         let reason_id = get_or_insert_reason(&action.reason)?;
-        let mut intents: SmallVec<[RuntimeKeyIntent; 8]> = SmallVec::new();
+        let mut intents: SmallVec<[RuntimeKeyIntent; MAX_KEYS]> = SmallVec::new();
 
         for &scan_code in &action.scan_codes {
             let key_slot =

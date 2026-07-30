@@ -62,7 +62,7 @@ jobs:
             case "$path" in
               # manifests/* intentionally omitted: winget channel is deferred
               # and has no CI gate yet (placeholder SHA only).
-              src/*|tests/*|scripts/*|installer/*|.github/workflows/*|.github/actions/*)
+              src/*|tests/*|scripts/*|installer/*|rust/*|.github/workflows/*|.github/actions/*)
                 relevant=true
                 break
                 ;;
@@ -130,6 +130,14 @@ jobs:
 
       - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
         uses: ./.github/actions/updater-ps51-gate
+
+      - name: Rust — format, lint, tests, and native wheel
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+          cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+          uv run --env-file .env python scripts/build_rust_wheel.py
 
       - name: Pester — installer tests
         uses: ./.github/actions/run-pester
