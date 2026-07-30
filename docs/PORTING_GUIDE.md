@@ -228,9 +228,7 @@ Every `unsafe` block inside the Rust core must:
 * ✅ Configuration parsers (YAML/JSON ingestion, validation).
 * ✅ Validation pipelines that run before signal dispatch.
 * ✅ CPU-bound loops with **no** Windows I/O.
-* ❌ **Signal-dispatch hot path.** This path stays in Python for now, honoring the `AGENTS.md` Working Principle *"Isolate the Windows backend behind an interface"* — keeping it independently testable and behind an abstract boundary.
-
-When the hot path is later allowed to move into Rust, that decision must update both `AGENTS.md` and this document, and must add the corresponding CI gate entry under §4.
+* ✅ **Signal-dispatch hot path and real-time worker.** Migration of real-time scheduling, waitable timer/event loop, and SendInput backend into Rust is active and governed by [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md).
 
 ---
 

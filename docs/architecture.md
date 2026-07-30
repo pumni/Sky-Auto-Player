@@ -73,6 +73,12 @@ To achieve microsecond accuracy on Windows, the dispatch thread employs:
 2. **Timer-Guard:** Utilizes a high-resolution waitable timer scope (1ms resolution) to prevent long scheduler sleeps from drifting.
 3. **Precise Sleeper:** Wakes up early using coarse sleeps, yields using `sleep(0)`, and busy-waits (spins) for the final `spin_threshold_us` to hit deadlines precisely.
 
+### Step 6: Native Rust Dispatch Engine (`sky_player_rs`)
+Under Python 3.14 free-threaded (no-GIL), hot-path dispatch logic is executed directly inside native Rust (`rust/` workspace):
+* **Workspace Structure:** `crates/sky_dispatch_core` (pure Rust domain logic, `#![forbid(unsafe_code)]`), `crates/sky_dispatch_win32` (Windows `SendInput`, QPC clock, MMCSS, Waitable Timer, Sleeper), and `crates/sky_player_rs` (PyO3 FFI extension with `#[pyo3::pymodule(gil_used = false)]`).
+* **Native Thread Loop (`NativeDispatchSession`):** Runs the real-time metronome loop on a dedicated OS background thread, completely bypassing CPython interpreter lock overhead.
+* **Feature Flag & Fallback:** Controlled by `SKY_USE_RUST_DISPATCH` (default `1` when `sky_player_rs` is built). Automatically degrades to Python `RuntimeDispatchCoordinator` / `WinSendInputBackend` if native extension is disabled or absent.
+
 ---
 
 ## 3. Playback Robustness & Hardening
@@ -80,15 +86,9 @@ To prevent input loss, stuck keys, and timing drift:
 * **Per-Play Window Re-acquire:** On play start, the engine re-acquires the active window handle for the game to ensure input is sent to the correct target.
 * **Active State Tracking:** The backend tracks all physically depressed keys in `active_keys`. If a duplicate down command is sent for an already-held key, the backend filters it out to prevent queue clutter.
 * **Unified abort helper (`_abort_input_safe`):** Every interrupt path on the dispatch thread (manual pause, focus loss, panic, runtime conflict, normal finish, exception) routes through one helper that composes `backend.release_all()` then `coordinator.cancel_all()` (release-first so the backend still knows which keys it held), and tallies the reason into telemetry via `abort_counts_by_reason`. Panic and process-teardown optionally pass `full_instrument=True` to issue a watchdog-equivalent full Sky-15 KEYUP after the tracked release.
-* **Dual-release on focus transitions:** When Sky loses foreground the dispatch thread fires `_abort_input_safe` immediately to clear OS-keyboard state, then freezes the timeline (`focus_pause_started_us`); when Sky regains focus it issues a SECOND idempotent `release_all` that clears game-side half-holds while Sky is foreground, before resuming. The polled gate publishes the renderer status; a Phase 2 pre-down gate (armed after the first note-on) closes the race window between deadline-wake and SendInput using the runtime `FocusSignal` — see [docs/2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md](2026-07_sendinput-lifecycle-and-timestamp-fidelity-plan.md) §2.3 for the design.
-* **Partial note-on no *late* retry (G5):** If `SendInput` returns `sent < n` for a musical note-on, the remainder is retried **once, immediately (no sleep)**, keeping it in the same sender-side dispatch window. The game sampling frame is not observable and is not guaranteed; whatever still does not land is dropped (`DROPPED_BACKEND`, tagged `partial_note_on`). A *late* (sleeping) retry remains forbidden — it would cross a frame boundary and stagger the chord. Note-off / safety paths still complete the remainder (a split release beats a stuck key). Outcomes are tagged `runtime_outcome="partial_note_on"` in CSV/telemetry for observability.
-* **Multi-Pass Emergency Release:** `release_all()` runs a 3-pass verification using `GetAsyncKeyState` so keys reliably bounce back up against OS-queue blocking. Stuck-key retries (2-pass, backoff 50/100 ms) promote failures into `failed_release_keys` so the next `release_all` re-attempts them.
-
-> **Doc truth note (2026-07, SendInput lifecycle plan Phases 0–5).** This section previously
-> mis-attributed a "focus-loss calls `release_all()`" claim to pre-Phase-1 code (which only
-> called `cancel_all` on loss). Phases 1–2 delivered the dual-release model above so the doc
-> now matches the runtime. Watchdog (`watchdog.panic_release_all`) remains the last-resort
-> hard-kill failsafe independent of this lifecycle layer.
+* **Dual-release on focus transitions:** When Sky loses foreground the dispatch thread fires `_abort_input_safe` immediately to clear OS-keyboard state, then freezes the timeline (`focus_pause_started_us`); when Sky regains focus it issues a SECOND idempotent `release_all` that clears game-side half-holds while Sky is foreground, before resuming.
+* **Partial note-on no *late* retry (G5):** If `SendInput` returns `sent < n` for a musical note-on, the remainder is retried **once, immediately (no sleep)**, keeping it in the same sender-side dispatch window. Whatever still does not land is dropped (`DROPPED_BACKEND`, tagged `partial_note_on`).
+* **Multi-Pass Emergency Release:** `release_all()` runs a 3-pass verification using `GetAsyncKeyState` so keys reliably bounce back up against OS-queue blocking.
 
 ---
 
@@ -101,4 +101,4 @@ Running with the `--debug-csv` flag dumps detailed metrics for every event:
 * `observed_hold_us`: The actual duration the key was held, measured from down dispatch completion to up dispatch completion.
 
 ### Calibration Loop
-Calibration is a host-side input-delivery measurement, not a game/audio-onset measurement. The app creates an app-owned Win32 calibration window, injects strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with the native-call completion timestamp. The resulting evidence is stored in `.cache/input_latency.json` with UTC `sampled_at` metadata and the `injected_raw_input_delivery_proxy` evidence label. The loader consumes the bounded recommendation as a `min_hold_margin_us` input; it does not infer Sky frame sampling, render timing, audio onset, or an optimal profile/FPS offset, and it does not currently apply a freshness TTL.
+Calibration is a host-side input-delivery measurement, not a game/audio-onset measurement. The app creates an app-owned Win32 calibration window, injects strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with the native-call completion timestamp. The resulting evidence is stored in `.cache/input_latency.json` with UTC `sampled_at` metadata and the `injected_raw_input_delivery_proxy` evidence label.

@@ -1,6 +1,6 @@
 # Rust Dispatch Worker — Migration Plan
 
-> **Status:** Implementation plan, pre-scaffold
+> **Status: SUPERSEDED by [docs/rust-dispatch-migration/README.md](rust-dispatch-migration/README.md)** (2026-07-30). Preserved as historical proposal context.
 > **Last updated:** 2026-07-17 (Phase 5 alignment: emit no-retry §8, single-interval pause §5, drop-oldest §10, focus ownership §Phase 2, invariant coverage §1.3)
 > **Decisions recorded:** See [debrief](#d-decision-log) section
 
