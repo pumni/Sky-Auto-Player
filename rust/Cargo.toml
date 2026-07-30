@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sky_dispatch_core",
+    "crates/sky_dispatch_win32",
+    "crates/sky_player_rs",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+authors = ["Sky Auto Player Team"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+panic = "unwind"
+strip = "symbols"
+overflow-checks = true

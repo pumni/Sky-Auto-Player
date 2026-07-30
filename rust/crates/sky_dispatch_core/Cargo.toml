@@ -1,0 +1,11 @@
+[package]
+name = "sky_dispatch_core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = "2"
+smallvec = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
