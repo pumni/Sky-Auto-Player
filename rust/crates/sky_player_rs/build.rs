@@ -36,10 +36,10 @@ fn main() {
         command_output("rustc", &["--version"]).unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=SKY_RUSTC_VERSION={rustc_version}");
 
-    let build_commit = std::env::var("SKY_NATIVE_BUILD_COMMIT")
+    let build_commit = std::env::var("GITHUB_SHA")
         .ok()
-        .or_else(|| std::env::var("GITHUB_SHA").ok())
         .or_else(|| command_output("git", &["rev-parse", "--verify", "HEAD"]))
+        .or_else(|| std::env::var("SKY_NATIVE_BUILD_COMMIT").ok())
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=SKY_NATIVE_BUILD_COMMIT={build_commit}");
     println!("cargo:rustc-env=SKY_NATIVE_ABI={}", native_abi());

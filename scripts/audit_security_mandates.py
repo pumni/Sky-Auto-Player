@@ -9,6 +9,10 @@ even if dormant or in dead code, crosses an AGENTS.md security mandate:
     P0.2 SENDINPUT ONLY       — only `user32.SendInput` family is legal
     P0.3 STRICT VALIDATION    — runtime import of foothold tooling is denied
 
+Rust's ``windows-sys`` dependency is checked against an explicit module
+allowlist as well.  This keeps a newly added Win32 surface from silently
+expanding the SendInput-only boundary.
+
 The audit is read-only. Findings print to stdout, and exit code is non-zero
 when any unsuppressed violation is found, so it slots directly into CI.
 
@@ -66,6 +70,16 @@ FORBIDDEN_IMPORT_NAMES: frozenset[str] = frozenset(
 FORBIDDEN_DLL_NAMES: frozenset[str] = frozenset(
     {
         "ntdll.dll",
+    }
+)
+ALLOWED_WINDOWS_SYS_MODULES: frozenset[str] = frozenset(
+    {
+        "Win32::Foundation",
+        "Win32::Media",
+        "Win32::System::Performance",
+        "Win32::System::Threading",
+        "Win32::UI::Input::KeyboardAndMouse",
+        "Win32::UI::WindowsAndMessaging",
     }
 )
 
@@ -257,6 +271,10 @@ def scan_rust_file(path: Path) -> list[Finding]:
     dll_pattern = re.compile(
         rf"(?i)\b({'|'.join(re.escape(name) for name in sorted(FORBIDDEN_DLL_NAMES))})\b"
     )
+    windows_sys_pattern = re.compile(
+        r"\bwindows_sys\s*::\s*"
+        r"([A-Za-z0-9_]+(?:\s*::\s*[A-Za-z0-9_]+)*)?"
+    )
 
     findings: list[Finding] = []
     for line_number, line in enumerate(code.splitlines(), start=1):
@@ -279,6 +297,21 @@ def scan_rust_file(path: Path) -> list[Finding]:
                     f"Rust reference to `{match.group(1)}` is process-tampering adjacent.",
                 )
             )
+        for match in windows_sys_pattern.finditer(line):
+            module_path = re.sub(r"\s*::\s*", "::", match.group(1) or "<root>")
+            if not any(
+                module_path == allowed
+                or module_path.startswith(f"{allowed}::")
+                for allowed in ALLOWED_WINDOWS_SYS_MODULES
+            ):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "disallowed-windows-sys-module",
+                        f"`windows_sys::{module_path}` is outside the approved Win32 module allowlist.",
+                    )
+                )
     return findings
 
 

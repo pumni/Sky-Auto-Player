@@ -20,7 +20,7 @@ EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
 
 
 def expected_build_commit(repo_root: Path) -> str:
-    for name in ("SKY_NATIVE_BUILD_COMMIT", "GITHUB_SHA"):
+    for name in ("GITHUB_SHA",):
         value = os.environ.get(name, "").strip()
         if value:
             return value

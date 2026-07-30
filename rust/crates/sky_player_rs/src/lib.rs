@@ -541,6 +541,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("wait_strategy_acquired", snap.wait_strategy_acquired)?;
         dict.set_item("power_throttling_disabled", snap.power_throttling_disabled)?;
         dict.set_item("input_path_degraded", snap.input_path_degraded)?;
+        dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
         dict.set_item("generation_count", snap.generation_count)?;
         dict.set_item("generation_status_counts", snap.generation_status_counts)?;

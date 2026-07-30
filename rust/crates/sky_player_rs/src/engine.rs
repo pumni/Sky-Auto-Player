@@ -61,6 +61,7 @@ pub struct EngineSnapshot {
     pub wait_strategy_acquired: String,
     pub power_throttling_disabled: bool,
     pub input_path_degraded: bool,
+    pub idle_wake_count: u64,
     pub terminal_error: Option<String>,
     pub generation_count: u64,
     pub generation_status_counts: HashMap<String, u64>,
@@ -212,6 +213,7 @@ struct SharedMetrics {
     wait_strategy_acquired: Mutex<String>,
     power_throttling_disabled: AtomicBool,
     input_path_degraded: AtomicBool,
+    idle_wake_count: AtomicU64,
     terminal_error: Mutex<Option<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
     abort_counts_by_reason: Mutex<HashMap<String, u64>>,
@@ -580,6 +582,7 @@ impl NativeDispatchSession {
                 .power_throttling_disabled
                 .load(Ordering::Relaxed),
             input_path_degraded: self.metrics.input_path_degraded.load(Ordering::Acquire),
+            idle_wake_count: self.metrics.idle_wake_count.load(Ordering::Relaxed),
             terminal_error: self.metrics.terminal_error.lock().clone(),
             generation_count: self.generation_count,
             generation_status_counts: self.metrics.generation_status_counts.lock().clone(),
@@ -1228,6 +1231,7 @@ fn run_worker(
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
                     );
+                    metrics.idle_wake_count.fetch_add(1, Ordering::Relaxed);
                     pending_pre_send_spin_us = wait_result.spin_us;
                     if wait_result.outcome == WaitOutcome::Interrupted {
                         pending_pre_send_spin_us = 0;

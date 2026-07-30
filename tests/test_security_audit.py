@@ -72,3 +72,30 @@ def test_rust_scanner_flags_forbidden_api_and_dll(tmp_path: Path) -> None:
         "forbidden-call:SetWindowsHookExW",
         "forbidden-dll-load",
     }
+
+
+def test_rust_scanner_allows_approved_windows_sys_modules(tmp_path: Path) -> None:
+    source = tmp_path / "approved_windows_sys.rs"
+    source.write_text(
+        "use windows_sys::Win32::Foundation::HANDLE;\n"
+        "use windows_sys::Win32::System::Threading::{CloseHandle, WaitForSingleObject};\n"
+        "use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\n",
+        encoding="utf-8",
+    )
+
+    assert AUDIT.scan_rust_file(source) == []
+
+
+def test_rust_scanner_flags_unapproved_windows_sys_module(tmp_path: Path) -> None:
+    source = tmp_path / "unapproved_windows_sys.rs"
+    source.write_text(
+        "use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;\n",
+        encoding="utf-8",
+    )
+
+    rules = {finding.rule for finding in AUDIT.scan_rust_file(source)}
+
+    assert rules == {
+        "forbidden-call:ReadProcessMemory",
+        "disallowed-windows-sys-module",
+    }
