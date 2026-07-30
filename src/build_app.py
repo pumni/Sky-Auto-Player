@@ -293,6 +293,16 @@ def main() -> None:
         except PermissionError as e:
             raise SystemExit(f"[!] Error cleaning DIST_DIR: {e}.\nFix: close any CMD/Explorer windows currently open in {DIST_DIR} and try again.") from e
 
+    rust_dir = PROJECT_ROOT / "rust"
+    if rust_dir.exists():
+        print("[+] Rust workspace detected. Running Rust wheel precheck...")
+        build_script = PROJECT_ROOT / "scripts" / "build_rust_wheel.py"
+        subprocess.run(
+            [sys.executable, str(build_script)],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+        )
+
     print("[+] Starting PyInstaller...")
     clean_flag = [] if args.no_clean else ["--clean"]
     subprocess.run(
