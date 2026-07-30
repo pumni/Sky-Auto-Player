@@ -13,7 +13,7 @@ use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
 use sky_dispatch_win32::power::PowerThrottlingGuard;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use smallvec::SmallVec;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -60,6 +60,7 @@ pub struct EngineSnapshot {
     pub effective_spin_threshold_us: u64,
     pub wait_strategy_acquired: String,
     pub power_throttling_disabled: bool,
+    pub input_path_degraded: bool,
     pub terminal_error: Option<String>,
     pub generation_count: u64,
     pub generation_status_counts: HashMap<String, u64>,
@@ -124,11 +125,13 @@ impl NativeTelemetryOutput {
 
     fn materialize_reasons(&mut self) -> Result<(), String> {
         for record in &mut self.records {
-            let reason = self
-                .reason_table
-                .get(record.reason_id as usize)
-                .ok_or_else(|| "native telemetry reason id is out of bounds".to_string())?;
-            record.reason = Some(reason.clone());
+            if record.reason.is_none() {
+                let reason = self
+                    .reason_table
+                    .get(record.reason_id as usize)
+                    .ok_or_else(|| "native telemetry reason id is out of bounds".to_string())?;
+                record.reason = Some(reason.clone());
+            }
         }
         Ok(())
     }
@@ -208,6 +211,7 @@ struct SharedMetrics {
     effective_spin_threshold_us: AtomicU64,
     wait_strategy_acquired: Mutex<String>,
     power_throttling_disabled: AtomicBool,
+    input_path_degraded: AtomicBool,
     terminal_error: Mutex<Option<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
     abort_counts_by_reason: Mutex<HashMap<String, u64>>,
@@ -237,6 +241,7 @@ struct WorkerConfig {
     spin_floor_us: u64,
     estimator_state_json: Option<String>,
     enable_adaptive_lead: bool,
+    input_path_warn_us: u64,
 }
 
 pub struct NativeDispatchSession {
@@ -289,6 +294,7 @@ impl NativeDispatchSession {
         spin_floor_us: u64,
         estimator_state_json: Option<String>,
         enable_adaptive_lead: bool,
+        input_path_warn_us: u64,
     ) -> Result<Self, String> {
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
@@ -328,6 +334,7 @@ impl NativeDispatchSession {
                 spin_floor_us,
                 estimator_state_json,
                 enable_adaptive_lead,
+                input_path_warn_us,
             })),
             total_us,
             generation_count,
@@ -572,6 +579,7 @@ impl NativeDispatchSession {
                 .metrics
                 .power_throttling_disabled
                 .load(Ordering::Relaxed),
+            input_path_degraded: self.metrics.input_path_degraded.load(Ordering::Acquire),
             terminal_error: self.metrics.terminal_error.lock().clone(),
             generation_count: self.generation_count,
             generation_status_counts: self.metrics.generation_status_counts.lock().clone(),
@@ -714,6 +722,10 @@ fn run_worker(
         .store(effective_spin_threshold_us, Ordering::Relaxed);
     let mut last_spin_probe_us = qpc_now_us();
     let mut last_send_elapsed_us = 0;
+    let mut pending_pre_send_spin_us = 0;
+    let mut send_duration_window = VecDeque::with_capacity(64);
+    let mut send_over_warn_count = 0usize;
+    let mut input_path_warn_started_us = None;
     // Epoch is captured only after all worker-owned real-time resources exist.
     let mut clock_state = PlaybackClockState::new(qpc_now_us(), 0);
     let mut focus_restore_started_us: Option<u64> = None;
@@ -812,24 +824,48 @@ fn run_worker(
                     );
                 }
                 let bookkeeping_completed_us = qpc_now_us();
-                let first = &due_pending[0];
+                let first = due_pending
+                    .iter()
+                    .min_by_key(|pending| {
+                        (
+                            pending.get_effective_release_us(lead_up),
+                            pending.source_action_index,
+                            pending.scan_code,
+                        )
+                    })
+                    .expect("non-empty pending release batch");
+                let scheduled_us = due_pending
+                    .iter()
+                    .map(|pending| pending.scheduled_release_us)
+                    .min()
+                    .unwrap_or(first.scheduled_release_us);
+                let deferred_by_us = due_pending
+                    .iter()
+                    .map(|pending| {
+                        pending
+                            .release_not_before_us
+                            .saturating_sub(pending.scheduled_release_us)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let mixed_source = due_pending.iter().any(|pending| {
+                    pending.source_action_index != first.source_action_index
+                        || pending.reason_id != first.reason_id
+                });
                 telemetry.push(|| NativeTelemetryRecord {
                     event_index: first.source_action_index,
                     dispatch_id: 0,
                     kind: "up",
-                    scheduled_us: first.scheduled_release_us,
+                    scheduled_us,
                     actual_us,
                     dispatch_completed_us: completed_effective,
-                    lateness_us: signed_delta(actual_us, first.scheduled_release_us),
-                    visible_lateness_us: signed_delta(
-                        completed_effective,
-                        first.scheduled_release_us,
-                    ),
+                    lateness_us: signed_delta(actual_us, scheduled_us),
+                    visible_lateness_us: signed_delta(completed_effective, scheduled_us),
                     send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
                     send_duration_pure_us: result.send_completed_us.saturating_sub(started_us),
                     bookkeeping_us: bookkeeping_completed_us
                         .saturating_sub(result.send_completed_us),
-                    dispatch_lateness_us: signed_delta(actual_us, first.scheduled_release_us)
+                    dispatch_lateness_us: signed_delta(actual_us, scheduled_us)
                         .saturating_add(result.send_completed_us.saturating_sub(started_us) as i64),
                     scan_codes: scan_codes.clone(),
                     sent_scan_codes: result.sent.clone(),
@@ -838,23 +874,31 @@ fn run_worker(
                         .iter()
                         .map(|pending| pending.generation_id)
                         .collect(),
-                    runtime_outcome: if first.release_not_before_us > first.scheduled_release_us {
+                    runtime_outcome: if deferred_by_us > 0 {
                         "deferred_release"
                     } else {
                         "sent"
                     },
-                    deferred_by_us: first
-                        .release_not_before_us
-                        .saturating_sub(first.scheduled_release_us),
-                    pre_send_spin_us: 0,
+                    deferred_by_us,
+                    pre_send_spin_us: pending_pre_send_spin_us,
                     idle_gap_us: 0,
                     reason_id: first.reason_id,
-                    reason: None,
+                    reason: mixed_source.then(|| "mixed_deferred_release".to_string()),
                     applied_lead_us: lead_up,
                 });
-                let deferred_release = first.release_not_before_us > first.scheduled_release_us;
+                pending_pre_send_spin_us = 0;
+                record_input_path_health(
+                    bookkeeping_completed_us.saturating_sub(started_us),
+                    completed_effective,
+                    config.input_path_warn_us,
+                    &mut send_duration_window,
+                    &mut send_over_warn_count,
+                    &mut input_path_warn_started_us,
+                    &metrics.input_path_degraded,
+                );
+                let deferred_release = deferred_by_us > 0;
                 record_lateness(
-                    signed_delta(actual_us, first.scheduled_release_us),
+                    signed_delta(actual_us, scheduled_us),
                     true,
                     deferred_release,
                     metrics,
@@ -864,10 +908,11 @@ fn run_worker(
                 continue;
             }
 
+            let next_down_polyphony = coordinator.next_authored_polyphony();
             let lead_down = if config.dispatch_lead_us > 0 {
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Down, 1)
+                estimator.get_lead_us(ActionKind::Down, next_down_polyphony)
             } else {
                 0
             };
@@ -877,13 +922,10 @@ fn run_worker(
                 if batch.kind == ActionKind::Down {
                     // Repeat the foreground comparison at the final boundary
                     // immediately before SendInput. If focus changed after
-                    // the outer-loop sample, restore the authored batch so it
-                    // can run after the focus grace period.
+                    // the outer-loop sample, terminalize this authored batch;
+                    // it must not be replayed after the focus grace period.
                     if !focus_matches(config.require_focus, focus_active, target_hwnd) {
-                        assert!(
-                            coordinator.restore_last_popped_authored(&batch),
-                            "fresh focus gate could not restore the popped batch"
-                        );
+                        coordinator.drop_expired_downs(&batch.intents);
                         let _ = backend.release_all();
                         coordinator.cancel_all();
                         clock_state.enter_pause("focus", now_us);
@@ -1030,7 +1072,7 @@ fn run_worker(
                             estimator.update(
                                 ActionKind::Down,
                                 result.send_completed_us.saturating_sub(started_us),
-                                result.sent.len(),
+                                playable.len(),
                             );
                             estimator.update_completion_error(
                                 ActionKind::Down,
@@ -1073,12 +1115,22 @@ fn run_worker(
                                 "partial_note_on"
                             },
                             deferred_by_us: 0,
-                            pre_send_spin_us: 0,
+                            pre_send_spin_us: pending_pre_send_spin_us,
                             idle_gap_us: 0,
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
                         });
+                        pending_pre_send_spin_us = 0;
+                        record_input_path_health(
+                            bookkeeping_completed_us.saturating_sub(started_us),
+                            completed_effective,
+                            config.input_path_warn_us,
+                            &mut send_duration_window,
+                            &mut send_over_warn_count,
+                            &mut input_path_warn_started_us,
+                            &metrics.input_path_degraded,
+                        );
                         record_lateness(
                             signed_delta(completed_effective, batch.scheduled_us),
                             false,
@@ -1127,10 +1179,11 @@ fn run_worker(
                 continue;
             }
 
+            let next_down_polyphony = coordinator.next_authored_polyphony();
             let lead_down = if config.dispatch_lead_us > 0 {
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Down, 1)
+                estimator.get_lead_us(ActionKind::Down, next_down_polyphony)
             } else {
                 0
             };
@@ -1170,12 +1223,14 @@ fn run_worker(
                     } else {
                         0
                     };
-                    if waiter.wait_until_us(
+                    let wait_result = waiter.wait_until_us_with_metrics(
                         target_qpc,
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
-                    ) == WaitOutcome::Interrupted
-                    {
+                    );
+                    pending_pre_send_spin_us = wait_result.spin_us;
+                    if wait_result.outcome == WaitOutcome::Interrupted {
+                        pending_pre_send_spin_us = 0;
                         continue;
                     }
                 }
@@ -1257,12 +1312,16 @@ fn focus_matches(
     if !require_focus {
         return true;
     }
+    let validated_focus_active = focus_active.load(Ordering::Acquire);
     let target = target_hwnd.load(Ordering::Acquire);
-    if target != 0 {
-        sky_dispatch_win32::focus::foreground_window_matches(target)
-    } else {
-        focus_active.load(Ordering::Acquire)
-    }
+    let foreground_matches =
+        target == 0 || sky_dispatch_win32::focus::foreground_window_matches(target);
+    focus_gate_matches(
+        require_focus,
+        validated_focus_active,
+        target,
+        foreground_matches,
+    )
 }
 
 fn record_lateness(
@@ -1310,6 +1369,62 @@ fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
         .clamp(spin_floor_us, 3_000)
 }
 
+fn record_input_path_health(
+    send_duration_us: u64,
+    elapsed_us: u64,
+    warn_us: u64,
+    window: &mut VecDeque<u64>,
+    over_warn_count: &mut usize,
+    warn_started_us: &mut Option<u64>,
+    degraded: &AtomicBool,
+) {
+    if warn_us == 0 {
+        return;
+    }
+    let evicted = (window.len() == 64).then(|| window[0]);
+    if let Some(value) = evicted
+        && value > warn_us
+    {
+        *over_warn_count = over_warn_count.saturating_sub(1);
+    }
+    let value = send_duration_us;
+    window.push_back(value);
+    if value > warn_us {
+        *over_warn_count += 1;
+    }
+
+    let length = window.len();
+    let required_warn_samples = (0.95_f64 * (length.saturating_sub(1) as f64)).round() as usize;
+    if *over_warn_count
+        <= length
+            .saturating_sub(1)
+            .saturating_sub(required_warn_samples)
+    {
+        *warn_started_us = None;
+        return;
+    }
+    if warn_started_us.is_none() {
+        *warn_started_us = Some(elapsed_us);
+        return;
+    }
+    if elapsed_us.saturating_sub(warn_started_us.unwrap_or(elapsed_us)) >= 1_000_000 {
+        degraded.store(true, Ordering::Release);
+    }
+}
+
+fn focus_gate_matches(
+    require_focus: bool,
+    validated_focus_active: bool,
+    target_hwnd: isize,
+    foreground_matches: bool,
+) -> bool {
+    if !require_focus {
+        return true;
+    }
+    let hwnd_matches = target_hwnd == 0 || foreground_matches;
+    validated_focus_active && hwnd_matches
+}
+
 fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
     metrics
         .active_count
@@ -1334,4 +1449,42 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
     metrics
         .chord_split_events
         .store(backend.chord_split_events, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{focus_gate_matches, record_input_path_health};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn focus_gate_requires_both_validation_and_foreground_match() {
+        assert!(!focus_gate_matches(true, false, 123, true));
+        assert!(!focus_gate_matches(true, true, 123, false));
+        assert!(focus_gate_matches(true, true, 123, true));
+        assert!(focus_gate_matches(true, true, 0, false));
+        assert!(focus_gate_matches(false, false, 123, false));
+    }
+
+    #[test]
+    fn input_path_degraded_is_not_key_drop_state() {
+        let mut window = VecDeque::with_capacity(64);
+        let mut over_warn = 0;
+        let mut started = None;
+        let degraded = AtomicBool::new(false);
+
+        for elapsed_us in (0..=1_010_000).step_by(1_000) {
+            record_input_path_health(
+                400,
+                elapsed_us,
+                300,
+                &mut window,
+                &mut over_warn,
+                &mut started,
+                &degraded,
+            );
+        }
+
+        assert!(degraded.load(Ordering::Acquire));
+    }
 }

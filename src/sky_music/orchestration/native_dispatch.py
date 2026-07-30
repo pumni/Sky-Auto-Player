@@ -106,6 +106,7 @@ class RustDispatchRuntime:
         enable_event_wait: bool,
         enable_adaptive_spin: bool,
         spin_floor_us: int,
+        input_path_warn_us: int,
         enable_adaptive_lead: bool,
         estimator_state_json: str | None,
         require_focus: bool,
@@ -149,6 +150,7 @@ class RustDispatchRuntime:
             enable_adaptive_spin=enable_adaptive_spin,
             enable_spin_reprobe=enable_adaptive_spin,
             spin_floor_us=spin_floor_us,
+            input_path_warn_us=input_path_warn_us,
             enable_adaptive_lead=enable_adaptive_lead,
             estimator_state_json=estimator_state_json,
         )
@@ -282,12 +284,12 @@ class RustDispatchRuntime:
                     max(self._total_us, 1) / 1_000_000,
                     self._song_name,
                     status=status,
-                    input_path_degraded=bool(latest["keys_dropped"]),
+                    input_path_degraded=bool(latest["input_path_degraded"]),
                     backend_health=self._health(latest),
                 )
             time.sleep(self._sleep_s)
 
-        joined = bool(self._session.join(timeout_ms=2_000))
+        joined = bool(self._session.join(timeout_ms=5_000))
         latest = self._session.snapshot()
         if not joined:
             outcome = PLAYBACK_SHUTDOWN_TIMEOUT

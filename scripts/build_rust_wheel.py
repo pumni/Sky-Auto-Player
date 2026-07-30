@@ -1,7 +1,7 @@
 """Build script and gate for native Rust extension wheel (sky_player_rs).
 
-Builds the extension wheel using Maturin under CPython 3.14t, verifies
-wheel tag naming, installs the wheel into the current uv environment, and
+Builds the extension wheel using Maturin under CPython 3.14t, verifies the
+exact wheel tag, installs only that artifact into a clean uv environment, and
 asserts that importing `sky_player_rs` does not re-enable the GIL.
 """
 
@@ -10,7 +10,49 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from packaging.tags import Tag
+from packaging.utils import canonicalize_name, parse_wheel_filename
+
+EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
+
+
+def expected_build_commit(repo_root: Path) -> str:
+    for name in ("SKY_NATIVE_BUILD_COMMIT", "GITHUB_SHA"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    commit = result.stdout.strip()
+    if result.returncode != 0 or not commit:
+        raise RuntimeError("cannot determine expected native build commit")
+    return commit
+
+
+def verify_wheel_name(wheel: Path) -> None:
+    distribution, _version, _build, tags = parse_wheel_filename(wheel.name)
+    if distribution != canonicalize_name("sky_player_rs"):
+        raise RuntimeError(f"unexpected wheel distribution: {distribution}")
+    if tags != {EXPECTED_NATIVE_TAG}:
+        rendered = ", ".join(sorted(str(tag) for tag in tags))
+        raise RuntimeError(
+            "wheel must have exactly the CPython 3.14t Windows x64 tag "
+            f"{EXPECTED_NATIVE_TAG}; found {rendered}"
+        )
+
+
+def clean_venv_python(venv: Path) -> Path:
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
 
 
 def main() -> int:
@@ -61,39 +103,65 @@ def main() -> int:
     latest_wheel = max(wheels, key=os.path.getmtime)
     print(f"[build_rust_wheel] Found built wheel: {latest_wheel.name}")
 
-    # Check wheel filename tags
-    if "cp314" not in latest_wheel.name:
-        print(f"[build_rust_wheel] ERROR: Wheel tag does not contain `cp314`: {latest_wheel.name}", file=sys.stderr)
+    try:
+        verify_wheel_name(latest_wheel)
+    except (ValueError, RuntimeError) as exc:
+        print(f"[build_rust_wheel] ERROR: invalid wheel ABI: {exc}", file=sys.stderr)
         return 1
 
-    # Install wheel into current uv environment
-    print("[build_rust_wheel] Installing wheel via uv pip install...")
-    install_cmd = ["uv", "pip", "install", "--reinstall", str(latest_wheel)]
-    install_res = subprocess.run(install_cmd, cwd=str(repo_root), check=False)
-    if install_res.returncode != 0:
-        # Check if sky_player_rs is already installed and functional (e.g. if .pyd file is locked by a background language server)
-        verify_check = subprocess.run([sys.executable, "-c", "import sky_player_rs; print(sky_player_rs.build_info())"], capture_output=True, text=True)
-        if verify_check.returncode == 0:
-            print("[build_rust_wheel] WARNING: uv pip install reported lock warning, but existing sky_player_rs import is valid and functional.")
-        else:
-            print(f"[build_rust_wheel] ERROR: uv pip install failed with code {install_res.returncode}", file=sys.stderr)
+    expected_commit = expected_build_commit(repo_root)
+    print(f"[build_rust_wheel] Expected build commit: {expected_commit}")
+
+    # Install only the wheel under test into a fresh environment. A failed
+    # reinstall must never be satisfied by a previously installed extension.
+    with tempfile.TemporaryDirectory(prefix="sky-rust-wheel-") as temp_dir:
+        venv = Path(temp_dir) / "venv"
+        create_res = subprocess.run(
+            ["uv", "venv", "--python", sys.executable, str(venv)],
+            cwd=str(repo_root),
+            check=False,
+        )
+        if create_res.returncode != 0:
+            print("[build_rust_wheel] ERROR: failed to create clean verification environment", file=sys.stderr)
+            return create_res.returncode
+        clean_python = clean_venv_python(venv)
+        print("[build_rust_wheel] Installing exact wheel into clean environment...")
+        install_res = subprocess.run(
+            ["uv", "pip", "install", "--python", str(clean_python), "--no-deps", str(latest_wheel)],
+            cwd=str(repo_root),
+            check=False,
+        )
+        if install_res.returncode != 0:
+            print(
+                f"[build_rust_wheel] ERROR: exact wheel install failed with code {install_res.returncode}",
+                file=sys.stderr,
+            )
             return install_res.returncode
 
-    # Verify import and GIL status in a subprocess to ensure clean state
-    test_code = (
-        "import sys, sky_player_rs; "
-        "info = sky_player_rs.build_info(); "
-        "print('build_info:', info); "
-        "gil_after = sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else True; "
-        "print('gil_after_import:', gil_after); "
-        "assert not gil_after, 'GIL was re-enabled by sky_player_rs import!'"
-    )
-
-    print("[build_rust_wheel] Verifying import and GIL status...")
-    test_res = subprocess.run([sys.executable, "-c", test_code], cwd=str(repo_root), check=False)
-    if test_res.returncode != 0:
-        print("[build_rust_wheel] ERROR: Extension verification failed!", file=sys.stderr)
-        return test_res.returncode
+        test_code = (
+            "import os, sys, sky_player_rs; "
+            "info = sky_player_rs.build_info(); "
+            "print('build_info:', info); "
+            "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
+            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
+            "gil_after = sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else True; "
+            "print('gil_after_import:', gil_after); "
+            "assert not gil_after, 'GIL was re-enabled by sky_player_rs import!'"
+        )
+        clean_env = os.environ.copy()
+        clean_env.pop("PYTHONPATH", None)
+        clean_env.pop("VIRTUAL_ENV", None)
+        clean_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+        print("[build_rust_wheel] Verifying exact wheel import, ABI, commit and GIL...")
+        test_res = subprocess.run(
+            [str(clean_python), "-c", test_code],
+            cwd=str(repo_root),
+            env=clean_env,
+            check=False,
+        )
+        if test_res.returncode != 0:
+            print("[build_rust_wheel] ERROR: clean extension verification failed!", file=sys.stderr)
+            return test_res.returncode
 
     print("[build_rust_wheel] Native Rust wheel build & verification PASSED cleanly.")
     return 0

@@ -126,7 +126,7 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         // `requested` is bounded to 15 by the validated caller.
         let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
         let completed_us = crate::clock::qpc_now_us();
-        let win32_error = if inserted == 0 && requested > 0 {
+        let win32_error = if inserted != requested {
             unsafe { windows_sys::Win32::Foundation::GetLastError() }
         } else {
             0

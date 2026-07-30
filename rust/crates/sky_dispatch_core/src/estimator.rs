@@ -308,6 +308,21 @@ mod tests {
     }
 
     #[test]
+    fn polyphony_buckets_are_selected_and_updated_independently() {
+        let mut est = SendLatencyEstimator::new(0.2, 2_000, 6);
+        for _ in 0..5 {
+            est.update(ActionKind::Down, 1_000, 1);
+            est.update(ActionKind::Down, 2_000, 2);
+            est.update(ActionKind::Down, 3_000, 3);
+        }
+
+        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 1_000);
+        assert_eq!(est.get_lead_us(ActionKind::Down, 2), 2_000);
+        assert_eq!(est.get_lead_us(ActionKind::Down, 3), 2_000);
+        assert_eq!(est.get_lead_us(ActionKind::Down, 99), 2_000);
+    }
+
+    #[test]
     fn test_estimator_state_round_trip_preserves_negative_residual_sum() {
         let mut source = SendLatencyEstimator::new(0.2, 2000, 2);
         for _ in 0..5 {

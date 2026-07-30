@@ -607,6 +607,7 @@ class PlaybackEngine:
             enable_event_wait=self.enable_event_wait,
             enable_adaptive_spin=self.enable_adaptive_spin,
             spin_floor_us=self.spin_floor_us,
+            input_path_warn_us=self.input_path_warn_us,
             enable_adaptive_lead=self.enable_adaptive_lead,
             estimator_state_json=(
                 json.dumps(self.estimator.export_state())
@@ -696,7 +697,11 @@ class PlaybackEngine:
                 temporary = cache_file.with_suffix(".tmp")
                 temporary.write_text(estimator_state_json, encoding="utf-8")
                 temporary.replace(cache_file)
-        self._input_path_degraded = bool(snapshot["keys_dropped"])
+        self.telemetry.record_input_path_health(
+            degraded=bool(snapshot["input_path_degraded"]),
+            warn_us=self.input_path_warn_us,
+        )
+        self._input_path_degraded = bool(snapshot["input_path_degraded"])
         return outcome
 
     def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:

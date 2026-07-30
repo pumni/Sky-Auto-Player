@@ -290,7 +290,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "degraded", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "degraded", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -314,6 +314,7 @@ impl NativeDispatchSessionPy {
         spin_floor_us: StrictU64,
         estimator_state_json: Option<&str>,
         enable_adaptive_lead: bool,
+        input_path_warn_us: StrictU64,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
         let max_lead_us = max_lead_us.0;
@@ -325,6 +326,7 @@ impl NativeDispatchSessionPy {
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         let spin_floor_us = spin_floor_us.0;
+        let input_path_warn_us = input_path_warn_us.0;
         if min_hold_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "min_hold_us must be at most 60000000",
@@ -355,6 +357,11 @@ impl NativeDispatchSessionPy {
         }
         if spin_floor_us > 3_000 {
             return Err(PyValueError::new_err("spin_floor_us must be at most 3000"));
+        }
+        if input_path_warn_us > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "input_path_warn_us must be at most 60000000",
+            ));
         }
         if estimator_state_json.is_some_and(|raw| raw.len() > 64 * 1024) {
             return Err(PyValueError::new_err(
@@ -425,6 +432,7 @@ impl NativeDispatchSessionPy {
             spin_floor_us,
             estimator_state_json.map(str::to_string),
             enable_adaptive_lead,
+            input_path_warn_us,
         )
         .map_err(PyRuntimeError::new_err)?;
 
@@ -502,7 +510,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
         dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
         dict.set_item("pyo3_version", "0.29.0")?;
-        dict.set_item("native_abi", "cp314t-win_amd64")?;
+        dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
         dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
         dict.set_item("elapsed_us", snap.elapsed_us)?;
         dict.set_item("total_us", snap.total_us)?;
@@ -532,6 +540,7 @@ impl NativeDispatchSessionPy {
         )?;
         dict.set_item("wait_strategy_acquired", snap.wait_strategy_acquired)?;
         dict.set_item("power_throttling_disabled", snap.power_throttling_disabled)?;
+        dict.set_item("input_path_degraded", snap.input_path_degraded)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
         dict.set_item("generation_count", snap.generation_count)?;
         dict.set_item("generation_status_counts", snap.generation_status_counts)?;
@@ -599,7 +608,7 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("native_schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("pyo3_version", "0.29.0")?;
-    dict.set_item("native_abi", "cp314t-win_amd64")?;
+    dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
     dict.set_item("free_threaded", true)?;
     dict.set_item("win32_backend", sky_dispatch_win32::win32_available())?;

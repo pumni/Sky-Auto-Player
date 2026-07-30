@@ -34,6 +34,51 @@ impl GenerationStatus {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{GenerationStatus, RuntimeDispatchCoordinator};
+    use crate::compile::compile_runtime_intents;
+    use crate::model::{ActionKind, KeyActionInput};
+
+    #[test]
+    fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let (batch, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("down batch is due");
+
+        coordinator.drop_expired_downs(&batch.intents);
+
+        assert!(coordinator.pop_next_due_authored(0, 0).is_none());
+        assert_eq!(
+            coordinator
+                .generation_status_counts()
+                .get(GenerationStatus::DroppedExpired.as_str()),
+            Some(&1)
+        );
+    }
+}
+
 pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
     GenerationStatus::Scheduled,
     GenerationStatus::Active,
@@ -133,6 +178,16 @@ impl RuntimeDispatchCoordinator {
             return Some(batch.scheduled_us);
         }
         Some(batch.scheduled_us.saturating_sub(lead))
+    }
+
+    /// Polyphony of the next authored down batch, used to select its lead
+    /// before the batch is popped from the schedule.
+    pub fn next_authored_polyphony(&self) -> usize {
+        self.schedule
+            .batches
+            .get(self.cursor)
+            .filter(|batch| batch.kind == ActionKind::Down)
+            .map_or(1, |batch| batch.intents.len())
     }
 
     pub fn next_pending_release_us(&self, lead_up: u64) -> Option<u64> {
@@ -250,19 +305,6 @@ impl RuntimeDispatchCoordinator {
         let popped = self.schedule.batches[self.cursor].clone();
         self.cursor += 1;
         Some((popped, lead))
-    }
-
-    /// Put back the most recently popped authored batch when a final
-    /// platform-side safety gate blocks dispatch before any key transition.
-    pub fn restore_last_popped_authored(&mut self, batch: &RuntimeBatch) -> bool {
-        let Some(previous_cursor) = self.cursor.checked_sub(1) else {
-            return false;
-        };
-        if self.schedule.batches[previous_cursor].packet_id != batch.packet_id {
-            return false;
-        }
-        self.cursor = previous_cursor;
-        true
     }
 
     pub fn activate_sent_downs(

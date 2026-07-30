@@ -10,6 +10,12 @@ pub enum WaitOutcome {
     Interrupted,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WaitResult {
+    pub outcome: WaitOutcome,
+    pub spin_us: u64,
+}
+
 pub struct HybridWaiter {
     timer: Option<WaitableTimer>,
     _timer_resolution: Option<TimerResolutionGuard>,
@@ -49,17 +55,35 @@ impl HybridWaiter {
         spin_threshold_us: u64,
         interrupt: &OwnedEvent,
     ) -> WaitOutcome {
+        self.wait_until_us_with_metrics(target_us, spin_threshold_us, interrupt)
+            .outcome
+    }
+
+    pub fn wait_until_us_with_metrics(
+        &self,
+        target_us: u64,
+        spin_threshold_us: u64,
+        interrupt: &OwnedEvent,
+    ) -> WaitResult {
+        let mut spin_started_us = None;
         loop {
             if self.event_wait_enabled && interrupt.try_take() {
-                return WaitOutcome::Interrupted;
+                return WaitResult {
+                    outcome: WaitOutcome::Interrupted,
+                    spin_us: 0,
+                };
             }
 
             let now_us = qpc_now_us();
             if now_us >= target_us {
-                return WaitOutcome::Deadline;
+                return WaitResult {
+                    outcome: WaitOutcome::Deadline,
+                    spin_us: spin_started_us.map_or(0, |started| now_us.saturating_sub(started)),
+                };
             }
             let remaining_us = target_us - now_us;
             if remaining_us <= spin_threshold_us {
+                spin_started_us.get_or_insert(now_us);
                 std::hint::spin_loop();
                 continue;
             }
@@ -81,7 +105,10 @@ impl HybridWaiter {
                     let result =
                         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, u32::MAX) };
                     if result == WAIT_OBJECT_0 {
-                        return WaitOutcome::Interrupted;
+                        return WaitResult {
+                            outcome: WaitOutcome::Interrupted,
+                            spin_us: 0,
+                        };
                     }
                     if result == WAIT_OBJECT_0 + 1 {
                         continue;
