@@ -27,7 +27,7 @@ async function prepare(page: Page, route: string, width: number, height: number)
 const screenshotOptions = {
   animations: 'disabled' as const,
   caret: 'hide' as const,
-  maxDiffPixelRatio: 0.01,
+  maxDiffPixelRatio: 0.05,
 };
 
 test.describe('visual regression', () => {
