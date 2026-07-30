@@ -12,11 +12,11 @@ smallvec = "1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
     "Win32_System_Performance",
     "Win32_Media_Multimedia",
     "Win32_System_Power",
-    "Win32_System_LibraryLoader",
 ] }

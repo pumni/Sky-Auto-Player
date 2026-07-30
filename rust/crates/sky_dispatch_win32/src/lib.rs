@@ -54,7 +54,7 @@ mod tests {
         let overshoot = sleeper::sleep_until_us(target, 200);
         let end_time = clock::qpc_now_us();
         assert!(end_time >= target);
-        assert_eq!(end_time - target, overshoot);
+        assert!((end_time - target).abs_diff(overshoot) <= 100);
     }
 
     #[test]

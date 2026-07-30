@@ -75,14 +75,17 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
             };
         }
 
-        let packets: Vec<INPUT> = scan_codes
+        let packets: SmallVec<[INPUT; 15]> = scan_codes
             .iter()
             .map(|&sc| create_keyboard_input(sc, key_up))
             .collect();
         let requested = packets.len() as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
 
-        let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) };
+        // SAFETY: `packets` owns `requested` contiguous, correctly aligned INPUT
+        // values and remains alive and immobile for the duration of SendInput.
+        // `requested` is bounded to 15 by the validated caller.
+        let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
         let completed_us = crate::clock::qpc_now_us();
         let win32_error = if inserted == 0 && requested > 0 {
             unsafe { windows_sys::Win32::Foundation::GetLastError() }
@@ -120,7 +123,7 @@ where
     }
     let n = scan_codes.len();
     let res1 = send_fn(scan_codes, false);
-    let landed1 = res1.inserted as usize;
+    let landed1 = (res1.inserted as usize).min(n);
 
     if landed1 >= n {
         let sent: SmallVec<[u16; 15]> = scan_codes.iter().copied().collect();
@@ -130,7 +133,7 @@ where
     // Call 2: immediate remainder retry
     let remainder = &scan_codes[landed1..];
     let res2 = send_fn(remainder, false);
-    let landed2 = res2.inserted as usize;
+    let landed2 = (res2.inserted as usize).min(remainder.len());
 
     let total_landed = landed1 + landed2;
     let success = total_landed == n;
@@ -144,9 +147,14 @@ pub fn emit_down(scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool, u64) {
     emit_down_with(scan_codes, send_input_raw)
 }
 
-pub fn emit_up_with<F>(scan_codes: &[u16], mut send_fn: F) -> (SmallVec<[u16; 15]>, u64, bool)
+fn emit_up_with_and_sleep<F, S>(
+    scan_codes: &[u16],
+    mut send_fn: F,
+    mut sleep_fn: S,
+) -> (SmallVec<[u16; 15]>, u64, bool)
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
+    S: FnMut(),
 {
     if scan_codes.is_empty() {
         return (SmallVec::new(), crate::clock::qpc_now_us(), true);
@@ -160,7 +168,7 @@ where
         let remainder = &scan_codes[sent_total..];
         let res = send_fn(remainder, true);
         last_completed_us = res.completed_us;
-        let inserted = res.inserted as usize;
+        let inserted = (res.inserted as usize).min(remainder.len());
 
         if inserted > 0 {
             sent_total += inserted;
@@ -170,13 +178,22 @@ where
             if zero_progress_count >= 3 {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            sleep_fn();
         }
     }
 
     let success = sent_total == n;
     let sent: SmallVec<[u16; 15]> = scan_codes[..sent_total].iter().copied().collect();
     (sent, last_completed_us, success)
+}
+
+pub fn emit_up_with<F>(scan_codes: &[u16], send_fn: F) -> (SmallVec<[u16; 15]>, u64, bool)
+where
+    F: FnMut(&[u16], bool) -> PlatformSendResult,
+{
+    emit_up_with_and_sleep(scan_codes, send_fn, || {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    })
 }
 
 pub fn emit_up(scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool) {
@@ -429,5 +446,68 @@ impl TrackedKeyState {
         let outcome = self.release_all();
         let _ = self.do_emit_up(&PHYSICAL_INSTRUMENT_SCAN_CODES);
         outcome
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn scripted_result(requested: usize, inserted: u32, completed_us: u64) -> PlatformSendResult {
+        PlatformSendResult {
+            requested: requested as u32,
+            inserted,
+            completed_us,
+            win32_error: 0,
+        }
+    }
+
+    #[test]
+    fn down_retry_matrix_is_exact_and_clamped() {
+        for (script, expected_sent, expected_calls, expected_success) in [
+            (vec![3], 3, 1, true),
+            (vec![2, 1], 3, 2, true),
+            (vec![0, 0], 0, 2, false),
+            (vec![1, 1], 2, 2, false),
+            (vec![99], 3, 1, true),
+        ] {
+            let mut returns = VecDeque::from(script);
+            let mut calls = 0;
+            let (sent, _, success, dropped) = emit_down_with(&[2, 3, 4], |codes, _| {
+                calls += 1;
+                scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
+            });
+            assert_eq!(sent.len(), expected_sent);
+            assert_eq!(calls, expected_calls);
+            assert_eq!(success, expected_success);
+            assert_eq!(dropped, (3 - expected_sent) as u64);
+        }
+    }
+
+    #[test]
+    fn up_retry_matrix_resets_progress_and_bounds_zero_progress() {
+        for (script, expected_sent, expected_calls, expected_sleeps, expected_success) in [
+            (vec![1, 1, 1], 3, 3, 0, true),
+            (vec![0, 1, 2], 3, 3, 1, true),
+            (vec![0, 0, 0], 0, 3, 2, false),
+            (vec![99], 3, 1, 0, true),
+        ] {
+            let mut returns = VecDeque::from(script);
+            let mut calls = 0;
+            let mut sleeps = 0;
+            let (sent, _, success) = emit_up_with_and_sleep(
+                &[2, 3, 4],
+                |codes, _| {
+                    calls += 1;
+                    scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
+                },
+                || sleeps += 1,
+            );
+            assert_eq!(sent.len(), expected_sent);
+            assert_eq!(calls, expected_calls);
+            assert_eq!(sleeps, expected_sleeps);
+            assert_eq!(success, expected_success);
+        }
     }
 }

@@ -227,9 +227,8 @@ impl SendLatencyEstimator {
         {
             return Err("estimator bucket arrays do not match max_poly".to_string());
         }
-        let valid_lead = |value: f64| {
-            value.is_finite() && value >= 0.0 && value <= self.max_lead_us as f64
-        };
+        let valid_lead =
+            |value: f64| value.is_finite() && value >= 0.0 && value <= self.max_lead_us as f64;
         if !state.ema_down.iter().copied().all(valid_lead)
             || !valid_lead(state.ema_down_total)
             || !valid_lead(state.ema_up)
@@ -251,8 +250,7 @@ impl SendLatencyEstimator {
         self.ema_down = state.ema_down;
         self.ema_down.extend(std::iter::repeat_n(0.0, pad));
         self.warm_down = state.warm_down;
-        self.warm_down
-            .extend(std::iter::repeat_n(false, pad));
+        self.warm_down.extend(std::iter::repeat_n(false, pad));
         self.count_down = state.count_down;
         self.count_down.extend(std::iter::repeat_n(0, pad));
         self.sum_down = state.sum_down;
