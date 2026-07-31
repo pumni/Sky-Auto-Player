@@ -7,6 +7,7 @@ asserts that importing `sky_player_rs` does not re-enable the GIL.
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -19,11 +20,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
 
 
-def expected_build_commit(repo_root: Path) -> str:
-    for name in ("GITHUB_SHA",):
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
+def git_head(repo_root: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
         cwd=str(repo_root),
@@ -33,8 +30,39 @@ def expected_build_commit(repo_root: Path) -> str:
     )
     commit = result.stdout.strip()
     if result.returncode != 0 or not commit:
-        raise RuntimeError("cannot determine expected native build commit")
+        raise RuntimeError("cannot determine checkout HEAD")
     return commit
+
+
+def git_status(repo_root: Path) -> str:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("cannot determine checkout cleanliness")
+    return result.stdout.strip()
+
+
+def expected_build_commit(repo_root: Path, *, allow_dirty: bool = False) -> str:
+    head = git_head(repo_root)
+    reported = os.environ.get("GITHUB_SHA", "").strip()
+    dirty = bool(git_status(repo_root))
+
+    if reported and reported != head:
+        message = f"GITHUB_SHA {reported} does not match checkout HEAD {head}"
+        if not allow_dirty:
+            raise RuntimeError(message)
+        print(f"[build_rust_wheel] WARNING: {message}", file=sys.stderr)
+    if dirty and not allow_dirty:
+        raise RuntimeError(
+            "native release build requires a clean working tree; "
+            "use --allow-dirty-development-build only for local development"
+        )
+    return f"{head}-dirty" if dirty else head
 
 
 def verify_wheel_name(wheel: Path) -> None:
@@ -56,6 +84,13 @@ def clean_venv_python(venv: Path) -> Path:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-dirty-development-build",
+        action="store_true",
+        help="allow a local dirty build and mark its native commit metadata with -dirty",
+    )
+    args = parser.parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     rust_dir = repo_root / "rust"
 
@@ -71,7 +106,14 @@ def main() -> int:
             print("[build_rust_wheel] WARNING: Interpreter has GIL enabled!", file=sys.stderr)
 
     cargo_manifest = rust_dir / "crates" / "sky_player_rs" / "Cargo.toml"
-    expected_commit = expected_build_commit(repo_root)
+    try:
+        expected_commit = expected_build_commit(
+            repo_root,
+            allow_dirty=args.allow_dirty_development_build,
+        )
+    except RuntimeError as exc:
+        print(f"[build_rust_wheel] ERROR: {exc}", file=sys.stderr)
+        return 1
     print(f"[build_rust_wheel] Expected build commit: {expected_commit}")
     print(f"[build_rust_wheel] Building wheel via maturin (manifest={cargo_manifest})...")
 

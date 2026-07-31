@@ -1524,6 +1524,7 @@ mod tests {
     #[test]
     fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
         let mut window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
+        let initial_capacity = window.capacity();
         let mut over_warn = 0;
         let mut started = None;
         let degraded = AtomicBool::new(false);
@@ -1541,7 +1542,7 @@ mod tests {
         }
 
         assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
-        assert_eq!(window.capacity(), INPUT_PATH_WINDOW_CAPACITY);
+        assert_eq!(window.capacity(), initial_capacity);
         assert_eq!(over_warn, INPUT_PATH_WINDOW_CAPACITY);
 
         for _ in 0..INPUT_PATH_WINDOW_CAPACITY {
