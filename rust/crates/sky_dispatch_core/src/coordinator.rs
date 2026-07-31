@@ -42,7 +42,7 @@ impl GenerationStatus {
 mod tests {
     use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
-    use crate::model::{ActionKind, KeyActionInput, PacketId};
+    use crate::model::{ActionKind, KeyActionInput};
 
     #[test]
     fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -66,7 +66,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
         let (batch, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down batch is due");
@@ -104,7 +104,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
 
         let (first, _) = coordinator
             .pop_next_due_authored(0, 2_000)
@@ -148,7 +148,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
@@ -209,7 +209,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
@@ -267,7 +267,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
 
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
@@ -319,7 +319,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down is due");
@@ -441,8 +441,12 @@ pub struct RuntimeDispatchCoordinator {
     terminal_counts: HashMap<GenerationStatus, u64>,
     generation_count: u64,
     recovery_offset_us: u64,
+    /// Pre-wired for P1.3 tick-domain refactor; not yet read by any method.
+    #[allow(dead_code)]
     recovery_offset_ticks: DurationTicks,
     release_recovery_started_us: Option<u64>,
+    /// Pre-wired for P1.3 tick-domain refactor; not yet read by any method.
+    #[allow(dead_code)]
     release_recovery_started_ticks: Option<TimelineTicks>,
 }
 

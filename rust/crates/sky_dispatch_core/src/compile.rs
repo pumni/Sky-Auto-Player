@@ -1,6 +1,7 @@
 //! Generation compiler for turning authored KeyAction sequences into RuntimeSchedule.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use crate::model::*;

@@ -466,6 +466,7 @@ mod platform {
 
                 let (lock, cvar) = ctx.shared.as_ref();
                 if let Ok(mut guard) = lock.lock() {
+                    #[allow(clippy::collapsible_if)]
                     if guard.active_sequence == Some(seq_id) {
                         guard.pending_receipts.push(receipt);
                         cvar.notify_one();

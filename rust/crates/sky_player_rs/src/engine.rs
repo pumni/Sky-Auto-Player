@@ -2262,7 +2262,7 @@ fn update_estimator_after_send_class(
     }
     estimator.update_with_class(kind, duration_us, authored_polyphony, latency_class);
     if applied_lead_us > 0 {
-        estimator.update_completion_error(kind, completion_error_us);
+        estimator.update_completion_error_with_class(kind, completion_error_us, latency_class);
     }
 }
 
