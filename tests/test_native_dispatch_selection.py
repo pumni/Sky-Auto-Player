@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from sky_music.domain import Song
@@ -29,16 +32,25 @@ def _production_engine() -> PlaybackEngine:
     )
 
 
-def test_native_dispatch_feature_flag_selects_real_windows_path(monkeypatch) -> None:
+def test_native_dispatch_legacy_feature_flag_selects_real_windows_path(monkeypatch) -> None:
     monkeypatch.delenv("SKY_USE_PYTHON_DISPATCH", raising=False)
     monkeypatch.setenv("SKY_USE_RUST_DISPATCH", "1")
     monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
     assert _production_engine()._should_use_native_dispatch() is True
 
 
-def test_native_dispatch_missing_extension_fails_closed(monkeypatch) -> None:
+def test_native_dispatch_missing_extension_falls_back_to_python(monkeypatch) -> None:
     monkeypatch.delenv("SKY_USE_PYTHON_DISPATCH", raising=False)
-    monkeypatch.setenv("SKY_USE_RUST_DISPATCH", "1")
+    monkeypatch.delenv("SKY_REQUIRE_RUST_DISPATCH", raising=False)
+    monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: False)
+    engine = _production_engine()
+    assert engine._should_use_native_dispatch() is False
+    assert engine.telemetry.runtime_options["rust_dispatch_fallback"] is True
+
+
+def test_native_dispatch_required_mode_fails_closed(monkeypatch) -> None:
+    monkeypatch.delenv("SKY_USE_PYTHON_DISPATCH", raising=False)
+    monkeypatch.setenv("SKY_REQUIRE_RUST_DISPATCH", "1")
     monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: False)
     with pytest.raises(RuntimeError, match="Native Rust dispatch is unavailable"):
         _production_engine()._should_use_native_dispatch()
@@ -51,8 +63,50 @@ def test_python_dispatch_requires_explicit_rollback_switch(monkeypatch) -> None:
     assert _production_engine()._should_use_native_dispatch() is False
 
 
-def test_python_dispatch_remains_default_until_soak_signoff(monkeypatch) -> None:
+def test_native_dispatch_is_default_when_eligible(monkeypatch) -> None:
     monkeypatch.delenv("SKY_USE_PYTHON_DISPATCH", raising=False)
     monkeypatch.delenv("SKY_USE_RUST_DISPATCH", raising=False)
     monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
-    assert _production_engine()._should_use_native_dispatch() is False
+    assert _production_engine()._should_use_native_dispatch() is True
+
+
+def test_native_dispatch_rejects_stale_build_id(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "sky_player_rs",
+        SimpleNamespace(
+            build_info=lambda: {
+                "schema_version": 1,
+                "native_schema_version": 1,
+                "native_abi": "cp314t-win_amd64",
+                "native_build_commit": "old-commit",
+                "free_threaded": True,
+                "win32_backend": True,
+            }
+        ),
+    )
+    monkeypatch.setattr(native_dispatch, "_expected_native_build_id", lambda: "new-commit")
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False, raising=False)
+    native_dispatch.reset_native_dispatch_availability_cache()
+    assert native_dispatch.is_native_dispatch_available() is False
+
+
+def test_native_dispatch_accepts_exact_build_id_and_abi(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "sky_player_rs",
+        SimpleNamespace(
+            build_info=lambda: {
+                "schema_version": 1,
+                "native_schema_version": 1,
+                "native_abi": "cp314t-win_amd64",
+                "native_build_commit": "new-commit",
+                "free_threaded": True,
+                "win32_backend": True,
+            }
+        ),
+    )
+    monkeypatch.setattr(native_dispatch, "_expected_native_build_id", lambda: "new-commit")
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False, raising=False)
+    native_dispatch.reset_native_dispatch_availability_cache()
+    assert native_dispatch.is_native_dispatch_available() is True

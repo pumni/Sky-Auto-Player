@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import threading
 from collections import Counter
 from collections.abc import Callable
@@ -84,6 +85,8 @@ from sky_music.orchestration.runtime_dispatch import (
     compile_runtime_intents,
 )
 from sky_music.orchestration.telemetry import TelemetryLogger
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SendLatencyEstimator:
@@ -562,17 +565,15 @@ class PlaybackEngine:
         )
 
     def _should_use_native_dispatch(self) -> bool:
-        """Select Rust only for the real Windows production sender path."""
+        """Select Rust by default for the eligible real Windows sender path."""
         from sky_music.infrastructure.backend import WinSendInputBackend
         from sky_music.orchestration.native_dispatch import (
             is_native_dispatch_available,
-            native_dispatch_explicitly_requested,
+            native_dispatch_required,
             python_dispatch_explicitly_requested,
         )
 
         if python_dispatch_explicitly_requested():
-            return False
-        if not native_dispatch_explicitly_requested():
             return False
         eligible = (
             isinstance(self.backend, WinSendInputBackend)
@@ -581,10 +582,27 @@ class PlaybackEngine:
             and self.use_dispatch_thread
         )
         if eligible and not is_native_dispatch_available():
-            raise RuntimeError(
-                "Native Rust dispatch is unavailable. Reinstall the application, or set "
-                "SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+            reason = "missing or incompatible native extension"
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "dispatch_backend": "python",
+                    "rust_dispatch_default": True,
+                    "rust_dispatch_fallback": True,
+                    "rust_dispatch_fallback_reason": reason,
+                }
             )
+            _LOGGER.warning(
+                "Rust dispatch unavailable (%s); falling back to Python dispatcher. "
+                "Set SKY_REQUIRE_RUST_DISPATCH=1 to fail closed.",
+                reason,
+            )
+            if native_dispatch_required():
+                raise RuntimeError(
+                    "Native Rust dispatch is unavailable. Reinstall the application, or set "
+                    "SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+                )
+            return False
         return eligible
 
     def _play_native(self) -> str:

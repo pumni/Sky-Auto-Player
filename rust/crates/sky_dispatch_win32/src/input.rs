@@ -146,12 +146,12 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         // inherits an unrelated error from earlier worker activity.
         unsafe { SetLastError(0) };
         let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
-        let completed_us = crate::clock::qpc_now_us();
         let win32_error = if inserted != requested {
             unsafe { windows_sys::Win32::Foundation::GetLastError() }
         } else {
             0
         };
+        let completed_us = crate::clock::qpc_now_us();
 
         PlatformSendResult {
             requested,

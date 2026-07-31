@@ -90,7 +90,9 @@ Gate: frozen app startup/playback/selftests.
 ## Phase 7 — Rust default, Python fallback
 
 - default Rust on supported Windows 3.14t;
-- fallback only by explicit env/CLI internal diagnostic flag;
+- fallback automatically when the native extension is missing/incompatible, with
+  `SKY_USE_PYTHON_DISPATCH=1` as the explicit rollback switch and
+  `SKY_REQUIRE_RUST_DISPATCH=1` as the fail-closed validation switch;
 - production telemetry records backend implementation/version;
 - soak testing across song corpus/FPS/profiles/focus/pause/panic;
 - publish migration notes.

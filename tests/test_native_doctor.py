@@ -22,11 +22,7 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
         SimpleNamespace(build_info=lambda: info),
     )
     monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
-    monkeypatch.setattr(
-        native_dispatch,
-        "native_dispatch_explicitly_requested",
-        lambda: False,
-    )
+    monkeypatch.setattr(native_dispatch, "native_dispatch_required", lambda: False)
     monkeypatch.setattr(
         native_dispatch,
         "python_dispatch_explicitly_requested",
@@ -43,11 +39,7 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
 
 def test_native_doctor_marks_explicit_missing_module_as_required(monkeypatch) -> None:
     monkeypatch.delitem(sys.modules, "sky_player_rs", raising=False)
-    monkeypatch.setattr(
-        native_dispatch,
-        "native_dispatch_explicitly_requested",
-        lambda: True,
-    )
+    monkeypatch.setattr(native_dispatch, "native_dispatch_required", lambda: True)
     monkeypatch.setattr(
         native_dispatch,
         "python_dispatch_explicitly_requested",
@@ -68,4 +60,4 @@ def test_native_doctor_marks_explicit_missing_module_as_required(monkeypatch) ->
 
     assert result["ok"] is False
     assert result["required"] is True
-    assert "explicitly requested" in result["msg"]
+    assert "is required" in result["msg"]

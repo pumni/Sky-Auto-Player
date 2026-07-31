@@ -1,6 +1,6 @@
 pub mod engine;
 
-use engine::NativeDispatchSession;
+use engine::{MockFailureMode, NativeDispatchSession};
 use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -298,7 +298,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "degraded", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300)))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "degraded", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), mock_failure_mode = "none"))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -323,6 +323,7 @@ impl NativeDispatchSessionPy {
         estimator_state_json: Option<&str>,
         enable_adaptive_lead: bool,
         input_path_warn_us: StrictU64,
+        mock_failure_mode: &str,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
         let max_lead_us = max_lead_us.0;
@@ -335,6 +336,21 @@ impl NativeDispatchSessionPy {
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         let spin_floor_us = spin_floor_us.0;
         let input_path_warn_us = input_path_warn_us.0;
+        let mock_failure_mode = match mock_failure_mode {
+            "none" => MockFailureMode::None,
+            "transient_release" if mock_backend => MockFailureMode::TransientRelease,
+            "persistent_release" if mock_backend => MockFailureMode::PersistentRelease,
+            "transient_release" | "persistent_release" => {
+                return Err(PyValueError::new_err(
+                    "mock_failure_mode requires mock_backend=True",
+                ));
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "mock_failure_mode must be 'none', 'transient_release', or 'persistent_release'",
+                ));
+            }
+        };
         if min_hold_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "min_hold_us must be at most 60000000",
@@ -424,6 +440,7 @@ impl NativeDispatchSessionPy {
             dispatch_lead_us,
             allowed_scan_codes,
             mock_backend,
+            mock_failure_mode,
             require_focus,
             focus_restore_grace_us,
             spin_threshold_us,

@@ -57,6 +57,8 @@ windows_version_info.txt
 
 # Build-generated version file (rewritten by build_app.py)
 src/sky_music/_version.py
+# Build-generated native extension provenance (rewritten by build_app.py)
+src/sky_music/_native_build.py
 
 # Local uv environment overrides (copy from .env.example)
 .env

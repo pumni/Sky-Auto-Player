@@ -39,7 +39,7 @@ thread owns controls/focus/rendering and must never call into the backend
 ### 2.1 The `orchestration/core/` package (the isolated dispatch seam)
 
 The Python reference core lives in `orchestration/core/`; the native worker replaces this seam
-when `SKY_USE_RUST_DISPATCH=1`. `orchestration/dispatch_loop.py` and
+by default on the eligible real Windows path. `orchestration/dispatch_loop.py` and
 `orchestration/runtime_dispatch.py` remain thin re-export shims and the differential oracle.
 The native adapter must not duplicate coordinator state, calculate deadlines, or call SendInput.
 
@@ -176,11 +176,11 @@ worker teardown.
 
 ### 5.1 Native rollout boundary
 
-The native implementation is intentionally not the default yet. `SKY_USE_RUST_DISPATCH=1`
-selects it only for the real Windows backend with the production clock/sleeper/thread mode.
-Dry-run, fake-clock tests, and explicit `SKY_USE_PYTHON_DISPATCH=1` use the Python oracle.
-Phase 7 may invert the default only after Windows E2E, frozen-app, timing, stuck-key, and agreed
-soak gates are recorded; extension absence must never silently change an explicitly selected run.
+The native implementation is default on only for the real Windows backend with the production
+clock/sleeper/thread mode. Dry-run, fake-clock tests, and explicit
+`SKY_USE_PYTHON_DISPATCH=1` use the Python oracle. Missing or incompatible native metadata falls
+back to Python and records a runtime warning; `SKY_REQUIRE_RUST_DISPATCH=1` is the fail-closed
+validation switch. The Python dispatcher remains available as the rollback path.
 
 ## 6. Production defaults & kill switches
 

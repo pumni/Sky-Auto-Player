@@ -109,21 +109,19 @@ def check_calibration_cache() -> dict:
 
 
 def check_native_dispatch() -> dict[str, Any]:
-    """Report native module/toolchain/ABI status without making Rust mandatory."""
+    """Report native module/toolchain/ABI status for the default-on sender."""
     from sky_music.orchestration.native_dispatch import (
         is_native_dispatch_available,
-        native_dispatch_explicitly_requested,
+        native_dispatch_required,
         python_dispatch_explicitly_requested,
     )
 
-    explicitly_enabled = (
-        native_dispatch_explicitly_requested()
-        and not python_dispatch_explicitly_requested()
-    )
+    rollback_enabled = python_dispatch_explicitly_requested()
+    explicitly_required = native_dispatch_required() and not rollback_enabled
     status: dict[str, Any] = {
         "ok": False,
-        "required": explicitly_enabled,
-        "enabled": explicitly_enabled,
+        "required": explicitly_required,
+        "enabled": not rollback_enabled,
         "available": False,
         "msg": "",
     }
@@ -134,7 +132,7 @@ def check_native_dispatch() -> dict[str, Any]:
         status.update(info)
         status["available"] = is_native_dispatch_available()
         status["ok"] = status["available"]
-        mode = "enabled" if explicitly_enabled else "installed (soak opt-in is off)"
+        mode = "rollback forced" if rollback_enabled else "default-on"
         status["msg"] = (
             f"Rust dispatch {mode}; core={info.get('rust_core_version', 'unknown')}, "
             f"rustc={info.get('rustc_version', 'unknown')}, "
@@ -148,7 +146,7 @@ def check_native_dispatch() -> dict[str, Any]:
     except (ImportError, AttributeError, RuntimeError, TypeError) as exc:
         status["msg"] = (
             "Rust dispatch module is unavailable"
-            + (" but was explicitly requested" if explicitly_enabled else "")
+            + (" but is required" if explicitly_required else "")
             + f": {exc}"
         )
     return status

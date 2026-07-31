@@ -281,6 +281,70 @@ def test_native_dispatch_telemetry_marks_deferred_release() -> None:
     assert [row["reason"] for row in output["records"]] == ["down", "up"]
 
 
+def test_native_worker_retries_transient_note_off_before_same_key_down() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15], "down-1"),
+            (1, "up", 1_000, [0x15], "up-1"),
+            (2, "down", 12_000, [0x15], "down-2"),
+        ],
+        [0x15],
+        min_hold_us=0,
+        mock_backend=True,
+        mock_failure_mode="transient_release",
+        telemetry_enabled=True,
+    )
+    session.start()
+    assert session.join() is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
+    records = output["records"]
+
+    assert snapshot["status"] == "finished"
+    assert snapshot["active_count"] == 0
+    assert snapshot["failed_release_count"] == 0
+    assert any(row["runtime_outcome"] == "failed_note_off" for row in records)
+    assert any(
+        row["event_index"] == 1
+        and row["runtime_outcome"] in {"sent", "deferred_release"}
+        for row in records
+    )
+    assert any(
+        row["event_index"] == 2 and row["runtime_outcome"] == "sent"
+        for row in records
+    )
+
+
+def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15], "down-1"),
+            (1, "up", 1_000, [0x15], "up-1"),
+            (2, "down", 6_000, [0x15], "down-2"),
+        ],
+        [0x15],
+        min_hold_us=0,
+        mock_backend=True,
+        mock_failure_mode="persistent_release",
+        telemetry_enabled=True,
+    )
+    session.start()
+    assert session.join() is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
+
+    assert snapshot["status"] == "finished"
+    assert snapshot["outcome"] == "error"
+    assert "note-off recovery exhausted" in snapshot["terminal_error"]
+    assert snapshot["release_outcome"]["released_successfully"] is False
+    assert not any(
+        row["event_index"] == 2 and row["runtime_outcome"] == "sent"
+        for row in output["records"]
+    )
+
+
 def test_native_dispatch_fixed_lead_overrides_adaptive_estimator() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [(0, "down", 5_000, [0x15], "lead")],

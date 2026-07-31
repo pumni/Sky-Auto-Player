@@ -34,6 +34,16 @@ const SEND_COLD_THRESHOLD_US: u64 = 20_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 
+/// Test-only emitter behavior used by the native worker integration tests.
+/// It is reachable only when the PyO3 caller explicitly selects the mock
+/// backend, and never changes the real SendInput path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MockFailureMode {
+    None,
+    TransientRelease,
+    PersistentRelease,
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub elapsed_us: u64,
@@ -238,6 +248,7 @@ struct WorkerConfig {
     dispatch_lead_us: u64,
     allowed_count: usize,
     mock_backend: bool,
+    mock_failure_mode: MockFailureMode,
     require_focus: bool,
     focus_restore_grace_us: u64,
     spin_threshold_us: u64,
@@ -291,6 +302,7 @@ impl NativeDispatchSession {
         dispatch_lead_us: u64,
         allowed_scan_codes: Vec<u16>,
         mock_backend: bool,
+        mock_failure_mode: MockFailureMode,
         require_focus: bool,
         focus_restore_grace_us: u64,
         spin_threshold_us: u64,
@@ -331,6 +343,7 @@ impl NativeDispatchSession {
                 dispatch_lead_us,
                 allowed_count: allowed_scan_codes.len(),
                 mock_backend,
+                mock_failure_mode,
                 require_focus,
                 focus_restore_grace_us,
                 spin_threshold_us,
@@ -697,11 +710,25 @@ fn run_worker(
     latency_tx: &Sender<i64>,
 ) -> u8 {
     let mut backend = if config.mock_backend {
-        TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
-            requested: codes.len() as u32,
-            inserted: codes.len() as u32,
-            completed_us: qpc_now_us(),
-            win32_error: 0,
+        let failure_mode = config.mock_failure_mode;
+        let release_failures = Arc::new(AtomicU8::new(0));
+        let emitter_failures = Arc::clone(&release_failures);
+        TrackedKeyState::with_emitter(move |codes, key_up| {
+            let should_fail = match failure_mode {
+                MockFailureMode::None => false,
+                MockFailureMode::TransientRelease => {
+                    key_up && emitter_failures.fetch_add(1, Ordering::Relaxed) < 3
+                }
+                MockFailureMode::PersistentRelease => key_up,
+            };
+            PlatformSendResult {
+                requested: codes.len() as u32,
+                inserted: if should_fail { 0 } else { codes.len() as u32 },
+                completed_us: qpc_now_us(),
+                // ERROR_TIMEOUT is representative of a transient native
+                // insertion failure and is surfaced as observed diagnostics.
+                win32_error: if should_fail { 1460 } else { 0 },
+            }
         })
     } else {
         TrackedKeyState::new()
@@ -833,7 +860,7 @@ fn run_worker(
                     &due_pending,
                     &result.sent,
                     &result.skipped_duplicates,
-                    effective_now_us,
+                    completed_effective,
                     result.last_win32_error,
                 );
                 coordinator.complete_releases(
@@ -1556,12 +1583,11 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
         .failed_release_count
         .store(backend.failed_release_keys.len() as u64, Ordering::Relaxed);
     // The healthy dispatch path never takes this lock. Error text is
-    // published only after the backend has entered a degraded state.
-    if let Some(error) = &backend.last_error {
-        let mut published = metrics.last_error.lock();
-        if published.as_deref() != Some(error.as_str()) {
-            *published = Some(error.clone());
-        }
+    // published only when the backend error state changes, including the
+    // transition back to None after a successful recovery.
+    let mut published = metrics.last_error.lock();
+    if published.as_ref() != backend.last_error.as_ref() {
+        *published = backend.last_error.clone();
     }
     metrics
         .chord_split_events
