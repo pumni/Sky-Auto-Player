@@ -35,6 +35,10 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
                     "idle_gap_us": 0,
                     "reason": "note",
                     "applied_lead_us": 100,
+                    "first_win32_error": 5,
+                    "last_win32_error": 1460,
+                    "send_attempts": 3,
+                    "zero_progress_retries": 2,
                 }
             ],
         }
@@ -46,6 +50,10 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["send_duration_pure_us"] == 10
     assert row["bookkeeping_us"] == 2
     assert row["generation_ids"] == "1"
+    assert row["first_win32_error"] == 5
+    assert row["last_win32_error"] == 1460
+    assert row["send_attempts"] == 3
+    assert row["zero_progress_retries"] == 2
 
 
 def test_native_terminal_counters_replace_python_placeholders() -> None:

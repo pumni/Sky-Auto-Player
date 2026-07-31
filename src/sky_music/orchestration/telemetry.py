@@ -18,6 +18,14 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 200_000
 
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("native telemetry integer field is invalid")
+    return value
+
 _CSV_FIELDS: list[str] = [
     "song",
     "event_index",
@@ -43,6 +51,10 @@ _CSV_FIELDS: list[str] = [
     "idle_gap_us",
     "reason",
     "applied_lead_us",
+    "first_win32_error",
+    "last_win32_error",
+    "send_attempts",
+    "zero_progress_retries",
 ]
 
 _CSV_INT_FIELDS: frozenset[str] = frozenset(
@@ -62,6 +74,10 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "pre_send_spin_us",
         "idle_gap_us",
         "applied_lead_us",
+        "first_win32_error",
+        "last_win32_error",
+        "send_attempts",
+        "zero_progress_retries",
     }
 )
 
@@ -77,21 +93,25 @@ class TelemetryRecord:
         "dispatch_id",
         "dispatch_lateness_us",
         "event_index",
+        "first_win32_error",
         "generation_ids",
         "idle_gap_us",
         "kind",
+        "last_win32_error",
         "lateness_us",
         "pre_send_spin_us",
         "reason",
         "runtime_outcome",
         "scan_codes",
         "scheduled_us",
+        "send_attempts",
         "send_duration_pure_us",
         "send_duration_us",
         "sent_scan_codes",
         "skipped_scan_codes",
         "song_name",
         "visible_lateness_us",
+        "zero_progress_retries",
     )
 
     def __init__(
@@ -119,6 +139,10 @@ class TelemetryRecord:
         send_duration_pure_us: int = 0,
         bookkeeping_us: int = 0,
         dispatch_lateness_us: int = 0,
+        first_win32_error: int | None = None,
+        last_win32_error: int | None = None,
+        send_attempts: int = 0,
+        zero_progress_retries: int = 0,
     ) -> None:
         self._dict = None
         self.song_name = song_name
@@ -144,6 +168,10 @@ class TelemetryRecord:
         self.send_duration_pure_us = send_duration_pure_us
         self.bookkeeping_us = bookkeeping_us
         self.dispatch_lateness_us = dispatch_lateness_us
+        self.first_win32_error = first_win32_error
+        self.last_win32_error = last_win32_error
+        self.send_attempts = send_attempts
+        self.zero_progress_retries = zero_progress_retries
 
     def _materialize(self) -> dict:
         if self._dict is None:
@@ -180,6 +208,10 @@ class TelemetryRecord:
                 "idle_gap_us": self.idle_gap_us,
                 "reason": self.reason,
                 "applied_lead_us": self.applied_lead_us,
+                "first_win32_error": self.first_win32_error,
+                "last_win32_error": self.last_win32_error,
+                "send_attempts": self.send_attempts,
+                "zero_progress_retries": self.zero_progress_retries,
                 "send_duration_pure_us": self.send_duration_pure_us,
                 "bookkeeping_us": self.bookkeeping_us,
                 "dispatch_lateness_us": self.dispatch_lateness_us,
@@ -310,6 +342,10 @@ class TelemetryLogger:
         idle_gap_us: int = 0,
         visible_lateness_us: int | None = None,
         applied_lead_us: int = 0,
+        first_win32_error: int | None = None,
+        last_win32_error: int | None = None,
+        send_attempts: int = 0,
+        zero_progress_retries: int = 0,
     ) -> None:
         send_duration_pure_us = 0
         bookkeeping_us = 0
@@ -331,6 +367,10 @@ class TelemetryLogger:
             deferred_by_us = getattr(result, "deferred_by_us", 0)
             visible_lateness_us = result.visible_lateness_us
             applied_lead_us = result.applied_lead_us
+            first_win32_error = getattr(result, "first_win32_error", None)
+            last_win32_error = getattr(result, "last_win32_error", None)
+            send_attempts = getattr(result, "send_attempts", 0)
+            zero_progress_retries = getattr(result, "zero_progress_retries", 0)
             send_duration_pure_us = getattr(result, "send_duration_pure_us", 0)
             bookkeeping_us = getattr(result, "bookkeeping_us", 0)
             dispatch_lateness_us = getattr(result, "dispatch_lateness_us", 0)
@@ -377,6 +417,10 @@ class TelemetryLogger:
                 send_duration_pure_us,
                 bookkeeping_us,
                 dispatch_lateness_us,
+                first_win32_error,
+                last_win32_error,
+                send_attempts,
+                zero_progress_retries,
             )
         )
         self._accepted_record_count += 1
@@ -433,6 +477,10 @@ class TelemetryLogger:
                     int(row["send_duration_pure_us"]),
                     int(row["bookkeeping_us"]),
                     int(row["dispatch_lateness_us"]),
+                    _optional_int(row.get("first_win32_error")),
+                    _optional_int(row.get("last_win32_error")),
+                    int(row.get("send_attempts", 0)),
+                    int(row.get("zero_progress_retries", 0)),
                 )
             )
             self._accepted_record_count += 1

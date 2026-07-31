@@ -1106,7 +1106,9 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     assert record.get("reason") == "onset"
     assert record.get("nonexistent", "default") == "default"
     assert "song" in record
-    assert len(record) == 24
+    # Four structured native SendInput diagnostics are part of the retained
+    # telemetry record: first/last Win32 error and retry counters.
+    assert len(record) == 28
 
     # Assert keys/items/values are correct
     assert "song" in record

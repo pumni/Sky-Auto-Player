@@ -39,6 +39,10 @@ def test_rust_input_backend_basic_lifecycle() -> None:
     assert res_down["success"] is True
     assert res_down["sent"] == [0x15, 0x16]
     assert res_down["skipped_duplicates"] == []
+    assert res_down["first_win32_error"] is None
+    assert res_down["last_win32_error"] is None
+    assert res_down["send_attempts"] == 1
+    assert res_down["zero_progress_retries"] == 0
 
     health = cast(dict[str, Any], backend.get_health())
     assert health["active_count"] == 2
@@ -54,6 +58,10 @@ def test_rust_input_backend_basic_lifecycle() -> None:
     assert res_up["success"] is True
     assert res_up["sent"] == [0x15]
     assert res_up["skipped_duplicates"] == []
+    assert res_up["first_win32_error"] is None
+    assert res_up["last_win32_error"] is None
+    assert res_up["send_attempts"] == 1
+    assert res_up["zero_progress_retries"] == 0
 
     health = cast(dict[str, Any], backend.get_health())
     assert health["active_count"] == 1

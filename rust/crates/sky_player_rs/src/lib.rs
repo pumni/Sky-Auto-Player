@@ -222,6 +222,10 @@ impl RustInputBackend {
         dict.set_item("success", res.success)?;
         dict.set_item("error", res.error)?;
         dict.set_item("send_completed_us", res.send_completed_us)?;
+        dict.set_item("first_win32_error", res.first_win32_error)?;
+        dict.set_item("last_win32_error", res.last_win32_error)?;
+        dict.set_item("send_attempts", res.send_attempts)?;
+        dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
         Ok(dict)
     }
 
@@ -239,6 +243,10 @@ impl RustInputBackend {
         dict.set_item("success", res.success)?;
         dict.set_item("error", res.error)?;
         dict.set_item("send_completed_us", res.send_completed_us)?;
+        dict.set_item("first_win32_error", res.first_win32_error)?;
+        dict.set_item("last_win32_error", res.last_win32_error)?;
+        dict.set_item("send_attempts", res.send_attempts)?;
+        dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
         Ok(dict)
     }
 

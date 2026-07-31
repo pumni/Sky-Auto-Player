@@ -219,6 +219,10 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
         "bookkeeping_us",
         "runtime_outcome",
         "generation_ids",
+        "first_win32_error",
+        "last_win32_error",
+        "send_attempts",
+        "zero_progress_retries",
     }
     with pytest.raises(RuntimeError):
         session.take_telemetry_json()

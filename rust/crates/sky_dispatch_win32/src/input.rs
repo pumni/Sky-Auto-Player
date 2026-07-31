@@ -66,6 +66,22 @@ pub struct InputSendResult {
     pub success: bool,
     pub error: Option<String>,
     pub send_completed_us: u64,
+    pub first_win32_error: Option<u32>,
+    pub last_win32_error: Option<u32>,
+    pub send_attempts: u8,
+    pub zero_progress_retries: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmitResult {
+    pub sent: SmallVec<[u16; 15]>,
+    pub completed_us: u64,
+    pub success: bool,
+    pub keys_dropped: u64,
+    pub first_win32_error: Option<u32>,
+    pub last_win32_error: Option<u32>,
+    pub send_attempts: u8,
+    pub zero_progress_retries: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,62 +166,102 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     }
 }
 
-pub fn emit_down_with<F>(
-    scan_codes: &[u16],
-    mut send_fn: F,
-) -> (SmallVec<[u16; 15]>, u64, bool, u64)
+pub fn emit_down_with<F>(scan_codes: &[u16], mut send_fn: F) -> EmitResult
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
-        return (SmallVec::new(), crate::clock::qpc_now_us(), true, 0);
+        return EmitResult {
+            sent: SmallVec::new(),
+            completed_us: crate::clock::qpc_now_us(),
+            success: true,
+            keys_dropped: 0,
+            first_win32_error: None,
+            last_win32_error: None,
+            send_attempts: 0,
+            zero_progress_retries: 0,
+        };
     }
     let n = scan_codes.len();
     let res1 = send_fn(scan_codes, false);
     let landed1 = (res1.inserted as usize).min(n);
+    let first_win32_error = (res1.win32_error != 0).then_some(res1.win32_error);
 
     if landed1 >= n {
         let sent: SmallVec<[u16; 15]> = scan_codes.iter().copied().collect();
-        return (sent, res1.completed_us, true, 0);
+        return EmitResult {
+            sent,
+            completed_us: res1.completed_us,
+            success: true,
+            keys_dropped: 0,
+            first_win32_error,
+            last_win32_error: first_win32_error,
+            send_attempts: 1,
+            zero_progress_retries: 0,
+        };
     }
 
     // Call 2: immediate remainder retry
     let remainder = &scan_codes[landed1..];
     let res2 = send_fn(remainder, false);
     let landed2 = (res2.inserted as usize).min(remainder.len());
+    let last_win32_error = (res2.win32_error != 0).then_some(res2.win32_error);
 
     let total_landed = landed1 + landed2;
     let success = total_landed == n;
     let keys_dropped = (n - total_landed) as u64;
 
     let sent: SmallVec<[u16; 15]> = scan_codes[..total_landed].iter().copied().collect();
-    (sent, res2.completed_us, success, keys_dropped)
+    EmitResult {
+        sent,
+        completed_us: res2.completed_us,
+        success,
+        keys_dropped,
+        first_win32_error: first_win32_error.or(last_win32_error),
+        last_win32_error: last_win32_error.or(first_win32_error),
+        send_attempts: 2,
+        zero_progress_retries: 0,
+    }
 }
 
-pub fn emit_down(scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool, u64) {
+pub fn emit_down(scan_codes: &[u16]) -> EmitResult {
     emit_down_with(scan_codes, send_input_raw)
 }
 
-fn emit_up_with_and_sleep<F, S>(
-    scan_codes: &[u16],
-    mut send_fn: F,
-    mut sleep_fn: S,
-) -> (SmallVec<[u16; 15]>, u64, bool)
+fn emit_up_with_and_sleep<F, S>(scan_codes: &[u16], mut send_fn: F, mut sleep_fn: S) -> EmitResult
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
     S: FnMut(),
 {
     if scan_codes.is_empty() {
-        return (SmallVec::new(), crate::clock::qpc_now_us(), true);
+        return EmitResult {
+            sent: SmallVec::new(),
+            completed_us: crate::clock::qpc_now_us(),
+            success: true,
+            keys_dropped: 0,
+            first_win32_error: None,
+            last_win32_error: None,
+            send_attempts: 0,
+            zero_progress_retries: 0,
+        };
     }
     let n = scan_codes.len();
     let mut sent_total = 0;
     let mut zero_progress_count = 0;
+    let mut zero_progress_retries: u8 = 0;
+    let mut send_attempts: u8 = 0;
+    let mut first_win32_error = None;
+    let mut last_win32_error = None;
     let mut last_completed_us = crate::clock::qpc_now_us();
 
     while sent_total < n {
         let remainder = &scan_codes[sent_total..];
         let res = send_fn(remainder, true);
+        send_attempts = send_attempts.saturating_add(1);
+        if let Some(error) = (res.win32_error != 0).then_some(res.win32_error) {
+            first_win32_error.get_or_insert(error);
+            last_win32_error = Some(error);
+        }
         last_completed_us = res.completed_us;
         let inserted = (res.inserted as usize).min(remainder.len());
 
@@ -217,16 +273,26 @@ where
             if zero_progress_count >= 3 {
                 break;
             }
+            zero_progress_retries = zero_progress_retries.saturating_add(1);
             sleep_fn();
         }
     }
 
     let success = sent_total == n;
     let sent: SmallVec<[u16; 15]> = scan_codes[..sent_total].iter().copied().collect();
-    (sent, last_completed_us, success)
+    EmitResult {
+        sent,
+        completed_us: last_completed_us,
+        success,
+        keys_dropped: (n - sent_total) as u64,
+        first_win32_error,
+        last_win32_error,
+        send_attempts,
+        zero_progress_retries,
+    }
 }
 
-pub fn emit_up_with<F>(scan_codes: &[u16], send_fn: F) -> (SmallVec<[u16; 15]>, u64, bool)
+pub fn emit_up_with<F>(scan_codes: &[u16], send_fn: F) -> EmitResult
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
@@ -235,7 +301,7 @@ where
     })
 }
 
-pub fn emit_up(scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool) {
+pub fn emit_up(scan_codes: &[u16]) -> EmitResult {
     emit_up_with(scan_codes, send_input_raw)
 }
 
@@ -294,7 +360,7 @@ impl TrackedKeyState {
         }
     }
 
-    fn do_emit_down(&mut self, scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool, u64) {
+    fn do_emit_down(&mut self, scan_codes: &[u16]) -> EmitResult {
         if let Some(ref emitter) = self.custom_emitter {
             emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up))
         } else {
@@ -302,7 +368,7 @@ impl TrackedKeyState {
         }
     }
 
-    fn do_emit_up(&mut self, scan_codes: &[u16]) -> (SmallVec<[u16; 15]>, u64, bool) {
+    fn do_emit_up(&mut self, scan_codes: &[u16]) -> EmitResult {
         if let Some(ref emitter) = self.custom_emitter {
             emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up))
         } else {
@@ -318,6 +384,10 @@ impl TrackedKeyState {
                 success: true,
                 error: None,
                 send_completed_us: crate::clock::qpc_now_us(),
+                first_win32_error: None,
+                last_win32_error: None,
+                send_attempts: 0,
+                zero_progress_retries: 0,
             };
         }
 
@@ -339,6 +409,10 @@ impl TrackedKeyState {
                 success: true,
                 error: None,
                 send_completed_us: crate::clock::qpc_now_us(),
+                first_win32_error: None,
+                last_win32_error: None,
+                send_attempts: 0,
+                zero_progress_retries: 0,
             };
         }
 
@@ -346,10 +420,10 @@ impl TrackedKeyState {
             self.possibly_active_keys.insert(sc);
         }
 
-        let (sent, completed_us, success, dropped) = self.do_emit_down(&to_send);
-        self.keys_dropped += dropped;
+        let emitted = self.do_emit_down(&to_send);
+        self.keys_dropped += emitted.keys_dropped;
 
-        for &sc in &sent {
+        for &sc in &emitted.sent {
             self.active_keys.insert(sc);
         }
 
@@ -357,31 +431,39 @@ impl TrackedKeyState {
             self.possibly_active_keys.remove(&sc);
         }
 
-        if !success && !sent.is_empty() {
+        if !emitted.success && !emitted.sent.is_empty() {
             self.chord_split_events += 1;
         }
-        if success {
+        if emitted.success {
             if self.failed_release_keys.is_empty() {
                 self.last_error = None;
             }
         } else {
             self.last_error = Some(format!(
                 "partial note-on: {} of {} keys dropped",
-                dropped,
+                emitted.keys_dropped,
                 to_send.len()
             ));
         }
 
         InputSendResult {
-            sent,
+            sent: emitted.sent,
             skipped_duplicates: duplicates,
-            success,
-            error: if success {
+            success: emitted.success,
+            error: if emitted.success {
                 None
             } else {
-                Some(format!("partial note-on: {}/{}", dropped, to_send.len()))
+                Some(format!(
+                    "partial note-on: {}/{}",
+                    emitted.keys_dropped,
+                    to_send.len()
+                ))
             },
-            send_completed_us: completed_us,
+            send_completed_us: emitted.completed_us,
+            first_win32_error: emitted.first_win32_error,
+            last_win32_error: emitted.last_win32_error,
+            send_attempts: emitted.send_attempts,
+            zero_progress_retries: emitted.zero_progress_retries,
         }
     }
 
@@ -393,6 +475,10 @@ impl TrackedKeyState {
                 success: true,
                 error: None,
                 send_completed_us: crate::clock::qpc_now_us(),
+                first_win32_error: None,
+                last_win32_error: None,
+                send_attempts: 0,
+                zero_progress_retries: 0,
             };
         }
 
@@ -417,26 +503,30 @@ impl TrackedKeyState {
                 success: true,
                 error: None,
                 send_completed_us: crate::clock::qpc_now_us(),
+                first_win32_error: None,
+                last_win32_error: None,
+                send_attempts: 0,
+                zero_progress_retries: 0,
             };
         }
 
-        let (sent, completed_us, success) = self.do_emit_up(&to_release);
+        let emitted = self.do_emit_up(&to_release);
 
-        for &sc in &sent {
+        for &sc in &emitted.sent {
             self.active_keys.remove(&sc);
             self.possibly_active_keys.remove(&sc);
             self.failed_release_keys.remove(&sc);
         }
 
-        if !success {
+        if !emitted.success {
             for &sc in &to_release {
-                if !sent.contains(&sc) {
+                if !emitted.sent.contains(&sc) {
                     self.failed_release_keys.insert(sc);
                 }
             }
             self.last_error = Some(format!(
                 "partial note-off: {}/{}",
-                sent.len(),
+                emitted.sent.len(),
                 to_release.len()
             ));
         } else if self.failed_release_keys.is_empty() {
@@ -444,15 +534,19 @@ impl TrackedKeyState {
         }
 
         InputSendResult {
-            sent,
+            sent: emitted.sent,
             skipped_duplicates: already_released,
-            success,
-            error: if success {
+            success: emitted.success,
+            error: if emitted.success {
                 None
             } else {
                 Some("partial note-off".to_string())
             },
-            send_completed_us: completed_us,
+            send_completed_us: emitted.completed_us,
+            first_win32_error: emitted.first_win32_error,
+            last_win32_error: emitted.last_win32_error,
+            send_attempts: emitted.send_attempts,
+            zero_progress_retries: emitted.zero_progress_retries,
         }
     }
 
@@ -477,8 +571,8 @@ impl TrackedKeyState {
         let mut released_successfully = false;
 
         for pass_idx in 0..3 {
-            let (sent, _ts, success) = self.do_emit_up(&attempted);
-            if success && sent.len() == attempted.len() {
+            let emitted = self.do_emit_up(&attempted);
+            if emitted.success && emitted.sent.len() == attempted.len() {
                 released_successfully = true;
                 break;
             }
@@ -548,7 +642,9 @@ impl TrackedKeyState {
     pub fn release_all_full_instrument(&mut self) -> ReleaseAllOutcome {
         let _tracked_outcome = self.release_all();
         let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
-        let (sent, _completed_us, send_success) = self.do_emit_up(&attempted);
+        let emitted = self.do_emit_up(&attempted);
+        let sent = emitted.sent;
+        let send_success = emitted.success;
         let mut release_successful = send_success;
         let mut verification_inconclusive = false;
         let mut stuck: Vec<u16> = attempted
@@ -570,7 +666,7 @@ impl TrackedKeyState {
         if !stuck.is_empty() {
             for delay_ms in [50, 100] {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                let (retry_sent, _, _) = self.do_emit_up(&stuck);
+                let retry_sent = self.do_emit_up(&stuck).sent;
                 stuck.retain(|scan_code| {
                     if !retry_sent.contains(scan_code) {
                         return true;
@@ -645,14 +741,14 @@ mod tests {
         ] {
             let mut returns = VecDeque::from(script);
             let mut calls = 0;
-            let (sent, _, success, dropped) = emit_down_with(&[2, 3, 4], |codes, _| {
+            let emitted = emit_down_with(&[2, 3, 4], |codes, _| {
                 calls += 1;
                 scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
             });
-            assert_eq!(sent.len(), expected_sent);
+            assert_eq!(emitted.sent.len(), expected_sent);
             assert_eq!(calls, expected_calls);
-            assert_eq!(success, expected_success);
-            assert_eq!(dropped, (3 - expected_sent) as u64);
+            assert_eq!(emitted.success, expected_success);
+            assert_eq!(emitted.keys_dropped, (3 - expected_sent) as u64);
         }
     }
 
@@ -667,7 +763,7 @@ mod tests {
             let mut returns = VecDeque::from(script);
             let mut calls = 0;
             let mut sleeps = 0;
-            let (sent, _, success) = emit_up_with_and_sleep(
+            let emitted = emit_up_with_and_sleep(
                 &[2, 3, 4],
                 |codes, _| {
                     calls += 1;
@@ -675,11 +771,55 @@ mod tests {
                 },
                 || sleeps += 1,
             );
-            assert_eq!(sent.len(), expected_sent);
+            assert_eq!(emitted.sent.len(), expected_sent);
             assert_eq!(calls, expected_calls);
             assert_eq!(sleeps, expected_sleeps);
-            assert_eq!(success, expected_success);
+            assert_eq!(emitted.success, expected_success);
         }
+    }
+
+    #[test]
+    fn structured_win32_errors_survive_down_retry() {
+        let mut calls = 0;
+        let emitted = emit_down_with(&[2, 3], |codes, _| {
+            calls += 1;
+            PlatformSendResult {
+                requested: codes.len() as u32,
+                inserted: 1,
+                completed_us: calls,
+                win32_error: if calls == 1 { 5 } else { 0 },
+            }
+        });
+
+        assert!(emitted.success);
+        assert_eq!(emitted.first_win32_error, Some(5));
+        assert_eq!(emitted.last_win32_error, Some(5));
+        assert_eq!(emitted.send_attempts, 2);
+        assert_eq!(emitted.zero_progress_retries, 0);
+    }
+
+    #[test]
+    fn structured_win32_errors_survive_up_zero_progress_retries() {
+        let mut calls = 0;
+        let emitted = emit_up_with_and_sleep(
+            &[2],
+            |codes, _| {
+                calls += 1;
+                PlatformSendResult {
+                    requested: codes.len() as u32,
+                    inserted: 0,
+                    completed_us: calls,
+                    win32_error: if calls == 1 { 5 } else { 1460 },
+                }
+            },
+            || {},
+        );
+
+        assert!(!emitted.success);
+        assert_eq!(emitted.first_win32_error, Some(5));
+        assert_eq!(emitted.last_win32_error, Some(1460));
+        assert_eq!(emitted.send_attempts, 3);
+        assert_eq!(emitted.zero_progress_retries, 2);
     }
 
     #[test]

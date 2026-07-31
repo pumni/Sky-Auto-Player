@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -38,3 +39,35 @@ def test_dirty_development_build_is_explicitly_marked(monkeypatch: pytest.Monkey
         BUILD.expected_build_commit(Path("."), allow_dirty=True)
         == "head-commit-dirty"
     )
+
+
+def test_clean_matching_sha_returns_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
+    monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")
+    monkeypatch.setenv("GITHUB_SHA", "head-commit")
+
+    assert BUILD.expected_build_commit(Path(".")) == "head-commit"
+
+
+def test_clean_without_reported_sha_returns_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
+    monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    assert BUILD.expected_build_commit(Path(".")) == "head-commit"
+
+
+def test_dirty_release_build_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
+    monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "?? new.rs")
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    with pytest.raises(RuntimeError, match="requires a clean working tree"):
+        BUILD.expected_build_commit(Path("."))
+
+
+def test_main_returns_failure_when_provenance_gate_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(BUILD, "expected_build_commit", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("stale")))
+    monkeypatch.setattr(sys, "argv", ["build_rust_wheel.py"])
+
+    assert BUILD.main() == 1

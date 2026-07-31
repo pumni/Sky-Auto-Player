@@ -96,6 +96,10 @@ pub struct NativeTelemetryRecord {
     pub reason_id: u16,
     pub reason: Option<String>,
     pub applied_lead_us: u64,
+    pub first_win32_error: Option<u32>,
+    pub last_win32_error: Option<u32>,
+    pub send_attempts: u8,
+    pub zero_progress_retries: u8,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -108,6 +112,9 @@ pub struct NativeTelemetryOutput {
     #[serde(skip)]
     reason_table: Vec<String>,
 }
+
+const MIXED_RELEASE_REASON: &str = "mixed_deferred_release";
+const MIXED_RELEASE_REASON_ID: u16 = u16::MAX;
 
 impl NativeTelemetryOutput {
     fn new(enabled: bool, capacity: usize, reason_table: Vec<String>) -> Self {
@@ -131,8 +138,11 @@ impl NativeTelemetryOutput {
                 let reason = self
                     .reason_table
                     .get(record.reason_id as usize)
+                    .map(String::as_str)
+                    .or((record.reason_id == MIXED_RELEASE_REASON_ID)
+                        .then_some(MIXED_RELEASE_REASON))
                     .ok_or_else(|| "native telemetry reason id is out of bounds".to_string())?;
-                record.reason = Some(reason.clone());
+                record.reason = Some(reason.to_string());
             }
         }
         Ok(())
@@ -143,6 +153,7 @@ struct TelemetryCollector {
     enabled: bool,
     capacity: usize,
     output: NativeTelemetryOutput,
+    mixed_release_reason_id: u16,
     next_dispatch_id: u64,
     last_completed_us: Option<u64>,
 }
@@ -153,6 +164,7 @@ impl TelemetryCollector {
             enabled,
             capacity,
             output: NativeTelemetryOutput::new(enabled, capacity, reason_table),
+            mixed_release_reason_id: MIXED_RELEASE_REASON_ID,
             next_dispatch_id: 0,
             last_completed_us: None,
         }
@@ -185,8 +197,6 @@ impl TelemetryCollector {
 
 #[derive(Clone, Copy, Debug)]
 enum WorkerCommand {
-    Pause,
-    Resume,
     Skip,
     Quit,
     PanicRelease,
@@ -480,7 +490,8 @@ impl NativeDispatchSession {
             return Err("session commands require a running worker".to_string());
         }
         self.desired_pause.store(true, Ordering::Release);
-        self.send_command(WorkerCommand::Pause)
+        let _ = self.interrupt.signal();
+        Ok(())
     }
 
     pub fn resume(&self) -> Result<(), String> {
@@ -488,7 +499,8 @@ impl NativeDispatchSession {
             return Err("session commands require a running worker".to_string());
         }
         self.desired_pause.store(false, Ordering::Release);
-        self.send_command(WorkerCommand::Resume)
+        let _ = self.interrupt.signal();
+        Ok(())
     }
 
     pub fn skip(&self) -> Result<(), String> {
@@ -736,13 +748,7 @@ fn run_worker(
 
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         while !coordinator.is_finished() {
-            drain_commands(
-                rx,
-                desired_pause,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-            );
+            drain_commands(rx, quit_requested, skip_requested, panic_requested);
             if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
                 break;
             }
@@ -860,6 +866,11 @@ fn run_worker(
                     pending.source_action_index != first.source_action_index
                         || pending.reason_id != first.reason_id
                 });
+                let reason_id = if mixed_source {
+                    telemetry.mixed_release_reason_id
+                } else {
+                    first.reason_id
+                };
                 telemetry.push(|| NativeTelemetryRecord {
                     event_index: first.source_action_index,
                     dispatch_id: 0,
@@ -890,9 +901,13 @@ fn run_worker(
                     deferred_by_us,
                     pre_send_spin_us: pending_pre_send_spin_us,
                     idle_gap_us: 0,
-                    reason_id: first.reason_id,
-                    reason: mixed_source.then(|| "mixed_deferred_release".to_string()),
+                    reason_id,
+                    reason: None,
                     applied_lead_us: lead_up,
+                    first_win32_error: result.first_win32_error,
+                    last_win32_error: result.last_win32_error,
+                    send_attempts: result.send_attempts,
+                    zero_progress_retries: result.zero_progress_retries,
                 });
                 pending_pre_send_spin_us = 0;
                 record_input_path_health(
@@ -973,6 +988,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            send_attempts: 0,
+                            zero_progress_retries: 0,
                         });
                         publish_backend_metrics(&backend, metrics);
                         continue;
@@ -1019,6 +1038,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            send_attempts: 0,
+                            zero_progress_retries: 0,
                         });
                         continue;
                     }
@@ -1054,6 +1077,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            send_attempts: 0,
+                            zero_progress_retries: 0,
                         });
                         assert!(
                             !config.strict_same_key_conflicts,
@@ -1128,6 +1155,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
+                            first_win32_error: result.first_win32_error,
+                            last_win32_error: result.last_win32_error,
+                            send_attempts: result.send_attempts,
+                            zero_progress_retries: result.zero_progress_retries,
                         });
                         pending_pre_send_spin_us = 0;
                         record_input_path_health(
@@ -1180,6 +1211,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_up,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            send_attempts: 0,
+                            zero_progress_retries: 0,
                         });
                     }
                 }
@@ -1296,15 +1331,12 @@ fn run_worker(
 
 fn drain_commands(
     rx: &Receiver<WorkerCommand>,
-    desired_pause: &AtomicBool,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
 ) {
     loop {
         match rx.try_recv() {
-            Ok(WorkerCommand::Pause) => desired_pause.store(true, Ordering::Release),
-            Ok(WorkerCommand::Resume) => desired_pause.store(false, Ordering::Release),
             Ok(WorkerCommand::Skip) => skip_requested.store(true, Ordering::Release),
             Ok(WorkerCommand::Quit) => quit_requested.store(true, Ordering::Release),
             Ok(WorkerCommand::PanicRelease) => panic_requested.store(true, Ordering::Release),
@@ -1482,13 +1514,36 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_PATH_WINDOW_CAPACITY, focus_gate_matches, record_input_path_health,
-        update_estimator_after_send,
+        INPUT_PATH_WINDOW_CAPACITY, WorkerCommand, drain_commands, focus_gate_matches,
+        record_input_path_health, update_estimator_after_send,
     };
+    use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
     use sky_dispatch_core::model::ActionKind;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn saturated_terminal_queue_cannot_overwrite_latest_pause_state() {
+        let (tx, rx) = bounded(32);
+        for _ in 0..32 {
+            tx.send(WorkerCommand::Quit).unwrap();
+        }
+        let desired_pause = AtomicBool::new(true);
+
+        // Resume is latest-wins state, not a queued command. A stale queued
+        // terminal command must not be able to write it back.
+        for index in 0..10_000 {
+            desired_pause.store(index % 2 == 0, Ordering::Release);
+        }
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        drain_commands(&rx, &quit_requested, &skip_requested, &panic_requested);
+
+        assert!(!desired_pause.load(Ordering::Acquire));
+        assert!(quit_requested.load(Ordering::Acquire));
+    }
 
     #[test]
     fn focus_gate_requires_both_validation_and_foreground_match() {
