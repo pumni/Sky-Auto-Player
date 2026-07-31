@@ -965,7 +965,7 @@ fn run_worker(
             .expect("estimator state was validated during prepare");
     }
     let telemetry_reason_table = config.schedule.reason_table.clone();
-    let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, |us| TimelineTicks(qpc_us_to_ticks(us)));
+    let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| TimelineTicks(qpc_us_to_ticks(us)));
     metrics
         .total_us
         .store(coordinator.effective_total_us(), Ordering::Relaxed);

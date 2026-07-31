@@ -66,7 +66,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
         let (batch, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down batch is due");
@@ -104,7 +104,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
 
         let (first, _) = coordinator
             .pop_next_due_authored(0, 2_000)
@@ -148,7 +148,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
@@ -209,7 +209,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
@@ -236,6 +236,56 @@ mod tests {
         let (playable, conflicts) = coordinator.split_down_intents(&next_down.intents);
         assert_eq!(playable.len(), 1);
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn blocked_authored_deadline_includes_delivery_margin() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15],
+                    reason: "up".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        
+        let min_hold = 20_000;
+        let delivery_margin = 5_000;
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, min_hold, delivery_margin, crate::time::TimelineTicks);
+        
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("down is due");
+        
+        // Complete the down at t=100.
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 50, crate::time::TimelineTicks(50), 100, crate::time::TimelineTicks(100));
+        
+        let (up, _) = coordinator
+            .pop_next_due_authored(100, 0)
+            .expect("up is due");
+        
+        // Pop it and request release.
+        let _ = coordinator.request_releases(&up.intents);
+        
+        // Since up was authored at 100, but min_hold is 20,000 and delivery_margin is 5,000, 
+        // the effective release time must be at least 100 (completion) + 20,000 + 5,000 = 25,100.
+        let due = coordinator.pop_due_pending(25_099, 0);
+        assert!(due.is_empty(), "release must not be due before min_hold + delivery_margin");
+        
+        let due_now = coordinator.pop_due_pending(25_100, 0);
+        assert_eq!(due_now.len(), 1, "release must be due exactly at completion + min_hold + delivery_margin");
     }
 
     #[test]
@@ -267,7 +317,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
 
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
@@ -319,7 +369,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, crate::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down is due");
@@ -431,6 +481,8 @@ pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
     pub min_hold_ticks: DurationTicks,
+    pub delivery_margin_us: u64,
+    pub delivery_margin_ticks: DurationTicks,
     pub batch_scheduled_ticks: Box<[TimelineTicks]>,
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
@@ -451,7 +503,7 @@ pub struct RuntimeDispatchCoordinator {
 }
 
 impl RuntimeDispatchCoordinator {
-    pub fn new<F>(schedule: RuntimeSchedule, min_hold_us: u64, us_to_ticks: F) -> Self
+    pub fn new<F>(schedule: RuntimeSchedule, min_hold_us: u64, delivery_margin_us: u64, us_to_ticks: F) -> Self
     where
         F: Fn(u64) -> TimelineTicks,
     {
@@ -463,11 +515,14 @@ impl RuntimeDispatchCoordinator {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let min_hold_ticks = DurationTicks(us_to_ticks(min_hold_us).0);
+        let delivery_margin_ticks = DurationTicks(us_to_ticks(delivery_margin_us).0);
         
         Self {
             schedule,
             min_hold_us,
             min_hold_ticks,
+            delivery_margin_us,
+            delivery_margin_ticks,
             batch_scheduled_ticks,
             cursor: 0,
             active_by_slot: std::array::from_fn(|_| None),
@@ -778,8 +833,8 @@ impl RuntimeDispatchCoordinator {
         dispatch_completed_us: u64,
         dispatch_completed_ticks: TimelineTicks,
     ) {
-        let release_not_before_us = dispatch_completed_us + self.min_hold_us;
-        let release_not_before_ticks = dispatch_completed_ticks.saturating_add(self.min_hold_ticks);
+        let release_not_before_us = dispatch_completed_us + self.min_hold_us + self.delivery_margin_us;
+        let release_not_before_ticks = dispatch_completed_ticks.saturating_add(self.min_hold_ticks).saturating_add(self.delivery_margin_ticks);
 
         if sent_scan_codes.len() == 1 {
             let only_sent = sent_scan_codes[0];

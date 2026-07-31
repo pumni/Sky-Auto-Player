@@ -34,7 +34,7 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
         let generation_count = schedule.generation_count;
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, min_hold_us, sky_dispatch_core::time::TimelineTicks);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, min_hold_us, 0, sky_dispatch_core::time::TimelineTicks);
 
         let (down, _) = coordinator
             .pop_next_due_authored(down_scheduled_us, 0)
