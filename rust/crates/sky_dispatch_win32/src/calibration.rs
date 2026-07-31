@@ -1,0 +1,1378 @@
+//! Chord-aware `SendInput` delivery-proxy calibration harness.
+//!
+//! # Evidence scope
+//!
+//! This module measures **injected Raw Input delivery proxy** latency only.
+//! Concretely it captures the time between `SendInput` completion and the
+//! moment a `WM_INPUT` message from the app-owned calibration window arrives.
+//!
+//! The measured boundary is:
+//! ```text
+//! call_started_ticks   — QPC immediately before SendInput
+//! call_completed_ticks — QPC immediately after SendInput returns
+//! first_receipt_ticks  — QPC when the first WM_INPUT for this packet arrives
+//! last_receipt_ticks   — QPC when the last WM_INPUT for this packet arrives
+//! ```
+//!
+//! This is **not** game-observed latency.  Do not label it as such.
+//!
+//! # Design
+//!
+//! A dedicated invisible top-level window is created for the duration of the
+//! calibration run.  Raw keyboard input is registered for that window using
+//! `RIDEV_INPUTSINK` so receipts arrive regardless of foreground focus.
+//!
+//! Each calibration packet is tagged with a `sequence_id` embedded in the high
+//! 32 bits of `dwExtraInfo`, which allows precise correlation without relying
+//! on scan code matching across overlapping samples.
+//!
+//! The window message pump runs on a dedicated thread so it does not interfere
+//! with the calling thread's timing measurements.
+//!
+//! # Non-Windows
+//!
+//! On non-Windows targets the public surface compiles but every function
+//! returns [`CalibrationError::PlatformUnsupported`].
+
+use crate::clock::{QpcTicks, qpc_now_ticks, qpc_ticks_to_us};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
+
+// ─── Public error type ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum CalibrationError {
+    #[error("calibration is not supported on this platform")]
+    PlatformUnsupported,
+
+    #[error("failed to create calibration window: win32 error {0}")]
+    WindowCreateFailed(u32),
+
+    #[error("failed to register Raw Input: win32 error {0}")]
+    RawInputRegisterFailed(u32),
+
+    #[error("window thread panicked or could not start")]
+    WindowThreadFailed,
+
+    #[error("sequence {sequence_id}: timeout waiting for {expected} receipts (got {received})")]
+    ReceiptTimeout {
+        sequence_id: u32,
+        expected: u8,
+        received: u8,
+    },
+
+    #[error("scan code {scan_code} is not an instrument key")]
+    InvalidScanCode { scan_code: u16 },
+
+    #[error("polyphony {0} exceeds maximum of 15")]
+    PolyphonyTooLarge(usize),
+
+    #[error("sample count must be at least 1")]
+    ZeroSamples,
+}
+
+// ─── Sample record ────────────────────────────────────────────────────────────
+
+/// A single calibration sample for one polyphony/direction bucket.
+///
+/// All times are QPC ticks at the time of collection and are converted to
+/// microseconds only when building the output JSON so that internal logic
+/// stays in tick-domain.
+#[derive(Debug, Clone)]
+pub struct CalibrationSample {
+    pub sequence_id: u32,
+    pub call_started_ticks: QpcTicks,
+    pub call_completed_ticks: QpcTicks,
+    /// `None` means no receipt arrived within the timeout window.
+    pub first_receipt_ticks: Option<QpcTicks>,
+    /// `None` means fewer receipts than expected arrived within the timeout.
+    pub last_receipt_ticks: Option<QpcTicks>,
+    pub receipt_count: u8,
+    pub expected_receipt_count: u8,
+    /// Anomalies detected for this packet.
+    pub anomalies: SampleAnomalies,
+}
+
+impl CalibrationSample {
+    pub fn call_duration_us(&self) -> u64 {
+        qpc_ticks_to_us(QpcTicks(
+            self.call_completed_ticks
+                .0
+                .saturating_sub(self.call_started_ticks.0),
+        ))
+    }
+
+    /// Signed error: first_receipt relative to call_completed. `None` if
+    /// no first receipt arrived.
+    pub fn first_receipt_latency_us(&self) -> Option<i64> {
+        let first = self.first_receipt_ticks?;
+        let completed = self.call_completed_ticks;
+        Some(signed_delta_us(first, completed))
+    }
+
+    /// Signed error: last_receipt relative to call_completed. `None` if not
+    /// all expected receipts arrived.
+    pub fn last_receipt_latency_us(&self) -> Option<i64> {
+        let last = self.last_receipt_ticks?;
+        let completed = self.call_completed_ticks;
+        Some(signed_delta_us(last, completed))
+    }
+
+    /// Spread between first and last receipt (intra-chord spread). `None` for
+    /// monophonic packets or when either timestamp is missing.
+    pub fn intra_chord_spread_us(&self) -> Option<u64> {
+        let first = self.first_receipt_ticks?;
+        let last = self.last_receipt_ticks?;
+        Some(qpc_ticks_to_us(QpcTicks(
+            last.0.saturating_sub(first.0),
+        )))
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.receipt_count == self.expected_receipt_count
+    }
+}
+
+/// Signed tick delta in microseconds: `later - earlier`.
+fn signed_delta_us(later: QpcTicks, earlier: QpcTicks) -> i64 {
+    if later.0 >= earlier.0 {
+        qpc_ticks_to_us(QpcTicks(later.0 - earlier.0)) as i64
+    } else {
+        -(qpc_ticks_to_us(QpcTicks(earlier.0 - later.0)) as i64)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SampleAnomalies {
+    pub duplicate_receipt: bool,
+    pub reordered_receipt: bool,
+    pub unexpected_scan_code: bool,
+    pub timeout: bool,
+}
+
+impl SampleAnomalies {
+    pub fn any(&self) -> bool {
+        self.duplicate_receipt
+            || self.reordered_receipt
+            || self.unexpected_scan_code
+            || self.timeout
+    }
+}
+
+// ─── Bucket-level statistics ──────────────────────────────────────────────────
+
+/// Aggregated statistics for one (kind, polyphony, class) bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketStats {
+    pub sample_count: u64,
+    pub error_count: u64,
+    pub timeout_count: u64,
+    pub anomaly_count: u64,
+    pub call_duration_us: QuantileStats,
+    /// Latency from `call_completed` to first Raw Input receipt.
+    pub first_receipt_us: Option<SignedQuantileStats>,
+    /// Latency from `call_completed` to last Raw Input receipt.
+    pub last_receipt_us: Option<SignedQuantileStats>,
+    /// Spread between first and last receipt (zero for polyphony-1 buckets).
+    pub intra_chord_spread_us: Option<QuantileStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantileStats {
+    pub min: u64,
+    pub p50: u64,
+    pub p95: u64,
+    pub p99: u64,
+    pub max: u64,
+    pub mean: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedQuantileStats {
+    pub min: i64,
+    pub p50: i64,
+    pub p95: i64,
+    pub p99: i64,
+    pub max: i64,
+    pub mean: i64,
+}
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+
+/// Polyphony classes used for bucket splitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleClass {
+    Hot,
+    Cold,
+}
+
+/// Direction of the injected packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PacketKind {
+    Down,
+    Up,
+}
+
+/// Parameters for a single calibration run.
+#[derive(Debug, Clone)]
+pub struct CalibrationConfig {
+    /// Polyphonies to measure (1–15). Must not be empty.
+    pub polyphonies: Vec<u8>,
+    /// Number of samples per (kind × polyphony × class) bucket.
+    pub samples_per_bucket: u32,
+    /// Number of warm-up injections before the first counted sample (marked
+    /// as `Cold`).  After the warm-up the remaining samples are `Hot`.
+    pub warmup_samples: u32,
+    /// Milliseconds to wait for Raw Input receipts before marking a packet as
+    /// timed out. Recommended: 200 ms.
+    pub receipt_timeout_ms: u32,
+    /// Microseconds of inter-sample gap to avoid back-to-back congestion.
+    pub inter_sample_gap_us: u64,
+}
+
+impl Default for CalibrationConfig {
+    fn default() -> Self {
+        Self {
+            polyphonies: vec![1, 2, 3, 5, 8, 15],
+            samples_per_bucket: 500,
+            warmup_samples: 20,
+            receipt_timeout_ms: 200,
+            inter_sample_gap_us: 5_000,
+        }
+    }
+}
+
+impl CalibrationConfig {
+    /// Minimal quick-calibration preset (user setup).
+    pub fn quick() -> Self {
+        Self {
+            samples_per_bucket: 200,
+            warmup_samples: 10,
+            ..Self::default()
+        }
+    }
+
+    /// Full calibration preset (tuning estimator / release gate).
+    pub fn full() -> Self {
+        Self {
+            samples_per_bucket: 5_000,
+            warmup_samples: 50,
+            ..Self::default()
+        }
+    }
+}
+
+// ─── Output schema ────────────────────────────────────────────────────────────
+
+/// The complete output of one calibration run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationOutput {
+    /// Schema version — bump when fields are added or renamed.
+    pub version: u32,
+    pub evidence_kind: &'static str,
+    pub host_fingerprint: HostFingerprint,
+    /// Buckets keyed by (kind, polyphony, class).
+    /// Serialised as nested maps: `down.1.hot`, `up.3.cold`, …
+    pub buckets: CalibrationBuckets,
+    /// Total samples attempted (including warm-up).
+    pub total_attempted: u64,
+    /// Total samples with at least one anomaly.
+    pub total_anomalous: u64,
+    /// Total samples that timed out completely.
+    pub total_timed_out: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CalibrationBuckets {
+    pub down: HashMap<u8, HashMap<String, BucketStats>>,
+    pub up: HashMap<u8, HashMap<String, BucketStats>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostFingerprint {
+    pub qpc_frequency_hz: u64,
+    pub win32_build: Option<String>,
+    pub sampled_at_us: u64,
+}
+
+// ─── Internal raw-input receipt state (shared between pump and collector) ─────
+
+/// A single Raw Input receipt delivered by the message pump.
+#[derive(Debug, Clone)]
+struct RawInputReceipt {
+    arrived_ticks: QpcTicks,
+    scan_code: u16,
+    #[allow(dead_code)] // retained for anomaly diagnostics / future use
+    key_up: bool,
+    sequence_id: u32,
+}
+
+/// Shared state between the calibration thread (sends packets and awaits
+/// receipts) and the window pump thread (delivers `WM_INPUT` events).
+struct SharedCalibState {
+    /// Receipts delivered for the currently active packet sequence.
+    pending_receipts: Vec<RawInputReceipt>,
+    /// Sequence ID of the currently expected packet, `None` when idle.
+    active_sequence: Option<u32>,
+    /// Set by the pump thread when the window is ready.
+    window_ready: bool,
+    /// Set to signal the pump thread to exit gracefully (checked on resume).
+    #[allow(dead_code)]
+    should_exit: bool,
+    /// HWND of the calibration window (as `isize`).
+    hwnd: isize,
+}
+
+// ─── Platform-specific implementation ────────────────────────────────────────
+
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE};
+    use crate::mmcss::{MmcssGuard, PriorityMode};
+
+    use std::sync::{Arc, Condvar, Mutex};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Input::{
+        HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+        RIDEV_INPUTSINK, RegisterRawInputDevices, GetRawInputData,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+        PostMessageW, RegisterClassExW, SetWindowPos, TranslateMessage, HWND_MESSAGE,
+        MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_INPUT,
+        WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    };
+
+    // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
+    const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+
+
+    const WM_CALIB_EXIT: u32 = WM_USER + 1;
+    const WM_CALIB_ACTIVATE: u32 = WM_USER + 2;
+
+    /// Combined extra-info tag so we can distinguish our own injections.
+    ///
+    /// High 32 bits: sequence ID (1-based).
+    /// Low 32 bits: `SKY_PLAYER_SIGNATURE`.
+    fn make_extra_info(sequence_id: u32) -> usize {
+        ((sequence_id as usize) << 32) | (SKY_PLAYER_SIGNATURE & 0xFFFF_FFFF)
+    }
+
+    fn extra_info_sequence(extra: usize) -> Option<u32> {
+        let sig = extra & 0xFFFF_FFFF;
+        if sig != (SKY_PLAYER_SIGNATURE & 0xFFFF_FFFF) {
+            return None;
+        }
+        let seq = (extra >> 32) as u32;
+        (seq > 0).then_some(seq)
+    }
+
+    // ── Window procedure ──────────────────────────────────────────────────────
+
+    // Thread-local pointer to the shared state, set before the message loop
+    // starts and cleared after it exits.
+    thread_local! {
+        static PUMP_STATE: std::cell::Cell<*const PumpContext> =
+            const { std::cell::Cell::new(std::ptr::null()) };
+    }
+
+    struct PumpContext {
+        shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
+    }
+
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        // SAFETY: we only set a raw pointer within the message loop on the same
+        // thread where the window was created, and clear it before the pointer
+        // could dangle.
+        let ctx_ptr: *const PumpContext = PUMP_STATE.with(|c| c.get());
+        if ctx_ptr.is_null() {
+            // SAFETY: DefWindowProcW is always safe to call with the provided
+            // message parameters.
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        }
+        // SAFETY: pointer is valid for the lifetime of the pump loop (see
+        // above), and we do not move or free the context here.
+        let ctx: &PumpContext = unsafe { &*ctx_ptr };
+
+        match msg {
+            WM_INPUT => {
+                let arrived = qpc_now_ticks();
+                let hri = lparam as HRAWINPUT;
+                let mut size: u32 = 0;
+                // SAFETY: querying size with null buffer is the documented
+                // pattern for GetRawInputData.
+                unsafe {
+                    GetRawInputData(
+                        hri,
+                        RID_INPUT,
+                        std::ptr::null_mut(),
+                        &mut size,
+                        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+                    )
+                };
+                if size == 0 || size > 4096 {
+                    // SAFETY: forward to default handler.
+                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                }
+                let mut buf = vec![0u8; size as usize];
+                // SAFETY: buf has the capacity reported by the previous call.
+                let read = unsafe {
+                    GetRawInputData(
+                        hri,
+                        RID_INPUT,
+                        buf.as_mut_ptr().cast(),
+                        &mut size,
+                        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+                    )
+                };
+                if read == u32::MAX || read < std::mem::size_of::<RAWINPUTHEADER>() as u32 {
+                    // SAFETY: forward on parse failure.
+                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                }
+                // SAFETY: buf is at least sizeof(RAWINPUT) and was filled by
+                // GetRawInputData.
+                let raw: &RAWINPUT = unsafe { &*(buf.as_ptr().cast()) };
+                let rtype = raw.header.dwType;
+                // RIM_TYPEKEYBOARD = 1
+                if rtype != 1 {
+                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                }
+                let keyboard = unsafe { &raw.data.keyboard };
+                let scan_code = keyboard.MakeCode;
+                let flags = keyboard.Flags;
+                // RI_KEY_BREAK = 1 (key-up)
+                let key_up = (flags & 1) != 0;
+                let extra = keyboard.ExtraInformation as usize;
+                let Some(seq_id) = extra_info_sequence(extra) else {
+                    // Not one of our injected packets — ignore.
+                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                };
+
+                let receipt = RawInputReceipt {
+                    arrived_ticks: arrived,
+                    scan_code,
+                    key_up,
+                    sequence_id: seq_id,
+                };
+
+                let (lock, cvar) = ctx.shared.as_ref();
+                if let Ok(mut guard) = lock.lock() {
+                    if guard.active_sequence == Some(seq_id) {
+                        guard.pending_receipts.push(receipt);
+                        cvar.notify_one();
+                    }
+                    // Receipts for stale sequence IDs are silently discarded.
+                }
+                0
+            }
+            WM_CALIB_EXIT => {
+                // SAFETY: PostQuitMessage is safe to call from within a window
+                // procedure.
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+                0
+            }
+            WM_CALIB_ACTIVATE => {
+                // Trigger a SetWindowPos to flush any pending messages.
+                // SAFETY: hwnd is a valid live window handle.
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        HWND_MESSAGE,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                };
+                0
+            }
+            _ => {
+                // SAFETY: forwarding to the default handler is always safe.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+        }
+    }
+
+    // ── Window pump thread ────────────────────────────────────────────────────
+
+    fn pump_thread(shared: Arc<(Mutex<SharedCalibState>, Condvar)>) {
+        // Register window class.
+        let class_name: Vec<u16> = "SkyCalibWindow\0".encode_utf16().collect();
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: 0,
+            lpfnWndProc: Some(wnd_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: std::ptr::null_mut(),
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: class_name.as_ptr(),
+            hIconSm: std::ptr::null_mut(),
+        };
+        // SAFETY: wc is a fully initialised WNDCLASSEXW with valid pointers
+        // that outlive this call.
+        let atom = unsafe { RegisterClassExW(&wc) };
+        if atom == 0 {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            let (lock, _cvar) = shared.as_ref();
+            if let Ok(mut g) = lock.lock() {
+                g.window_ready = true; // signal failure with hwnd = 0
+                drop(g);
+            }
+            eprintln!("[calibration] RegisterClassExW failed: {err}");
+            return;
+        }
+
+        let window_name: Vec<u16> = "SkyCalib\0".encode_utf16().collect();
+        // SAFETY: the class name and window name are NUL-terminated UTF-16 slices
+        // valid for the duration of the call.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                window_name.as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                1,
+                1,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            let (lock, _cvar) = shared.as_ref();
+            if let Ok(mut g) = lock.lock() {
+                g.window_ready = true;
+                drop(g);
+            }
+            eprintln!("[calibration] CreateWindowExW failed: {err}");
+            return;
+        }
+
+        // Register Raw Input for keyboard on this window.
+        let rid = RAWINPUTDEVICE {
+            usUsagePage: HID_USAGE_PAGE_GENERIC,
+            usUsage: 0x06, // HID_USAGE_GENERIC_KEYBOARD
+            dwFlags: RIDEV_INPUTSINK,
+            hwndTarget: hwnd,
+        };
+        // SAFETY: rid is a valid RAWINPUTDEVICE and remains alive for the call.
+        let ok = unsafe {
+            RegisterRawInputDevices(
+                &rid,
+                1,
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        if ok == 0 {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            unsafe { DestroyWindow(hwnd) };
+            let (lock, _cvar) = shared.as_ref();
+            if let Ok(mut g) = lock.lock() {
+                g.window_ready = true;
+                drop(g);
+            }
+            eprintln!("[calibration] RegisterRawInputDevices failed: {err}");
+            return;
+        }
+
+        // Publish hwnd and signal ready.
+        {
+            let (lock, cvar) = shared.as_ref();
+            if let Ok(mut g) = lock.lock() {
+                g.hwnd = hwnd as isize;
+                g.window_ready = true;
+                cvar.notify_all();
+            }
+        }
+
+        // Install the thread-local context pointer.
+        let ctx = PumpContext {
+            shared: Arc::clone(&shared),
+        };
+        let ctx_ptr: *const PumpContext = &ctx;
+        PUMP_STATE.with(|c| c.set(ctx_ptr));
+
+        // Message loop.
+        let mut msg = MSG {
+            hwnd: std::ptr::null_mut(),
+            message: 0,
+            wParam: 0,
+            lParam: 0,
+            time: 0,
+            pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+        };
+        loop {
+            // SAFETY: msg is a valid MSG out-parameter; filter is 0 so we
+            // receive all messages for any window on this thread.
+            let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
+            if r == 0 || r == -1 {
+                break;
+            }
+            // SAFETY: msg is freshly filled by GetMessageW.
+            unsafe { TranslateMessage(&msg) };
+            // SAFETY: msg is freshly filled by GetMessageW.
+            unsafe { DispatchMessageW(&msg) };
+        }
+
+        // Clear the thread-local pointer before the context goes out of scope.
+        PUMP_STATE.with(|c| c.set(std::ptr::null()));
+        // Clean up registration so other processes can register normally.
+        let unregister = RAWINPUTDEVICE {
+            usUsagePage: HID_USAGE_PAGE_GENERIC,
+            usUsage: 0x06,
+            dwFlags: windows_sys::Win32::UI::Input::RIDEV_REMOVE,
+            hwndTarget: std::ptr::null_mut(),
+        };
+        // SAFETY: unregister is a valid RAWINPUTDEVICE.
+        unsafe {
+            RegisterRawInputDevices(
+                &unregister,
+                1,
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        // SAFETY: hwnd is a live window owned by this thread.
+        unsafe { DestroyWindow(hwnd) };
+    }
+
+    // ── CalibrationSession ────────────────────────────────────────────────────
+
+    pub struct CalibrationSession {
+        shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
+        hwnd: isize,
+        pump_thread: Option<std::thread::JoinHandle<()>>,
+        next_sequence: u32,
+    }
+
+    impl CalibrationSession {
+        pub fn open() -> Result<Self, CalibrationError> {
+            let initial = SharedCalibState {
+                pending_receipts: Vec::new(),
+                active_sequence: None,
+                window_ready: false,
+                should_exit: false,
+                hwnd: 0,
+            };
+            let shared = Arc::new((Mutex::new(initial), Condvar::new()));
+            let shared_clone = Arc::clone(&shared);
+
+            let handle = std::thread::Builder::new()
+                .name("sky-calib-pump".into())
+                .spawn(move || pump_thread(shared_clone))
+                .map_err(|_| CalibrationError::WindowThreadFailed)?;
+
+            // Wait for the pump to signal window ready.
+            let hwnd = {
+                let (lock, cvar) = shared.as_ref();
+                let guard = lock.lock().unwrap();
+                let guard = cvar
+                    .wait_timeout_while(guard, Duration::from_secs(5), |g| !g.window_ready)
+                    .unwrap()
+                    .0;
+                if guard.hwnd == 0 {
+                    return Err(CalibrationError::WindowCreateFailed(0));
+                }
+                guard.hwnd
+            };
+
+            Ok(Self {
+                shared,
+                hwnd,
+                pump_thread: Some(handle),
+                next_sequence: 1,
+            })
+        }
+
+        /// Inject one calibration packet and collect receipts.
+        ///
+        /// `scan_codes` must be a subset of `PHYSICAL_INSTRUMENT_SCAN_CODES`.
+        /// `key_up` controls the direction. The caller is responsible for
+        /// maintaining down/up balance across samples.
+        pub fn measure_packet(
+            &mut self,
+            scan_codes: &[u16],
+            key_up: bool,
+            receipt_timeout: Duration,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let n = scan_codes.len();
+            if n == 0 || n > 15 {
+                return Err(CalibrationError::PolyphonyTooLarge(n));
+            }
+            for &sc in scan_codes {
+                if !PHYSICAL_INSTRUMENT_SCAN_CODES.contains(&sc) {
+                    return Err(CalibrationError::InvalidScanCode { scan_code: sc });
+                }
+            }
+
+            let seq = self.next_sequence;
+            self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
+
+            // Prepare extra_info with sequence tag.
+            let extra = make_extra_info(seq);
+
+            // Arm the active sequence BEFORE injecting so we cannot miss any
+            // receipt delivered before the mutex is acquired after SendInput.
+            {
+                let (lock, _cvar) = self.shared.as_ref();
+                let mut g = lock.lock().unwrap();
+                g.active_sequence = Some(seq);
+                g.pending_receipts.clear();
+            }
+
+            // Build and send the INPUT packets with the tagged extra_info.
+            let call_started = qpc_now_ticks();
+            let psr = send_input_raw_tagged(scan_codes, key_up, extra);
+            let call_completed = qpc_now_ticks();
+
+            let expected = scan_codes.len() as u8;
+            if psr.inserted < expected as u32 {
+                // Clear active sequence.
+                let (lock, cvar) = self.shared.as_ref();
+                let mut g = lock.lock().unwrap();
+                g.active_sequence = None;
+                cvar.notify_all();
+                // Still return a partial sample so the caller can count errors.
+                return Ok(CalibrationSample {
+                    sequence_id: seq,
+                    call_started_ticks: call_started,
+                    call_completed_ticks: call_completed,
+                    first_receipt_ticks: None,
+                    last_receipt_ticks: None,
+                    receipt_count: 0,
+                    expected_receipt_count: expected,
+                    anomalies: SampleAnomalies {
+                        timeout: true,
+                        ..Default::default()
+                    },
+                });
+            }
+
+            // Wait for expected receipts.
+            let deadline = std::time::Instant::now() + receipt_timeout;
+            let (first, last, count, anomalies) = {
+                let (lock, cvar) = self.shared.as_ref();
+                let mut guard = lock.lock().unwrap();
+                loop {
+                    let n_received = guard.pending_receipts.len();
+                    if n_received >= expected as usize {
+                        break;
+                    }
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    guard = cvar.wait_timeout(guard, remaining).unwrap().0;
+                }
+
+                let receipts = std::mem::take(&mut guard.pending_receipts);
+                guard.active_sequence = None;
+                cvar.notify_all();
+                drop(guard);
+
+                analyse_receipts(&receipts, scan_codes, seq, expected)
+            };
+
+            Ok(CalibrationSample {
+                sequence_id: seq,
+                call_started_ticks: call_started,
+                call_completed_ticks: call_completed,
+                first_receipt_ticks: first,
+                last_receipt_ticks: last,
+                receipt_count: count,
+                expected_receipt_count: expected,
+                anomalies,
+            })
+        }
+
+        pub fn close(mut self) {
+            // Signal the pump thread to exit.
+            if self.hwnd != 0 {
+                // SAFETY: hwnd is a live message-only window on the pump thread.
+                unsafe {
+                    PostMessageW(
+                        self.hwnd as HWND,
+                        WM_CALIB_EXIT,
+                        0,
+                        0,
+                    )
+                };
+                self.hwnd = 0;
+            }
+            if let Some(h) = self.pump_thread.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    impl Drop for CalibrationSession {
+        fn drop(&mut self) {
+            if self.hwnd != 0 {
+                unsafe {
+                    PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0);
+                }
+                if let Some(h) = self.pump_thread.take() {
+                    let _ = h.join();
+                }
+            }
+        }
+    }
+
+    /// Variant of `send_input_raw` that injects a custom `dwExtraInfo` so we
+    /// can correlate Raw Input receipts with the correct sequence.
+    fn send_input_raw_tagged(scan_codes: &[u16], key_up: bool, extra: usize) -> crate::input::PlatformSendResult {
+        use windows_sys::Win32::Foundation::SetLastError;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput,
+        };
+        use smallvec::SmallVec;
+
+        if scan_codes.is_empty() {
+            return crate::input::PlatformSendResult {
+                requested: 0,
+                inserted: 0,
+                completed_us: crate::clock::qpc_now_us(),
+                win32_error: 0,
+            };
+        }
+
+        let mut flags = KEYEVENTF_SCANCODE;
+        if key_up {
+            flags |= KEYEVENTF_KEYUP;
+        }
+
+        let packets: SmallVec<[INPUT; 15]> = scan_codes
+            .iter()
+            .map(|&sc| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: 0,
+                        wScan: sc,
+                        dwFlags: flags,
+                        time: 0,
+                        dwExtraInfo: extra,
+                    },
+                },
+            })
+            .collect();
+
+        let requested = packets.len() as u32;
+        let cb_size = std::mem::size_of::<INPUT>() as i32;
+
+        // SAFETY: packets is contiguous, correctly aligned, and remains valid
+        // for the duration of SendInput.
+        unsafe { SetLastError(0) };
+        let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
+        let win32_error = if inserted != requested {
+            unsafe { windows_sys::Win32::Foundation::GetLastError() }
+        } else {
+            0
+        };
+        let completed_us = crate::clock::qpc_now_us();
+
+        crate::input::PlatformSendResult {
+            requested,
+            inserted,
+            completed_us,
+            win32_error,
+        }
+    }
+
+    fn analyse_receipts(
+        receipts: &[RawInputReceipt],
+        expected_scan_codes: &[u16],
+        expected_seq: u32,
+        expected_count: u8,
+    ) -> (Option<QpcTicks>, Option<QpcTicks>, u8, SampleAnomalies) {
+        let mut anomalies = SampleAnomalies::default();
+        let count = receipts.len().min(u8::MAX as usize) as u8;
+
+        if count == 0 {
+            anomalies.timeout = true;
+            return (None, None, 0, anomalies);
+        }
+        if count < expected_count {
+            anomalies.timeout = true;
+        }
+
+        // Detect unexpected scan codes.
+        for r in receipts {
+            if r.sequence_id != expected_seq {
+                // Shouldn't happen due to sequence guard, but flag anyway.
+                anomalies.unexpected_scan_code = true;
+            }
+            if !expected_scan_codes.contains(&r.scan_code) {
+                anomalies.unexpected_scan_code = true;
+            }
+        }
+
+        // Detect duplicates: same scan code appearing more than once.
+        for i in 0..receipts.len() {
+            for j in (i + 1)..receipts.len() {
+                if receipts[i].scan_code == receipts[j].scan_code {
+                    anomalies.duplicate_receipt = true;
+                    break;
+                }
+            }
+        }
+
+        // Detect temporal reordering (not physically meaningful for scan
+        // codes, but useful as a jitter diagnostic).
+        for w in receipts.windows(2) {
+            if w[1].arrived_ticks < w[0].arrived_ticks {
+                anomalies.reordered_receipt = true;
+                break;
+            }
+        }
+
+        let first = receipts.iter().map(|r| r.arrived_ticks).min();
+        let last = receipts.iter().map(|r| r.arrived_ticks).max();
+
+        let last = if count >= expected_count { last } else { None };
+
+        (first, last, count, anomalies)
+    }
+
+    // ── Host fingerprint ──────────────────────────────────────────────────────
+
+    pub fn build_host_fingerprint() -> HostFingerprint {
+        use crate::clock::{qpc_frequency, qpc_now_us};
+        let freq = qpc_frequency();
+        let win32_build = windows_build_string();
+        HostFingerprint {
+            qpc_frequency_hz: freq,
+            win32_build,
+            sampled_at_us: qpc_now_us(),
+        }
+    }
+
+    fn windows_build_string() -> Option<String> {
+        use windows_sys::Win32::System::SystemInformation::{
+            GetVersionExW, OSVERSIONINFOW,
+        };
+        let mut info = OSVERSIONINFOW {
+            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+            dwMajorVersion: 0,
+            dwMinorVersion: 0,
+            dwBuildNumber: 0,
+            dwPlatformId: 0,
+            szCSDVersion: [0u16; 128],
+        };
+        // SAFETY: info is a valid out-parameter of the correct size.
+        if unsafe { GetVersionExW(&mut info) } != 0 {
+            Some(format!(
+                "{}.{}.{}",
+                info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
+            ))
+        } else {
+            None
+        }
+    }
+
+    // ── Top-level run function ────────────────────────────────────────────────
+
+    /// Run a complete calibration and return the aggregated output.
+    pub fn run_calibration(
+        config: &CalibrationConfig,
+    ) -> Result<CalibrationOutput, CalibrationError> {
+        if config.polyphonies.is_empty() || config.samples_per_bucket == 0 {
+            return Err(CalibrationError::ZeroSamples);
+        }
+        for &p in &config.polyphonies {
+            if p == 0 || p as usize > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
+                return Err(CalibrationError::PolyphonyTooLarge(p as usize));
+            }
+        }
+
+        let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
+        let mut session = CalibrationSession::open()?;
+
+        let receipt_timeout =
+            Duration::from_millis(config.receipt_timeout_ms as u64);
+        let inter_sample_sleep = Duration::from_micros(config.inter_sample_gap_us);
+
+        // We use the first N scan codes from the canonical instrument list for
+        // each polyphony level.  This is deterministic and canonical per the
+        // plan.
+        let mut all_raw: HashMap<(PacketKind, u8, SampleClass), Vec<CalibrationSample>> =
+            HashMap::new();
+        let mut total_attempted: u64 = 0;
+        let mut total_anomalous: u64 = 0;
+        let mut total_timed_out: u64 = 0;
+
+        for &poly in &config.polyphonies {
+            let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..poly as usize];
+
+            for kind in [PacketKind::Down, PacketKind::Up] {
+                let _key_up = matches!(kind, PacketKind::Up);
+
+                let total_samples = config.warmup_samples + config.samples_per_bucket;
+                for i in 0..total_samples {
+                    let is_warmup = i < config.warmup_samples;
+                    let class = if is_warmup {
+                        SampleClass::Cold
+                    } else {
+                        SampleClass::Hot
+                    };
+
+                    // For Down samples: send Down, then release before next Down.
+                    // For Up samples: ensure keys are down first, then send Up.
+                    // We alternate down/up pairs to keep state consistent.
+                    let sample = match kind {
+                        PacketKind::Down => {
+                            let s = session.measure_packet(scan_codes, false, receipt_timeout)?;
+                            // Release immediately so the next Down is valid.
+                            let _ = session.measure_packet(scan_codes, true, receipt_timeout);
+                            s
+                        }
+                        PacketKind::Up => {
+                            // Inject Down first (not counted).
+                            let _ = session.measure_packet(scan_codes, false, receipt_timeout);
+                            // Counted Up sample.
+                            session.measure_packet(scan_codes, true, receipt_timeout)?
+                        }
+                    };
+
+                    total_attempted += 1;
+                    if sample.anomalies.timeout {
+                        total_timed_out += 1;
+                    }
+                    if sample.anomalies.any() {
+                        total_anomalous += 1;
+                    }
+
+                    if !is_warmup {
+                        all_raw
+                            .entry((kind, poly, class))
+                            .or_default()
+                            .push(sample);
+                    }
+
+                    if !inter_sample_sleep.is_zero() {
+                        std::thread::sleep(inter_sample_sleep);
+                    }
+                }
+            }
+        }
+
+        session.close();
+
+        // Aggregate into buckets.
+        let mut buckets = CalibrationBuckets::default();
+        for ((kind, poly, class), samples) in &all_raw {
+            let stats = aggregate_samples(samples);
+            let class_key = match class {
+                SampleClass::Hot => "hot",
+                SampleClass::Cold => "cold",
+            };
+            match kind {
+                PacketKind::Down => {
+                    buckets
+                        .down
+                        .entry(*poly)
+                        .or_default()
+                        .insert(class_key.to_string(), stats);
+                }
+                PacketKind::Up => {
+                    buckets
+                        .up
+                        .entry(*poly)
+                        .or_default()
+                        .insert(class_key.to_string(), stats);
+                }
+            }
+        }
+
+        Ok(CalibrationOutput {
+            version: 2,
+            evidence_kind: "injected_raw_input_delivery_proxy",
+            host_fingerprint: build_host_fingerprint(),
+            buckets,
+            total_attempted,
+            total_anomalous,
+            total_timed_out,
+        })
+    }
+} // mod platform
+
+// ─── Non-Windows stub ─────────────────────────────────────────────────────────
+
+#[cfg(not(windows))]
+mod platform {
+    use super::*;
+
+    pub fn run_calibration(_config: &CalibrationConfig) -> Result<CalibrationOutput, CalibrationError> {
+        Err(CalibrationError::PlatformUnsupported)
+    }
+
+    pub fn build_host_fingerprint() -> HostFingerprint {
+        HostFingerprint {
+            qpc_frequency_hz: 0,
+            win32_build: None,
+            sampled_at_us: 0,
+        }
+    }
+}
+
+// ─── Aggregation helpers ──────────────────────────────────────────────────────
+
+fn aggregate_samples(samples: &[CalibrationSample]) -> BucketStats {
+    let n = samples.len() as u64;
+    let error_count = samples
+        .iter()
+        .filter(|s| !s.is_complete() || s.anomalies.any())
+        .count() as u64;
+    let timeout_count = samples.iter().filter(|s| s.anomalies.timeout).count() as u64;
+    let anomaly_count = samples.iter().filter(|s| s.anomalies.any()).count() as u64;
+
+    let call_durations: Vec<u64> = samples.iter().map(|s| s.call_duration_us()).collect();
+    let call_duration_us = quantile_stats_u64(&call_durations);
+
+    let first_latencies: Vec<i64> = samples
+        .iter()
+        .filter_map(|s| s.first_receipt_latency_us())
+        .collect();
+    let first_receipt_us = if first_latencies.is_empty() {
+        None
+    } else {
+        Some(quantile_stats_i64(&first_latencies))
+    };
+
+    let last_latencies: Vec<i64> = samples
+        .iter()
+        .filter_map(|s| s.last_receipt_latency_us())
+        .collect();
+    let last_receipt_us = if last_latencies.is_empty() {
+        None
+    } else {
+        Some(quantile_stats_i64(&last_latencies))
+    };
+
+    let spreads: Vec<u64> = samples
+        .iter()
+        .filter_map(|s| s.intra_chord_spread_us())
+        .collect();
+    let intra_chord_spread_us = if spreads.is_empty() {
+        None
+    } else {
+        Some(quantile_stats_u64(&spreads))
+    };
+
+    BucketStats {
+        sample_count: n,
+        error_count,
+        timeout_count,
+        anomaly_count,
+        call_duration_us,
+        first_receipt_us,
+        last_receipt_us,
+        intra_chord_spread_us,
+    }
+}
+
+fn quantile_stats_u64(values: &[u64]) -> QuantileStats {
+    if values.is_empty() {
+        return QuantileStats {
+            min: 0,
+            p50: 0,
+            p95: 0,
+            p99: 0,
+            max: 0,
+            mean: 0,
+        };
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let n = sorted.len();
+    let percentile = |p: usize| {
+        let idx = ((n * p).saturating_add(99) / 100)
+            .saturating_sub(1)
+            .min(n - 1);
+        sorted[idx]
+    };
+    let mean = sorted.iter().sum::<u64>() / n as u64;
+    QuantileStats {
+        min: sorted[0],
+        p50: percentile(50),
+        p95: percentile(95),
+        p99: percentile(99),
+        max: *sorted.last().unwrap(),
+        mean,
+    }
+}
+
+fn quantile_stats_i64(values: &[i64]) -> SignedQuantileStats {
+    if values.is_empty() {
+        return SignedQuantileStats {
+            min: 0,
+            p50: 0,
+            p95: 0,
+            p99: 0,
+            max: 0,
+            mean: 0,
+        };
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let n = sorted.len();
+    let percentile = |p: usize| {
+        let idx = ((n * p).saturating_add(99) / 100)
+            .saturating_sub(1)
+            .min(n - 1);
+        sorted[idx]
+    };
+    let mean = sorted.iter().sum::<i64>() / n as i64;
+    SignedQuantileStats {
+        min: sorted[0],
+        p50: percentile(50),
+        p95: percentile(95),
+        p99: percentile(99),
+        max: *sorted.last().unwrap(),
+        mean,
+    }
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/// Run a complete calibration and return JSON-serialised output.
+///
+/// This is the primary entry point for callers (including the PyO3 wrapper in
+/// `sky_player_rs`).  It blocks the calling thread for the duration of the
+/// calibration run.
+///
+/// # Errors
+///
+/// Returns [`CalibrationError::PlatformUnsupported`] on non-Windows.
+pub fn run_calibration_json(config: &CalibrationConfig) -> Result<String, CalibrationError> {
+    let output = platform::run_calibration(config)?;
+    serde_json::to_string_pretty(&output).map_err(|_e| {
+        // JSON serialisation failure is an internal bug — surface it as a
+        // descriptive error.  CalibrationError does not have a generic JSON
+        // variant, so reuse WindowCreateFailed with u32::MAX as a sentinel.
+        CalibrationError::WindowCreateFailed(u32::MAX)
+    })
+}
+
+pub use platform::build_host_fingerprint;
+
+// ─── Unit tests (non-Windows stubs and pure logic) ───────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quantile_stats_single_value() {
+        let stats = quantile_stats_u64(&[42]);
+        assert_eq!(stats.min, 42);
+        assert_eq!(stats.max, 42);
+        assert_eq!(stats.p50, 42);
+        assert_eq!(stats.mean, 42);
+    }
+
+    #[test]
+    fn quantile_stats_empty_is_zero() {
+        let stats = quantile_stats_u64(&[]);
+        assert_eq!(stats.min, 0);
+        assert_eq!(stats.max, 0);
+    }
+
+    #[test]
+    fn signed_quantile_stats_negative() {
+        let stats = quantile_stats_i64(&[-10, -5, 0, 5, 10]);
+        assert_eq!(stats.min, -10);
+        assert_eq!(stats.max, 10);
+        assert_eq!(stats.p50, 0);
+    }
+
+    #[test]
+    fn signed_delta_us_positive() {
+        let a = QpcTicks(1_000_000);
+        let b = QpcTicks(500_000);
+        // a > b so delta should be positive
+        let delta = signed_delta_us(a, b);
+        assert!(delta >= 0);
+    }
+
+    #[test]
+    fn signed_delta_us_negative() {
+        let a = QpcTicks(500_000);
+        let b = QpcTicks(1_000_000);
+        // a < b so delta should be negative
+        let delta = signed_delta_us(a, b);
+        assert!(delta <= 0);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn non_windows_returns_unsupported() {
+        let config = CalibrationConfig::default();
+        let result = run_calibration_json(&config);
+        assert!(matches!(result, Err(CalibrationError::PlatformUnsupported)));
+    }
+
+    #[test]
+    fn default_config_polyphonies() {
+        let cfg = CalibrationConfig::default();
+        assert_eq!(cfg.polyphonies, vec![1, 2, 3, 5, 8, 15]);
+    }
+
+    #[test]
+    fn quick_config_fewer_samples() {
+        let quick = CalibrationConfig::quick();
+        let full = CalibrationConfig::full();
+        assert!(quick.samples_per_bucket < full.samples_per_bucket);
+    }
+
+    #[test]
+    fn sample_is_complete_when_receipts_match() {
+        let sample = CalibrationSample {
+            sequence_id: 1,
+            call_started_ticks: QpcTicks(100),
+            call_completed_ticks: QpcTicks(200),
+            first_receipt_ticks: Some(QpcTicks(250)),
+            last_receipt_ticks: Some(QpcTicks(300)),
+            receipt_count: 3,
+            expected_receipt_count: 3,
+            anomalies: SampleAnomalies::default(),
+        };
+        assert!(sample.is_complete());
+        assert!(sample.first_receipt_latency_us().is_some());
+        assert!(sample.last_receipt_latency_us().is_some());
+        assert!(sample.intra_chord_spread_us().is_some());
+    }
+
+    #[test]
+    fn sample_intra_chord_spread_none_for_monophonic() {
+        let sample = CalibrationSample {
+            sequence_id: 1,
+            call_started_ticks: QpcTicks(100),
+            call_completed_ticks: QpcTicks(200),
+            first_receipt_ticks: Some(QpcTicks(250)),
+            last_receipt_ticks: Some(QpcTicks(250)), // same tick → spread = 0 us
+            receipt_count: 1,
+            expected_receipt_count: 1,
+            anomalies: SampleAnomalies::default(),
+        };
+        // For polyphony-1 first == last, so spread = 0 (not None).
+        assert_eq!(sample.intra_chord_spread_us(), Some(0));
+    }
+}

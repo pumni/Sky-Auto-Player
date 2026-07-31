@@ -1,3 +1,4 @@
+pub mod calibration;
 pub mod engine;
 
 use engine::{ChordConflictPolicy, MockFailureMode, NativeDispatchSession};
@@ -904,5 +905,6 @@ fn sky_player_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sleep_until_rs, m)?)?;
     m.add_function(wrap_pyfunction!(measure_spin_overhead_rs, m)?)?;
     m.add_function(wrap_pyfunction!(qpc_now_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
     Ok(())
 }

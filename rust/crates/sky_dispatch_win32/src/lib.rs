@@ -2,6 +2,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod calibration;
 pub mod clock;
 pub mod event;
 pub mod focus;
