@@ -84,6 +84,10 @@ pub struct InputSendResult {
     pub last_win32_error: Option<u32>,
     pub send_attempts: u8,
     pub zero_progress_retries: u8,
+    pub first_inserted: u8,
+    pub partial_progress: bool,
+    pub retried_after_zero_progress: bool,
+    pub chord_integrity_lost: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +100,10 @@ pub struct EmitResult {
     pub last_win32_error: Option<u32>,
     pub send_attempts: u8,
     pub zero_progress_retries: u8,
+    pub first_inserted: u8,
+    pub partial_progress: bool,
+    pub retried_after_zero_progress: bool,
+    pub chord_integrity_lost: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +207,10 @@ where
             last_win32_error: None,
             send_attempts: 0,
             zero_progress_retries: 0,
+            first_inserted: 0,
+            partial_progress: false,
+            retried_after_zero_progress: false,
+            chord_integrity_lost: false,
         };
     }
     let n = scan_codes.len();
@@ -217,29 +229,97 @@ where
             last_win32_error: first_win32_error,
             send_attempts: 1,
             zero_progress_retries: 0,
+            first_inserted: landed1 as u8,
+            partial_progress: false,
+            retried_after_zero_progress: false,
+            chord_integrity_lost: false,
         };
     }
 
-    // Call 2: immediate remainder retry
-    let remainder = &scan_codes[landed1..];
-    let res2 = send_fn(remainder, false);
-    let landed2 = (res2.inserted as usize).min(remainder.len());
-    let last_win32_error = (res2.win32_error != 0).then_some(res2.win32_error);
+    // A non-zero partial insertion has already destroyed chord integrity. Do
+    // not send the remainder: that would make a nominally successful chord
+    // arrive through two separately timestamped SendInput calls. Roll back
+    // the landed prefix immediately and leave any rollback residue tracked so
+    // the worker's terminal cleanup can handle it.
+    if landed1 > 0 {
+        let rollback = send_fn(&scan_codes[..landed1], true);
+        let rollback_inserted = (rollback.inserted as usize).min(landed1);
+        let rollback_error = (rollback.win32_error != 0).then_some(rollback.win32_error);
+        let sent: SmallVec<[u16; 15]> = scan_codes[..landed1]
+            .iter()
+            .skip(rollback_inserted)
+            .copied()
+            .collect();
+        return EmitResult {
+            sent,
+            completed_us: rollback.completed_us,
+            success: false,
+            keys_dropped: (n - landed1) as u64,
+            first_win32_error,
+            last_win32_error: rollback_error.or(first_win32_error),
+            send_attempts: 2,
+            zero_progress_retries: 0,
+            first_inserted: landed1 as u8,
+            partial_progress: true,
+            retried_after_zero_progress: false,
+            chord_integrity_lost: true,
+        };
+    }
 
-    let total_landed = landed1 + landed2;
-    let success = total_landed == n;
-    let keys_dropped = (n - total_landed) as u64;
+    // Zero progress is the only case where an immediate retry is safe: the
+    // first call inserted no packet, so the chord has not been split yet.
+    let retry = send_fn(scan_codes, false);
+    let retry_inserted = (retry.inserted as usize).min(n);
+    let retry_error = (retry.win32_error != 0).then_some(retry.win32_error);
+    if retry_inserted >= n {
+        return EmitResult {
+            sent: scan_codes.iter().copied().collect(),
+            completed_us: retry.completed_us,
+            success: true,
+            keys_dropped: 0,
+            first_win32_error,
+            last_win32_error: retry_error.or(first_win32_error),
+            send_attempts: 2,
+            zero_progress_retries: 1,
+            first_inserted: 0,
+            partial_progress: false,
+            retried_after_zero_progress: true,
+            chord_integrity_lost: false,
+        };
+    }
 
-    let sent: SmallVec<[u16; 15]> = scan_codes[..total_landed].iter().copied().collect();
+    let mut sent: SmallVec<[u16; 15]> = SmallVec::new();
+    let mut completed_us = retry.completed_us;
+    let mut send_attempts = 2;
+    let mut last_win32_error = retry_error.or(first_win32_error);
+    if retry_inserted > 0 {
+        let rollback = send_fn(&scan_codes[..retry_inserted], true);
+        let rollback_inserted = (rollback.inserted as usize).min(retry_inserted);
+        sent.extend(
+            scan_codes[..retry_inserted]
+                .iter()
+                .skip(rollback_inserted)
+                .copied(),
+        );
+        completed_us = rollback.completed_us;
+        send_attempts = 3;
+        last_win32_error = (rollback.win32_error != 0)
+            .then_some(rollback.win32_error)
+            .or(last_win32_error);
+    }
     EmitResult {
         sent,
-        completed_us: res2.completed_us,
-        success,
-        keys_dropped,
-        first_win32_error: first_win32_error.or(last_win32_error),
-        last_win32_error: last_win32_error.or(first_win32_error),
-        send_attempts: 2,
-        zero_progress_retries: 0,
+        completed_us,
+        success: false,
+        keys_dropped: (n - retry_inserted) as u64,
+        first_win32_error,
+        last_win32_error,
+        send_attempts,
+        zero_progress_retries: 1,
+        first_inserted: 0,
+        partial_progress: retry_inserted > 0,
+        retried_after_zero_progress: true,
+        chord_integrity_lost: retry_inserted > 0,
     }
 }
 
@@ -267,6 +347,10 @@ where
             last_win32_error: None,
             send_attempts: 0,
             zero_progress_retries: 0,
+            first_inserted: 0,
+            partial_progress: false,
+            retried_after_zero_progress: false,
+            chord_integrity_lost: false,
         };
     }
     let n = scan_codes.len();
@@ -283,6 +367,10 @@ where
             last_win32_error: first_win32_error,
             send_attempts: 1,
             zero_progress_retries: 0,
+            first_inserted: first_inserted as u8,
+            partial_progress: false,
+            retried_after_zero_progress: false,
+            chord_integrity_lost: false,
         };
     }
 
@@ -304,6 +392,10 @@ where
         last_win32_error,
         send_attempts: 2,
         zero_progress_retries: u8::from(first_inserted == 0),
+        first_inserted: first_inserted as u8,
+        partial_progress: false,
+        retried_after_zero_progress: first_inserted == 0,
+        chord_integrity_lost: false,
     }
 }
 
@@ -388,6 +480,10 @@ impl TrackedKeyState {
                 last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
+                first_inserted: 0,
+                partial_progress: false,
+                retried_after_zero_progress: false,
+                chord_integrity_lost: false,
             };
         }
 
@@ -413,6 +509,10 @@ impl TrackedKeyState {
                 last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
+                first_inserted: 0,
+                partial_progress: false,
+                retried_after_zero_progress: false,
+                chord_integrity_lost: false,
             };
         }
 
@@ -431,7 +531,7 @@ impl TrackedKeyState {
             self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
         }
 
-        if !emitted.success && !emitted.sent.is_empty() {
+        if emitted.chord_integrity_lost {
             self.chord_split_events += 1;
         }
         if emitted.success {
@@ -440,9 +540,10 @@ impl TrackedKeyState {
             }
         } else {
             self.last_error = Some(format!(
-                "partial note-on: {} of {} keys dropped",
+                "note-on rejected: {} of {} keys dropped; chord integrity lost={}",
                 emitted.keys_dropped,
-                to_send.len()
+                to_send.len(),
+                emitted.chord_integrity_lost,
             ));
         }
 
@@ -454,7 +555,7 @@ impl TrackedKeyState {
                 None
             } else {
                 Some(format!(
-                    "partial note-on: {}/{}",
+                    "note-on rejected: {}/{} dropped",
                     emitted.keys_dropped,
                     to_send.len()
                 ))
@@ -464,6 +565,10 @@ impl TrackedKeyState {
             last_win32_error: emitted.last_win32_error,
             send_attempts: emitted.send_attempts,
             zero_progress_retries: emitted.zero_progress_retries,
+            first_inserted: emitted.first_inserted,
+            partial_progress: emitted.partial_progress,
+            retried_after_zero_progress: emitted.retried_after_zero_progress,
+            chord_integrity_lost: emitted.chord_integrity_lost,
         }
     }
 
@@ -479,6 +584,10 @@ impl TrackedKeyState {
                 last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
+                first_inserted: 0,
+                partial_progress: false,
+                retried_after_zero_progress: false,
+                chord_integrity_lost: false,
             };
         }
 
@@ -508,6 +617,10 @@ impl TrackedKeyState {
                 last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
+                first_inserted: 0,
+                partial_progress: false,
+                retried_after_zero_progress: false,
+                chord_integrity_lost: false,
             };
         }
 
@@ -549,6 +662,10 @@ impl TrackedKeyState {
             last_win32_error: emitted.last_win32_error,
             send_attempts: emitted.send_attempts,
             zero_progress_retries: emitted.zero_progress_retries,
+            first_inserted: emitted.first_inserted,
+            partial_progress: emitted.partial_progress,
+            retried_after_zero_progress: emitted.retried_after_zero_progress,
+            chord_integrity_lost: emitted.chord_integrity_lost,
         }
     }
 
@@ -736,12 +853,14 @@ mod tests {
 
     #[test]
     fn down_retry_matrix_is_exact_and_clamped() {
-        for (script, expected_sent, expected_calls, expected_success) in [
-            (vec![3], 3, 1, true),
-            (vec![2, 1], 3, 2, true),
-            (vec![0, 0], 0, 2, false),
-            (vec![1, 1], 2, 2, false),
-            (vec![99], 3, 1, true),
+        for (script, expected_sent, expected_dropped, expected_calls, expected_success) in [
+            (vec![3], 3, 0, 1, true),
+            // A partial first insertion is rolled back; the remainder is
+            // never emitted as a second note-on chord.
+            (vec![2, 1], 1, 1, 2, false),
+            (vec![0, 0], 0, 3, 2, false),
+            (vec![1, 1], 0, 2, 2, false),
+            (vec![99], 3, 0, 1, true),
         ] {
             let mut returns = VecDeque::from(script);
             let mut calls = 0;
@@ -752,8 +871,42 @@ mod tests {
             assert_eq!(emitted.sent.len(), expected_sent);
             assert_eq!(calls, expected_calls);
             assert_eq!(emitted.success, expected_success);
-            assert_eq!(emitted.keys_dropped, (3 - expected_sent) as u64);
+            assert_eq!(emitted.keys_dropped, expected_dropped);
         }
+    }
+
+    #[test]
+    fn partial_note_on_marks_integrity_loss_and_rolls_back_prefix() {
+        let mut calls = 0;
+        let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
+            calls += 1;
+            assert_eq!(key_up, calls == 2);
+            scripted_result(codes.len(), 2, calls)
+        });
+
+        assert!(!emitted.success);
+        assert!(emitted.partial_progress);
+        assert!(emitted.chord_integrity_lost);
+        assert_eq!(emitted.first_inserted, 2);
+        assert_eq!(emitted.sent.len(), 0);
+        assert_eq!(emitted.send_attempts, 2);
+    }
+
+    #[test]
+    fn zero_progress_can_retry_whole_chord_without_splitting() {
+        let mut calls = 0;
+        let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
+            calls += 1;
+            assert!(!key_up);
+            scripted_result(codes.len(), if calls == 1 { 0 } else { 3 }, calls)
+        });
+
+        assert!(emitted.success);
+        assert_eq!(emitted.sent.len(), 3);
+        assert_eq!(emitted.send_attempts, 2);
+        assert_eq!(emitted.zero_progress_retries, 1);
+        assert!(emitted.retried_after_zero_progress);
+        assert!(!emitted.chord_integrity_lost);
     }
 
     #[test]
@@ -789,7 +942,8 @@ mod tests {
             }
         });
 
-        assert!(emitted.success);
+        assert!(!emitted.success);
+        assert!(emitted.chord_integrity_lost);
         assert_eq!(emitted.first_win32_error, Some(5));
         assert_eq!(emitted.last_win32_error, Some(5));
         assert_eq!(emitted.send_attempts, 2);

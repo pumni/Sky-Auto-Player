@@ -762,6 +762,9 @@ class DispatchLoop:
                 raise RuntimeSameKeyConflictError(
                     "Runtime same-key conflict under strict policy"
                 )
+            if self.same_key_conflict_policy == "drop_chord":
+                self.coordinator.drop_conflicted_downs(playable)
+                return None
 
         if not playable:
             return None

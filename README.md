@@ -66,7 +66,7 @@ system Python, no installer, no admin rights, no registry entries.
 
 ## Features
 
-- **Timing-first playback** — chords aligned to one frame, holds held in full, latency learned and compensated
+- **Timing-first playback** — chords are submitted contiguously, holds held in full, and sender-side latency is learned and compensated; game observation still depends on Windows and the game's sampling loop
 - **Textual TUI picker** — fuzzy search by song name, fully keyboard-driven
 - **Per-song profiles** — timing, tempo, FPS, theme
 - **Dry-run mode** — preview without sending input

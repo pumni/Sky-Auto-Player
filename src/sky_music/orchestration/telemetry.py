@@ -1019,13 +1019,14 @@ class TelemetryLogger:
             },
             # Phase 0 of SendInput lifecycle plan: per-reason abort tally.
             "abort_counts_by_reason": dict(self.abort_counts_by_reason),
-            # Phase 3 partial-send outcome hygiene: count of note-on dispatches whose
-            # SendInput returned a strict prefix (or nothing) and so were truncated on
-            # the sender side. G5 keeps us from late-retrying the remainder; this count
-            # surfaces the sender-side atomicity breaks without a metrics server.
+            # Count note-on dispatches whose SendInput result broke chord
+            # integrity. Native accuracy mode uses the explicit
+            # ``chord_integrity_lost`` outcome; the Python fallback retains
+            # ``partial_note_on`` for compatibility.
             "partial_note_on_count": sum(
                 1 for r in rows
-                if r.get("kind") == "down" and r.get("runtime_outcome") == "partial_note_on"
+                if r.get("kind") == "down"
+                and r.get("runtime_outcome") in {"partial_note_on", "chord_integrity_lost"}
             ),
             "backend": backend_info,
             "input_path_degraded": self.input_path_degraded,

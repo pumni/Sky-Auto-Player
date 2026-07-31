@@ -1,6 +1,6 @@
 pub mod engine;
 
-use engine::{MockFailureMode, NativeDispatchSession};
+use engine::{ChordConflictPolicy, MockFailureMode, NativeDispatchSession};
 use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -231,6 +231,13 @@ impl RustInputBackend {
         dict.set_item("last_win32_error", res.last_win32_error)?;
         dict.set_item("send_attempts", res.send_attempts)?;
         dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
+        dict.set_item("first_inserted", res.first_inserted)?;
+        dict.set_item("partial_progress", res.partial_progress)?;
+        dict.set_item(
+            "retried_after_zero_progress",
+            res.retried_after_zero_progress,
+        )?;
+        dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
         Ok(dict)
     }
 
@@ -255,6 +262,13 @@ impl RustInputBackend {
         dict.set_item("last_win32_error", res.last_win32_error)?;
         dict.set_item("send_attempts", res.send_attempts)?;
         dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
+        dict.set_item("first_inserted", res.first_inserted)?;
+        dict.set_item("partial_progress", res.partial_progress)?;
+        dict.set_item(
+            "retried_after_zero_progress",
+            res.retried_after_zero_progress,
+        )?;
+        dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
         Ok(dict)
     }
 
@@ -416,12 +430,13 @@ impl NativeDispatchSessionPy {
                 "telemetry_capacity must be between 1 and 200000",
             ));
         }
-        let strict_same_key_conflicts = match same_key_conflict_policy {
-            "degraded" => false,
-            "strict" => true,
+        let chord_conflict_policy = match same_key_conflict_policy {
+            "degraded" => ChordConflictPolicy::DropConflictingKeys,
+            "drop_chord" => ChordConflictPolicy::DropWholeChord,
+            "strict" | "abort" => ChordConflictPolicy::AbortPlayback,
             _ => {
                 return Err(PyValueError::new_err(
-                    "same_key_conflict_policy must be 'degraded' or 'strict'",
+                    "same_key_conflict_policy must be 'degraded', 'drop_chord', or 'strict'",
                 ));
             }
         };
@@ -460,7 +475,7 @@ impl NativeDispatchSessionPy {
             spin_threshold_us,
             core_warmup_budget_us,
             late_pulse_drop_threshold_us,
-            strict_same_key_conflicts,
+            chord_conflict_policy,
             telemetry_enabled,
             telemetry_capacity,
             priority_mode,

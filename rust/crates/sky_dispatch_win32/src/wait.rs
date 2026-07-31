@@ -120,13 +120,13 @@ impl HybridWaiter {
                 remaining_ticks.saturating_sub(spin_threshold_ticks),
             ));
             #[cfg(windows)]
-            if let Some(timer) = &self.timer
-                && timer.arm_relative_us(kernel_wait_us)
-            {
-                use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-                use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
+            if self.event_wait_enabled {
+                if let Some(timer) = &self.timer
+                    && timer.arm_relative_us(kernel_wait_us)
+                {
+                    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+                    use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
-                if self.event_wait_enabled {
                     // Event is deliberately index 0 so simultaneous readiness
                     // gives command processing priority over dispatch.
                     let handles = [interrupt.raw_handle(), timer.raw_handle()];
@@ -143,9 +143,14 @@ impl HybridWaiter {
                     if result == WAIT_OBJECT_0 + 1 {
                         continue;
                     }
-                } else if timer.sleep_us(kernel_wait_us.min(1_000)) {
-                    continue;
                 }
+            } else if let Some(timer) = &self.timer
+                // `sleep_us` arms and waits once. Do not arm the same timer
+                // above and then re-arm it to a 1 ms cap: that turns every
+                // long gap into a polling loop and distorts wake metrics.
+                && timer.sleep_us(kernel_wait_us)
+            {
+                continue;
             }
 
             // Portable/degraded fallback remains bounded so a command cannot

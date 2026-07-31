@@ -28,13 +28,22 @@ from typing import Any
 from sky_music.layouts import SKY_15_SCAN_CODES
 
 
-def _actions(count: int) -> list[tuple[int, str, int, list[int], str]]:
+def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
+    if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
+        raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
-        scan_code = int(SKY_15_SCAN_CODES[index % len(SKY_15_SCAN_CODES)])
-        at_us = index * 2_000
-        actions.append((index * 2, "down", at_us, [scan_code], "bench-down"))
-        actions.append((index * 2 + 1, "up", at_us + 1_000, [scan_code], "bench-up"))
+        scan_codes = [
+            int(SKY_15_SCAN_CODES[(index * polyphony + offset) % len(SKY_15_SCAN_CODES)])
+            for offset in range(polyphony)
+        ]
+        # Leave a generous multi-millisecond off-gap between cycles. The benchmark is
+        # a clean chord-integrity gate; sub-millisecond same-key feasibility
+        # belongs to the dedicated conflict/recovery tests, not this sender
+        # timing baseline.
+        at_us = index * 10_000
+        actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
+        actions.append((index * 2 + 1, "up", at_us + 5_000, scan_codes, "bench-up"))
     return actions
 
 
@@ -101,7 +110,9 @@ def _new_session(actions: list[tuple[int, str, int, list[int], str]]) -> Any:
     )
 
 
-def _run_dispatch(actions: list[tuple[int, str, int, list[int], str]]) -> dict[str, Any]:
+def _run_dispatch(
+    actions: list[tuple[int, str, int, list[int], str]], polyphony: int
+) -> dict[str, Any]:
     session = _new_session(actions)
     started_ns = time.perf_counter_ns()
     session.start()
@@ -114,6 +125,7 @@ def _run_dispatch(actions: list[tuple[int, str, int, list[int], str]]) -> dict[s
     sender_errors = [int(record["visible_lateness_us"]) for record in records]
     peak_rss = _peak_working_set_bytes()
     result: dict[str, Any] = {
+        "polyphony": polyphony,
         "wall_us": wall_us,
         "_sender_error_values": sender_errors,
         "sender_completion_error_us": _stats(sender_errors),
@@ -121,6 +133,8 @@ def _run_dispatch(actions: list[tuple[int, str, int, list[int], str]]) -> dict[s
         "peak_rss_bytes": peak_rss,
         "keys_dropped": int(snapshot.get("keys_dropped", 0)),
         "failed_release_count": int(snapshot.get("failed_release_count", 0)),
+        "chord_split_events": int(snapshot.get("chord_split_events", 0)),
+        "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
         "outcome": snapshot.get("outcome"),
     }
     return result
@@ -159,7 +173,73 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--label", default="native")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--polyphony",
+        default="1,2,3,5,8,15",
+        help="comma-separated chord sizes to exercise (default: 1,2,3,5,8,15)",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="optional JSON report with sender-side regression thresholds",
+    )
     return parser.parse_args()
+
+
+def _parse_polyphony(raw: str) -> list[int]:
+    try:
+        values = [int(part.strip()) for part in raw.split(",") if part.strip()]
+    except ValueError as exc:
+        raise SystemExit("--polyphony must contain comma-separated integers") from exc
+    if not values or len(set(values)) != len(values):
+        raise SystemExit("--polyphony must contain at least one unique value")
+    if any(value < 1 or value > len(SKY_15_SCAN_CODES) for value in values):
+        raise SystemExit(f"--polyphony values must be in 1..{len(SKY_15_SCAN_CODES)}")
+    return values
+
+
+def _assert_correctness(run: dict[str, Any]) -> None:
+    if run["outcome"] != "finished":
+        raise SystemExit(f"native acceptance outcome was {run['outcome']!r}")
+    if run["keys_dropped"] or run["failed_release_count"] or run["chord_split_events"]:
+        raise SystemExit(
+            "native acceptance correctness failure: "
+            f"polyphony={run['polyphony']} "
+            f"keys_dropped={run['keys_dropped']} "
+            f"failed_release_count={run['failed_release_count']} "
+            f"chord_split_events={run['chord_split_events']}"
+        )
+    statuses = run["generation_status_counts"]
+    nonterminal = sum(int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending"))
+    if nonterminal:
+        raise SystemExit(
+            f"native acceptance left {nonterminal} nonterminal generations "
+            f"for polyphony={run['polyphony']}"
+        )
+
+
+def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read benchmark baseline {baseline_path}: {exc}") from exc
+
+    checks = [
+        ("sender_completion_error_us", "p95", 1.25),
+        ("sender_completion_error_us", "p99", 1.25),
+        ("command_interrupt_latency_us", "p95", 1.50),
+        ("peak_rss_bytes", "max", 1.25),
+    ]
+    for section, field, ratio in checks:
+        observed = float(report[section][field])
+        expected = float(baseline.get(section, {}).get(field, 0))
+        if expected <= 0:
+            continue
+        if observed > expected * ratio:
+            raise SystemExit(
+                f"native benchmark regression in {section}.{field}: "
+                f"observed={observed:g}, baseline={expected:g}, allowed={expected * ratio:g}"
+            )
 
 
 def main() -> int:
@@ -169,8 +249,32 @@ def main() -> int:
     if args.actions <= 0 or args.repeats <= 0:
         raise SystemExit("--actions and --repeats must be positive")
 
-    actions = _actions(args.actions)
-    dispatch_runs = [_run_dispatch(actions) for _ in range(args.repeats)]
+    polyphonies = _parse_polyphony(args.polyphony)
+    dispatch_runs: list[dict[str, Any]] = []
+    by_polyphony: dict[str, Any] = {}
+    for polyphony in polyphonies:
+        actions = _actions(args.actions, polyphony)
+        runs = [_run_dispatch(actions, polyphony) for _ in range(args.repeats)]
+        for run in runs:
+            _assert_correctness(run)
+        values = [value for run in runs for value in run["_sender_error_values"]]
+        poly_report = {
+            "polyphony": polyphony,
+            "actions": len(actions),
+            "sender_completion_error_us": {
+                key: _stats(values)[key] for key in ("p50", "p95", "p99", "max")
+            },
+            "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
+            "peak_rss_bytes": _stats(
+                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
+            ),
+            "keys_dropped": sum(run["keys_dropped"] for run in runs),
+            "failed_release_count": sum(run["failed_release_count"] for run in runs),
+            "chord_split_events": sum(run["chord_split_events"] for run in runs),
+            "outcomes": sorted({run["outcome"] for run in runs}),
+        }
+        by_polyphony[str(polyphony)] = poly_report
+        dispatch_runs.extend(runs)
     interrupt_runs = [_measure_command_interrupt() for _ in range(args.repeats)]
     sender_errors = [
         value
@@ -180,7 +284,8 @@ def main() -> int:
     report: dict[str, Any] = {
         "label": args.label,
         "backend": "mock",
-        "actions": len(actions),
+        "actions_per_polyphony": args.actions * 2,
+        "polyphony": polyphonies,
         "repeats": args.repeats,
         "sender_completion_error_us": {
             key: _stats(sender_errors)[key]
@@ -194,8 +299,11 @@ def main() -> int:
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
         "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
         "outcomes": sorted({run["outcome"] for run in dispatch_runs}),
+        "by_polyphony": by_polyphony,
         "evidence_scope": "sender_side_mock_backend",
     }
+    if args.baseline is not None:
+        _assert_baseline(report, args.baseline)
     encoded = json.dumps(report, indent=2)
     print(encoded)
     if args.output is not None:

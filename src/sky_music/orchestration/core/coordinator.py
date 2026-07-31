@@ -446,6 +446,12 @@ class RuntimeDispatchCoordinator:
             if intent.generation_id is not None:
                 self._terminalize(intent.generation_id, GenerationStatus.DROPPED_EXPIRED)
 
+    def drop_conflicted_downs(self, intents: tuple[RuntimeKeyIntent, ...]) -> None:
+        """Drop the whole authored chord after a same-key conflict."""
+        for intent in intents:
+            if intent.generation_id is not None:
+                self._terminalize(intent.generation_id, GenerationStatus.DROPPED_CONFLICT)
+
     def request_releases(
         self,
         intents: tuple[RuntimeKeyIntent, ...],

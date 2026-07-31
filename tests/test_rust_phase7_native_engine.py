@@ -550,8 +550,9 @@ def test_native_dispatch_strict_conflict_is_contained_and_reported() -> None:
     session.start()
     assert session.join() is True
     snapshot = cast(dict[str, Any], session.snapshot())
-    assert snapshot["status"] == "panicked"
-    assert "strict same-key conflict" in snapshot["terminal_error"]
+    assert snapshot["status"] == "error"
+    assert snapshot["outcome"] == "error"
+    assert "same-key conflict" in snapshot["terminal_error"]
     assert snapshot["active_count"] == 0
     assert snapshot["abort_counts_by_reason"] == {"error": 1}
     assert len(snapshot["release_outcome"]["attempted"]) == 15

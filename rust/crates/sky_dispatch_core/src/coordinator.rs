@@ -611,6 +611,17 @@ impl RuntimeDispatchCoordinator {
         (playable, conflicts)
     }
 
+    /// Terminalize every generation in a conflicted authored chord without
+    /// sending a playable subset. Accuracy-first callers use this when a
+    /// partial chord would be worse than dropping the whole chord.
+    pub fn drop_conflicted_downs(&mut self, intents: &[RuntimeKeyIntent]) {
+        for intent in intents {
+            if let Some(generation_id) = intent.generation_id {
+                self.terminalize(generation_id, GenerationStatus::DroppedConflict);
+            }
+        }
+    }
+
     pub fn drop_expired_downs(&mut self, intents: &[RuntimeKeyIntent]) {
         for intent in intents {
             if let Some(gen_id) = intent.generation_id {

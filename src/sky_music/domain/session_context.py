@@ -20,7 +20,7 @@ from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
 if TYPE_CHECKING:
     from sky_music.orchestration.calibration import CalibrationRecommendation
 
-ConflictPolicy = Literal["degraded", "strict"]
+ConflictPolicy = Literal["degraded", "drop_chord", "strict"]
 
 
 @dataclass(frozen=True, slots=True)

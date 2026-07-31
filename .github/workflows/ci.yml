@@ -146,10 +146,10 @@ jobs:
         # Run windows-marked tests when present; skip only wall-clock `slow`.
         run: uv run pytest -m "not slow"
 
-      - name: Benchmark — native sender-side acceptance smoke
+      - name: Benchmark — native sender-side acceptance and regression gate
         # Mock backend only: records host-side timing evidence without sending
         # input to a game or another process.
-        run: uv run --env-file .env python scripts/bench_native_acceptance.py --actions 512 --repeats 3 --label ci
+        run: uv run --env-file .env python scripts/bench_native_acceptance.py --actions 256 --repeats 3 --polyphony 1,2,3,5,8,15 --baseline .github/native_acceptance_baseline.json --label ci
 
   status:
     name: Sky Auto Player — full altitude gate

@@ -519,7 +519,7 @@ def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionCont
     ] if isinstance(raw_overrides, list | tuple) else []
 
     conflict_policy = str(payload.get("same_key_conflict_policy", "degraded"))
-    if conflict_policy not in {"degraded", "strict"}:
+    if conflict_policy not in {"degraded", "drop_chord", "strict"}:
         conflict_policy = "degraded"
 
     return PlaybackSessionContext(

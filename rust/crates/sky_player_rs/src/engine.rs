@@ -44,6 +44,17 @@ pub enum MockFailureMode {
     PersistentRelease,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChordConflictPolicy {
+    /// Preserve the legacy best-effort behavior and send only non-conflicting
+    /// keys. This mode is intentionally not fidelity-first.
+    DropConflictingKeys,
+    /// Drop the complete authored chord when any key is already active.
+    DropWholeChord,
+    /// Drop the complete chord and terminate playback with a controlled error.
+    AbortPlayback,
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub elapsed_us: u64,
@@ -241,15 +252,15 @@ impl TelemetryCollector {
     where
         F: FnOnce() -> NativeTelemetryRecord,
     {
-        let mut record = build();
         self.output.attempted = self.output.attempted.saturating_add(1);
-        self.output.summary.observe(&record);
-        // Production runs keep the bounded summary even when full event retention is disabled.
-        // The record is dropped immediately after its counters are observed, so this does not
-        // create an unbounded allocation or a post-run JSON record buffer.
+        // The worker still counts attempted dispatches, but disabled
+        // production telemetry must not materialize SmallVecs, generation
+        // lists, or other event-owned data on the real-time thread.
         if !self.enabled {
             return;
         }
+        let mut record = build();
+        self.output.summary.observe(&record);
         record.dispatch_id = self.next_dispatch_id;
         self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
         record.idle_gap_us = self
@@ -324,7 +335,7 @@ struct WorkerConfig {
     spin_threshold_us: u64,
     core_warmup_budget_us: u64,
     late_pulse_drop_threshold_us: Option<u64>,
-    strict_same_key_conflicts: bool,
+    chord_conflict_policy: ChordConflictPolicy,
     telemetry_enabled: bool,
     telemetry_capacity: usize,
     priority_mode: PriorityMode,
@@ -377,7 +388,7 @@ impl NativeDispatchSession {
         spin_threshold_us: u64,
         core_warmup_budget_us: u64,
         late_pulse_drop_threshold_us: Option<u64>,
-        strict_same_key_conflicts: bool,
+        chord_conflict_policy: ChordConflictPolicy,
         telemetry_enabled: bool,
         telemetry_capacity: usize,
         priority_mode: PriorityMode,
@@ -420,7 +431,7 @@ impl NativeDispatchSession {
                 spin_threshold_us,
                 core_warmup_budget_us,
                 late_pulse_drop_threshold_us,
-                strict_same_key_conflicts,
+                chord_conflict_policy,
                 telemetry_enabled,
                 telemetry_capacity,
                 priority_mode,
@@ -901,7 +912,12 @@ fn run_worker(
                     // target is foreground, before playback can resume.
                     let _ = backend.release_all();
                     coordinator.cancel_all();
-                    let _ = clock_state.exit_pause("focus", now_us);
+                    // Cleanup can include bounded backend retries. Re-sample
+                    // QPC after it completes so that the cleanup interval is
+                    // included in the focus pause rather than lost from the
+                    // playback clock.
+                    let resumed_us = qpc_now_us();
+                    let _ = clock_state.exit_pause("focus", resumed_us);
                     focus_restore_started_us = None;
                     publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
@@ -980,6 +996,10 @@ fn run_worker(
                         result.sent.len(),
                         lead_up,
                         0,
+                        result.success
+                            && result.sent.len() == scan_codes.len()
+                            && result.skipped_duplicates.is_empty()
+                            && result.send_attempts == 1,
                     );
                 }
                 let bookkeeping_completed_us = qpc_now_us();
@@ -1264,13 +1284,29 @@ fn run_worker(
                             send_attempts: 0,
                             zero_progress_retries: 0,
                         });
-                        assert!(
-                            !config.strict_same_key_conflicts,
-                            "strict same-key conflict policy rejected overlapping note-on"
-                        );
                         backend.chord_split_events = backend.chord_split_events.saturating_add(1);
                     }
-                    if !playable.is_empty() {
+                    let send_playable = conflicts.is_empty()
+                        || matches!(
+                            config.chord_conflict_policy,
+                            ChordConflictPolicy::DropConflictingKeys
+                        );
+                    if !conflicts.is_empty() && !send_playable {
+                        coordinator.drop_conflicted_downs(&playable);
+                        if matches!(
+                            config.chord_conflict_policy,
+                            ChordConflictPolicy::AbortPlayback
+                        ) {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "same-key conflict rejected authored chord at action {}",
+                                batch.source_action_index
+                            ));
+                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            break;
+                        }
+                    }
+                    if send_playable && !playable.is_empty() {
                         let scan_codes: SmallVec<[u16; 15]> =
                             playable.iter().map(|intent| intent.scan_code).collect();
                         let started_us = qpc_now_us();
@@ -1294,6 +1330,11 @@ fn run_worker(
                                 playable.len(),
                                 lead_down,
                                 signed_delta(completed_effective, batch.scheduled_us),
+                                result.success
+                                    && result.sent.len() == playable.len()
+                                    && result.skipped_duplicates.is_empty()
+                                    && result.send_attempts == 1
+                                    && !result.chord_integrity_lost,
                             );
                         }
                         let bookkeeping_completed_us = qpc_now_us();
@@ -1326,7 +1367,9 @@ fn run_worker(
                                 .iter()
                                 .filter_map(|intent| intent.generation_id)
                                 .collect(),
-                            runtime_outcome: if result.sent.len() == scan_codes.len() {
+                            runtime_outcome: if result.chord_integrity_lost {
+                                "chord_integrity_lost"
+                            } else if result.sent.len() == scan_codes.len() {
                                 "sent"
                             } else {
                                 "partial_note_on"
@@ -1377,6 +1420,15 @@ fn run_worker(
                             metrics,
                             latency_tx,
                         );
+                        if result.chord_integrity_lost {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "SendInput split authored chord at action {}",
+                                batch.source_action_index
+                            ));
+                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            break;
+                        }
                     }
                 } else {
                     let (_, suppressed) = coordinator.request_releases(&batch.intents);
@@ -1638,6 +1690,7 @@ fn release_runtime_outcome(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_estimator_after_send(
     estimator: &mut SendLatencyEstimator,
     kind: ActionKind,
@@ -1646,8 +1699,9 @@ fn update_estimator_after_send(
     authored_polyphony: usize,
     applied_lead_us: u64,
     completion_error_us: i64,
+    clean_sample: bool,
 ) {
-    if sent_count == 0 {
+    if !clean_sample || sent_count == 0 {
         return;
     }
     estimator.update(kind, duration_us, authored_polyphony);
@@ -1908,17 +1962,19 @@ mod tests {
     fn failed_send_does_not_seed_estimator_or_residual() {
         let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
 
-        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120);
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120, false);
         let state = estimator.export_state();
         assert_eq!(state.count_down[3], 0);
         assert_eq!(state.count_residual, 0);
 
-        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120);
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120, false);
         let state = estimator.export_state();
-        assert_eq!(state.count_down[3], 1);
+        assert_eq!(state.count_down[3], 0);
         assert_eq!(state.count_residual, 0);
 
-        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120);
+        update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120, true);
+        let state = estimator.export_state();
+        assert_eq!(state.count_down[3], 1);
         assert_eq!(estimator.export_state().count_residual, 1);
     }
 

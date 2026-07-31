@@ -29,7 +29,7 @@ class TimingPolicy:
 
     focus_restore_grace_us: Microseconds = Microseconds(100_000) # Default is overridden in from_dict
 
-    same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
+    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "degraded"
     hold_frames: float = 1.25
     min_hold_frames: float = 1.25
     hold_override_us: Microseconds | None = None
@@ -164,7 +164,7 @@ class TimingPolicy:
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
                 p_dict.get("same_key_conflict_policy", "degraded")
-                if p_dict.get("same_key_conflict_policy", "degraded") in ("degraded", "strict")
+                if p_dict.get("same_key_conflict_policy", "degraded") in ("degraded", "drop_chord", "strict")
                 else "degraded"
             ),
             hold_frames=hold_frames,
@@ -206,7 +206,7 @@ class FrameTimingPolicy:
 
     focus_restore_grace_us: Microseconds
 
-    same_key_conflict_policy: Literal["degraded", "strict"] = "degraded"
+    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "degraded"
     profile_name: str | None = None
 
     # Carried unchanged from TimingPolicy; consumed by build_key_actions. See TimingPolicy docstring.
@@ -230,7 +230,7 @@ class FrameTimingPolicy:
         policy: TimingPolicy,
         fps: int | None = None,
         min_visible_hold_frames: float = 1.25,
-        same_key_conflict_policy: Literal["degraded", "strict"] | None = None,
+        same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] | None = None,
         min_hold_min_frame_ratio: float = 1.25,
         *,
         profile_name: str | None = None,
@@ -274,7 +274,7 @@ class FrameTimingPolicy:
             applied_margin_us = 0
             
         conflict_policy = same_key_conflict_policy if same_key_conflict_policy is not None else policy.same_key_conflict_policy
-        if conflict_policy not in ("strict", "degraded"):
+        if conflict_policy not in ("strict", "drop_chord", "degraded"):
             conflict_policy = "degraded"
 
         return cls(
