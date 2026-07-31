@@ -268,29 +268,21 @@ def test_wake_error_probe_failure_preserves_configured_threshold() -> None:
     assert engine.telemetry.runtime_options["effective_spin_threshold_us"] == 777
 
 
-def test_wake_error_probe_covers_heavy_tail_outliers() -> None:
-    """Effective spin threshold must cover the worst observed wake error.
+def test_wake_error_probe_records_heavy_tail_outliers() -> None:
+    """The probe records heavy tails while deriving the threshold from p95.
 
-    Real hardware shows rare wake-error spikes >> p90 (Windows timer
-    coalescing batches, brief power-state transitions, transient DPC
-    latency). The pre-play probe samples only 30 sleeps, so a formula
-    based on p90 — which with n=30 sits at the 27th sample — silently
-    ignores the worst three outliers. Those outliers then leak through
-    the spin guard as late completions on the rare nights they strike
-    in production.
+    Real hardware shows rare wake-error spikes (Windows timer coalescing
+    batches, brief power-state transitions, transient DPC latency). The
+    pre-play probe records p50/p95/p99/max so those spikes remain visible,
+    while p95 prevents one outlier from permanently forcing a 3 ms spin.
 
-    The heavy-tail-aware threshold uses the worst observed sample
-    (``max_wake + buffer``), restoring the original Phase-5 design
-    intent recorded in ``docs/archive/2026-06_rt-pipeline-extreme-
-    optimization-plan.md`` §Phase 5 (``p_max + 200``).
+    The threshold uses ``p95 + 200`` with the configured floor and cap.
     """
 
     # Sleeper whose 28 sleeps overshoot 300 us and 2 sleeps overshoot 1500 us.
     # After sorting (30 samples): [300]*28 + [1500]*2.
-    # Sorted index 27 = 300 (p90 under n=30) — the old p90+100 formula returns
-    # 700 (floor clamp); the worst outlier (1500) stays 800 us *outside* the
-    # spin guard. The new formula returns max(700, min(3000, 1500+200)) = 1700,
-    # fully absorbing the heavy tail.
+    # p95 lands on the first outlier for this distribution, so the threshold
+    # remains 1700 us while the recorded max still exposes the full tail.
     class HeavyTailSleeper:
         def __init__(self, clock: FakeClock) -> None:
             self.clock = clock
@@ -346,12 +338,9 @@ def test_wake_error_probe_covers_heavy_tail_outliers() -> None:
     assert threshold is not None, (
         "probe must populate effective_spin_threshold_us when enable_adaptive_spin=True"
     )
-    assert threshold >= 1500, (
-        f"effective_spin_threshold_us must cover the heaviest observed wake "
-        f"error (1500 us in this test); got {threshold}. The p90+100 "
-        f"formula leaves rare production outliers (Windows timer "
-        f"coalescing batches, DPC spikes) outside the spin guard."
-    )
+    assert threshold == 1700
+    assert engine.telemetry.runtime_options.get("probe_wake_error_p95_us") == 1500
+    assert engine.telemetry.runtime_options.get("probe_wake_error_max_us") == 1500
 
 
 def test_probes_complete_before_perf_anchor() -> None:

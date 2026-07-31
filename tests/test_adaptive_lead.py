@@ -107,10 +107,10 @@ def test_send_latency_estimator_ema() -> None:
     # Test that alpha=0.2 EMA and capping works
     estimator = SendLatencyEstimator(alpha=0.2, max_lead_us=2000)
     
-    # First 4 sends should yield 0
+    # Cold buckets use the conservative single-key prior until they are warm.
     for _ in range(4):
         estimator.update(ActionKind.DOWN, 1000)
-        assert estimator.get_lead_us(ActionKind.DOWN) == 0
+        assert estimator.get_lead_us(ActionKind.DOWN) == 50
     
     # 5th send seeds the EMA
     estimator.update(ActionKind.DOWN, 1000)
@@ -148,10 +148,10 @@ def test_send_latency_estimator_residual_prologue_bias() -> None:
     # Ups ignore residual prologue bias
     assert estimator.get_lead_us(ActionKind.UP) == 400
 
-    # Early residual must not shrink lead
+    # Early residual reduces lead slowly once its EMA is warm.
     for _ in range(20):
         estimator.update_completion_error(ActionKind.DOWN, -200)
-    assert estimator.get_lead_us(ActionKind.DOWN) == 800
+    assert estimator.get_lead_us(ActionKind.DOWN) == 751
 
 
 def test_no_early_conflict_guard() -> None:
@@ -246,8 +246,9 @@ def test_adaptive_lead_integration() -> None:
     assert engine.estimator._count_down[1] == 7
     assert engine.estimator._count_up == 7
     
-    # Seed value was 800, 7th value updated: 0.2 * 800 + 0.8 * 800 = 800
-    assert engine.estimator.get_lead_us(ActionKind.DOWN) == 800
+    # The measured send EMA is 800. The deterministic fake clock also exposes a sustained
+    # positive completion residual, which is folded in at the bounded 500-us cap.
+    assert engine.estimator.get_lead_us(ActionKind.DOWN) == 1300
     assert engine.estimator.get_lead_us(ActionKind.UP) == 800
     
     # Telemetry records should exist and have non-zero applied_lead_us for later records
@@ -257,20 +258,15 @@ def test_adaptive_lead_integration() -> None:
     down_records = [r for r in records if r.kind == "down"]
     assert len(down_records) == 7
     
-    # First 5 downs pop early (COLD) due to falling behind: d1–d4 fill count_down[1] to 4,
-    # still under ``SendLatencyEstimator._SEED_SAMPLES`` (=5), so ``get_lead_us`` returns 0.
-    # Under the scalar drain (``pop_next_due_authored``) introduced in the review of
-    # main@7c548527 §1.4, d5 still pops while count is 4 — its lead is 0 too. d5's dispatch
-    # then bumps count_down[1] to 5, seeding the EMA at 800 (warm), so d6 and d7 pop with
-    # lead=800. (The legacy fan-pop tuple path computed every fan batch's lead BEFORE any
-    # dispatch in the fan updated the estimator, so d5 AND d6 both saw cold → 0; the scalar
-    # drain lets the estimator advance between pops in the same drain, which is the more
-    # responsive adaptive-lead behaviour the scalar-drain refactor enables.)
+    # The first five downs use the conservative cold-start prior until d5 seeds the EMA.
+    # Under the scalar drain (``pop_next_due_authored``), d5 still pops while count is 4;
+    # its dispatch then bumps count_down[1] to 5, seeding the EMA at 800, so d6 and d7 pop
+    # with the measured lead plus the warmed residual correction (1300).
     for r in down_records[:5]:
-        assert r.applied_lead_us == 0
+        assert r.applied_lead_us == 50
     # 6th and 7th downs: lead popped after the estimator seeded (count_down[1] ≥ 5, warm).
-    assert down_records[5].applied_lead_us == 800
-    assert down_records[6].applied_lead_us == 800
+    assert down_records[5].applied_lead_us == 1300
+    assert down_records[6].applied_lead_us == 1300
 
 
 # ---------------------------------------------------------------------------
@@ -512,10 +508,10 @@ def test_estimator_total_fallback_when_no_lower_bucket() -> None:
 
 def test_estimator_bucket_cold_then_clamp() -> None:
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=2_000)
-    # Cold: fewer than seed samples in the bucket -> lead 0.
+    # Cold: fewer than seed samples in the bucket -> conservative polyphony prior.
     for _ in range(4):
         est.update(ActionKind.DOWN, 5_000, n_keys=3)
-    assert est.get_lead_us(ActionKind.DOWN, 3) == 0
+    assert est.get_lead_us(ActionKind.DOWN, 3) == 80
     # Seed then push high -> clamp at max_lead_us.
     est.update(ActionKind.DOWN, 5_000, n_keys=3)
     for _ in range(20):
@@ -630,13 +626,11 @@ def test_first_three_key_chord_lead_positive_after_linear_seed_from_singles() ->
     )
 
 
-def test_residual_prologue_bias_is_positive_only_and_capped_at_500us() -> None:
-    """Phase 4 §4.2 row "residual bias: keep positive-only cap 500us — document".
+def test_residual_prologue_bias_is_asymmetric_and_capped_at_500us() -> None:
+    """Late residuals lead fully; early residuals unwind the lead slowly.
 
-    The estimator's residual prologue bias is intentionally positive-only: lead must NEVER
-    shrink because an early completion under-shot (that would compound latency). Negative
-    residuals would cancel future lead and cause systematic lateness. The cap bounds the
-    bias influence so a single slow first event cannot dominate lead.
+    The asymmetric correction protects against transient early samples while allowing a stable
+    early bias to reduce an unnecessarily large lead. The cap bounds late bias influence.
     """
     seed_n = SendLatencyEstimator._SEED_SAMPLES
     est = SendLatencyEstimator(alpha=0.2, max_lead_us=5_000)
@@ -644,14 +638,13 @@ def test_residual_prologue_bias_is_positive_only_and_capped_at_500us() -> None:
     for _ in range(seed_n):
         est.update(ActionKind.DOWN, 200, n_keys=1)
 
-    # Force an early completion: lead was 200, completion landed at -1000us early.
-    # The residual bias must NOT become -1000 (negative forbidden); it stays at 0.
+    # One early sample is not enough to warm the residual estimator.
     est.update_completion_error(ActionKind.DOWN, -1_000)
     assert est.get_lead_us(ActionKind.DOWN, 1) == 200, (
-        "negative residuals must not reduce lead (positive-only invariant)"
+        "a cold residual sample must not reduce lead"
     )
 
-    # Force a late completion: residual folds in (positive side) but is capped at 500us.
+    # Force a late completion: residual folds in and is capped at 500us.
     est.update_completion_error(ActionKind.DOWN, 1_500)
     lead_after_late = est.get_lead_us(ActionKind.DOWN, 1)
     assert lead_after_late >= 200, "residual folds in positive side (>= EMA)"

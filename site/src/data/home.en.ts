@@ -5,7 +5,7 @@ export const homeEn: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows',
     description:
-      'Load a Sky music sheet and play notes, chords and holds on time with an open-source Windows application.',
+      'Load a Sky music sheet and play notes, chords and holds on time — frame-aligned, latency-compensated, no macro replay.',
   },
   navigation: {
     playback: 'Playback',
@@ -18,7 +18,7 @@ export const homeEn: HomeContent = {
     kicker: 'Music automation for Sky · Windows 10/11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
-      'Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on time.',
+      'Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — aligned to the game\'s frames, not just sequenced.',
     primaryCta: 'Download for Windows',
     secondaryCta: 'See how it works',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
@@ -29,21 +29,23 @@ export const homeEn: HomeContent = {
     kicker: 'Performance profile',
     metric: 'FRAME-SYNC / 60 FPS TARGET',
     signals: [
-      'Windows SendInput only',
-      'Portable ZIP release',
-      'Open source, reviewable',
-      'Per-song timing profiles',
+      'Chords land in the same game frame',
+      'Latency learned per machine — under 1 millisecond off the beat',
+      'Holds keep their full duration, never clipped',
+      'Player and display on separate threads — HUD stays smooth',
     ],
   },
   playback: {
     kicker: 'Built around the music',
     title: 'Timing is the instrument.',
     description:
-      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro.',
+      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro. Every note is checked against the moment it actually lands, not just the moment it was scheduled.',
     points: [
       'Frame-aligned chords',
       'Tempo-aware playback',
       'Notes, chords and holds',
+      'Latency learned per machine',
+      'Player and HUD on separate threads',
       'Dry-run preview',
     ],
   },
@@ -57,6 +59,8 @@ export const homeEn: HomeContent = {
       { macro: 'Fixed delays', player: 'Timing follows the sheet and tempo' },
       { macro: 'Tap-focused playback', player: 'Notes, chords and holds' },
       { macro: 'One global setup', player: 'Per-song timing profiles' },
+      { macro: 'Fixed delay, one-size-fits-all', player: 'Learns your machine delay and compensates' },
+      { macro: 'HUD stutters when busy', player: 'Note firing and display run on separate threads' },
     ],
   },
   product: {

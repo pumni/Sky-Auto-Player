@@ -9,6 +9,7 @@ pub type GenerationId = u64;
 pub type ReasonId = u16;
 pub type PacketId = u32;
 pub type KeySlot = u8;
+pub const NO_GENERATION_ID: GenerationId = GenerationId::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +69,29 @@ pub struct RuntimeKeyIntent {
     pub reason_id: ReasonId,
 }
 
+/// Compact immutable intent stored in the schedule arena.
+///
+/// The batch header owns the fields shared by every intent in a chord.  The
+/// full `RuntimeKeyIntent` remains the short-lived materialized view consumed
+/// by the coordinator and worker, so the million-action schedule does not
+/// inline fifteen copies of those fields for every action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactIntent {
+    pub generation_id: GenerationId,
+    pub key_slot: KeySlot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledBatch {
+    pub source_action_index: u32,
+    pub kind: ActionKind,
+    pub scheduled_us: u64,
+    pub reason_id: ReasonId,
+    pub intent_start: u32,
+    pub intent_len: u8,
+    pub packet_id: PacketId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeBatch {
     pub source_action_index: u32,
@@ -80,10 +104,53 @@ pub struct RuntimeBatch {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSchedule {
-    pub batches: Vec<RuntimeBatch>,
+    pub batches: Vec<CompiledBatch>,
+    pub intents: Vec<CompactIntent>,
     pub generation_count: u64,
     pub key_registry: KeyRegistry,
     pub reason_table: Vec<String>,
+}
+
+impl RuntimeSchedule {
+    pub fn materialize_batch(&self, index: usize, scheduled_offset_us: u64) -> RuntimeBatch {
+        let header = self
+            .batches
+            .get(index)
+            .expect("runtime batch index must be valid");
+        let scheduled_us = header.scheduled_us.saturating_add(scheduled_offset_us);
+        let start = header.intent_start as usize;
+        let end = start + header.intent_len as usize;
+        let intents = self.intents[start..end]
+            .iter()
+            .map(|compact| RuntimeKeyIntent {
+                source_action_index: header.source_action_index,
+                generation_id: (compact.generation_id != NO_GENERATION_ID)
+                    .then_some(compact.generation_id),
+                kind: header.kind,
+                scan_code: self
+                    .key_registry
+                    .scan_code_for(compact.key_slot)
+                    .expect("compiled key slot must belong to key registry"),
+                key_slot: compact.key_slot,
+                scheduled_us,
+                reason_id: header.reason_id,
+            })
+            .collect();
+        RuntimeBatch {
+            source_action_index: header.source_action_index,
+            kind: header.kind,
+            scheduled_us,
+            reason_id: header.reason_id,
+            intents,
+            packet_id: header.packet_id,
+        }
+    }
+
+    pub fn intent_slice(&self, batch: &CompiledBatch) -> &[CompactIntent] {
+        let start = batch.intent_start as usize;
+        let end = start + batch.intent_len as usize;
+        &self.intents[start..end]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

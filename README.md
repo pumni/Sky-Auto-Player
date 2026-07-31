@@ -2,7 +2,7 @@
 
 # 🎵 Sky Auto Player
 
-*Auto-plays Sky music sheets on Windows, in time.*
+*Auto-plays Sky music sheets on Windows — notes, chords and holds land on the beat, not just on keypress.*
 
 <a href="https://github.com/pumni/Sky-Auto-Player/releases/latest"><img src="https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue&logo=python" alt="Latest version"></a>
 <a href="https://github.com/pumni/Sky-Auto-Player/releases"><img src="https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success" alt="Downloads"></a>
@@ -26,6 +26,18 @@ editor into clean chords, fast arpeggios, and long holds played in-game, automat
 sends standard keystrokes through the public Windows `SendInput` API — the same channel any
 keyboard macro uses — and never reads game memory, injects code, hooks the process, attaches a
 debugger, or touches game files.
+
+## Why it sounds right
+
+Sky Auto Player doesn't replay a fixed macro. It schedules every note like a small performance:
+
+- **Frame-aligned chords** — chord notes arrive in the same game frame, so they ring together instead of straggling.
+- **Learns your machine's latency** — the more you play, the more it compensates for the small delay between "send" and "land", keeping notes under a thousandth of a second off the beat.
+- **Holds keep their full duration** — long notes don't get clipped short, even when the next note is close behind.
+- **Per-song timing profiles** — fast arpeggios and slow ballads get different timing, not one global setting.
+- **A separate timing thread** — the player and the on-screen display run on separate threads, so the HUD stays smooth while notes fire on beat.
+
+This is what "in time" actually means here.
 
 > [!WARNING]
 > Automated music playback may violate Thatgamecompany's Terms of Service. Use this tool
@@ -54,6 +66,7 @@ system Python, no installer, no admin rights, no registry entries.
 
 ## Features
 
+- **Timing-first playback** — chords aligned to one frame, holds held in full, latency learned and compensated
 - **Textual TUI picker** — fuzzy search by song name, fully keyboard-driven
 - **Per-song profiles** — timing, tempo, FPS, theme
 - **Dry-run mode** — preview without sending input

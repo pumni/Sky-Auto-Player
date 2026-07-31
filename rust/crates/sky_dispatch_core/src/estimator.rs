@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 const SEED_SAMPLES: u64 = 5;
 const MAX_RESIDUAL_US: i64 = 500;
+const BASE_PRIOR_US: u64 = 50;
+const PER_KEY_PRIOR_US: u64 = 15;
+const EARLY_CORRECTION_DECAY: f64 = 0.25;
 
 pub fn round_half_to_even(x: f64) -> i64 {
     let floor = x.floor();
@@ -147,34 +150,47 @@ impl SendLatencyEstimator {
     }
 
     pub fn residual_bias_us(&self) -> u64 {
+        self.residual_adjustment_us().max(0) as u64
+    }
+
+    /// Signed correction for the completion residual.
+    ///
+    /// Late completion raises lead at full strength; early completion only
+    /// reduces it at a quarter rate so a short-lived early sample cannot
+    /// immediately erase a safety margin.
+    pub fn residual_adjustment_us(&self) -> i64 {
         if !self.warm_residual {
             return 0;
         }
         let rounded = round_half_to_even(self.ema_residual);
-        0.max(MAX_RESIDUAL_US.min(rounded)) as u64
+        if rounded >= 0 {
+            rounded.min(MAX_RESIDUAL_US)
+        } else {
+            round_half_to_even(rounded as f64 * EARLY_CORRECTION_DECAY)
+        }
     }
 
     pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
-        let residual = self.residual_bias_us() as i64;
+        let residual = self.residual_adjustment_us();
         let max_lead = self.max_lead_us as i64;
         match kind {
             ActionKind::Down => {
                 let n = 1.max(self.max_poly.min(n_keys));
-                if self.warm_down[n] {
-                    let rounded = round_half_to_even(self.ema_down[n]);
-                    return (rounded + residual).clamp(0, max_lead) as u64;
-                }
-                for b in (1..=n).rev() {
-                    if self.warm_down[b] {
-                        let rounded = round_half_to_even(self.ema_down[b]);
-                        return (rounded + residual).clamp(0, max_lead) as u64;
-                    }
-                }
-                if self.count_down_total >= SEED_SAMPLES {
-                    let rounded = round_half_to_even(self.ema_down_total);
-                    return (rounded + residual).clamp(0, max_lead) as u64;
-                }
-                0
+                let prior = BASE_PRIOR_US
+                    .saturating_add(PER_KEY_PRIOR_US.saturating_mul(n.saturating_sub(1) as u64));
+                let estimate = if self.warm_down[n] {
+                    Some(round_half_to_even(self.ema_down[n]))
+                } else {
+                    (1..=n)
+                        .rev()
+                        .find(|&bucket| self.warm_down[bucket])
+                        .map(|bucket| round_half_to_even(self.ema_down[bucket]))
+                        .or_else(|| {
+                            (self.count_down_total >= SEED_SAMPLES)
+                                .then_some(round_half_to_even(self.ema_down_total))
+                        })
+                };
+                (estimate.unwrap_or(0).max(prior as i64) + residual).clamp(0, max_lead) as u64
             }
             ActionKind::Up => {
                 if self.count_up < SEED_SAMPLES {
@@ -295,7 +311,7 @@ mod tests {
     #[test]
     fn test_estimator_seeding_and_lead() {
         let mut est = SendLatencyEstimator::new(0.2, 2000, 6);
-        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 0);
+        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 50);
 
         // Update 5 samples of 1000 us for polyphony 1
         for _ in 0..5 {
@@ -370,5 +386,28 @@ mod tests {
         assert!(estimator.import_state(invalid).is_err());
         assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), lead_before);
         assert_eq!(estimator.max_poly, 6);
+    }
+
+    #[test]
+    fn cold_polyphony_uses_a_small_conservative_prior() {
+        let estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), 50);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 6), 125);
+    }
+
+    #[test]
+    fn early_residual_reduces_lead_more_slowly_than_late_residual_increases_it() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
+        for _ in 0..5 {
+            estimator.update(ActionKind::Down, 800, 1);
+            estimator.update_completion_error(ActionKind::Down, -400);
+        }
+        assert_eq!(estimator.residual_adjustment_us(), -100);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), 700);
+
+        for _ in 0..5 {
+            estimator.update_completion_error(ActionKind::Down, 400);
+        }
+        assert!(estimator.residual_adjustment_us() > -100);
     }
 }

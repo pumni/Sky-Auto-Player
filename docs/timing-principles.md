@@ -58,8 +58,18 @@ loader applies no freshness TTL until repeated measurements establish a conserva
 The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
 
 ### Same-Key Feasibility
-A same-key repeat is feasible if and only if:
+The authored feasibility floor remains:
 $$\text{same\_key\_interval\_us} \ge \text{min\_hold\_us}$$
+
+The native sender applies a stricter runtime condition because the release floor is anchored at
+the actual down completion:
+$$\text{repeat\_interval} \ge \text{min\_hold\_us} + \text{delivery\_budget} + \text{off\_gap\_budget}$$
+
+`delivery_budget` is a conservative sender-side estimate, not a claim about when the game
+observes the key. `off_gap_budget` is profile- and frame-dependent and is intentionally not a
+universal constant. A schedule can therefore be authored-feasible while still producing a
+runtime conflict under a slow or contended input path; fidelity-oriented tooling should warn or
+reject such repeats instead of silently treating them as guaranteed.
 
 If the authored interval is smaller than `min_hold_us`:
 1. **Strict Mode:** The scheduler rejects the playback and recommends a lower tempo.

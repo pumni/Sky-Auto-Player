@@ -96,28 +96,32 @@ class SendLatencyEstimator:
     """Per-kind EMA of SendInput durations used to derive the adaptive dispatch lead.
 
     Down durations are bucketed by polyphony (number of scan-codes in the batch, clamped to
-    [1, MAX_POLY]) so that each chord size gets its own EMA.  Fallback chain for an unseeded
-    bucket: nearest seeded bucket ≤ N → total down EMA → 0.
+    [1, MAX_POLY]) so that each chord size gets its own EMA. Fallback chain for an unseeded
+    bucket: nearest seeded bucket ≤ N → total down EMA → conservative prior.
 
     Up durations use a single scalar EMA (unchanged from the original design).
 
-    The first N samples of each bucket yield lead 0 (cold estimates are worse than nothing); the
-    Nth sample seeds the EMA with the average of all warm-up samples.
+    Unseeded buckets use a small polyphony-scaled prior. The prior is deliberately lower than
+    normal measured send latency, but prevents the first note or chord from being dispatched at
+    its authored deadline while the estimator warms. The Nth sample seeds the EMA with the
+    average of all warm-up samples.
 
     Residual completion error (``update_completion_error``): after a lead is applied, any
-    remaining ``visible_lateness`` is systematic prologue (spin overshoot + Python work before
-    SendInput). An EMA of that residual is folded into ``get_lead_us`` (positive only, capped)
-    so the next onsets pull earlier by the observed bias rather than leaving a constant late
-    offset on every note.
+    remaining ``visible_lateness`` is systematic prologue (spin overshoot + work before
+    SendInput). An EMA of that residual is folded into ``get_lead_us`` with asymmetric signed
+    correction: late samples increase lead at full strength, while early samples reduce it
+    slowly. This lets a stable early bias unwind without letting one early sample erase margin.
 
-    Honesty note: the residual bias is capped at ``_MAX_RESIDUAL_US`` (≈ ½ ms) and is positive-
-    only. Completions land within ~``_MAX_RESIDUAL_US`` of schedule when residual warm; not exact (the cap absorbs
-    prologue beyond the cap). It does NOT land exactly on schedule — by design, since for a
-    frame-quantized target landing slightly early is strictly safer than late. A machine whose
-    prologue routinely exceeds the cap will sit at the cap rather than chase it upward.
+    Honesty note: the correction is capped at ``_MAX_RESIDUAL_US`` (≈ ½ ms). It does NOT make
+    completion exact — a frame-quantized target may still land slightly early or late, and a
+    machine whose prologue routinely exceeds the cap will remain capped rather than chase it
+    upward.
     """
 
     _SEED_SAMPLES = 5
+    _BASE_PRIOR_US = 50
+    _PER_KEY_PRIOR_US = 15
+    _EARLY_CORRECTION_DECAY = 0.25
     # Residual bias is a fine correction on top of pure-send lead — keep it small so a single
     # OS hitch cannot drag the lead into the multi-millisecond range.
     _MAX_RESIDUAL_US = 500
@@ -217,27 +221,34 @@ class SendLatencyEstimator:
                 self._ema_residual = self._sum_residual / self._count_residual
                 self._warm_residual = True
 
-    def _residual_bias_us(self) -> int:
-        """Positive residual only — never shrink lead because of early completions."""
+    def _residual_adjustment_us(self) -> int:
+        """Return an asymmetric signed correction for the completion residual."""
         if not self._warm_residual:
             return 0
-        return max(0, min(self._MAX_RESIDUAL_US, round(self._ema_residual)))
+        rounded = round(self._ema_residual)
+        if rounded >= 0:
+            return min(self._MAX_RESIDUAL_US, rounded)
+        return round(rounded * self._EARLY_CORRECTION_DECAY)
 
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
-        residual = self._residual_bias_us()
+        residual = self._residual_adjustment_us()
         if kind == "down":
             n = max(1, min(self.max_poly, n_keys))
+            prior = self._BASE_PRIOR_US + self._PER_KEY_PRIOR_US * (n - 1)
             # Exact bucket usable (seeded)?
             if self._warm_down[n]:
-                return max(0, min(self._max_lead_us, round(self._ema_down[n]) + residual))
+                estimate = round(self._ema_down[n])
+                return max(0, min(self._max_lead_us, max(prior, estimate) + residual))
             # Nearest usable bucket ≤ n
             for b in range(n, 0, -1):
                 if self._warm_down[b]:
-                    return max(0, min(self._max_lead_us, round(self._ema_down[b]) + residual))
+                    estimate = round(self._ema_down[b])
+                    return max(0, min(self._max_lead_us, max(prior, estimate) + residual))
             # Total fallback
             if self._count_down_total >= self._SEED_SAMPLES:
-                return max(0, min(self._max_lead_us, round(self._ema_down_total) + residual))
-            return 0
+                estimate = round(self._ema_down_total)
+                return max(0, min(self._max_lead_us, max(prior, estimate) + residual))
+            return max(0, min(self._max_lead_us, prior + residual))
         if kind == "up":
             if self._count_up < self._SEED_SAMPLES:
                 return 0
@@ -661,10 +672,20 @@ class PlaybackEngine:
                 "native_abi": snapshot["native_abi"],
                 "rt_priority_acquired": snapshot["rt_priority_acquired"],
                 "effective_spin_threshold_us": snapshot["effective_spin_threshold_us"],
+                "wake_error_p50_us": snapshot.get("wake_error_p50_us", 0),
+                "wake_error_p95_us": snapshot.get("wake_error_p95_us", 0),
+                "wake_error_p99_us": snapshot.get("wake_error_p99_us", 0),
+                "wake_error_max_us": snapshot.get("wake_error_max_us", 0),
+                "spin_time_us": snapshot.get("spin_time_us", 0),
                 "wait_strategy_acquired": snapshot["wait_strategy_acquired"],
                 "power_throttling_disabled": snapshot[
                     "power_throttling_disabled"
                 ],
+                "sendinput_path_degraded": snapshot.get(
+                    "sendinput_path_degraded", False
+                ),
+                "bookkeeping_degraded": snapshot.get("bookkeeping_degraded", False),
+                "wait_path_degraded": snapshot.get("wait_path_degraded", False),
             }
         )
         self.telemetry.record_backend_health(
@@ -839,13 +860,10 @@ class PlaybackEngine:
         (Phase H) runs independently inside ``DispatchLoop._wait_until_runtime_deadline`` when long
         inter-note gaps allow safe budget use.
 
-        Heavy-tail-aware threshold (Fix A): the worst observed wake error — not just p90 — must
-        lie inside the spin guard. With n=30 samples, p90 sits at index 27 and silently ignores
-        the worst three outliers. Those rare spikes (Windows timer coalescing batches, brief DPC
-        latency) leak through the guard as late completions on the nights they strike. Buffer
-        is 200 µs over the worst sample; the 3 000 µs cap is the CPU-thrift safety documented
-        in docs/rt-dispatch-architecture.md §3. Restores the Phase-5 design intent recorded in
-        docs/archive/2026-06_rt-pipeline-extreme-optimization-plan.md §Phase 5 (``p_max + 200``).
+        Use p95 plus a 200 µs safety margin. The probe still records p50/p99/max so a heavy tail
+        remains visible, but one outlier must not permanently expand the busy-spin window to the
+        3 ms cap. The threshold is raised immediately when p95 increases and is reduced only
+        through the reprobe hysteresis in the dispatch loop.
         """
         wake_errors: list[int] = []
         try:
@@ -872,14 +890,21 @@ class PlaybackEngine:
             return threshold
 
         wake_errors.sort()
-        max_wake = wake_errors[-1]
-        threshold = max(self.spin_floor_us, min(3_000, max_wake + 200))
+        p95_index = max(0, min(len(wake_errors) - 1, (len(wake_errors) * 95 + 99) // 100 - 1))
+        p95_wake = wake_errors[p95_index]
+        threshold = max(self.spin_floor_us, min(3_000, p95_wake + 200))
         self.effective_spin_threshold_us = threshold
 
         self.telemetry.record_runtime_options(
             {
                 **self.telemetry.runtime_options,
                 "probe_wake_errors_us": wake_errors,
+                "probe_wake_error_p50_us": wake_errors[len(wake_errors) // 2],
+                "probe_wake_error_p95_us": p95_wake,
+                "probe_wake_error_p99_us": wake_errors[
+                    max(0, min(len(wake_errors) - 1, (len(wake_errors) * 99 + 99) // 100 - 1))
+                ],
+                "probe_wake_error_max_us": wake_errors[-1],
                 "effective_spin_threshold_us": threshold,
                 "enable_adaptive_spin": True,
                 "adaptive_probe_thread_id": threading.get_ident(),

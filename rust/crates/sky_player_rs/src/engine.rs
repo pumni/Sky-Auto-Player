@@ -6,12 +6,12 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
-use sky_dispatch_win32::clock::qpc_now_us;
+use sky_dispatch_win32::clock::{QpcTicks, qpc_now_ticks, qpc_now_us, qpc_us_to_ticks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
 use sky_dispatch_win32::power::PowerThrottlingGuard;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
+use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WakeErrorStats};
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -69,9 +69,17 @@ pub struct EngineSnapshot {
     pub outcome: Option<String>,
     pub rt_priority_acquired: String,
     pub effective_spin_threshold_us: u64,
+    pub wake_error_p50_us: u64,
+    pub wake_error_p95_us: u64,
+    pub wake_error_p99_us: u64,
+    pub wake_error_max_us: u64,
+    pub spin_time_us: u64,
     pub wait_strategy_acquired: String,
     pub power_throttling_disabled: bool,
     pub input_path_degraded: bool,
+    pub sendinput_path_degraded: bool,
+    pub bookkeeping_degraded: bool,
+    pub wait_path_degraded: bool,
     pub idle_wake_count: u64,
     pub terminal_error: Option<String>,
     pub generation_count: u64,
@@ -113,8 +121,56 @@ pub struct NativeTelemetryRecord {
 }
 
 #[derive(Debug, Default, serde::Serialize)]
+pub struct NativeTelemetrySummary {
+    pub dispatch_count: u64,
+    pub down_count: u64,
+    pub up_count: u64,
+    pub requested_key_count: u64,
+    pub sent_key_count: u64,
+    pub skipped_key_count: u64,
+    pub max_lateness_us: i64,
+    pub max_send_duration_us: u64,
+    pub lateness_histogram_50us: [u64; 16],
+    pub send_duration_histogram_50us: [u64; 16],
+}
+
+impl NativeTelemetrySummary {
+    fn observe(&mut self, record: &NativeTelemetryRecord) {
+        self.dispatch_count = self.dispatch_count.saturating_add(1);
+        match record.kind {
+            "down" => self.down_count = self.down_count.saturating_add(1),
+            "up" => self.up_count = self.up_count.saturating_add(1),
+            _ => {}
+        }
+        self.requested_key_count = self
+            .requested_key_count
+            .saturating_add(record.scan_codes.len() as u64);
+        self.sent_key_count = self
+            .sent_key_count
+            .saturating_add(record.sent_scan_codes.len() as u64);
+        self.skipped_key_count = self
+            .skipped_key_count
+            .saturating_add(record.skipped_scan_codes.len() as u64);
+        self.max_lateness_us = self.max_lateness_us.max(record.visible_lateness_us);
+        self.max_send_duration_us = self.max_send_duration_us.max(record.send_duration_us);
+        let lateness_bucket = record
+            .visible_lateness_us
+            .max(0)
+            .unsigned_abs()
+            .saturating_div(50)
+            .min(15) as usize;
+        let send_bucket = record.send_duration_us.saturating_div(50).min(15) as usize;
+        self.lateness_histogram_50us[lateness_bucket] =
+            self.lateness_histogram_50us[lateness_bucket].saturating_add(1);
+        self.send_duration_histogram_50us[send_bucket] =
+            self.send_duration_histogram_50us[send_bucket].saturating_add(1);
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize)]
 pub struct NativeTelemetryOutput {
     pub records: Vec<NativeTelemetryRecord>,
+    pub summary: NativeTelemetrySummary,
     pub attempted: u64,
     pub accepted: u64,
     pub dropped: u64,
@@ -134,6 +190,7 @@ impl NativeTelemetryOutput {
             } else {
                 Vec::new()
             },
+            summary: NativeTelemetrySummary::default(),
             attempted: 0,
             accepted: 0,
             dropped: 0,
@@ -184,11 +241,15 @@ impl TelemetryCollector {
     where
         F: FnOnce() -> NativeTelemetryRecord,
     {
+        let mut record = build();
+        self.output.attempted = self.output.attempted.saturating_add(1);
+        self.output.summary.observe(&record);
+        // Production runs keep the bounded summary even when full event retention is disabled.
+        // The record is dropped immediately after its counters are observed, so this does not
+        // create an unbounded allocation or a post-run JSON record buffer.
         if !self.enabled {
             return;
         }
-        let mut record = build();
-        self.output.attempted = self.output.attempted.saturating_add(1);
         record.dispatch_id = self.next_dispatch_id;
         self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
         record.idle_gap_us = self
@@ -215,6 +276,7 @@ enum WorkerCommand {
 #[derive(Default)]
 struct SharedMetrics {
     elapsed_us: AtomicU64,
+    total_us: AtomicU64,
     lateness_us: AtomicU64,
     max_lateness_us: AtomicU64,
     late_2ms: AtomicU64,
@@ -231,9 +293,17 @@ struct SharedMetrics {
     is_paused: AtomicBool,
     panicked: AtomicBool,
     effective_spin_threshold_us: AtomicU64,
+    wake_error_p50_us: AtomicU64,
+    wake_error_p95_us: AtomicU64,
+    wake_error_p99_us: AtomicU64,
+    wake_error_max_us: AtomicU64,
+    spin_time_us: AtomicU64,
     wait_strategy_acquired: Mutex<String>,
     power_throttling_disabled: AtomicBool,
     input_path_degraded: AtomicBool,
+    sendinput_path_degraded: AtomicBool,
+    bookkeeping_degraded: AtomicBool,
+    wait_path_degraded: AtomicBool,
     idle_wake_count: AtomicU64,
     terminal_error: Mutex<Option<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
@@ -270,7 +340,6 @@ struct WorkerConfig {
 
 pub struct NativeDispatchSession {
     config: Mutex<Option<WorkerConfig>>,
-    total_us: u64,
     generation_count: u64,
     command_tx: Sender<WorkerCommand>,
     command_rx: Receiver<WorkerCommand>,
@@ -335,6 +404,8 @@ impl NativeDispatchSession {
                 SendLatencyEstimator::new(0.2, max_lead_us, allowed_scan_codes.len());
             validator.import_state(raw)?;
         }
+        let metrics = Arc::new(SharedMetrics::default());
+        metrics.total_us.store(total_us, Ordering::Relaxed);
         Ok(Self {
             config: Mutex::new(Some(WorkerConfig {
                 schedule,
@@ -362,7 +433,6 @@ impl NativeDispatchSession {
                 enable_adaptive_lead,
                 input_path_warn_us,
             })),
-            total_us,
             generation_count,
             command_tx,
             command_rx,
@@ -377,7 +447,7 @@ impl NativeDispatchSession {
             target_hwnd: Arc::new(AtomicIsize::new(0)),
             lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_NEW)),
             terminal_outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
-            metrics: Arc::new(SharedMetrics::default()),
+            metrics,
             thread_handle: Mutex::new(None),
             completed: Arc::new((StdMutex::new(false), Condvar::new())),
             telemetry_output: Arc::new(Mutex::new(None)),
@@ -579,7 +649,7 @@ impl NativeDispatchSession {
         };
         EngineSnapshot {
             elapsed_us: self.metrics.elapsed_us.load(Ordering::Relaxed),
-            total_us: self.total_us,
+            total_us: self.metrics.total_us.load(Ordering::Relaxed),
             lateness_us: self.metrics.lateness_us.load(Ordering::Relaxed),
             max_lateness_us: self.metrics.max_lateness_us.load(Ordering::Relaxed),
             late_2ms: self.metrics.late_2ms.load(Ordering::Relaxed),
@@ -606,12 +676,20 @@ impl NativeDispatchSession {
                 .metrics
                 .effective_spin_threshold_us
                 .load(Ordering::Relaxed),
+            wake_error_p50_us: self.metrics.wake_error_p50_us.load(Ordering::Relaxed),
+            wake_error_p95_us: self.metrics.wake_error_p95_us.load(Ordering::Relaxed),
+            wake_error_p99_us: self.metrics.wake_error_p99_us.load(Ordering::Relaxed),
+            wake_error_max_us: self.metrics.wake_error_max_us.load(Ordering::Relaxed),
+            spin_time_us: self.metrics.spin_time_us.load(Ordering::Relaxed),
             wait_strategy_acquired: self.metrics.wait_strategy_acquired.lock().clone(),
             power_throttling_disabled: self
                 .metrics
                 .power_throttling_disabled
                 .load(Ordering::Relaxed),
             input_path_degraded: self.metrics.input_path_degraded.load(Ordering::Acquire),
+            sendinput_path_degraded: self.metrics.sendinput_path_degraded.load(Ordering::Acquire),
+            bookkeeping_degraded: self.metrics.bookkeeping_degraded.load(Ordering::Acquire),
+            wait_path_degraded: self.metrics.wait_path_degraded.load(Ordering::Acquire),
             idle_wake_count: self.metrics.idle_wake_count.load(Ordering::Relaxed),
             terminal_error: self.metrics.terminal_error.lock().clone(),
             generation_count: self.generation_count,
@@ -751,6 +829,9 @@ fn run_worker(
     }
     let telemetry_reason_table = config.schedule.reason_table.clone();
     let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us);
+    metrics
+        .total_us
+        .store(coordinator.effective_total_us(), Ordering::Relaxed);
     let mut telemetry = TelemetryCollector::new(
         config.telemetry_enabled,
         config.telemetry_capacity,
@@ -760,9 +841,10 @@ fn run_worker(
     let mut effective_spin_threshold_us = config.spin_threshold_us;
     let _ = interrupt.try_take();
     if config.enable_adaptive_spin
-        && let Some(wake_error_us) = waiter.probe_wake_error_us(interrupt, 30)
+        && let Some(stats) = waiter.probe_wake_error_stats(interrupt, 30)
     {
-        effective_spin_threshold_us = derive_spin_threshold_us(wake_error_us, config.spin_floor_us);
+        publish_wake_error_stats(stats, metrics);
+        effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
     }
     metrics
         .effective_spin_threshold_us
@@ -773,6 +855,12 @@ fn run_worker(
     let mut send_duration_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
     let mut send_over_warn_count = 0usize;
     let mut input_path_warn_started_us = None;
+    let mut send_pure_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
+    let mut send_pure_over_warn_count = 0usize;
+    let mut send_pure_warn_started_us = None;
+    let mut bookkeeping_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
+    let mut bookkeeping_over_warn_count = 0usize;
+    let mut bookkeeping_warn_started_us = None;
     // Epoch is captured only after all worker-owned real-time resources exist.
     let mut clock_state = PlaybackClockState::new(qpc_now_us(), 0);
     let mut focus_restore_started_us: Option<u64> = None;
@@ -872,9 +960,16 @@ fn run_worker(
                     &result.skipped_duplicates,
                 );
                 // A successful retry closes the recovery pause. The
-                // coordinator shifts the remaining authored timeline so
+                // coordinator advances one immutable timeline offset, so
                 // overdue work cannot burst immediately after recovery.
-                let _ = coordinator.finish_release_recovery(completed_effective);
+                if !recovery_required
+                    && let Some(recovery_pause_us) =
+                        coordinator.finish_release_recovery(completed_effective)
+                {
+                    metrics
+                        .total_us
+                        .fetch_add(recovery_pause_us, Ordering::Relaxed);
+                }
                 if config.enable_adaptive_lead {
                     update_estimator_after_send(
                         &mut estimator,
@@ -970,6 +1065,24 @@ fn run_worker(
                     &mut send_over_warn_count,
                     &mut input_path_warn_started_us,
                     &metrics.input_path_degraded,
+                );
+                record_input_path_health(
+                    result.send_completed_us.saturating_sub(started_us),
+                    completed_effective,
+                    config.input_path_warn_us,
+                    &mut send_pure_window,
+                    &mut send_pure_over_warn_count,
+                    &mut send_pure_warn_started_us,
+                    &metrics.sendinput_path_degraded,
+                );
+                record_input_path_health(
+                    bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                    completed_effective,
+                    config.input_path_warn_us,
+                    &mut bookkeeping_window,
+                    &mut bookkeeping_over_warn_count,
+                    &mut bookkeeping_warn_started_us,
+                    &metrics.bookkeeping_degraded,
                 );
                 let deferred_release = deferred_by_us > 0;
                 record_lateness(
@@ -1168,7 +1281,7 @@ fn run_worker(
                         coordinator.activate_sent_downs(
                             &playable,
                             &result.sent,
-                            effective_now_us,
+                            actual_us,
                             completed_effective,
                         );
                         if config.enable_adaptive_lead {
@@ -1237,6 +1350,24 @@ fn run_worker(
                             &mut send_over_warn_count,
                             &mut input_path_warn_started_us,
                             &metrics.input_path_degraded,
+                        );
+                        record_input_path_health(
+                            result.send_completed_us.saturating_sub(started_us),
+                            completed_effective,
+                            config.input_path_warn_us,
+                            &mut send_pure_window,
+                            &mut send_pure_over_warn_count,
+                            &mut send_pure_warn_started_us,
+                            &metrics.sendinput_path_degraded,
+                        );
+                        record_input_path_health(
+                            bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                            completed_effective,
+                            config.input_path_warn_us,
+                            &mut bookkeeping_window,
+                            &mut bookkeeping_over_warn_count,
+                            &mut bookkeeping_warn_started_us,
+                            &metrics.bookkeeping_degraded,
                         );
                         record_lateness(
                             signed_delta(completed_effective, batch.scheduled_us),
@@ -1313,20 +1444,27 @@ fn run_worker(
                         && remaining_us >= 500_000
                         && now_us.saturating_sub(last_spin_probe_us) >= 30_000_000
                     {
-                        if let Some(wake_error_us) = waiter.probe_wake_error_us(interrupt, 8) {
+                        if let Some(stats) = waiter.probe_wake_error_stats(interrupt, 8) {
+                            publish_wake_error_stats(stats, metrics);
                             let candidate =
-                                derive_spin_threshold_us(wake_error_us, config.spin_floor_us);
-                            if candidate.abs_diff(effective_spin_threshold_us) >= 50 {
-                                effective_spin_threshold_us = candidate;
+                                derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
+                            let adjusted =
+                                adjust_spin_threshold(effective_spin_threshold_us, candidate);
+                            if adjusted != effective_spin_threshold_us {
+                                effective_spin_threshold_us = adjusted;
                                 metrics
                                     .effective_spin_threshold_us
-                                    .store(candidate, Ordering::Relaxed);
+                                    .store(adjusted, Ordering::Relaxed);
                             }
                             last_spin_probe_us = qpc_now_us();
                         }
                         continue;
                     }
-                    let target_qpc = now_us.saturating_add(deadline_us - effective_now_us);
+                    let target_qpc = QpcTicks(
+                        qpc_now_ticks()
+                            .0
+                            .saturating_add(qpc_us_to_ticks(deadline_us - effective_now_us)),
+                    );
                     let cold_warmup_us = if deadline_us.saturating_sub(last_send_elapsed_us)
                         > SEND_COLD_THRESHOLD_US
                     {
@@ -1334,13 +1472,22 @@ fn run_worker(
                     } else {
                         0
                     };
-                    let wait_result = waiter.wait_until_us_with_metrics(
+                    let wait_result = waiter.wait_until_ticks_with_metrics(
                         target_qpc,
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
                     );
                     metrics.idle_wake_count.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .spin_time_us
+                        .fetch_add(wait_result.spin_us, Ordering::Relaxed);
                     pending_pre_send_spin_us = wait_result.spin_us;
+                    let wake_elapsed_us = clock_state.get_elapsed_us(qpc_now_us());
+                    if config.input_path_warn_us > 0
+                        && wake_elapsed_us > deadline_us.saturating_add(config.input_path_warn_us)
+                    {
+                        metrics.wait_path_degraded.store(true, Ordering::Release);
+                    }
                     if wait_result.outcome == WaitOutcome::Interrupted {
                         pending_pre_send_spin_us = 0;
                         continue;
@@ -1513,10 +1660,33 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
+fn publish_wake_error_stats(stats: WakeErrorStats, metrics: &SharedMetrics) {
+    metrics
+        .wake_error_p50_us
+        .store(stats.p50_us, Ordering::Relaxed);
+    metrics
+        .wake_error_p95_us
+        .store(stats.p95_us, Ordering::Relaxed);
+    metrics
+        .wake_error_p99_us
+        .store(stats.p99_us, Ordering::Relaxed);
+    metrics
+        .wake_error_max_us
+        .store(stats.max_us, Ordering::Relaxed);
+}
+
 fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
     wake_error_us
         .saturating_add(200)
         .clamp(spin_floor_us, 3_000)
+}
+
+fn adjust_spin_threshold(current_us: u64, candidate_us: u64) -> u64 {
+    if candidate_us >= current_us {
+        candidate_us
+    } else {
+        current_us.saturating_sub(current_us.saturating_sub(candidate_us).min(50))
+    }
 }
 
 fn record_input_path_health(
@@ -1583,16 +1753,18 @@ fn publish_backend_metrics(
 ) {
     metrics
         .active_count
-        .store(backend.active_keys.len() as u64, Ordering::Relaxed);
+        .store(backend.active_mask.count_ones() as u64, Ordering::Relaxed);
     metrics
         .keys_dropped
         .store(backend.keys_dropped, Ordering::Relaxed);
-    metrics
-        .possibly_active_count
-        .store(backend.possibly_active_keys.len() as u64, Ordering::Relaxed);
-    metrics
-        .failed_release_count
-        .store(backend.failed_release_keys.len() as u64, Ordering::Relaxed);
+    metrics.possibly_active_count.store(
+        backend.possibly_active_mask.count_ones() as u64,
+        Ordering::Relaxed,
+    );
+    metrics.failed_release_count.store(
+        backend.failed_release_mask.count_ones() as u64,
+        Ordering::Relaxed,
+    );
     // The healthy dispatch path never takes this lock. Error text is
     // published only when the backend error state changes, including the
     // transition back to None after a successful recovery.
@@ -1609,8 +1781,9 @@ fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_PATH_WINDOW_CAPACITY, WorkerCommand, drain_commands, focus_gate_matches,
-        record_input_path_health, release_runtime_outcome, update_estimator_after_send,
+        INPUT_PATH_WINDOW_CAPACITY, WorkerCommand, adjust_spin_threshold, drain_commands,
+        focus_gate_matches, record_input_path_health, release_runtime_outcome,
+        update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
@@ -1709,6 +1882,13 @@ mod tests {
 
         assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
         assert_eq!(over_warn, 0);
+    }
+
+    #[test]
+    fn spin_threshold_rises_immediately_and_decays_with_hysteresis() {
+        assert_eq!(adjust_spin_threshold(700, 1_000), 1_000);
+        assert_eq!(adjust_spin_threshold(1_000, 700), 950);
+        assert_eq!(adjust_spin_threshold(1_000, 100), 950);
     }
 
     #[test]

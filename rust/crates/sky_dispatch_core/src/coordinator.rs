@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::model::*;
 
@@ -132,6 +132,7 @@ mod tests {
         assert_eq!(retry.len(), 1);
         coordinator.complete_releases(&retry, &[0x15], &[]);
         assert_eq!(coordinator.finish_release_recovery(3_000), Some(2_000));
+        assert_eq!(coordinator.schedule.batches[2].scheduled_us, 4_000);
 
         let (next_down, _) = coordinator
             .pop_next_due_authored(6_000, 0)
@@ -188,6 +189,7 @@ mod tests {
         let retry = coordinator.pop_due_pending(3_000, 0);
         coordinator.complete_releases(&retry, &[0x15], &[]);
         assert_eq!(coordinator.finish_release_recovery(3_000), Some(2_000));
+        assert_eq!(coordinator.schedule.batches[2].scheduled_us, 2_000);
         assert!(coordinator.pop_next_due_authored(3_000, 0).is_none());
         let (next_down, _) = coordinator
             .pop_next_due_authored(4_000, 0)
@@ -250,12 +252,14 @@ pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
     pub cursor: usize,
-    pub active_by_scan_code: HashMap<u16, ActiveGeneration>,
+    active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
+    active_mask: u16,
+    pending_by_slot: [Option<PendingRelease>; MAX_KEYS],
+    pending_mask: u16,
     pub status_by_generation: HashMap<GenerationId, GenerationStatus>,
     terminal_counts: HashMap<GenerationStatus, u64>,
     generation_count: u64,
-    pub pending_by_generation: HashMap<GenerationId, PendingRelease>,
-    pub pending_scan_codes: HashSet<u16>,
+    recovery_offset_us: u64,
     release_recovery_started_us: Option<u64>,
 }
 
@@ -266,14 +270,36 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             cursor: 0,
-            active_by_scan_code: HashMap::with_capacity(MAX_KEYS),
+            active_by_slot: std::array::from_fn(|_| None),
+            active_mask: 0,
+            pending_by_slot: std::array::from_fn(|_| None),
+            pending_mask: 0,
             status_by_generation: HashMap::with_capacity(MAX_KEYS),
             terminal_counts: HashMap::with_capacity(ALL_GENERATION_STATUSES.len()),
             generation_count,
-            pending_by_generation: HashMap::with_capacity(MAX_KEYS),
-            pending_scan_codes: HashSet::with_capacity(MAX_KEYS),
+            recovery_offset_us: 0,
             release_recovery_started_us: None,
         }
+    }
+
+    fn bit_for_slot(slot: KeySlot) -> u16 {
+        1u16 << slot
+    }
+
+    fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
+        self.active_by_slot
+            .get(slot as usize)
+            .and_then(Option::as_ref)
+    }
+
+    pub fn recovery_offset_us(&self) -> u64 {
+        self.recovery_offset_us
+    }
+
+    pub fn effective_total_us(&self) -> u64 {
+        self.schedule.batches.last().map_or(0, |batch| {
+            batch.scheduled_us.saturating_add(self.recovery_offset_us)
+        })
     }
 
     fn terminalize(&mut self, generation_id: GenerationId, status: GenerationStatus) {
@@ -281,16 +307,16 @@ impl RuntimeDispatchCoordinator {
         *self.terminal_counts.entry(status).or_insert(0) += 1;
     }
 
-    fn early_pop_blocked(&self, batch: &RuntimeBatch) -> bool {
+    fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
         if batch.kind != ActionKind::Down {
             return false;
         }
-        if self.active_by_scan_code.is_empty() && self.pending_scan_codes.is_empty() {
+        if self.active_mask == 0 && self.pending_mask == 0 {
             return false;
         }
-        batch.intents.iter().any(|intent| {
-            self.active_by_scan_code.contains_key(&intent.scan_code)
-                || self.pending_scan_codes.contains(&intent.scan_code)
+        self.schedule.intent_slice(batch).iter().any(|intent| {
+            let bit = Self::bit_for_slot(intent.key_slot);
+            self.active_mask & bit != 0 || self.pending_mask & bit != 0
         })
     }
 
@@ -303,7 +329,12 @@ impl RuntimeDispatchCoordinator {
         if lead > 0 && self.early_pop_blocked(batch) {
             return Some(batch.scheduled_us);
         }
-        Some(batch.scheduled_us.saturating_sub(lead))
+        Some(
+            batch
+                .scheduled_us
+                .saturating_add(self.recovery_offset_us)
+                .saturating_sub(lead),
+        )
     }
 
     /// Polyphony of the next authored down batch, used to select its lead
@@ -313,15 +344,16 @@ impl RuntimeDispatchCoordinator {
             .batches
             .get(self.cursor)
             .filter(|batch| batch.kind == ActionKind::Down)
-            .map_or(1, |batch| batch.intents.len())
+            .map_or(1, |batch| batch.intent_len as usize)
     }
 
     pub fn next_pending_release_us(&self, lead_up: u64) -> Option<u64> {
-        if self.pending_by_generation.is_empty() {
+        if self.pending_mask == 0 {
             return None;
         }
-        self.pending_by_generation
-            .values()
+        self.pending_by_slot
+            .iter()
+            .filter_map(Option::as_ref)
             .map(|pending| pending.get_effective_release_us(lead_up))
             .min()
     }
@@ -346,7 +378,7 @@ impl RuntimeDispatchCoordinator {
         // wait forever on an active generation that has no pending release.
         // Failed pending releases are kept alive by `requeue_failed_releases`
         // until they succeed or recovery aborts the session.
-        self.cursor >= self.schedule.batches.len() && self.pending_by_generation.is_empty()
+        self.cursor >= self.schedule.batches.len() && self.pending_mask == 0
     }
 
     pub fn generation_status_counts(&self) -> HashMap<String, u64> {
@@ -378,25 +410,15 @@ impl RuntimeDispatchCoordinator {
         now_us: u64,
         lead_up: u64,
     ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
-        if self.pending_by_generation.is_empty() {
+        if self.pending_mask == 0 {
             return SmallVec::new();
         }
 
-        if self.pending_by_generation.len() == 1 {
-            let gen_id = *self.pending_by_generation.keys().next().unwrap();
-            let pending = self.pending_by_generation.get(&gen_id).unwrap();
-            if pending.get_effective_release_us(lead_up) > now_us {
-                return SmallVec::new();
-            }
-            let pending = self.pending_by_generation.remove(&gen_id).unwrap();
-            self.pending_scan_codes.remove(&pending.scan_code);
-            return std::iter::once(pending).collect();
-        }
-
         let mut due: SmallVec<[PendingRelease; MAX_KEYS]> = self
-            .pending_by_generation
-            .values()
-            .filter(|p| p.get_effective_release_us(lead_up) <= now_us)
+            .pending_by_slot
+            .iter()
+            .filter_map(Option::as_ref)
+            .filter(|pending| pending.get_effective_release_us(lead_up) <= now_us)
             .cloned()
             .collect();
 
@@ -413,8 +435,9 @@ impl RuntimeDispatchCoordinator {
         });
 
         for p in &due {
-            self.pending_by_generation.remove(&p.generation_id);
-            self.pending_scan_codes.remove(&p.scan_code);
+            let slot = p.key_slot as usize;
+            self.pending_by_slot[slot] = None;
+            self.pending_mask &= !Self::bit_for_slot(p.key_slot);
         }
 
         due
@@ -436,13 +459,16 @@ impl RuntimeDispatchCoordinator {
         }
         let batch = &self.schedule.batches[self.cursor];
         let lead = dispatch_lead_us;
-        if batch.scheduled_us > now_us + lead {
+        let effective_scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
+        if effective_scheduled_us > now_us.saturating_add(lead) {
             return None;
         }
-        if batch.scheduled_us > now_us && self.early_pop_blocked(batch) {
+        if effective_scheduled_us > now_us && self.early_pop_blocked(batch) {
             return None;
         }
-        let popped = self.schedule.batches[self.cursor].clone();
+        let popped = self
+            .schedule
+            .materialize_batch(self.cursor, self.recovery_offset_us);
         self.cursor += 1;
         Some((popped, lead))
     }
@@ -466,19 +492,17 @@ impl RuntimeDispatchCoordinator {
                     self.terminalize(generation_id, GenerationStatus::DroppedBackend);
                     continue;
                 }
-                self.active_by_scan_code.insert(
-                    intent.scan_code,
-                    ActiveGeneration {
-                        generation_id,
-                        scan_code: intent.scan_code,
-                        key_slot: intent.key_slot,
-                        source_action_index: intent.source_action_index,
-                        scheduled_down_us: intent.scheduled_us,
-                        down_dispatch_started_us: dispatch_started_us,
-                        down_dispatch_completed_us: dispatch_completed_us,
-                        release_not_before_us,
-                    },
-                );
+                self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
+                    generation_id,
+                    scan_code: intent.scan_code,
+                    key_slot: intent.key_slot,
+                    source_action_index: intent.source_action_index,
+                    scheduled_down_us: intent.scheduled_us,
+                    down_dispatch_started_us: dispatch_started_us,
+                    down_dispatch_completed_us: dispatch_completed_us,
+                    release_not_before_us,
+                });
+                self.active_mask |= Self::bit_for_slot(intent.key_slot);
                 self.status_by_generation
                     .insert(generation_id, GenerationStatus::Active);
             }
@@ -493,19 +517,17 @@ impl RuntimeDispatchCoordinator {
                 self.terminalize(generation_id, GenerationStatus::DroppedBackend);
                 continue;
             }
-            self.active_by_scan_code.insert(
-                intent.scan_code,
-                ActiveGeneration {
-                    generation_id,
-                    scan_code: intent.scan_code,
-                    key_slot: intent.key_slot,
-                    source_action_index: intent.source_action_index,
-                    scheduled_down_us: intent.scheduled_us,
-                    down_dispatch_started_us: dispatch_started_us,
-                    down_dispatch_completed_us: dispatch_completed_us,
-                    release_not_before_us,
-                },
-            );
+            self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
+                generation_id,
+                scan_code: intent.scan_code,
+                key_slot: intent.key_slot,
+                source_action_index: intent.source_action_index,
+                scheduled_down_us: intent.scheduled_us,
+                down_dispatch_started_us: dispatch_started_us,
+                down_dispatch_completed_us: dispatch_completed_us,
+                release_not_before_us,
+            });
+            self.active_mask |= Self::bit_for_slot(intent.key_slot);
             self.status_by_generation
                 .insert(generation_id, GenerationStatus::Active);
         }
@@ -518,14 +540,14 @@ impl RuntimeDispatchCoordinator {
         SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
         SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
     ) {
-        if self.active_by_scan_code.is_empty() {
+        if self.active_mask == 0 {
             return (intents.iter().cloned().collect(), SmallVec::new());
         }
         let mut playable = SmallVec::new();
         let mut conflicts = SmallVec::new();
 
         for intent in intents {
-            if self.active_by_scan_code.contains_key(&intent.scan_code) {
+            if self.active_mask & Self::bit_for_slot(intent.key_slot) != 0 {
                 conflicts.push(intent.clone());
                 if let Some(gen_id) = intent.generation_id {
                     self.terminalize(gen_id, GenerationStatus::DroppedConflict);
@@ -557,7 +579,7 @@ impl RuntimeDispatchCoordinator {
             let Some(generation_id) = intent.generation_id else {
                 return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
-            let active = self.active_by_scan_code.get(&intent.scan_code);
+            let active = self.active_for_slot(intent.key_slot);
             let Some(active) = active else {
                 return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
@@ -580,9 +602,8 @@ impl RuntimeDispatchCoordinator {
                 last_win32_error: None,
             };
 
-            self.pending_by_generation
-                .insert(generation_id, pending.clone());
-            self.pending_scan_codes.insert(intent.scan_code);
+            self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
+            self.pending_mask |= Self::bit_for_slot(intent.key_slot);
             self.status_by_generation
                 .insert(generation_id, GenerationStatus::ReleasePending);
             return (std::iter::once(pending).collect(), SmallVec::new());
@@ -596,7 +617,7 @@ impl RuntimeDispatchCoordinator {
                 suppressed.push(intent.clone());
                 continue;
             };
-            let active = self.active_by_scan_code.get(&intent.scan_code);
+            let active = self.active_for_slot(intent.key_slot);
             let Some(active) = active else {
                 suppressed.push(intent.clone());
                 continue;
@@ -621,9 +642,8 @@ impl RuntimeDispatchCoordinator {
                 last_win32_error: None,
             };
 
-            self.pending_by_generation
-                .insert(generation_id, pending.clone());
-            self.pending_scan_codes.insert(intent.scan_code);
+            self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
+            self.pending_mask |= Self::bit_for_slot(intent.key_slot);
             self.status_by_generation
                 .insert(generation_id, GenerationStatus::ReleasePending);
             requested.push(pending);
@@ -644,9 +664,10 @@ impl RuntimeDispatchCoordinator {
             if !in_sent && !in_skipped {
                 continue;
             }
-            if matches!(self.active_by_scan_code.get(&pending.scan_code), Some(active) if active.generation_id == pending.generation_id)
+            if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
             {
-                self.active_by_scan_code.remove(&pending.scan_code);
+                self.active_by_slot[pending.key_slot as usize] = None;
+                self.active_mask &= !Self::bit_for_slot(pending.key_slot);
             }
             let status = if in_sent {
                 GenerationStatus::Released
@@ -661,25 +682,18 @@ impl RuntimeDispatchCoordinator {
         self.release_recovery_started_us.is_some()
     }
 
-    /// End a recovery pause after the pending release set is empty and shift
-    /// all authored work that remains in the schedule by the elapsed recovery
-    /// interval. This freezes the authored timeline instead of emitting a
-    /// catch-up burst after a successful retry.
+    /// End a recovery pause after the pending release set is empty.
+    ///
+    /// The authored schedule is immutable.  A single offset moves the
+    /// effective playback timeline, so recovery remains O(1) regardless of
+    /// how many batches are still queued.
     pub fn finish_release_recovery(&mut self, completed_us: u64) -> Option<u64> {
-        if !self.pending_by_generation.is_empty() {
+        if self.pending_mask != 0 {
             return None;
         }
         let started_us = self.release_recovery_started_us.take()?;
         let pause_us = completed_us.saturating_sub(started_us);
-        if pause_us == 0 {
-            return Some(0);
-        }
-        for batch in self.schedule.batches.iter_mut().skip(self.cursor) {
-            batch.scheduled_us = batch.scheduled_us.saturating_add(pause_us);
-            for intent in &mut batch.intents {
-                intent.scheduled_us = intent.scheduled_us.saturating_add(pause_us);
-            }
-        }
+        self.recovery_offset_us = self.recovery_offset_us.saturating_add(pause_us);
         Some(pause_us)
     }
 
@@ -703,7 +717,7 @@ impl RuntimeDispatchCoordinator {
                 continue;
             }
             if !matches!(
-                self.active_by_scan_code.get(&pending.scan_code),
+                self.active_for_slot(pending.key_slot),
                 Some(active) if active.generation_id == pending.generation_id
             ) {
                 continue;
@@ -722,33 +736,43 @@ impl RuntimeDispatchCoordinator {
             retry.next_retry_us = now_us.saturating_add(RELEASE_RETRY_BACKOFF_US[delay_index]);
             retry.first_failure_us = Some(pending.first_failure_us.unwrap_or(now_us));
             retry.last_win32_error = last_win32_error.or(pending.last_win32_error);
-            self.pending_scan_codes.insert(retry.scan_code);
-            self.pending_by_generation
-                .insert(retry.generation_id, retry);
+            let retry_slot = retry.key_slot;
+            self.pending_mask |= Self::bit_for_slot(retry_slot);
+            self.pending_by_slot[retry_slot as usize] = Some(retry);
         }
         recovery_required
     }
 
     pub fn cancel_all(&mut self) -> Vec<GenerationId> {
-        let mut cancelled_ids: HashSet<GenerationId> = self
-            .active_by_scan_code
-            .values()
-            .map(|a| a.generation_id)
+        let mut cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
+            .active_by_slot
+            .iter()
+            .filter_map(Option::as_ref)
+            .map(|active| active.generation_id)
             .collect();
-        for &pending_id in self.pending_by_generation.keys() {
-            cancelled_ids.insert(pending_id);
+        for pending_id in self
+            .pending_by_slot
+            .iter()
+            .filter_map(Option::as_ref)
+            .map(|pending| pending.generation_id)
+        {
+            if !cancelled_ids.contains(&pending_id) {
+                cancelled_ids.push(pending_id);
+            }
         }
 
-        let mut sorted_cancelled: Vec<GenerationId> = cancelled_ids.into_iter().collect();
+        let mut sorted_cancelled: Vec<GenerationId> = cancelled_ids.into_vec();
         sorted_cancelled.sort_unstable();
 
         for &gen_id in &sorted_cancelled {
             self.terminalize(gen_id, GenerationStatus::Cancelled);
         }
 
-        self.active_by_scan_code.clear();
-        self.pending_by_generation.clear();
-        self.pending_scan_codes.clear();
+        self.active_by_slot.fill(None);
+        self.pending_by_slot.fill(None);
+        self.active_mask = 0;
+        self.pending_mask = 0;
+        self.release_recovery_started_us = None;
 
         sorted_cancelled
     }

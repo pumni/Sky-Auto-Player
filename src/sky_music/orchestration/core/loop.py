@@ -343,7 +343,7 @@ class DispatchLoop:
         self._reprobe_attempt_id = 0
         self._reprobe_active = False
         self._reprobe_sample_count = 0
-        self._reprobe_sample_max_error_us: int | None = None
+        self._reprobe_errors_us: list[int] = []
         self._reprobe_started_elapsed_us = 0
 
         self._next_dispatch_id = 0
@@ -1182,7 +1182,7 @@ class DispatchLoop:
         Compatibility helper for a caller that explicitly requests a complete
         attempt. Production playback uses the cooperative state machine below:
         one sample per outer wait iteration, with command/focus service between
-        samples. The candidate uses sample_max + 200, not a percentile estimate.
+        samples. The candidate uses p95 + 200 and retains the raw samples in telemetry.
         """
         wake_errors: list[int] = []
         for _ in range(REPROBE_SAMPLES):
@@ -1206,19 +1206,21 @@ class DispatchLoop:
     def _reprobe_candidate(self, wake_errors: list[int]) -> int:
         if not wake_errors:
             return self.spin_threshold_us
-        return max(self._spin_floor_us, min(3_000, max(wake_errors) + 200))
+        ordered = sorted(wake_errors)
+        p95_index = max(0, min(len(ordered) - 1, (len(ordered) * 95 + 99) // 100 - 1))
+        return max(self._spin_floor_us, min(3_000, ordered[p95_index] + 200))
 
     def _discard_mid_song_reprobe(self) -> None:
         self._reprobe_active = False
         self._reprobe_sample_count = 0
-        self._reprobe_sample_max_error_us = None
+        self._reprobe_errors_us.clear()
         self._reprobe_started_elapsed_us = 0
 
     def _begin_mid_song_reprobe(self, elapsed_us: int) -> None:
         self._reprobe_attempt_id += 1
         self._reprobe_active = True
         self._reprobe_sample_count = 0
-        self._reprobe_sample_max_error_us = None
+        self._reprobe_errors_us.clear()
         self._reprobe_started_elapsed_us = elapsed_us
 
     def _advance_mid_song_reprobe(self, elapsed_us: int, remaining_us: int) -> bool:
@@ -1233,16 +1235,12 @@ class DispatchLoop:
         t1 = self.clock.now_us()
         error_us = (t1 - t0) - int(REPROBE_SLEEP_S * 1_000_000)
         self._reprobe_sample_count += 1
-        if (
-            self._reprobe_sample_max_error_us is None
-            or error_us > self._reprobe_sample_max_error_us
-        ):
-            self._reprobe_sample_max_error_us = error_us
+        self._reprobe_errors_us.append(error_us)
 
         if self._reprobe_sample_count < REPROBE_SAMPLES:
             return False
 
-        candidate = self._reprobe_candidate([self._reprobe_sample_max_error_us or 0])
+        candidate = self._reprobe_candidate(self._reprobe_errors_us)
         if abs(candidate - self.spin_threshold_us) >= REPROBE_HYSTERESIS_US:
             self.spin_threshold_us = candidate
         self._reprobe_applied_thresholds.append(candidate)

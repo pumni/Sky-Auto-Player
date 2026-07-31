@@ -38,17 +38,20 @@ mod tests {
     #[test]
     fn test_tracked_key_state_lifecycle() {
         let mut state = input::TrackedKeyState::with_emitter(fake_success_emitter);
-        assert!(state.active_keys.is_empty());
+        assert_eq!(state.active_mask, 0);
 
-        let res_down = state.key_down(&[1, 2]);
+        let res_down = state.key_down(&[0x15, 0x16]);
         assert!(res_down.success);
-        assert_eq!(res_down.sent.as_slice(), &[1, 2]);
+        assert_eq!(res_down.sent.as_slice(), &[0x15, 0x16]);
+        assert_eq!(state.active_mask.count_ones(), 2);
 
-        let res_up = state.key_up(&[1]);
+        let res_up = state.key_up(&[0x15]);
         assert!(res_up.success);
+        assert_eq!(state.active_mask.count_ones(), 1);
 
         let outcome = state.release_all();
         assert!(outcome.released_successfully);
+        assert_eq!(state.active_mask, 0);
     }
 
     #[test]

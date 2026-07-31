@@ -1,6 +1,6 @@
 //! Interruptible wait strategy with command-event priority.
 
-use crate::clock::qpc_now_us;
+use crate::clock::{QpcTicks, qpc_now_ticks, qpc_ticks_to_us, qpc_us_to_ticks};
 use crate::event::OwnedEvent;
 use crate::timer::{TimerResolutionGuard, WaitableTimer};
 
@@ -14,6 +14,14 @@ pub enum WaitOutcome {
 pub struct WaitResult {
     pub outcome: WaitOutcome,
     pub spin_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WakeErrorStats {
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub p99_us: u64,
+    pub max_us: u64,
 }
 
 pub struct HybridWaiter {
@@ -65,7 +73,21 @@ impl HybridWaiter {
         spin_threshold_us: u64,
         interrupt: &OwnedEvent,
     ) -> WaitResult {
+        let now_ticks = qpc_now_ticks();
+        let target_ticks = QpcTicks(now_ticks.0.saturating_add(qpc_us_to_ticks(
+            target_us.saturating_sub(qpc_ticks_to_us(now_ticks)),
+        )));
+        self.wait_until_ticks_with_metrics(target_ticks, spin_threshold_us, interrupt)
+    }
+
+    pub fn wait_until_ticks_with_metrics(
+        &self,
+        target_ticks: QpcTicks,
+        spin_threshold_us: u64,
+        interrupt: &OwnedEvent,
+    ) -> WaitResult {
         let mut spin_started_us = None;
+        let spin_threshold_ticks = qpc_us_to_ticks(spin_threshold_us);
         loop {
             if self.event_wait_enabled && interrupt.try_take() {
                 return WaitResult {
@@ -74,21 +96,24 @@ impl HybridWaiter {
                 };
             }
 
-            let now_us = qpc_now_us();
-            if now_us >= target_us {
+            let now_ticks = qpc_now_ticks();
+            if now_ticks >= target_ticks {
+                let now_us = qpc_ticks_to_us(now_ticks);
                 return WaitResult {
                     outcome: WaitOutcome::Deadline,
                     spin_us: spin_started_us.map_or(0, |started| now_us.saturating_sub(started)),
                 };
             }
-            let remaining_us = target_us - now_us;
-            if remaining_us <= spin_threshold_us {
-                spin_started_us.get_or_insert(now_us);
+            let remaining_ticks = target_ticks.0.saturating_sub(now_ticks.0);
+            if remaining_ticks <= spin_threshold_ticks {
+                spin_started_us.get_or_insert(qpc_ticks_to_us(now_ticks));
                 std::hint::spin_loop();
                 continue;
             }
 
-            let kernel_wait_us = remaining_us - spin_threshold_us;
+            let kernel_wait_us = qpc_ticks_to_us(QpcTicks(
+                remaining_ticks.saturating_sub(spin_threshold_ticks),
+            ));
             #[cfg(windows)]
             if let Some(timer) = &self.timer
                 && timer.arm_relative_us(kernel_wait_us)
@@ -125,15 +150,46 @@ impl HybridWaiter {
     }
 
     pub fn probe_wake_error_us(&self, interrupt: &OwnedEvent, samples: usize) -> Option<u64> {
-        let mut max_error_us = 0;
+        self.probe_wake_error_stats(interrupt, samples)
+            .map(|stats| stats.p95_us)
+    }
+
+    pub fn probe_wake_error_stats(
+        &self,
+        interrupt: &OwnedEvent,
+        samples: usize,
+    ) -> Option<WakeErrorStats> {
+        if samples == 0 {
+            return None;
+        }
+        let mut errors = Vec::with_capacity(samples);
         for _ in 0..samples {
-            let target_us = qpc_now_us().saturating_add(2_000);
-            if self.wait_until_us(target_us, 0, interrupt) == WaitOutcome::Interrupted {
+            let target_ticks = QpcTicks(qpc_now_ticks().0.saturating_add(qpc_us_to_ticks(2_000)));
+            if self
+                .wait_until_ticks_with_metrics(target_ticks, 0, interrupt)
+                .outcome
+                == WaitOutcome::Interrupted
+            {
                 return None;
             }
-            max_error_us = max_error_us.max(qpc_now_us().saturating_sub(target_us));
+            let now_ticks = qpc_now_ticks();
+            errors.push(qpc_ticks_to_us(QpcTicks(
+                now_ticks.0.saturating_sub(target_ticks.0),
+            )));
         }
-        Some(max_error_us)
+        errors.sort_unstable();
+        let percentile = |numerator: usize| {
+            let index = ((errors.len() * numerator).saturating_add(99) / 100)
+                .saturating_sub(1)
+                .min(errors.len() - 1);
+            errors[index]
+        };
+        Some(WakeErrorStats {
+            p50_us: percentile(50),
+            p95_us: percentile(95),
+            p99_us: percentile(99),
+            max_us: *errors.last().unwrap_or(&0),
+        })
     }
 }
 

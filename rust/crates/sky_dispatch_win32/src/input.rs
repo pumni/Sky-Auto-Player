@@ -1,7 +1,6 @@
 //! Windows SendInput API wrappers, input packet prewarming, and tracked key backend.
 
 use smallvec::SmallVec;
-use std::collections::HashSet;
 use std::fmt;
 
 pub const SKY_PLAYER_SIGNATURE: usize = 0x5C1B9111;
@@ -11,6 +10,21 @@ pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
     0x23, 0x24, 0x25, 0x26, 0x27, // H J K L ;
     0x31, 0x32, 0x33, 0x34, 0x35, // N M , . /
 ];
+
+fn key_mask(scan_code: u16) -> Option<u16> {
+    PHYSICAL_INSTRUMENT_SCAN_CODES
+        .iter()
+        .position(|&code| code == scan_code)
+        .map(|slot| 1u16 << slot)
+}
+
+fn scan_codes_from_mask(mask: u16) -> Vec<u16> {
+    PHYSICAL_INSTRUMENT_SCAN_CODES
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, &scan_code)| (mask & (1u16 << slot) != 0).then_some(scan_code))
+        .collect()
+}
 
 fn virtual_key_for_scan_code(scan_code: u16) -> Option<i32> {
     Some(match scan_code {
@@ -233,10 +247,15 @@ pub fn emit_down(scan_codes: &[u16]) -> EmitResult {
     emit_down_with(scan_codes, send_input_raw)
 }
 
-fn emit_up_with_and_sleep<F, S>(scan_codes: &[u16], mut send_fn: F, mut sleep_fn: S) -> EmitResult
+/// Emit a note-off without delaying the real-time worker.
+///
+/// A partial `SendInput` result gets one immediate remainder retry.  Any
+/// delayed retry belongs to the coordinator, which can then enter an
+/// interruptible recovery pause instead of blocking command handling inside
+/// the platform seam.
+fn emit_up_with_immediate<F>(scan_codes: &[u16], mut send_fn: F) -> EmitResult
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
-    S: FnMut(),
 {
     if scan_codes.is_empty() {
         return EmitResult {
@@ -251,49 +270,40 @@ where
         };
     }
     let n = scan_codes.len();
-    let mut sent_total = 0;
-    let mut zero_progress_count = 0;
-    let mut zero_progress_retries: u8 = 0;
-    let mut send_attempts: u8 = 0;
-    let mut first_win32_error = None;
-    let mut last_win32_error = None;
-    let mut last_completed_us = crate::clock::qpc_now_us();
-
-    while sent_total < n {
-        let remainder = &scan_codes[sent_total..];
-        let res = send_fn(remainder, true);
-        send_attempts = send_attempts.saturating_add(1);
-        if let Some(error) = (res.win32_error != 0).then_some(res.win32_error) {
-            first_win32_error.get_or_insert(error);
-            last_win32_error = Some(error);
-        }
-        last_completed_us = res.completed_us;
-        let inserted = (res.inserted as usize).min(remainder.len());
-
-        if inserted > 0 {
-            sent_total += inserted;
-            zero_progress_count = 0;
-        } else {
-            zero_progress_count += 1;
-            if zero_progress_count >= 3 {
-                break;
-            }
-            zero_progress_retries = zero_progress_retries.saturating_add(1);
-            sleep_fn();
-        }
+    let first = send_fn(scan_codes, true);
+    let first_inserted = (first.inserted as usize).min(n);
+    let first_win32_error = (first.win32_error != 0).then_some(first.win32_error);
+    if first_inserted >= n {
+        return EmitResult {
+            sent: scan_codes.iter().copied().collect(),
+            completed_us: first.completed_us,
+            success: true,
+            keys_dropped: 0,
+            first_win32_error,
+            last_win32_error: first_win32_error,
+            send_attempts: 1,
+            zero_progress_retries: 0,
+        };
     }
+
+    let remainder = &scan_codes[first_inserted..];
+    let second = send_fn(remainder, true);
+    let second_inserted = (second.inserted as usize).min(remainder.len());
+    let sent_total = first_inserted + second_inserted;
+    let second_win32_error = (second.win32_error != 0).then_some(second.win32_error);
+    let last_win32_error = second_win32_error.or(first_win32_error);
 
     let success = sent_total == n;
     let sent: SmallVec<[u16; 15]> = scan_codes[..sent_total].iter().copied().collect();
     EmitResult {
         sent,
-        completed_us: last_completed_us,
+        completed_us: second.completed_us,
         success,
         keys_dropped: (n - sent_total) as u64,
-        first_win32_error,
+        first_win32_error: first_win32_error.or(second_win32_error),
         last_win32_error,
-        send_attempts,
-        zero_progress_retries,
+        send_attempts: 2,
+        zero_progress_retries: u8::from(first_inserted == 0),
     }
 }
 
@@ -301,9 +311,7 @@ pub fn emit_up_with<F>(scan_codes: &[u16], send_fn: F) -> EmitResult
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
-    emit_up_with_and_sleep(scan_codes, send_fn, || {
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    })
+    emit_up_with_immediate(scan_codes, send_fn)
 }
 
 pub fn emit_up(scan_codes: &[u16]) -> EmitResult {
@@ -313,9 +321,9 @@ pub fn emit_up(scan_codes: &[u16]) -> EmitResult {
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
 pub struct TrackedKeyState {
-    pub active_keys: HashSet<u16>,
-    pub possibly_active_keys: HashSet<u16>,
-    pub failed_release_keys: HashSet<u16>,
+    pub active_mask: u16,
+    pub possibly_active_mask: u16,
+    pub failed_release_mask: u16,
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
@@ -325,9 +333,9 @@ pub struct TrackedKeyState {
 impl Default for TrackedKeyState {
     fn default() -> Self {
         Self {
-            active_keys: HashSet::with_capacity(15),
-            possibly_active_keys: HashSet::with_capacity(15),
-            failed_release_keys: HashSet::with_capacity(15),
+            active_mask: 0,
+            possibly_active_mask: 0,
+            failed_release_mask: 0,
             last_error: None,
             keys_dropped: 0,
             chord_split_events: 0,
@@ -339,9 +347,9 @@ impl Default for TrackedKeyState {
 impl fmt::Debug for TrackedKeyState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TrackedKeyState")
-            .field("active_keys", &self.active_keys)
-            .field("possibly_active_keys", &self.possibly_active_keys)
-            .field("failed_release_keys", &self.failed_release_keys)
+            .field("active_mask", &self.active_mask)
+            .field("possibly_active_mask", &self.possibly_active_mask)
+            .field("failed_release_mask", &self.failed_release_mask)
             .field("last_error", &self.last_error)
             .field("keys_dropped", &self.keys_dropped)
             .field("chord_split_events", &self.chord_split_events)
@@ -400,7 +408,7 @@ impl TrackedKeyState {
         let mut duplicates: SmallVec<[u16; 15]> = SmallVec::new();
 
         for &sc in scan_codes {
-            if self.active_keys.contains(&sc) {
+            if self.active_mask & key_mask(sc).unwrap_or(0) != 0 {
                 duplicates.push(sc);
             } else {
                 to_send.push(sc);
@@ -422,25 +430,25 @@ impl TrackedKeyState {
         }
 
         for &sc in &to_send {
-            self.possibly_active_keys.insert(sc);
+            self.possibly_active_mask |= key_mask(sc).unwrap_or(0);
         }
 
         let emitted = self.do_emit_down(&to_send);
         self.keys_dropped += emitted.keys_dropped;
 
         for &sc in &emitted.sent {
-            self.active_keys.insert(sc);
+            self.active_mask |= key_mask(sc).unwrap_or(0);
         }
 
         for &sc in &to_send {
-            self.possibly_active_keys.remove(&sc);
+            self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
         }
 
         if !emitted.success && !emitted.sent.is_empty() {
             self.chord_split_events += 1;
         }
         if emitted.success {
-            if self.failed_release_keys.is_empty() {
+            if self.failed_release_mask == 0 {
                 self.last_error = None;
             }
         } else {
@@ -491,9 +499,10 @@ impl TrackedKeyState {
         let mut already_released: SmallVec<[u16; 15]> = SmallVec::new();
 
         for &sc in scan_codes {
-            if self.active_keys.contains(&sc)
-                || self.possibly_active_keys.contains(&sc)
-                || self.failed_release_keys.contains(&sc)
+            let bit = key_mask(sc).unwrap_or(0);
+            if self.active_mask & bit != 0
+                || self.possibly_active_mask & bit != 0
+                || self.failed_release_mask & bit != 0
             {
                 to_release.push(sc);
             } else {
@@ -518,15 +527,16 @@ impl TrackedKeyState {
         let emitted = self.do_emit_up(&to_release);
 
         for &sc in &emitted.sent {
-            self.active_keys.remove(&sc);
-            self.possibly_active_keys.remove(&sc);
-            self.failed_release_keys.remove(&sc);
+            let bit = key_mask(sc).unwrap_or(0);
+            self.active_mask &= !bit;
+            self.possibly_active_mask &= !bit;
+            self.failed_release_mask &= !bit;
         }
 
         if !emitted.success {
             for &sc in &to_release {
                 if !emitted.sent.contains(&sc) {
-                    self.failed_release_keys.insert(sc);
+                    self.failed_release_mask |= key_mask(sc).unwrap_or(0);
                 }
             }
             self.last_error = Some(format!(
@@ -534,7 +544,7 @@ impl TrackedKeyState {
                 emitted.sent.len(),
                 to_release.len()
             ));
-        } else if self.failed_release_keys.is_empty() {
+        } else if self.failed_release_mask == 0 {
             self.last_error = None;
         }
 
@@ -556,12 +566,8 @@ impl TrackedKeyState {
     }
 
     pub fn release_all(&mut self) -> ReleaseAllOutcome {
-        let mut to_release_set: HashSet<u16> = HashSet::new();
-        to_release_set.extend(&self.active_keys);
-        to_release_set.extend(&self.possibly_active_keys);
-        to_release_set.extend(&self.failed_release_keys);
-
-        if to_release_set.is_empty() {
+        let tracked_mask = self.active_mask | self.possibly_active_mask | self.failed_release_mask;
+        if tracked_mask == 0 {
             return ReleaseAllOutcome {
                 attempted: Vec::new(),
                 released_successfully: true,
@@ -570,8 +576,7 @@ impl TrackedKeyState {
             };
         }
 
-        let mut attempted: Vec<u16> = to_release_set.into_iter().collect();
-        attempted.sort_unstable();
+        let attempted = scan_codes_from_mask(tracked_mask);
 
         let mut released_successfully = false;
 
@@ -616,9 +621,9 @@ impl TrackedKeyState {
         }
 
         if released_successfully && stuck.is_empty() {
-            self.active_keys.clear();
-            self.possibly_active_keys.clear();
-            self.failed_release_keys.clear();
+            self.active_mask = 0;
+            self.possibly_active_mask = 0;
+            self.failed_release_mask = 0;
             self.last_error = None;
             return ReleaseAllOutcome {
                 attempted,
@@ -629,13 +634,18 @@ impl TrackedKeyState {
         }
 
         if stuck.is_empty() {
-            self.failed_release_keys.extend(&attempted);
+            self.failed_release_mask |= attempted
+                .iter()
+                .filter_map(|&scan_code| key_mask(scan_code))
+                .fold(0, |mask, bit| mask | bit);
         } else {
-            self.failed_release_keys.extend(&stuck);
+            self.failed_release_mask |= stuck
+                .iter()
+                .filter_map(|&scan_code| key_mask(scan_code))
+                .fold(0, |mask, bit| mask | bit);
         }
         self.last_error = Some("tracked release incomplete".to_string());
-        let mut reported_stuck: Vec<u16> = self.failed_release_keys.iter().copied().collect();
-        reported_stuck.sort_unstable();
+        let reported_stuck = scan_codes_from_mask(self.failed_release_mask);
         ReleaseAllOutcome {
             attempted,
             released_successfully: false,
@@ -692,9 +702,9 @@ impl TrackedKeyState {
         }
 
         if release_successful && stuck.is_empty() {
-            self.active_keys.clear();
-            self.possibly_active_keys.clear();
-            self.failed_release_keys.clear();
+            self.active_mask = 0;
+            self.possibly_active_mask = 0;
+            self.failed_release_mask = 0;
             self.last_error = None;
             return ReleaseAllOutcome {
                 attempted,
@@ -704,14 +714,16 @@ impl TrackedKeyState {
             };
         }
 
-        self.failed_release_keys.extend(&stuck);
+        self.failed_release_mask |= stuck
+            .iter()
+            .filter_map(|&scan_code| key_mask(scan_code))
+            .fold(0, |mask, bit| mask | bit);
         self.last_error = Some(format!(
             "full-instrument release incomplete: {}/{} keys unresolved",
             stuck.len(),
             attempted.len()
         ));
-        let mut reported_stuck: Vec<u16> = self.failed_release_keys.iter().copied().collect();
-        reported_stuck.sort_unstable();
+        let reported_stuck = scan_codes_from_mask(self.failed_release_mask);
         ReleaseAllOutcome {
             attempted,
             released_successfully: false,
@@ -758,27 +770,21 @@ mod tests {
     }
 
     #[test]
-    fn up_retry_matrix_resets_progress_and_bounds_zero_progress() {
-        for (script, expected_sent, expected_calls, expected_sleeps, expected_success) in [
-            (vec![1, 1, 1], 3, 3, 0, true),
-            (vec![0, 1, 2], 3, 3, 1, true),
-            (vec![0, 0, 0], 0, 3, 2, false),
-            (vec![99], 3, 1, 0, true),
+    fn up_retry_matrix_is_immediate_and_bounded() {
+        for (script, expected_sent, expected_calls, expected_success) in [
+            (vec![3], 3, 1, true),
+            (vec![1, 2], 3, 2, true),
+            (vec![0, 0], 0, 2, false),
+            (vec![99], 3, 1, true),
         ] {
             let mut returns = VecDeque::from(script);
             let mut calls = 0;
-            let mut sleeps = 0;
-            let emitted = emit_up_with_and_sleep(
-                &[2, 3, 4],
-                |codes, _| {
-                    calls += 1;
-                    scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
-                },
-                || sleeps += 1,
-            );
+            let emitted = emit_up_with_immediate(&[2, 3, 4], |codes, _| {
+                calls += 1;
+                scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
+            });
             assert_eq!(emitted.sent.len(), expected_sent);
             assert_eq!(calls, expected_calls);
-            assert_eq!(sleeps, expected_sleeps);
             assert_eq!(emitted.success, expected_success);
         }
     }
@@ -806,25 +812,21 @@ mod tests {
     #[test]
     fn structured_win32_errors_survive_up_zero_progress_retries() {
         let mut calls = 0;
-        let emitted = emit_up_with_and_sleep(
-            &[2],
-            |codes, _| {
-                calls += 1;
-                PlatformSendResult {
-                    requested: codes.len() as u32,
-                    inserted: 0,
-                    completed_us: calls,
-                    win32_error: if calls == 1 { 5 } else { 1460 },
-                }
-            },
-            || {},
-        );
+        let emitted = emit_up_with_immediate(&[2], |codes, _| {
+            calls += 1;
+            PlatformSendResult {
+                requested: codes.len() as u32,
+                inserted: 0,
+                completed_us: calls,
+                win32_error: if calls == 1 { 5 } else { 1460 },
+            }
+        });
 
         assert!(!emitted.success);
         assert_eq!(emitted.first_win32_error, Some(5));
         assert_eq!(emitted.last_win32_error, Some(1460));
-        assert_eq!(emitted.send_attempts, 3);
-        assert_eq!(emitted.zero_progress_retries, 2);
+        assert_eq!(emitted.send_attempts, 2);
+        assert_eq!(emitted.zero_progress_retries, 1);
     }
 
     #[test]
@@ -861,6 +863,6 @@ mod tests {
         assert!(!outcome.released_successfully);
         assert_eq!(outcome.attempted, PHYSICAL_INSTRUMENT_SCAN_CODES);
         assert_eq!(outcome.stuck_keys, PHYSICAL_INSTRUMENT_SCAN_CODES);
-        assert_eq!(state.failed_release_keys.len(), 15);
+        assert_eq!(state.failed_release_mask.count_ones(), 15);
     }
 }

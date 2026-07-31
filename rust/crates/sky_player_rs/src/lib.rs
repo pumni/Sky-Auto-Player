@@ -10,7 +10,6 @@ use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_win32::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, TrackedKeyState};
 use sky_dispatch_win32::mmcss::PriorityMode;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -70,7 +69,7 @@ fn strict_u64(value: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
 fn strict_scan_codes(
     value: &Bound<'_, PyAny>,
     field: &str,
-    allowed: Option<&HashSet<u16>>,
+    allowed: Option<&[u16]>,
 ) -> PyResult<Vec<u16>> {
     let items = strict_sequence(value, field)?;
     if items.is_empty() || items.len() > sky_dispatch_core::model::MAX_KEYS {
@@ -81,32 +80,36 @@ fn strict_scan_codes(
     }
 
     let mut result = Vec::with_capacity(items.len());
-    let mut seen = HashSet::with_capacity(items.len());
+    let mut seen: Vec<u16> = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         let item_field = format!("{field}[{index}]");
         let integer = strict_integer(item, &item_field)?;
         let scan_code = u16::try_from(integer)
             .map_err(|_| PyValueError::new_err(format!("{item_field} must be in 0..=u16::MAX")))?;
-        if !seen.insert(scan_code) {
+        if seen.contains(&scan_code) {
             return Err(PyValueError::new_err(format!(
                 "{field} contains duplicate scan code {scan_code}"
             )));
         }
-        if let Some(allowed) = allowed
-            && !allowed.contains(&scan_code)
-        {
-            return Err(PyValueError::new_err(format!(
-                "{item_field} scan code {scan_code} is outside the prepared allowlist"
-            )));
+        if let Some(allowed) = allowed {
+            if !allowed.contains(&scan_code) {
+                return Err(PyValueError::new_err(format!(
+                    "{item_field} scan code {scan_code} is outside the prepared allowlist"
+                )));
+            }
         }
+        seen.push(scan_code);
         result.push(scan_code);
     }
     Ok(result)
 }
 
 fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
-    let instrument: HashSet<u16> = PHYSICAL_INSTRUMENT_SCAN_CODES.iter().copied().collect();
-    strict_scan_codes(value, "allowed_scan_codes", Some(&instrument))
+    strict_scan_codes(
+        value,
+        "allowed_scan_codes",
+        Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
+    )
 }
 
 fn parse_actions(
@@ -120,7 +123,6 @@ fn parse_actions(
             sky_dispatch_core::compile::MAX_ACTIONS
         )));
     }
-    let allowed: HashSet<u16> = allowed_scan_codes.iter().copied().collect();
     let mut actions = Vec::with_capacity(items.len());
 
     for (position, item) in items.iter().enumerate() {
@@ -157,7 +159,7 @@ fn parse_actions(
         let scan_codes = strict_scan_codes(
             &tuple.get_item(3)?,
             &format!("actions[{position}].scan_codes"),
-            Some(&allowed),
+            Some(allowed_scan_codes),
         )?;
         let reason = tuple
             .get_item(4)?
@@ -213,8 +215,11 @@ impl RustInputBackend {
         py: Python<'py>,
         scan_codes: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let allowed: HashSet<u16> = PHYSICAL_INSTRUMENT_SCAN_CODES.iter().copied().collect();
-        let scan_codes = strict_scan_codes(scan_codes, "scan_codes", Some(&allowed))?;
+        let scan_codes = strict_scan_codes(
+            scan_codes,
+            "scan_codes",
+            Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
+        )?;
         let res = self.state.lock().key_down(&scan_codes);
         let dict = PyDict::new(py);
         dict.set_item("sent", res.sent.to_vec())?;
@@ -234,8 +239,11 @@ impl RustInputBackend {
         py: Python<'py>,
         scan_codes: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let allowed: HashSet<u16> = PHYSICAL_INSTRUMENT_SCAN_CODES.iter().copied().collect();
-        let scan_codes = strict_scan_codes(scan_codes, "scan_codes", Some(&allowed))?;
+        let scan_codes = strict_scan_codes(
+            scan_codes,
+            "scan_codes",
+            Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
+        )?;
         let res = self.state.lock().key_up(&scan_codes);
         let dict = PyDict::new(py);
         dict.set_item("sent", res.sent.to_vec())?;
@@ -279,9 +287,15 @@ impl RustInputBackend {
     fn get_health<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let state = self.state.lock();
         let dict = PyDict::new(py);
-        dict.set_item("active_count", state.active_keys.len())?;
-        dict.set_item("possibly_active_count", state.possibly_active_keys.len())?;
-        dict.set_item("failed_release_count", state.failed_release_keys.len())?;
+        dict.set_item("active_count", state.active_mask.count_ones())?;
+        dict.set_item(
+            "possibly_active_count",
+            state.possibly_active_mask.count_ones(),
+        )?;
+        dict.set_item(
+            "failed_release_count",
+            state.failed_release_mask.count_ones(),
+        )?;
         dict.set_item("last_error", state.last_error.clone())?;
         dict.set_item("keys_dropped", state.keys_dropped)?;
         dict.set_item("chord_split_events", state.chord_split_events)?;
@@ -563,9 +577,17 @@ impl NativeDispatchSessionPy {
             "effective_spin_threshold_us",
             snap.effective_spin_threshold_us,
         )?;
+        dict.set_item("wake_error_p50_us", snap.wake_error_p50_us)?;
+        dict.set_item("wake_error_p95_us", snap.wake_error_p95_us)?;
+        dict.set_item("wake_error_p99_us", snap.wake_error_p99_us)?;
+        dict.set_item("wake_error_max_us", snap.wake_error_max_us)?;
+        dict.set_item("spin_time_us", snap.spin_time_us)?;
         dict.set_item("wait_strategy_acquired", snap.wait_strategy_acquired)?;
         dict.set_item("power_throttling_disabled", snap.power_throttling_disabled)?;
         dict.set_item("input_path_degraded", snap.input_path_degraded)?;
+        dict.set_item("sendinput_path_degraded", snap.sendinput_path_degraded)?;
+        dict.set_item("bookkeeping_degraded", snap.bookkeeping_degraded)?;
+        dict.set_item("wait_path_degraded", snap.wait_path_degraded)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
         dict.set_item("generation_count", snap.generation_count)?;

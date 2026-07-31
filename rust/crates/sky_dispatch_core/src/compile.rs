@@ -1,6 +1,5 @@
 //! Generation compiler for turning authored KeyAction sequences into RuntimeSchedule.
 
-use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 
@@ -44,9 +43,8 @@ pub fn compile_runtime_intents(
     if allowed_scan_codes.is_empty() || allowed_scan_codes.len() > MAX_KEYS {
         return Err(CompileError::InvalidAllowedScanCodeCount);
     }
-    let mut allowed_seen = std::collections::HashSet::with_capacity(allowed_scan_codes.len());
-    for &scan_code in allowed_scan_codes {
-        if !allowed_seen.insert(scan_code) {
+    for (index, &scan_code) in allowed_scan_codes.iter().enumerate() {
+        if allowed_scan_codes[..index].contains(&scan_code) {
             return Err(CompileError::DuplicateAllowedScanCode(scan_code));
         }
     }
@@ -56,10 +54,16 @@ pub fn compile_runtime_intents(
 
     let key_registry = KeyRegistry::new(allowed_scan_codes);
     let mut next_generation_id: GenerationId = 0;
-    let mut unmatched_downs: HashMap<u16, VecDeque<GenerationId>> = HashMap::new();
+    let mut unmatched_downs: [VecDeque<GenerationId>; MAX_KEYS] =
+        std::array::from_fn(|_| VecDeque::new());
     let mut reason_table: Vec<String> = Vec::new();
     let mut reason_map: HashMap<String, ReasonId> = HashMap::new();
-    let mut batches: Vec<RuntimeBatch> = Vec::with_capacity(actions.len());
+    let intent_capacity = actions
+        .iter()
+        .map(|action| action.scan_codes.len())
+        .sum::<usize>();
+    let mut batches = Vec::with_capacity(actions.len());
+    let mut intents = Vec::with_capacity(intent_capacity);
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {
@@ -104,27 +108,29 @@ pub fn compile_runtime_intents(
             });
         }
 
-        let mut batch_seen = std::collections::HashSet::with_capacity(action.scan_codes.len());
+        let mut batch_seen_mask: u16 = 0;
         for &scan_code in &action.scan_codes {
-            if !allowed_seen.contains(&scan_code) {
+            let Some(key_slot) = key_registry.slot_for(scan_code) else {
                 return Err(CompileError::ScanCodeNotAllowed {
                     action_index: action.source_action_index,
                     scan_code,
                 });
-            }
-            if !batch_seen.insert(scan_code) {
+            };
+            let bit = 1u16 << key_slot;
+            if batch_seen_mask & bit != 0 {
                 return Err(CompileError::DuplicateBatchScanCode {
                     action_index: action.source_action_index,
                     scan_code,
                 });
             }
+            batch_seen_mask |= bit;
         }
 
         previous_source_index = Some(action.source_action_index);
         previous_scheduled_us = Some(action.scheduled_us);
         let reason_id = get_or_insert_reason(&action.reason)?;
-        let mut intents: SmallVec<[RuntimeKeyIntent; MAX_KEYS]> = SmallVec::new();
-
+        let intent_start =
+            u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
         for &scan_code in &action.scan_codes {
             let key_slot =
                 key_registry
@@ -139,40 +145,33 @@ pub fn compile_runtime_intents(
                     next_generation_id = next_generation_id
                         .checked_add(1)
                         .ok_or(CompileError::GenerationOverflow)?;
-                    unmatched_downs
-                        .entry(scan_code)
-                        .or_default()
-                        .push_back(gen_id);
+                    unmatched_downs[key_slot as usize].push_back(gen_id);
                     Some(gen_id)
                 }
-                ActionKind::Up => unmatched_downs
-                    .get_mut(&scan_code)
-                    .and_then(|queue| queue.pop_front()),
+                ActionKind::Up => unmatched_downs[key_slot as usize].pop_front(),
             };
 
-            intents.push(RuntimeKeyIntent {
-                source_action_index: action.source_action_index,
-                generation_id,
-                kind: action.kind,
-                scan_code,
+            intents.push(CompactIntent {
+                generation_id: generation_id.unwrap_or(NO_GENERATION_ID),
                 key_slot,
-                scheduled_us: action.scheduled_us,
-                reason_id,
             });
         }
 
-        batches.push(RuntimeBatch {
+        batches.push(CompiledBatch {
             source_action_index: action.source_action_index,
             kind: action.kind,
             scheduled_us: action.scheduled_us,
             reason_id,
-            intents,
+            intent_start,
+            intent_len: u8::try_from(action.scan_codes.len())
+                .expect("validated batch length is at most MAX_KEYS"),
             packet_id: 0,
         });
     }
 
     Ok(RuntimeSchedule {
         batches,
+        intents,
         generation_count: next_generation_id,
         key_registry,
         reason_table,
@@ -215,13 +214,16 @@ mod tests {
         assert_eq!(sched.batches.len(), 3);
 
         // Down batch has gen 0 and gen 1
-        assert_eq!(sched.batches[0].intents[0].generation_id, Some(0));
-        assert_eq!(sched.batches[0].intents[1].generation_id, Some(1));
+        let down = sched.materialize_batch(0, 0);
+        assert_eq!(down.intents[0].generation_id, Some(0));
+        assert_eq!(down.intents[1].generation_id, Some(1));
 
         // Up 1 matches gen 0
-        assert_eq!(sched.batches[1].intents[0].generation_id, Some(0));
+        let up_one = sched.materialize_batch(1, 0);
+        assert_eq!(up_one.intents[0].generation_id, Some(0));
         // Up 2 matches gen 1
-        assert_eq!(sched.batches[2].intents[0].generation_id, Some(1));
+        let up_two = sched.materialize_batch(2, 0);
+        assert_eq!(up_two.intents[0].generation_id, Some(1));
     }
 
     #[test]
@@ -237,7 +239,7 @@ mod tests {
 
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
         assert_eq!(sched.generation_count, 0);
-        assert_eq!(sched.batches[0].intents[0].generation_id, None);
+        assert_eq!(sched.materialize_batch(0, 0).intents[0].generation_id, None);
     }
 
     #[test]
@@ -275,5 +277,34 @@ mod tests {
             compile_runtime_intents(&outside_allowlist, &allowed),
             Err(CompileError::ScanCodeNotAllowed { scan_code: 2, .. })
         ));
+    }
+
+    #[test]
+    fn schedule_uses_a_flat_intent_arena() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 10,
+                    scan_codes: vec![1],
+                    reason: "single".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 20,
+                    scan_codes: vec![2, 3],
+                    reason: "chord".to_string(),
+                },
+            ],
+            &[1, 2, 3],
+        )
+        .unwrap();
+        assert_eq!(schedule.intents.len(), 3);
+        assert_eq!(schedule.batches[0].intent_len, 1);
+        assert_eq!(schedule.batches[1].intent_len, 2);
+        assert!(std::mem::size_of::<CompiledBatch>() <= 32);
+        assert!(std::mem::size_of::<CompactIntent>() <= 16);
     }
 }

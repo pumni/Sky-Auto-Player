@@ -1,6 +1,7 @@
-# RT Dispatch Architecture (Python oracle + native migration path)
+# RT Dispatch Architecture (Python oracle + native Rust worker)
 
-Status: CURRENT — Python is the production oracle; Rust Phase 5/6 is opt-in pending soak.
+Status: CURRENT — Rust owns the eligible native real-time sender path; Python remains the
+deterministic oracle and rollback path.
 History: built by `archive/2026-06_rt-pipeline-extreme-optimization-plan.md`; A/B numbers in
 `perf-baselines/2026-06-baseline.md`.
 
@@ -94,14 +95,11 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   (no busy-loop while waiting for the blocking release).
 - **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
-  `effective_spin_threshold = clamp(spin_floor_us, 3000, max_wake_error + 200)` µs (default
-  `spin_floor_us = 700`, cap 3000 µs). The formula is **heavy-tail-aware**: it uses the worst
-  observed sample — not p90 — because p90 with n=30 sits at index 27 and silently ignores the
-  worst three outliers. Those rare spikes (Windows timer coalescing batches, brief DPC latency)
-  otherwise leak through the spin guard as late completions. Buffer 200 µs absorbs spin overshoot
-  on top of the worst sample. Restores the original Phase-5 design intent recorded in
-  `docs/archive/2026-06_rt-pipeline-extreme-optimization-plan.md` §Phase 5. Recorded in
-  `runtime_options.probe_wake_errors_us`.
+  `effective_spin_threshold = clamp(spin_floor_us, 3000, p95_wake_error + 200)` µs (default
+  `spin_floor_us = 700`, cap 3000 µs). The probe also retains p50/p99/max diagnostics. A later
+  reprobe raises the threshold immediately and lowers it by at most 50 µs per update, preventing
+  one timer outlier from permanently forcing a 3 ms spin window while retaining fast protection
+  when the timer path degrades.
 - **Cross-session EMA lead cache (Phase D):** `SendLatencyEstimator` exports/imports per-kind
   EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
   warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
@@ -114,8 +112,8 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   since the last reprobe, the dispatch thread starts an eight-sample cooperative attempt. It takes
   at most one 2 ms sample per outer wait iteration and services command/focus state between
   samples; pause, focus, stop, or an unsafe deadline discards the partial attempt. A candidate is
-  committed only after all eight samples using `sample_max + 200 µs`, floor/cap and ± 50 µs
-  hysteresis. The eight-sample maximum is not called p90. Kill switch: `enable_spin_reprobe`
+  committed only after all eight samples using `p95 + 200 µs`, floor/cap and asymmetric
+  hysteresis. Kill switch: `enable_spin_reprobe`
   (auto-off when `enable_adaptive_spin = False`). Applied thresholds are recorded in
   `runtime_options.reprobe_applied_thresholds`.
 
@@ -123,8 +121,8 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 runs on the dispatch thread after the timer and priority scopes have entered and before the final
 epoch rebase. The result is applied to the loop before its first wait. Direct playback probes in
 its execution context before creating the playback anchor. A probe failure preserves the configured
-threshold and records the degradation; it does not abort playback. `sample_max + 200 µs`, the
-configured floor/cap, and the existing kill switch remain unchanged.
+threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
+floor/cap, and the existing kill switch remain unchanged.
 
 **Calibration evidence boundary.** The latency calibration cache is an
 `injected_raw_input_delivery_proxy`: the app injects through Windows `SendInput` into an app-owned
@@ -151,10 +149,11 @@ on commands and focus transitions. In event mode the supervisor also publishes t
 by the loop itself. Direct (non-threaded) mode always runs polled.
 
 The Rust equivalent is `sky_dispatch_win32::wait::HybridWaiter`. It creates the event before the
-worker starts, orders `[command_event, timer]`, uses a bounded degraded poll, and keeps handle
-ownership in RAII wrappers. Its adaptive probe runs after timer/priority acquisition and before
-the playback epoch. If the high-resolution timer is unavailable or disabled, a worker-owned
-1 ms timer-resolution guard is acquired and restored; the effective wait mode is exposed as
+worker starts, orders `[command_event, timer]`, uses raw QPC ticks in the final wait/spin loop,
+and keeps handle ownership in RAII wrappers. Microseconds are used only at the coordinator and
+telemetry boundary. Its adaptive probe runs after timer/priority acquisition and before the
+playback epoch. If the high-resolution timer is unavailable or disabled, a worker-owned 1 ms
+timer-resolution guard is acquired and restored; the effective wait mode is exposed as
 `runtime_options.wait_strategy_acquired`. The Python strategy remains the deterministic oracle
 and rollback path.
 
@@ -224,10 +223,15 @@ cleanest send tail of all runs.
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
-The Rust path reserves its retain-first record buffer before the playback epoch. Per-record
-scan/generation fields use inline storage and reasons remain compact IDs on the worker; reason
-strings and JSON are materialized only after terminal join. This preserves the existing CSV
-fields and outcome strings without per-send heap allocation or disk I/O.
+The Rust path reserves its retain-first record buffer before the playback epoch. The compiled
+schedule uses a flat `CompactIntent` arena plus small batch headers; only the current batch is
+materialized into full intent views. Runtime active/release ownership uses 15-key arrays and
+bitmasks rather than hash tables. Per-record scan/generation fields use inline storage and
+reasons remain compact IDs on the worker; bounded summary counters and 50 µs histograms remain
+available in every native run, including summary-only runs where the retain-first event buffer is
+disabled. Reason strings and JSON are materialized only after terminal join. This preserves the
+existing CSV fields and outcome strings without per-send disk I/O while making production health
+histograms available without retaining every event.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
 engine prewarms the platform INPUT cache in two passes under the cache cap

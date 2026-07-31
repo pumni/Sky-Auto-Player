@@ -5,7 +5,7 @@ export const homeVi: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Trình phát nhạc Sky tự động trên Windows',
     description:
-      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng thời điểm bằng ứng dụng Windows mã nguồn mở.',
+      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng nhịp — căn theo khung hình game, tự bù độ trễ, không phải phát lại macro.',
   },
   navigation: {
     playback: 'Phát nhạc',
@@ -18,7 +18,7 @@ export const homeVi: HomeContent = {
     kicker: 'Trình phát nhạc tự động cho Sky · Windows 10/11',
     titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
-      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân được phát đúng thời điểm.',
+      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — căn theo khung hình của game, chứ không chỉ gửi phím tuần tự.',
     primaryCta: 'Tải xuống cho Windows',
     secondaryCta: 'Xem cách hoạt động',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'PORTABLE', 'KHÔNG CẦN CÀI ĐẶT'],
@@ -29,21 +29,23 @@ export const homeVi: HomeContent = {
     kicker: 'Hồ sơ trình diễn',
     metric: 'ĐỒNG BỘ FRAME / MỤC TIÊU 60 FPS',
     signals: [
-      'Chỉ Windows SendInput',
-      'Bản ZIP portable',
-      'Mã nguồn mở, kiểm chứng được',
-      'Profile timing theo từng bài',
+      'Hợp âm rơi cùng một khung hình của game',
+      'Tự học độ trễ từng máy — lệch dưới 1 phần nghìn giây',
+      'Nốt ngân giữ đủ trường độ, không bị cắt ngang',
+      'Phát nhạc và giao diện chạy rời rành — HUD vẫn mượt',
     ],
   },
   playback: {
     kicker: 'Được xây dựng quanh bản nhạc',
     title: 'Timing cũng là một phần của nhạc cụ.',
     description:
-      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung.',
+      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung. Mỗi nốt được đối chiếu với thời điểm nó thực sự vang lên, chứ không chỉ thời điểm được lên lịch.',
     points: [
       'Hợp âm căn theo frame',
       'Phát theo tempo',
       'Nốt, hợp âm và nốt ngân',
+      'Tự học độ trễ từng máy',
+      'Phát nhạc và HUD chạy trên hai luồng riêng',
       'Xem thử bằng dry-run',
     ],
   },
@@ -57,6 +59,8 @@ export const homeVi: HomeContent = {
       { macro: 'Độ trễ cố định', player: 'Timing đi theo sheet và tempo' },
       { macro: 'Chủ yếu giả định bấm-thả', player: 'Hỗ trợ nốt, hợp âm và nốt ngân' },
       { macro: 'Một cấu hình dùng cho mọi bài', player: 'Profile timing riêng cho từng bài' },
+      { macro: 'Độ trễ cố định, một loại cho mọi máy', player: 'Tự học độ trễ máy bạn rồi bù trước' },
+      { macro: 'HUD giật khi bận', player: 'Phát nốt và giao diện chạy trên hai luồng riêng' },
     ],
   },
   product: {
