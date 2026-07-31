@@ -1,23 +1,28 @@
 //! Monotonic QueryPerformanceCounter clock query helper.
 
+use std::sync::OnceLock;
+
 pub fn qpc_frequency() -> u64 {
-    #[cfg(windows)]
-    {
-        let mut freq: i64 = 0;
-        // SAFETY: `freq` is a valid writable out-parameter and the API does
-        // not retain its address.
-        let success = unsafe {
-            windows_sys::Win32::System::Performance::QueryPerformanceFrequency(&mut freq)
-        };
-        if success == 0 || freq <= 0 {
-            return 0;
+    static FREQUENCY: OnceLock<u64> = OnceLock::new();
+    *FREQUENCY.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            let mut freq: i64 = 0;
+            // SAFETY: `freq` is a valid writable out-parameter and the API does
+            // not retain its address.
+            let success = unsafe {
+                windows_sys::Win32::System::Performance::QueryPerformanceFrequency(&mut freq)
+            };
+            if success == 0 || freq <= 0 {
+                return 0;
+            }
+            freq as u64
         }
-        freq as u64
-    }
-    #[cfg(not(windows))]
-    {
-        1_000_000_000
-    }
+        #[cfg(not(windows))]
+        {
+            1_000_000_000
+        }
+    })
 }
 
 pub fn qpc_now_us() -> u64 {

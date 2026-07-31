@@ -119,6 +119,7 @@ pub fn create_keyboard_input(
 pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::SetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
@@ -140,6 +141,10 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         // SAFETY: `packets` owns `requested` contiguous, correctly aligned INPUT
         // values and remains alive and immobile for the duration of SendInput.
         // `requested` is bounded to 15 by the validated caller.
+        // SendInput does not promise to clear last-error on every path. Reset
+        // it immediately before the syscall so a partial/zero result never
+        // inherits an unrelated error from earlier worker activity.
+        unsafe { SetLastError(0) };
         let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
         let completed_us = crate::clock::qpc_now_us();
         let win32_error = if inserted != requested {

@@ -52,6 +52,10 @@ class RustInputAdapter(InputBackend):
             success=bool(res["success"]),
             error=res["error"],
             send_completed_us=res.get("send_completed_us"),
+            first_win32_error=res.get("first_win32_error"),
+            last_win32_error=res.get("last_win32_error"),
+            send_attempts=int(res.get("send_attempts", 0)),
+            zero_progress_retries=int(res.get("zero_progress_retries", 0)),
         )
 
     def key_up(self, scan_codes: tuple[int, ...]) -> InputSendResult:
@@ -62,6 +66,10 @@ class RustInputAdapter(InputBackend):
             success=bool(res["success"]),
             error=res["error"],
             send_completed_us=res.get("send_completed_us"),
+            first_win32_error=res.get("first_win32_error"),
+            last_win32_error=res.get("last_win32_error"),
+            send_attempts=int(res.get("send_attempts", 0)),
+            zero_progress_retries=int(res.get("zero_progress_retries", 0)),
         )
 
     def release_all(self) -> ReleaseAllOutcome:

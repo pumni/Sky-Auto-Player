@@ -165,26 +165,23 @@ def test_observe_exec_result_onset_threshold_buckets_use_visible_lateness_us() -
     assert counters.max_lateness_us == 2_500
 
 
-def test_observe_exec_result_release_keeps_call_entry_lateness() -> None:
-    """Release (kind='up') counters must continue using ``lateness_us`` (the
-    bounded-retry contract signal), not ``visible_lateness_us`` — the release
-    path's metric is not the player-perceived onset.
-    """
+def test_observe_exec_result_release_uses_completion_lateness() -> None:
+    """Release counters include syscall/retry time through completion."""
     loop = _build_loop_with_counters()
     loop._observe_exec_result(
         _make_exec_result(
             kind="up",
-            lateness_us=4_000,           # release path call-entry lateness
-            visible_lateness_us=2_000,   # completion was earlier — irrelevant
+            lateness_us=4_000,           # call-entry lateness
+            visible_lateness_us=2_000,   # completion-lateness metric
         )
     )
 
     counters = loop._get_progress_counters()
     assert counters is not None
-    assert counters.release_max_us == 4_000, (
-        f"release counter must use call-entry lateness, got {counters.release_max_us}"
+    assert counters.release_max_us == 2_000, (
+        f"release counter must use completion lateness, got {counters.release_max_us}"
     )
-    assert counters.release_late_2ms == 1
+    assert counters.release_late_2ms == 0
     # Release counter must NOT have polluted the onset counter.
     assert counters.max_lateness_us == 0
     assert counters.recent_latencies_us == (), (

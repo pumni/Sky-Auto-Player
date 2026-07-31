@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from sky_music.domain.scheduler_types import ActionKind, KeyAction
@@ -67,13 +67,25 @@ class PendingRelease:
     down_dispatch_started_us: int
     release_not_before_us: int
     reason: str
+    retry_count: int = 0
+    next_retry_us: int = 0
+    first_failure_us: int | None = None
+    last_win32_error: int | None = None
 
     @property
     def effective_release_us(self) -> int:
-        return max(self.scheduled_release_us, self.release_not_before_us)
+        return max(
+            self.scheduled_release_us,
+            self.release_not_before_us,
+            self.next_retry_us,
+        )
 
     def get_effective_release_us(self, lead_up: int = 0) -> int:
-        return max(self.scheduled_release_us - lead_up, self.release_not_before_us)
+        return max(
+            self.scheduled_release_us - lead_up,
+            self.release_not_before_us,
+            self.next_retry_us,
+        )
 
 
 def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
@@ -523,6 +535,50 @@ class RuntimeDispatchCoordinator:
                 pending.generation_id,
                 GenerationStatus.RELEASED if pending.scan_code in sent else GenerationStatus.DROPPED_BACKEND,
             )
+
+    def requeue_failed_releases(
+        self,
+        releases: tuple[PendingRelease, ...],
+        sent_scan_codes: tuple[int, ...],
+        skipped_scan_codes: tuple[int, ...],
+        now_us: int,
+        last_win32_error: int | None = None,
+    ) -> bool:
+        """Keep failed note-offs pending until bounded recovery is required."""
+        max_retries = 8
+        backoff_us = (2_000, 5_000, 10_000, 20_000)
+        recovery_required = False
+        sent = set(sent_scan_codes)
+        skipped = set(skipped_scan_codes)
+        for pending in releases:
+            if pending.scan_code in sent or pending.scan_code in skipped:
+                continue
+            active = self.active_by_scan_code.get(pending.scan_code)
+            if active is None or active.generation_id != pending.generation_id:
+                continue
+            retry_count = pending.retry_count + 1
+            if retry_count > max_retries:
+                recovery_required = True
+                continue
+            delay = backoff_us[min(retry_count - 1, len(backoff_us) - 1)]
+            retry = replace(
+                pending,
+                retry_count=retry_count,
+                next_retry_us=now_us + delay,
+                first_failure_us=(
+                    pending.first_failure_us
+                    if pending.first_failure_us is not None
+                    else now_us
+                ),
+                last_win32_error=(
+                    last_win32_error
+                    if last_win32_error is not None
+                    else pending.last_win32_error
+                ),
+            )
+            self.pending_by_generation[retry.generation_id] = retry
+            self.pending_scan_codes.add(retry.scan_code)
+        return recovery_required
 
     def cancel_all(self) -> tuple[int, ...]:
         active_gen_ids = {active.generation_id for active in self.active_by_scan_code.values()}

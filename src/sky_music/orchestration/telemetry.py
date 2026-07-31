@@ -667,9 +667,14 @@ class TelemetryLogger:
             # Records were already persisted (save()) or never recorded: serve the cache.
             return self._last_summary
 
-        # dispatch_records: only records where SendInput was actually called
-        # (sent_scan_codes is non-empty string). No-op release skips are excluded.
-        dispatch_records = [r for r in rows if r.get("sent_scan_codes")]
+        # dispatch_records includes zero-insertion SendInput attempts. Native
+        # records expose send_attempts explicitly; the sent-code fallback keeps
+        # compatibility with older Python/native records that predate it.
+        dispatch_records = [
+            r
+            for r in rows
+            if r.get("sent_scan_codes") or int(r.get("send_attempts", 0) or 0) > 0
+        ]
         noop_skipped_count = sum(
             1 for r in rows
             if not r.get("sent_scan_codes") and r.get("skipped_scan_codes")
@@ -966,7 +971,9 @@ class TelemetryLogger:
             ),
             "attempted_dispatches": len(dispatch_records),
             "noop_skipped_count": noop_skipped_count,
-            "successful_dispatches": len(dispatch_records),  # already filtered to sent-only
+            "successful_dispatches": sum(
+                1 for r in dispatch_records if r.get("sent_scan_codes")
+            ),
             "sent_down_count": sent_down_count,
             "sent_up_count": sent_up_count,
             "backend_skipped_down_count": backend_skipped_down_count,

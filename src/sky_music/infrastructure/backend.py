@@ -49,6 +49,12 @@ class InputSendResult:
     # Raw perf_counter µs right after SendInput returned (before backend bookkeeping).
     # None if the backend cannot provide this (e.g. DryRunBackend or no clock available).
     send_completed_us: int | None = None
+    # Structured SendInput diagnostics. Backends without a native seam keep the
+    # zero/None defaults; the Rust adapter preserves the native values.
+    first_win32_error: int | None = None
+    last_win32_error: int | None = None
+    send_attempts: int = 0
+    zero_progress_retries: int = 0
 
 class InputBackend(Protocol):
     """Protocol interface defining operations for keyboard note key injections."""

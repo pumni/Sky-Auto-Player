@@ -6,6 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::*;
 
+pub const MAX_RELEASE_RETRIES: u8 = 8;
+const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationStatus {
@@ -77,6 +80,65 @@ mod tests {
             Some(&1)
         );
     }
+
+    #[test]
+    fn failed_release_is_requeued_and_unblocks_later_same_key_down() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 4_000,
+                    scan_codes: vec![0x15],
+                    reason: "down-2".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("first down is due");
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, 10);
+
+        let (up, _) = coordinator
+            .pop_next_due_authored(1_000, 0)
+            .expect("up is due");
+        let (_, suppressed) = coordinator.request_releases(&up.intents);
+        assert!(suppressed.is_empty());
+
+        let due = coordinator.pop_due_pending(1_000, 0);
+        assert_eq!(due.len(), 1);
+        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, Some(5)));
+        assert_eq!(coordinator.next_pending_release_us(0), Some(3_000));
+        assert!(!coordinator.is_finished());
+
+        let retry = coordinator.pop_due_pending(3_000, 0);
+        assert_eq!(retry.len(), 1);
+        coordinator.complete_releases(&retry, &[0x15], &[]);
+
+        let (next_down, _) = coordinator
+            .pop_next_due_authored(4_000, 0)
+            .expect("same-key down remains schedulable after recovery");
+        let (playable, conflicts) = coordinator.split_down_intents(&next_down.intents);
+        assert_eq!(playable.len(), 1);
+        assert!(conflicts.is_empty());
+    }
 }
 
 pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
@@ -112,12 +174,16 @@ pub struct PendingRelease {
     pub down_dispatch_started_us: u64,
     pub release_not_before_us: u64,
     pub reason_id: ReasonId,
+    pub retry_count: u8,
+    pub next_retry_us: u64,
+    pub first_failure_us: Option<u64>,
+    pub last_win32_error: Option<u32>,
 }
 
 impl PendingRelease {
     pub fn get_effective_release_us(&self, lead_up: u64) -> u64 {
         let led = self.scheduled_release_us.saturating_sub(lead_up);
-        self.release_not_before_us.max(led)
+        self.release_not_before_us.max(led).max(self.next_retry_us)
     }
 }
 
@@ -212,6 +278,11 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn is_finished(&self) -> bool {
+        // An authored down may legitimately have no matching up in the input
+        // timeline.  The worker's terminal cleanup owns that case, so do not
+        // wait forever on an active generation that has no pending release.
+        // Failed pending releases are kept alive by `requeue_failed_releases`
+        // until they succeed or recovery aborts the session.
         self.cursor >= self.schedule.batches.len() && self.pending_by_generation.is_empty()
     }
 
@@ -434,6 +505,10 @@ impl RuntimeDispatchCoordinator {
                 down_dispatch_started_us: active.down_dispatch_started_us,
                 release_not_before_us: active.release_not_before_us,
                 reason_id: intent.reason_id,
+                retry_count: 0,
+                next_retry_us: 0,
+                first_failure_us: None,
+                last_win32_error: None,
             };
 
             self.pending_by_generation
@@ -471,6 +546,10 @@ impl RuntimeDispatchCoordinator {
                 down_dispatch_started_us: active.down_dispatch_started_us,
                 release_not_before_us: active.release_not_before_us,
                 reason_id: intent.reason_id,
+                retry_count: 0,
+                next_retry_us: 0,
+                first_failure_us: None,
+                last_win32_error: None,
             };
 
             self.pending_by_generation
@@ -507,6 +586,51 @@ impl RuntimeDispatchCoordinator {
             };
             self.terminalize(pending.generation_id, status);
         }
+    }
+
+    /// Requeue release work that did not reach the operating-system input
+    /// stream. The active generation remains owned by the coordinator while
+    /// bounded retries are pending; callers must stop playback and perform
+    /// full-instrument recovery when this returns `true`.
+    pub fn requeue_failed_releases(
+        &mut self,
+        releases: &[PendingRelease],
+        sent_scan_codes: &[u16],
+        skipped_scan_codes: &[u16],
+        now_us: u64,
+        last_win32_error: Option<u32>,
+    ) -> bool {
+        let mut recovery_required = false;
+        for pending in releases {
+            if sent_scan_codes.contains(&pending.scan_code)
+                || skipped_scan_codes.contains(&pending.scan_code)
+            {
+                continue;
+            }
+            if !matches!(
+                self.active_by_scan_code.get(&pending.scan_code),
+                Some(active) if active.generation_id == pending.generation_id
+            ) {
+                continue;
+            }
+
+            let retry_count = pending.retry_count.saturating_add(1);
+            if retry_count > MAX_RELEASE_RETRIES {
+                recovery_required = true;
+                continue;
+            }
+            let delay_index =
+                usize::from(retry_count.saturating_sub(1)).min(RELEASE_RETRY_BACKOFF_US.len() - 1);
+            let mut retry = pending.clone();
+            retry.retry_count = retry_count;
+            retry.next_retry_us = now_us.saturating_add(RELEASE_RETRY_BACKOFF_US[delay_index]);
+            retry.first_failure_us = Some(pending.first_failure_us.unwrap_or(now_us));
+            retry.last_win32_error = last_win32_error.or(pending.last_win32_error);
+            self.pending_scan_codes.insert(retry.scan_code);
+            self.pending_by_generation
+                .insert(retry.generation_id, retry);
+        }
+        recovery_required
     }
 
     pub fn cancel_all(&mut self) -> Vec<GenerationId> {

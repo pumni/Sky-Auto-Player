@@ -65,3 +65,29 @@ def test_native_terminal_counters_replace_python_placeholders() -> None:
 
     assert logger.abort_counts_by_reason == {"finished": 1, "focus_lost": 2}
     assert logger.generation_status_counts == {"released": 3, "cancelled": 0}
+
+
+def test_summary_counts_zero_insertion_send_attempt() -> None:
+    logger = TelemetryLogger("failed-send", enabled=True, retain_records_after_save=True)
+    logger.record(
+        event_index=0,
+        kind="up",
+        scheduled_us=1_000,
+        actual_us=1_010,
+        lateness_us=10,
+        send_duration_us=6_000,
+        scan_codes=(0x15,),
+        reason="release",
+        sent_scan_codes=(),
+        send_attempts=3,
+        first_win32_error=5,
+        last_win32_error=1460,
+        zero_progress_retries=2,
+        runtime_outcome="failed_note_off",
+    )
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["attempted_dispatches"] == 1
+    assert summary["successful_dispatches"] == 0
+    assert summary["send_duration_us"]["p50_us"] == 6_000.0

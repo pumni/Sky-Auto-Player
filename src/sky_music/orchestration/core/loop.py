@@ -96,6 +96,24 @@ class ExecutionResult:
     send_duration_pure_us: int = 0  # time from backend call start to SendInput return (no bookkeeping)
     bookkeeping_us: int = 0        # time from SendInput return to backend call end
     dispatch_lateness_us: int = 0  # send_completed_us - action.at_us; player-side completion lateness
+    first_win32_error: int | None = None
+    last_win32_error: int | None = None
+    send_attempts: int = 0
+    zero_progress_retries: int = 0
+
+
+def _scan_code_tuple(value: object) -> tuple[int, ...]:
+    """Normalize backend seam values without trusting dynamic test doubles."""
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, list):
+        return tuple(value)
+    return ()
+
+
+def _pending_retry_us(pending: object) -> int:
+    value = getattr(pending, "next_retry_us", 0)
+    return value if isinstance(value, int) else 0
 
 
 if TYPE_CHECKING:
@@ -393,9 +411,8 @@ class DispatchLoop:
         Onset (kind='down') counters use ``visible_lateness_us`` (completion_us
         - scheduled_us — the player-perceived onset), not the sender call-entry
         lateness; the latter stays in the raw ``ExecutionResult`` record for
-        Python-prologue analysis. Release (kind='up') counters continue to use
-        ``lateness_us`` — the release path's metric is the bounded-retry
-        contract, not game-observed onset.
+        Python-prologue analysis. Release counters also use completion
+        lateness so retries and syscall time are included in the quality metric.
 
         Deferred releases (``runtime_outcome == 'deferred_release'``) bypass
         both buckets, mirroring the production guard that kept this logic
@@ -418,7 +435,9 @@ class DispatchLoop:
                 self._late_10ms += 1
             self._latencies.append(metric)
         else:
-            lateness_us = exec_result.lateness_us
+            # Release quality uses SendInput completion, including retries and
+            # their delay, rather than call-entry lateness.
+            lateness_us = exec_result.visible_lateness_us
             clamped = max(0, lateness_us)
             if clamped > self._release_max_us:
                 self._release_max_us = clamped
@@ -521,6 +540,10 @@ class DispatchLoop:
             send_result = self.backend.key_down(action.scan_codes)
         else:
             send_result = self.backend.key_up(action.scan_codes)
+        sent_scan_codes = _scan_code_tuple(getattr(send_result, "sent", ()))
+        skipped_scan_codes = _scan_code_tuple(
+            getattr(send_result, "skipped_duplicates", ())
+        )
         send_end_raw = self.clock.now_us()
         send_end_us = state.get_elapsed_us(self.clock, send_end_raw)
         send_duration_us = send_end_us - send_start_us
@@ -580,10 +603,30 @@ class DispatchLoop:
             dispatch_completed_us=completion_us,
             deferred_by_us=deferred_by_us,
             visible_lateness_us=visible_lateness_us,
-            sent_scan_codes=send_result.sent,
-            skipped_scan_codes=send_result.skipped_duplicates,
+            sent_scan_codes=sent_scan_codes,
+            skipped_scan_codes=skipped_scan_codes,
             runtime_outcome=resolved_outcome,
             applied_lead_us=applied_lead_us,
+            first_win32_error=(
+                getattr(send_result, "first_win32_error", None)
+                if isinstance(getattr(send_result, "first_win32_error", None), int)
+                else None
+            ),
+            last_win32_error=(
+                getattr(send_result, "last_win32_error", None)
+                if isinstance(getattr(send_result, "last_win32_error", None), int)
+                else None
+            ),
+            send_attempts=(
+                getattr(send_result, "send_attempts", 0)
+                if isinstance(getattr(send_result, "send_attempts", 0), int)
+                else 0
+            ),
+            zero_progress_retries=(
+                getattr(send_result, "zero_progress_retries", 0)
+                if isinstance(getattr(send_result, "zero_progress_retries", 0), int)
+                else 0
+            ),
         )
 
         dispatch_id = self._next_dispatch_id
@@ -612,7 +655,7 @@ class DispatchLoop:
         # coordinator promotes unsent gens to DROPPED_BACKEND in ``activate_sent_downs``.
         # ``partial_note_on`` makes the sender-side atomicity break first-class in
         # CSV/telemetry, distinct from pre-send drops.
-        sent = getattr(send_result, "sent", ())
+        sent = _scan_code_tuple(getattr(send_result, "sent", ()))
         if not sent and len(action.scan_codes) > 0:
             return "partial_note_on"
         if (
@@ -634,7 +677,16 @@ class DispatchLoop:
         if now_us is None:
             now_us = state.get_elapsed_us(self.clock)
 
-        if self.late_pulse_drop_threshold_us is not None and now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us:
+        if (
+            self.late_pulse_drop_threshold_us is not None
+            and (
+                self.late_pulse_drop_threshold_us == 0
+                or (
+                    now_us >= batch.scheduled_us
+                    and now_us - batch.scheduled_us > self.late_pulse_drop_threshold_us
+                )
+            )
+        ):
                 self.coordinator.drop_expired_downs(batch.intents)
                 self._record_without_dispatch(
                     idx=batch.source_action_index,
@@ -772,7 +824,11 @@ class DispatchLoop:
             only = releases[0]
             # Deferral is vs the completion-anchored floor (release_not_before), not the
             # start-anchored estimate — matches when the coordinator actually holds the up.
-            deferred_by_us = max(0, only.release_not_before_us - only.scheduled_release_us)
+            deferred_by_us = max(
+                0,
+                max(only.release_not_before_us, _pending_retry_us(only))
+                - only.scheduled_release_us,
+            )
             action = KeyAction(
                 kind=ActionKind.UP,
                 scan_codes=(only.scan_code,),  # type: ignore[arg-type]
@@ -787,14 +843,24 @@ class DispatchLoop:
                 runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
                 applied_lead_us=lead_up,
                 deferred_by_us=deferred_by_us,
+                outcome_resolver=self._resolve_release_outcome,
             )
             if result.sent_scan_codes:
                 self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
+            recovery_required = self.coordinator.requeue_failed_releases(
+                releases,
+                result.sent_scan_codes,
+                result.skipped_scan_codes,
+                state.get_elapsed_us(self.clock),
+                result.last_win32_error,
+            )
             self.coordinator.complete_releases(
                 releases,
                 result.sent_scan_codes,
                 result.skipped_scan_codes,
             )
+            if recovery_required is True:
+                raise RuntimeError("note-off recovery exhausted after 8 retries")
             return result
 
         # Multi-release path (chords / deferred batches): single pass over releases.
@@ -819,7 +885,10 @@ class DispatchLoop:
                 best_key = key
             if release.scheduled_release_us < scheduled_us:
                 scheduled_us = release.scheduled_release_us
-            deferral = release.release_not_before_us - release.scheduled_release_us
+            deferral = (
+                max(release.release_not_before_us, _pending_retry_us(release))
+                - release.scheduled_release_us
+            )
             if deferral > max_deferral:
                 max_deferral = deferral
             if release.source_action_index != first_source_idx or release.reason != first_reason:
@@ -853,15 +922,40 @@ class DispatchLoop:
             runtime_outcome="deferred_release" if deferred_by_us > 0 else "sent",
             applied_lead_us=lead_up,
             deferred_by_us=deferred_by_us,
+            outcome_resolver=self._resolve_release_outcome,
         )
         if result.sent_scan_codes:
             self.estimator.update(ActionKind.UP, result.send_duration_pure_us)
+        recovery_required = self.coordinator.requeue_failed_releases(
+            releases,
+            result.sent_scan_codes,
+            result.skipped_scan_codes,
+            state.get_elapsed_us(self.clock),
+            result.last_win32_error,
+        )
         self.coordinator.complete_releases(
             releases,
             result.sent_scan_codes,
             result.skipped_scan_codes,
         )
+        if recovery_required is True:
+            raise RuntimeError("note-off recovery exhausted after 8 retries")
         return result
+
+    @staticmethod
+    def _resolve_release_outcome(
+        action: KeyAction,
+        send_result: object,
+        default_outcome: str,
+    ) -> str:
+        sent_count = len(_scan_code_tuple(getattr(send_result, "sent", ())))
+        requested_count = len(action.scan_codes)
+        deferred = default_outcome == "deferred_release"
+        if sent_count == requested_count:
+            return default_outcome
+        if sent_count > 0:
+            return "deferred_partial_note_off" if deferred else "partial_note_off"
+        return "deferred_failed_note_off" if deferred else "failed_note_off"
 
     def _request_up_batch(
         self,
@@ -1498,7 +1592,10 @@ class DispatchLoop:
             final_abort_reason = "quit"
             return PLAYBACK_QUIT
         finally:
-            outcome = self._abort_input_safe(final_abort_reason)
+            outcome = self._abort_input_safe(
+                final_abort_reason,
+                full_instrument=final_abort_reason == "error",
+            )
             self.telemetry.record_generation_status_counts(
                 self.coordinator.generation_status_counts()
             )

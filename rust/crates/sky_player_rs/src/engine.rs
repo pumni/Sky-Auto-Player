@@ -437,7 +437,9 @@ impl NativeDispatchSession {
                     }
                 };
                 let panicked = panic_message.is_some();
-                *metrics.terminal_error.lock() = panic_message;
+                if let Some(message) = panic_message {
+                    *metrics.terminal_error.lock() = Some(message);
+                }
                 if terminal_outcome.load(Ordering::Acquire) != OUTCOME_SHUTDOWN_TIMEOUT {
                     terminal_outcome.store(worker_outcome, Ordering::Release);
                 }
@@ -745,6 +747,8 @@ fn run_worker(
     // Epoch is captured only after all worker-owned real-time resources exist.
     let mut clock_state = PlaybackClockState::new(qpc_now_us(), 0);
     let mut focus_restore_started_us: Option<u64> = None;
+    let mut force_full_cleanup = false;
+    let mut terminal_error: Option<String> = None;
 
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         while !coordinator.is_finished() {
@@ -825,7 +829,18 @@ fn run_worker(
                 let result = backend.key_up(&scan_codes);
                 let completed_effective = clock_state.get_elapsed_us(result.send_completed_us);
                 last_send_elapsed_us = completed_effective;
-                coordinator.complete_releases(&due_pending, &result.sent, &[]);
+                let recovery_required = coordinator.requeue_failed_releases(
+                    &due_pending,
+                    &result.sent,
+                    &result.skipped_duplicates,
+                    effective_now_us,
+                    result.last_win32_error,
+                );
+                coordinator.complete_releases(
+                    &due_pending,
+                    &result.sent,
+                    &result.skipped_duplicates,
+                );
                 if config.enable_adaptive_lead {
                     update_estimator_after_send(
                         &mut estimator,
@@ -858,6 +873,7 @@ fn run_worker(
                     .map(|pending| {
                         pending
                             .release_not_before_us
+                            .max(pending.next_retry_us)
                             .saturating_sub(pending.scheduled_release_us)
                     })
                     .max()
@@ -871,6 +887,12 @@ fn run_worker(
                 } else {
                     first.reason_id
                 };
+                let release_outcome = release_runtime_outcome(
+                    deferred_by_us,
+                    result.sent.len(),
+                    scan_codes.len(),
+                    recovery_required,
+                );
                 telemetry.push(|| NativeTelemetryRecord {
                     event_index: first.source_action_index,
                     dispatch_id: 0,
@@ -893,11 +915,7 @@ fn run_worker(
                         .iter()
                         .map(|pending| pending.generation_id)
                         .collect(),
-                    runtime_outcome: if deferred_by_us > 0 {
-                        "deferred_release"
-                    } else {
-                        "sent"
-                    },
+                    runtime_outcome: release_outcome,
                     deferred_by_us,
                     pre_send_spin_us: pending_pre_send_spin_us,
                     idle_gap_us: 0,
@@ -921,13 +939,26 @@ fn run_worker(
                 );
                 let deferred_release = deferred_by_us > 0;
                 record_lateness(
-                    signed_delta(actual_us, scheduled_us),
+                    signed_delta(completed_effective, scheduled_us),
                     true,
                     deferred_release,
                     metrics,
                     latency_tx,
                 );
                 publish_backend_metrics(&backend, metrics);
+                if recovery_required {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!(
+                        "note-off recovery exhausted after {} retries{}",
+                        sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES,
+                        result
+                            .last_win32_error
+                            .map_or(String::new(), |error| format!(" (Win32 error {error})"))
+                    ));
+                    let _ = backend.release_all_full_instrument();
+                    coordinator.cancel_all();
+                    break;
+                }
                 continue;
             }
 
@@ -999,7 +1030,10 @@ fn run_worker(
                     if config
                         .late_pulse_drop_threshold_us
                         .is_some_and(|threshold| {
-                            effective_now_us.saturating_sub(batch.scheduled_us) > threshold
+                            threshold == 0
+                                || (effective_now_us >= batch.scheduled_us
+                                    && effective_now_us.saturating_sub(batch.scheduled_us)
+                                        > threshold)
                         })
                     {
                         coordinator.drop_expired_downs(&batch.intents);
@@ -1287,7 +1321,7 @@ fn run_worker(
     // This cleanup sits outside the contained loop so it also runs when an
     // unexpected panic crosses the orchestration/backend seam.
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        if worker_result.is_err() {
+        if worker_result.is_err() || force_full_cleanup {
             backend.release_all_full_instrument()
         } else {
             backend.release_all()
@@ -1296,16 +1330,20 @@ fn run_worker(
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
     }
+    if let Some(error) = terminal_error.as_ref() {
+        *metrics.terminal_error.lock() = Some(error.clone());
+    }
     coordinator.cancel_all();
-    let terminal_abort_reason = if worker_result.is_err() || cleanup_result.is_err() {
-        "error"
-    } else if skip_requested.load(Ordering::Acquire) {
-        "skipped"
-    } else if quit_requested.load(Ordering::Acquire) {
-        "quit"
-    } else {
-        "finished"
-    };
+    let terminal_abort_reason =
+        if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
+            "error"
+        } else if skip_requested.load(Ordering::Acquire) {
+            "skipped"
+        } else if quit_requested.load(Ordering::Acquire) {
+            "quit"
+        } else {
+            "finished"
+        };
     *abort_counts.entry(terminal_abort_reason).or_insert(0) += 1;
     *metrics.abort_counts_by_reason.lock() = abort_counts
         .into_iter()
@@ -1320,7 +1358,9 @@ fn run_worker(
         (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}
     }
-    if skip_requested.load(Ordering::Acquire) {
+    if terminal_error.is_some() {
+        OUTCOME_ERROR
+    } else if skip_requested.load(Ordering::Acquire) {
         OUTCOME_SKIPPED
     } else if quit_requested.load(Ordering::Acquire) {
         OUTCOME_QUIT
@@ -1397,6 +1437,23 @@ fn record_lateness(
         metrics.late_2ms.fetch_add(1, Ordering::Relaxed);
     }
     let _ = latency_tx.try_send(lateness_us);
+}
+
+fn release_runtime_outcome(
+    deferred_by_us: u64,
+    sent_count: usize,
+    requested_count: usize,
+    _recovery_required: bool,
+) -> &'static str {
+    let deferred = deferred_by_us > 0;
+    match (sent_count == requested_count, sent_count > 0, deferred) {
+        (true, _, true) => "deferred_release",
+        (true, _, false) => "sent",
+        (false, true, true) => "deferred_partial_note_off",
+        (false, true, false) => "partial_note_off",
+        (false, false, true) => "deferred_failed_note_off",
+        (false, false, false) => "failed_note_off",
+    }
 }
 
 fn update_estimator_after_send(
@@ -1515,7 +1572,7 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
 mod tests {
     use super::{
         INPUT_PATH_WINDOW_CAPACITY, WorkerCommand, drain_commands, focus_gate_matches,
-        record_input_path_health, update_estimator_after_send,
+        record_input_path_health, release_runtime_outcome, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
@@ -1632,5 +1689,19 @@ mod tests {
 
         update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120);
         assert_eq!(estimator.export_state().count_residual, 1);
+    }
+
+    #[test]
+    fn failed_release_outcome_and_completion_metrics_are_distinguishable() {
+        assert_eq!(release_runtime_outcome(0, 1, 1, false), "sent");
+        assert_eq!(
+            release_runtime_outcome(100, 1, 2, false),
+            "deferred_partial_note_off"
+        );
+        assert_eq!(release_runtime_outcome(0, 0, 1, true), "failed_note_off");
+        assert_eq!(
+            release_runtime_outcome(100, 0, 1, true),
+            "deferred_failed_note_off"
+        );
     }
 }
