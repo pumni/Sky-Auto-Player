@@ -528,6 +528,8 @@ def test_native_dispatch_rejects_invalid_estimator_cache_atomically() -> None:
         ("late_pulse_drop_threshold_us", True),
         ("telemetry_capacity", True),
         ("spin_floor_us", True),
+        ("strict_down_completion_late_us", True),
+        ("strict_up_completion_late_us", True),
     ],
 )
 def test_native_dispatch_rejects_bool_for_integer_config(
@@ -578,6 +580,106 @@ def test_native_dispatch_strict_conflict_is_contained_and_reported() -> None:
     assert snapshot["active_count"] == 0
     assert snapshot["abort_counts_by_reason"] == {"error": 1}
     assert len(snapshot["release_outcome"]["attempted"]) == 15
+
+
+def test_native_strict_timing_overrides_default_drop_chord_policy() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15], "first"),
+            (1, "down", 1_000, [0x15], "overlap"),
+        ],
+        [0x15],
+        mock_backend=True,
+        strict_timing=True,
+    )
+    session.start()
+    assert session.join() is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    assert snapshot["status"] == "error"
+    assert snapshot["outcome"] == "error"
+    assert "same-key conflict" in snapshot["terminal_error"]
+
+
+def test_native_strict_down_completion_slo_rejects_clean_late_send() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [(0, "down", 0, [0x15], "late-down")],
+        [0x15],
+        mock_backend=True,
+        mock_latency_base_us=3_000,
+        strict_timing=True,
+        strict_down_completion_late_us=2_000,
+        telemetry_enabled=True,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
+    assert snapshot["status"] == "error"
+    assert "completion SLO" in snapshot["terminal_error"]
+    assert output["records"][0]["runtime_outcome"] == "strict_completion_slo_exceeded"
+
+
+def test_native_strict_up_completion_slo_rejects_clean_late_release() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15], "down"),
+            (1, "up", 20_000, [0x15], "late-up"),
+        ],
+        [0x15],
+        min_hold_us=0,
+        mock_backend=True,
+        mock_latency_base_us=3_000,
+        strict_timing=True,
+        strict_down_completion_late_us=10_000,
+        strict_up_completion_late_us=2_000,
+        telemetry_enabled=True,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
+    assert snapshot["status"] == "error"
+    assert "note-off" in snapshot["terminal_error"]
+    assert output["records"][-1]["runtime_outcome"] == "strict_completion_slo_exceeded"
+
+
+def test_native_deferred_release_is_excluded_from_strict_completion_slo() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15], "down"),
+            (1, "up", 1_000, [0x15], "deferred-up"),
+        ],
+        [0x15],
+        min_hold_us=10_000,
+        mock_backend=True,
+        mock_latency_base_us=3_000,
+        strict_timing=True,
+        strict_down_completion_late_us=10_000,
+        strict_up_completion_late_us=2_000,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    assert snapshot["status"] == "finished"
+
+
+def test_native_non_strict_late_send_is_telemetry_only() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [(0, "down", 0, [0x15], "late-but-best-effort")],
+        [0x15],
+        mock_backend=True,
+        mock_latency_base_us=3_000,
+        strict_timing=False,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    assert snapshot["status"] == "finished"
 
 
 @pytest.mark.parametrize(

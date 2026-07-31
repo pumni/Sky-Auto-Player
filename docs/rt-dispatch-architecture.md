@@ -108,7 +108,15 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 - **Chord conflict default is fidelity-first.** `drop_chord` rejects the whole authored chord;
   `strict` also terminates playback; `degraded` is an explicit legacy/diagnostic mode that may
   send a partial chord. Multiple same-timestamp Down batches are rejected by the native compiler
-  because they cannot be made atomic after the Python boundary.
+  because they cannot be made atomic after the Python boundary. At the Rust/PyO3 boundary,
+  `strict_timing = true` always coerces the effective policy to `AbortPlayback`, even when a
+  caller omits the policy and receives the Python-facing `drop_chord` default.
+- **Strict completion SLO is post-send.** A clean, single-attempt Down and a clean,
+  non-deferred, single-source Up must complete within their configured
+  `strict_down_completion_late_us` / `strict_up_completion_late_us` thresholds (2,000 µs
+  defaults). Exceeding either threshold records `strict_completion_slo_exceeded`, performs full
+  cleanup, and ends with a controlled error. Deferred or mixed release cohorts are excluded from
+  this comparison because their authored timestamp is not their effective dispatch target.
 - **Estimator query cost is bounded.** Rolling p95 values are refreshed only when a sample is
   inserted or state is imported; real-time lead queries are O(polyphony) integer comparisons and
   do not sort the rolling window. Saturation is returned with the applied lead from the same
@@ -128,8 +136,10 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   `runtime_options.lead_cache_loaded`.
 - **Idle-gap core warmup (Phase 1/6):** When the gap since last `SendInput` completion ≥ 20 ms, a
   `core_warmup_budget_us` (default 200 µs, capped at 500 µs) is added directly to the
-  `effective_spin_threshold` for the final precision wait. This expands the busy-spin window right
-  before the deadline to warm the CPU core without adding a separate blocking sleep cycle.
+  `effective_spin_threshold` for the final precision wait. The cold/hot decision and this guard
+  use physical QPC time, not the logical playback clock, so a long pause/focus recovery still
+  treats the first subsequent send as cold. This expands the busy-spin window right before the
+  deadline to warm the CPU core without adding a separate blocking sleep cycle.
 - **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
   since the last reprobe, the dispatch thread starts an eight-sample cooperative attempt. It takes
   at most one 2 ms sample per outer wait iteration and services command/focus state between
@@ -213,7 +223,7 @@ deterministic tests are unaffected):
 |---|---|---|
 | MMCSS/priority ladder | `rt_priority_mode: auto` (config) | `--rt-priority-mode off` |
 | Adaptive dispatch lead | `enable_adaptive_lead: true` (config) | `--no-adaptive-lead` |
-| Same-key chord conflict | `drop_chord` (whole authored chord) | `degraded` legacy or `strict` abort |
+| Same-key chord conflict | `drop_chord` for best-effort; Rust strict timing coerces to abort | `degraded` legacy or explicit `strict` abort |
 | Lead p95 cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
 | Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
@@ -247,8 +257,11 @@ cleanest send tail of all runs.
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
-The Rust path reserves a small initial retain-first record buffer before the playback epoch and
-grows only as records are actually accepted; the hard cap remains explicit. The compiled
+The Rust path reserves the configured bounded retain-first record buffer before the playback epoch
+when telemetry is enabled, so a long diagnostic session cannot trigger a Vec growth/copy on the
+dispatch thread. Telemetry is opt-in and this predictable memory reservation is preferred over
+allocator jitter; with telemetry disabled no event record is materialized. The hard cap remains
+explicit. The compiled
 schedule uses a flat 8-byte packed `CompactIntent` arena plus small batch headers; only the current batch is
 materialized into full intent views. Runtime active/release ownership uses 15-key arrays and
 bitmasks rather than hash tables. Per-record scan/generation fields use inline storage and
@@ -263,7 +276,8 @@ than the requested lead are not all saturated to deadline zero. The first action
 physical startup anchor; later sub-lead actions temporarily dispatch without early lead so their
 relative ordering remains observable.
 Normal adaptive lead uses the rolling p95; native strict timing selects the clamped rolling upper
-tail and aborts after the configured repeated positive-at-cap condition.
+tail and keeps the global upper-tail guard for sparse local buckets. It aborts after the configured
+repeated positive-at-cap condition or any clean completion SLO violation.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
 engine prewarms the platform INPUT cache in two passes under the cache cap

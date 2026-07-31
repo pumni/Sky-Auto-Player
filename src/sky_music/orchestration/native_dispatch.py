@@ -192,6 +192,8 @@ class RustDispatchRuntime:
         renderer: Any,
         poll_s: float,
         strict_timing: bool = True,
+        strict_down_completion_late_us: int = 2_000,
+        strict_up_completion_late_us: int = 2_000,
         core_warmup_budget_us: int = 200,
         dispatch_lead_us: int = 0,
         chord_stagger_us: int = 0,
@@ -237,6 +239,8 @@ class RustDispatchRuntime:
             enable_adaptive_lead=enable_adaptive_lead,
             estimator_state_json=estimator_state_json,
             strict_timing=strict_timing,
+            strict_down_completion_late_us=strict_down_completion_late_us,
+            strict_up_completion_late_us=strict_up_completion_late_us,
         )
         self._actions = actions
         self._song_name = song_name

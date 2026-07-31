@@ -399,8 +399,18 @@ impl SendLatencyEstimator {
                     PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
                 )
             });
-        local
-            .or(global)
+        // Keep the global tail as a guard in strict mode even after a sparse
+        // local bucket has one or two samples. A newly seeded polyphony
+        // bucket must not erase a recent strict-mode outlier observed
+        // elsewhere on the input path. Normal mode retains the local-first
+        // behavior so a calibrated bucket is not overridden by an unrelated
+        // global sample.
+        let local_or_global = if strict_upper_tail {
+            local.into_iter().chain(global).max()
+        } else {
+            local.or(global)
+        };
+        local_or_global
             .into_iter()
             .chain(lower_bucket)
             .chain(std::iter::once(Self::cold_prior_us(n)))
@@ -693,6 +703,24 @@ mod tests {
                 .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true,)
                 .applied_us,
             2_000
+        );
+    }
+
+    #[test]
+    fn strict_sparse_bucket_keeps_global_upper_tail_guard() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 4_000, 8);
+        for _ in 0..32 {
+            estimator.update(ActionKind::Down, 1_500, 8);
+        }
+        for _ in 0..5 {
+            estimator.update(ActionKind::Down, 300, 1);
+        }
+
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+                .applied_us,
+            1_500
         );
     }
 

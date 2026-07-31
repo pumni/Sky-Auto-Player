@@ -36,7 +36,6 @@ const PAUSED_POLL_US: u64 = 2_000;
 const SEND_COLD_THRESHOLD_US: u64 = 20_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
-const TELEMETRY_INITIAL_RESERVE: usize = 4_096;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
@@ -219,11 +218,11 @@ impl NativeTelemetryOutput {
     fn new(enabled: bool, capacity: usize, reason_table: Vec<String>) -> Self {
         Self {
             records: if enabled {
-                // Avoid reserving the full 200k-record hard cap on the
-                // real-time thread. The retain-first cap remains unchanged;
-                // the vector grows only when a caller actually records a
-                // long session.
-                Vec::with_capacity(capacity.min(TELEMETRY_INITIAL_RESERVE))
+                // Reserve the complete bounded buffer before the worker
+                // epoch. Telemetry is an opt-in diagnostic mode; once it is
+                // enabled, a later Vec growth/copy on the dispatch thread is
+                // a worse failure mode than its predictable memory cost.
+                Vec::with_capacity(capacity)
             } else {
                 Vec::new()
             },
@@ -390,6 +389,8 @@ struct WorkerConfig {
     enable_adaptive_lead: bool,
     input_path_warn_us: u64,
     strict_timing: bool,
+    strict_down_completion_late_us: u64,
+    strict_up_completion_late_us: u64,
 }
 
 pub struct NativeDispatchSession {
@@ -446,6 +447,8 @@ impl NativeDispatchSession {
         enable_adaptive_lead: bool,
         input_path_warn_us: u64,
         strict_timing: bool,
+        strict_down_completion_late_us: u64,
+        strict_up_completion_late_us: u64,
     ) -> Result<Self, String> {
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
@@ -492,6 +495,8 @@ impl NativeDispatchSession {
                 enable_adaptive_lead,
                 input_path_warn_us,
                 strict_timing,
+                strict_down_completion_late_us,
+                strict_up_completion_late_us,
             })),
             generation_count,
             command_tx,
@@ -965,7 +970,10 @@ fn run_worker(
         .effective_spin_threshold_us
         .store(effective_spin_threshold_us, Ordering::Relaxed);
     let mut last_spin_probe_us = qpc_now_us();
-    let mut last_send_elapsed_us: Option<u64> = None;
+    // Cold/hot classification must use physical QPC time.  The authored
+    // playback clock deliberately freezes during pause/focus recovery, so a
+    // logical gap cannot tell us whether the CPU/input path has gone cold.
+    let mut last_send_qpc_us: Option<u64> = None;
     let mut pending_pre_send_spin_us = 0;
     let mut down_saturation_positive_streak: u8 = 0;
     let mut up_saturation_positive_streak: u8 = 0;
@@ -1153,13 +1161,7 @@ fn run_worker(
             metrics
                 .elapsed_us
                 .store(effective_now_us, Ordering::Relaxed);
-            let latency_class = if last_send_elapsed_us
-                .is_none_or(|last| effective_now_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US)
-            {
-                LatencyClass::Cold
-            } else {
-                LatencyClass::Hot
-            };
+            let latency_class = classify_latency_class(last_send_qpc_us, now_us);
 
             let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
                 if config.dispatch_lead_us > 0 {
@@ -1187,7 +1189,7 @@ fn run_worker(
                 let actual_us = clock_state.get_elapsed_us(started_us);
                 let result = backend.key_up(&scan_codes);
                 let completed_effective = clock_state.get_elapsed_us(result.send_completed_us);
-                last_send_elapsed_us = Some(completed_effective);
+                last_send_qpc_us = Some(result.send_completed_us);
                 let recovery_required = coordinator.requeue_failed_releases(
                     &due_pending,
                     &result.sent,
@@ -1238,7 +1240,21 @@ fn run_worker(
                     })
                     .max()
                     .unwrap_or(0);
+                let mixed_source = due_pending.iter().any(|pending| {
+                    pending.source_action_index != first.source_action_index
+                        || pending.reason_id != first.reason_id
+                });
                 let up_completion_error_us = signed_delta(completed_effective, scheduled_us);
+                let clean_up_sample = result.success
+                    && result.sent.len() == scan_codes.len()
+                    && result.skipped_duplicates.is_empty()
+                    && result.send_attempts == 1
+                    && deferred_by_us == 0
+                    && !mixed_source;
+                let strict_up_completion_late = config.strict_timing
+                    && clean_up_sample
+                    && up_completion_error_us
+                        > config.strict_up_completion_late_us.min(i64::MAX as u64) as i64;
                 let up_saturated_positive = pending_plan
                     .as_ref()
                     .is_some_and(|plan| plan.lead_saturated)
@@ -1250,10 +1266,6 @@ fn run_worker(
                 };
                 let saturation_abort = config.strict_timing
                     && up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-                let mixed_source = due_pending.iter().any(|pending| {
-                    pending.source_action_index != first.source_action_index
-                        || pending.reason_id != first.reason_id
-                });
                 if config.enable_adaptive_lead {
                     update_estimator_after_send_class(
                         &mut estimator,
@@ -1263,12 +1275,7 @@ fn run_worker(
                         scan_codes.len(),
                         lead_up,
                         up_completion_error_us,
-                        result.success
-                            && result.sent.len() == scan_codes.len()
-                            && result.skipped_duplicates.is_empty()
-                            && result.send_attempts == 1
-                            && deferred_by_us == 0
-                            && !mixed_source,
+                        clean_up_sample,
                         latency_class,
                     );
                 }
@@ -1277,12 +1284,16 @@ fn run_worker(
                 } else {
                     first.reason_id
                 };
-                let release_outcome = release_runtime_outcome(
-                    deferred_by_us,
-                    result.sent.len(),
-                    scan_codes.len(),
-                    recovery_required,
-                );
+                let release_outcome = if strict_up_completion_late {
+                    "strict_completion_slo_exceeded"
+                } else {
+                    release_runtime_outcome(
+                        deferred_by_us,
+                        result.sent.len(),
+                        scan_codes.len(),
+                        recovery_required,
+                    )
+                };
                 telemetry.push(|| NativeTelemetryRecord {
                     event_index: first.source_action_index,
                     dispatch_id: 0,
@@ -1377,6 +1388,14 @@ fn run_worker(
                     ));
                     let _ = backend.release_all_full_instrument();
                     coordinator.cancel_all();
+                    break;
+                }
+                if strict_up_completion_late {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!(
+                        "strict timing completion SLO exceeded for note-off at action {}: completion was {}us late",
+                        first.source_action_index, up_completion_error_us
+                    ));
                     break;
                 }
                 if saturation_abort {
@@ -1597,7 +1616,7 @@ fn run_worker(
                         let result = backend.key_down(&scan_codes);
                         let completed_effective =
                             clock_state.get_elapsed_us(result.send_completed_us);
-                        last_send_elapsed_us = Some(completed_effective);
+                        last_send_qpc_us = Some(result.send_completed_us);
                         coordinator.activate_sent_downs(
                             &playable,
                             &result.sent,
@@ -1611,9 +1630,18 @@ fn run_worker(
                             .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US)
                             .min(i64::MAX as u64)
                             as i64;
+                        let clean_down_sample = result.success
+                            && result.sent.len() == playable.len()
+                            && result.skipped_duplicates.is_empty()
+                            && result.send_attempts == 1
+                            && !result.chord_integrity_lost;
                         let recovered_retry_late = result.retried_after_zero_progress
                             && completion_error_us > retry_late_threshold_us;
                         let retry_late_abort = config.strict_timing && recovered_retry_late;
+                        let strict_down_completion_late = config.strict_timing
+                            && clean_down_sample
+                            && completion_error_us
+                                > config.strict_down_completion_late_us.min(i64::MAX as u64) as i64;
                         if recovered_retry_late {
                             metrics
                                 .recovered_zero_progress_but_late
@@ -1636,11 +1664,7 @@ fn run_worker(
                                 playable.len(),
                                 lead_down,
                                 completion_error_us,
-                                result.success
-                                    && result.sent.len() == playable.len()
-                                    && result.skipped_duplicates.is_empty()
-                                    && result.send_attempts == 1
-                                    && !result.chord_integrity_lost,
+                                clean_down_sample,
                                 latency_class,
                             );
                         }
@@ -1676,6 +1700,8 @@ fn run_worker(
                                 .collect(),
                             runtime_outcome: if recovered_retry_late {
                                 "recovered_zero_progress_but_late"
+                            } else if strict_down_completion_late {
+                                "strict_completion_slo_exceeded"
                             } else if result.chord_integrity_lost {
                                 "chord_integrity_lost"
                             } else if result.sent.len() == scan_codes.len() {
@@ -1750,6 +1776,15 @@ fn run_worker(
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "strict timing rejected zero-progress retry at action {}: completion was {}us late",
+                                batch.source_action_index, completion_error_us
+                            ));
+                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            break;
+                        }
+                        if strict_down_completion_late {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "strict timing completion SLO exceeded for note-on at action {}: completion was {}us late",
                                 batch.source_action_index, completion_error_us
                             ));
                             publish_backend_metrics(&backend, metrics, &mut last_published_error);
@@ -1878,8 +1913,9 @@ fn run_worker(
                         clock_state.epoch_us,
                         deadline_us,
                     );
-                    let cold_warmup_us = if last_send_elapsed_us.is_none_or(|last| {
-                        deadline_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US
+                    let cold_warmup_us = if last_send_qpc_us.is_none_or(|last| {
+                        qpc_ticks_to_us(target_sample_ticks).saturating_sub(last)
+                            > SEND_COLD_THRESHOLD_US
                     }) {
                         config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US)
                     } else {
@@ -2134,6 +2170,15 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
+fn classify_latency_class(last_send_qpc_us: Option<u64>, now_qpc_us: u64) -> LatencyClass {
+    if last_send_qpc_us.is_none_or(|last| now_qpc_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US)
+    {
+        LatencyClass::Cold
+    } else {
+        LatencyClass::Hot
+    }
+}
+
 /// Map a non-negative logical deadline to an absolute QPC target using the
 /// clock's physical anchor and one current sample.
 fn deadline_target_ticks_from_anchor(
@@ -2342,12 +2387,12 @@ fn publish_backend_metrics(
 mod tests {
     use super::{
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
-        anchored_dispatch_target_ticks, deadline_target_ticks, derive_spin_threshold_us,
-        drain_commands, focus_gate_matches, record_input_path_health, release_runtime_outcome,
-        update_estimator_after_send,
+        anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
+        derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
+        release_runtime_outcome, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
-    use sky_dispatch_core::estimator::SendLatencyEstimator;
+    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::ActionKind;
     use sky_dispatch_win32::clock::{QpcTicks, qpc_ticks_to_us, qpc_us_to_ticks};
     use std::collections::VecDeque;
@@ -2373,6 +2418,19 @@ mod tests {
         let target = anchored_dispatch_target_ticks(now_ticks, now_qpc_us, anchor_us, 0, lead_us);
 
         assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(startup_guard_us));
+    }
+
+    #[test]
+    fn cold_classification_uses_physical_gap_after_logical_pause() {
+        assert_eq!(
+            classify_latency_class(Some(100_000), 120_000),
+            LatencyClass::Hot
+        );
+        assert_eq!(
+            classify_latency_class(Some(100_000), 120_001 + super::SEND_COLD_THRESHOLD_US),
+            LatencyClass::Cold
+        );
+        assert_eq!(classify_latency_class(None, 0), LatencyClass::Cold);
     }
 
     #[test]

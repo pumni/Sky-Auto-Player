@@ -106,8 +106,22 @@ startup-anchor negative offset.
 The worker records a separate Up completion residual only from clean, non-deferred, single-source
 release cohorts.
 Normal estimator operation uses the rolling p95. Native strict timing uses the clamped rolling
-upper tail instead, so a recent outlier remains visible; repeated positive residual at the lead
-cap is a controlled timing error rather than an unreported tail.
+upper tail instead, so a recent outlier remains visible; strict sparse buckets also retain the
+global upper-tail guard. Repeated positive residual at the lead cap is a controlled timing error
+rather than an unreported tail.
+
+Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
+boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed
+`drop_chord` default. A clean, single-attempt Down and a clean, non-deferred, single-source Up
+must satisfy `strict_down_completion_late_us` and `strict_up_completion_late_us` (2,000 µs by
+default) after `SendInput` returns. A violation is recorded as
+`strict_completion_slo_exceeded`, followed by full cleanup and a controlled error. Deferred or
+mixed release cohorts are not compared with their authored timestamp because their effective
+release target is different.
+
+Cold/hot latency classification uses the physical QPC gap since the previous send completion.
+The logical playback clock is intentionally paused during focus/manual recovery and therefore
+must not be used to infer CPU or input-path warmth.
 
 ---
 

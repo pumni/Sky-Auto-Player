@@ -351,7 +351,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -377,6 +377,8 @@ impl NativeDispatchSessionPy {
         enable_adaptive_lead: bool,
         input_path_warn_us: StrictU64,
         strict_timing: bool,
+        strict_down_completion_late_us: StrictU64,
+        strict_up_completion_late_us: StrictU64,
         mock_failure_mode: &str,
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
@@ -394,6 +396,8 @@ impl NativeDispatchSessionPy {
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         let spin_floor_us = spin_floor_us.0;
         let input_path_warn_us = input_path_warn_us.0;
+        let strict_down_completion_late_us = strict_down_completion_late_us.0;
+        let strict_up_completion_late_us = strict_up_completion_late_us.0;
         let mock_failure_mode = match mock_failure_mode {
             "none" => MockFailureMode::None,
             "transient_release" if mock_backend => MockFailureMode::TransientRelease,
@@ -466,12 +470,22 @@ impl NativeDispatchSessionPy {
                 "late_pulse_drop_threshold_us must be at most 60000000",
             ));
         }
+        if strict_down_completion_late_us > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "strict_down_completion_late_us must be at most 60000000",
+            ));
+        }
+        if strict_up_completion_late_us > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "strict_up_completion_late_us must be at most 60000000",
+            ));
+        }
         if telemetry_capacity == 0 || telemetry_capacity > 200_000 {
             return Err(PyValueError::new_err(
                 "telemetry_capacity must be between 1 and 200000",
             ));
         }
-        let chord_conflict_policy = match same_key_conflict_policy {
+        let parsed_chord_conflict_policy = match same_key_conflict_policy {
             "degraded" => ChordConflictPolicy::DropConflictingKeys,
             "drop_chord" => ChordConflictPolicy::DropWholeChord,
             "strict" | "abort" => ChordConflictPolicy::AbortPlayback,
@@ -480,6 +494,15 @@ impl NativeDispatchSessionPy {
                     "same_key_conflict_policy must be 'degraded', 'drop_chord', or 'strict'",
                 ));
             }
+        };
+        // Strict timing is a fidelity contract, not merely a telemetry mode.
+        // Enforce the safe conflict policy at the native boundary so a
+        // caller cannot accidentally combine strict timing with a policy
+        // that silently drops an authored chord and reports success.
+        let chord_conflict_policy = if strict_timing {
+            ChordConflictPolicy::AbortPlayback
+        } else {
+            parsed_chord_conflict_policy
         };
         let priority_mode = match rt_priority_mode {
             "auto" => PriorityMode::Auto,
@@ -531,6 +554,8 @@ impl NativeDispatchSessionPy {
             enable_adaptive_lead,
             input_path_warn_us,
             strict_timing,
+            strict_down_completion_late_us,
+            strict_up_completion_late_us,
         )
         .map_err(PyRuntimeError::new_err)?;
 

@@ -467,6 +467,8 @@ class PlaybackEngine:
         min_hold_margin_us: int = 0,
         min_hold_margin_source: str = "default_500",
         chord_stagger_us: int = 0,
+        strict_down_completion_late_us: int = 2_000,
+        strict_up_completion_late_us: int = 2_000,
     ):
         self.song = song
         self.actions = actions
@@ -484,6 +486,16 @@ class PlaybackEngine:
             if late_pulse_drop_threshold_us is None
             else max(0, late_pulse_drop_threshold_us)
         )
+        for field_name, value in (
+            ("strict_down_completion_late_us", strict_down_completion_late_us),
+            ("strict_up_completion_late_us", strict_up_completion_late_us),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+            if not 0 <= value <= 60_000_000:
+                raise ValueError(f"{field_name} must be in 0..=60000000")
+        self.strict_down_completion_late_us = strict_down_completion_late_us
+        self.strict_up_completion_late_us = strict_up_completion_late_us
         self.use_dispatch_thread = use_dispatch_thread
         self.input_path_warn_us = max(0, input_path_warn_us)
         self.enable_timer_guard = enable_timer_guard
@@ -714,6 +726,8 @@ class PlaybackEngine:
             input_path_warn_us=self.input_path_warn_us,
             enable_adaptive_lead=self.enable_adaptive_lead,
             strict_timing=True,
+            strict_down_completion_late_us=self.strict_down_completion_late_us,
+            strict_up_completion_late_us=self.strict_up_completion_late_us,
             estimator_state_json=(
                 json.dumps(self.estimator.export_state())
                 if self.enable_adaptive_lead
