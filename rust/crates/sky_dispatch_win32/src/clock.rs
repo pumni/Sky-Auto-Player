@@ -6,6 +6,38 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct QpcTicks(pub u64);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QpcError {
+    FrequencyUnavailable,
+    CounterUnavailable,
+}
+
+pub fn qpc_frequency_checked() -> Result<u64, QpcError> {
+    let frequency = qpc_frequency();
+    (frequency > 0)
+        .then_some(frequency)
+        .ok_or(QpcError::FrequencyUnavailable)
+}
+
+pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
+    #[cfg(windows)]
+    {
+        let mut ticks: i64 = 0;
+        // SAFETY: `ticks` is a valid writable out-parameter and the API does
+        // not retain its address.
+        let success =
+            unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut ticks) };
+        if success == 0 || ticks < 0 {
+            return Err(QpcError::CounterUnavailable);
+        }
+        Ok(QpcTicks(ticks as u64))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(qpc_now_ticks())
+    }
+}
+
 pub fn qpc_frequency() -> u64 {
     static FREQUENCY: OnceLock<u64> = OnceLock::new();
     *FREQUENCY.get_or_init(|| {

@@ -351,7 +351,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -376,6 +376,7 @@ impl NativeDispatchSessionPy {
         estimator_state_json: Option<&str>,
         enable_adaptive_lead: bool,
         input_path_warn_us: StrictU64,
+        strict_timing: bool,
         mock_failure_mode: &str,
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
@@ -397,14 +398,15 @@ impl NativeDispatchSessionPy {
             "none" => MockFailureMode::None,
             "transient_release" if mock_backend => MockFailureMode::TransientRelease,
             "persistent_release" if mock_backend => MockFailureMode::PersistentRelease,
-            "transient_release" | "persistent_release" => {
+            "zero_progress_down_once" if mock_backend => MockFailureMode::ZeroProgressDownOnce,
+            "transient_release" | "persistent_release" | "zero_progress_down_once" => {
                 return Err(PyValueError::new_err(
                     "mock_failure_mode requires mock_backend=True",
                 ));
             }
             _ => {
                 return Err(PyValueError::new_err(
-                    "mock_failure_mode must be 'none', 'transient_release', or 'persistent_release'",
+                    "mock_failure_mode must be 'none', 'transient_release', 'persistent_release', or 'zero_progress_down_once'",
                 ));
             }
         };
@@ -528,6 +530,7 @@ impl NativeDispatchSessionPy {
             estimator_state_json.map(str::to_string),
             enable_adaptive_lead,
             input_path_warn_us,
+            strict_timing,
         )
         .map_err(PyRuntimeError::new_err)?;
 
@@ -648,6 +651,10 @@ impl NativeDispatchSessionPy {
         )?;
         dict.set_item("lead_saturation_count_up", snap.lead_saturation_count_up)?;
         dict.set_item("positive_residual_at_cap", snap.positive_residual_at_cap)?;
+        dict.set_item(
+            "recovered_zero_progress_but_late",
+            snap.recovered_zero_progress_but_late,
+        )?;
         dict.set_item("outcome", snap.outcome)?;
         dict.set_item("rt_priority_acquired", snap.rt_priority_acquired)?;
         dict.set_item(

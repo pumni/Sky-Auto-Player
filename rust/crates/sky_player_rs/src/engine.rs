@@ -4,16 +4,17 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
-use sky_dispatch_core::estimator::SendLatencyEstimator;
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
 use sky_dispatch_win32::clock::{
-    QpcTicks, qpc_now_ticks, qpc_now_us, qpc_ticks_to_us, qpc_us_to_ticks,
+    QpcTicks, qpc_frequency_checked, qpc_now_ticks, qpc_now_ticks_checked, qpc_now_us,
+    qpc_ticks_to_us, qpc_us_to_ticks,
 };
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
 use sky_dispatch_win32::power::PowerThrottlingGuard;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WakeErrorStats};
+use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WakeErrorStats};
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -35,6 +36,10 @@ const PAUSED_POLL_US: u64 = 2_000;
 const SEND_COLD_THRESHOLD_US: u64 = 20_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
+const TELEMETRY_INITIAL_RESERVE: usize = 4_096;
+const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
+const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
+const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 
 /// Test-only emitter behavior used by the native worker integration tests.
 /// It is reachable only when the PyO3 caller explicitly selects the mock
@@ -44,6 +49,7 @@ pub enum MockFailureMode {
     None,
     TransientRelease,
     PersistentRelease,
+    ZeroProgressDownOnce,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +97,7 @@ pub struct EngineSnapshot {
     pub lead_saturation_count_down: Vec<u64>,
     pub lead_saturation_count_up: Vec<u64>,
     pub positive_residual_at_cap: u64,
+    pub recovered_zero_progress_but_late: u64,
     pub outcome: Option<String>,
     pub rt_priority_acquired: String,
     pub effective_spin_threshold_us: u64,
@@ -212,7 +219,11 @@ impl NativeTelemetryOutput {
     fn new(enabled: bool, capacity: usize, reason_table: Vec<String>) -> Self {
         Self {
             records: if enabled {
-                Vec::with_capacity(capacity)
+                // Avoid reserving the full 200k-record hard cap on the
+                // real-time thread. The retain-first cap remains unchanged;
+                // the vector grows only when a caller actually records a
+                // long session.
+                Vec::with_capacity(capacity.min(TELEMETRY_INITIAL_RESERVE))
             } else {
                 Vec::new()
             },
@@ -328,6 +339,7 @@ struct SharedMetrics {
     lead_saturation_count_down: [AtomicU64; 16],
     lead_saturation_count_up: [AtomicU64; 16],
     positive_residual_at_cap: AtomicU64,
+    recovered_zero_progress_but_late: AtomicU64,
     is_paused: AtomicBool,
     panicked: AtomicBool,
     effective_spin_threshold_us: AtomicU64,
@@ -377,6 +389,7 @@ struct WorkerConfig {
     estimator_state_json: Option<String>,
     enable_adaptive_lead: bool,
     input_path_warn_us: u64,
+    strict_timing: bool,
 }
 
 pub struct NativeDispatchSession {
@@ -432,6 +445,7 @@ impl NativeDispatchSession {
         estimator_state_json: Option<String>,
         enable_adaptive_lead: bool,
         input_path_warn_us: u64,
+        strict_timing: bool,
     ) -> Result<Self, String> {
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
@@ -477,6 +491,7 @@ impl NativeDispatchSession {
                 estimator_state_json,
                 enable_adaptive_lead,
                 input_path_warn_us,
+                strict_timing,
             })),
             generation_count,
             command_tx,
@@ -755,6 +770,10 @@ impl NativeDispatchSession {
                 .metrics
                 .positive_residual_at_cap
                 .load(Ordering::Relaxed),
+            recovered_zero_progress_but_late: self
+                .metrics
+                .recovered_zero_progress_but_late
+                .load(Ordering::Relaxed),
             outcome: self.terminal_outcome().map(str::to_string),
             rt_priority_acquired: self.priority_acquired.lock().clone(),
             effective_spin_threshold_us: self
@@ -893,6 +912,9 @@ fn run_worker(
                     key_up && emitter_failures.fetch_add(1, Ordering::Relaxed) < 3
                 }
                 MockFailureMode::PersistentRelease => key_up,
+                MockFailureMode::ZeroProgressDownOnce => {
+                    !key_up && emitter_failures.fetch_add(1, Ordering::Relaxed) == 0
+                }
             };
             PlatformSendResult {
                 requested: codes.len() as u32,
@@ -943,8 +965,10 @@ fn run_worker(
         .effective_spin_threshold_us
         .store(effective_spin_threshold_us, Ordering::Relaxed);
     let mut last_spin_probe_us = qpc_now_us();
-    let mut last_send_elapsed_us = 0;
+    let mut last_send_elapsed_us: Option<u64> = None;
     let mut pending_pre_send_spin_us = 0;
+    let mut down_saturation_positive_streak: u8 = 0;
+    let mut up_saturation_positive_streak: u8 = 0;
     let mut send_duration_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
     let mut send_over_warn_count = 0usize;
     let mut input_path_warn_started_us = None;
@@ -954,14 +978,66 @@ fn run_worker(
     let mut bookkeeping_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
     let mut bookkeeping_over_warn_count = 0usize;
     let mut bookkeeping_warn_started_us = None;
-    // Epoch is captured only after all worker-owned real-time resources exist.
-    let mut clock_state = PlaybackClockState::new(qpc_now_us(), 0);
+    // Keep the logical authored timeline at zero while placing the physical
+    // anchor in the future.  This gives a t=0 action a real opportunity to
+    // dispatch early by its measured lead instead of being forced late by the
+    // worker prologue.
+    let startup_class = LatencyClass::Cold;
+    let startup_lead_us = if config.dispatch_lead_us > 0 {
+        config.dispatch_lead_us
+    } else if config.enable_adaptive_lead {
+        estimator
+            .estimate_lead_with_class_and_policy(
+                ActionKind::Down,
+                coordinator.next_authored_polyphony(),
+                startup_class,
+                config.strict_timing,
+            )
+            .applied_us
+    } else {
+        0
+    };
+    let startup_authored_us = coordinator
+        .schedule
+        .batches
+        .first()
+        .map(|batch| batch.scheduled_us);
+    let startup_guard_us = STARTUP_WAKE_GUARD_US
+        .saturating_add(effective_spin_threshold_us)
+        .saturating_add(config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US));
+    let startup_anchor_us = qpc_now_us()
+        .saturating_add(startup_guard_us)
+        .saturating_add(startup_lead_us);
+    let mut clock_state = PlaybackClockState::new(startup_anchor_us, 0);
+    let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
     let mut force_full_cleanup = false;
     let mut terminal_error: Option<String> = None;
     let mut last_published_error: Option<String> = None;
 
+    let qpc_admission_error = qpc_frequency_checked()
+        .err()
+        .map(|error| format!("QPC frequency unavailable: {error:?}"))
+        .or_else(|| {
+            qpc_now_ticks_checked()
+                .err()
+                .map(|error| format!("QPC counter unavailable: {error:?}"))
+        })
+        .or_else(|| {
+            config
+                .strict_timing
+                .then(|| waiter.initial_failure().map(wait_failure_message))
+                .flatten()
+        });
+    if let Some(error) = qpc_admission_error {
+        force_full_cleanup = true;
+        terminal_error = Some(error);
+    }
+
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
+        if terminal_error.is_some() {
+            return;
+        }
         while !coordinator.is_finished() {
             drain_commands(rx, quit_requested, skip_requested, panic_requested);
             if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
@@ -974,7 +1050,7 @@ fn run_worker(
                 publish_backend_metrics(&backend, metrics, &mut last_published_error);
             }
 
-            let now_us = qpc_now_us();
+            let mut now_us = qpc_now_us();
             let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
 
@@ -1020,20 +1096,81 @@ fn run_worker(
             let paused = clock_state.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
-                let _ = waiter.wait_until_us(now_us.saturating_add(PAUSED_POLL_US), 0, interrupt);
+                if let WaitOutcome::Failed(failure) =
+                    waiter.wait_until_us(now_us.saturating_add(PAUSED_POLL_US), 0, interrupt)
+                {
+                    metrics.wait_path_degraded.store(true, Ordering::Release);
+                    if config.strict_timing {
+                        force_full_cleanup = true;
+                        terminal_error = Some(wait_failure_message(failure));
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_micros(500));
+                }
                 continue;
+            }
+
+            if let Some((startup_scheduled_us, startup_lead_us)) = startup_gate {
+                let target_sample_ticks = qpc_now_ticks();
+                let target_sample_qpc_us = qpc_ticks_to_us(target_sample_ticks);
+                let target_qpc = anchored_dispatch_target_ticks(
+                    target_sample_ticks,
+                    target_sample_qpc_us,
+                    clock_state.epoch_us,
+                    startup_scheduled_us,
+                    startup_lead_us,
+                );
+                if target_sample_ticks < target_qpc {
+                    let wait_result = waiter.wait_until_ticks_with_metrics(
+                        target_qpc,
+                        effective_spin_threshold_us,
+                        interrupt,
+                    );
+                    metrics.idle_wake_count.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .spin_time_us
+                        .fetch_add(wait_result.spin_us, Ordering::Relaxed);
+                    match wait_result.outcome {
+                        WaitOutcome::Interrupted => continue,
+                        WaitOutcome::Deadline => continue,
+                        WaitOutcome::Failed(failure) => {
+                            metrics.wait_path_degraded.store(true, Ordering::Release);
+                            if config.strict_timing {
+                                force_full_cleanup = true;
+                                terminal_error = Some(wait_failure_message(failure));
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_micros(500));
+                            continue;
+                        }
+                    }
+                }
+                startup_gate = None;
+                now_us = qpc_now_us();
             }
 
             let effective_now_us = clock_state.get_elapsed_us(now_us);
             metrics
                 .elapsed_us
                 .store(effective_now_us, Ordering::Relaxed);
+            let latency_class = if last_send_elapsed_us
+                .is_none_or(|last| effective_now_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US)
+            {
+                LatencyClass::Cold
+            } else {
+                LatencyClass::Hot
+            };
 
             let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
                 if config.dispatch_lead_us > 0 {
                     (config.dispatch_lead_us, false)
                 } else if config.enable_adaptive_lead {
-                    let estimate = estimator.estimate_lead(ActionKind::Up, polyphony);
+                    let estimate = estimator.estimate_lead_with_class_and_policy(
+                        ActionKind::Up,
+                        polyphony,
+                        latency_class,
+                        config.strict_timing,
+                    );
                     (estimate.applied_us, estimate.saturated)
                 } else {
                     (0, false)
@@ -1050,7 +1187,7 @@ fn run_worker(
                 let actual_us = clock_state.get_elapsed_us(started_us);
                 let result = backend.key_up(&scan_codes);
                 let completed_effective = clock_state.get_elapsed_us(result.send_completed_us);
-                last_send_elapsed_us = completed_effective;
+                last_send_elapsed_us = Some(completed_effective);
                 let recovery_required = coordinator.requeue_failed_releases(
                     &due_pending,
                     &result.sent,
@@ -1074,21 +1211,6 @@ fn run_worker(
                     metrics
                         .total_us
                         .fetch_add(recovery_pause_us, Ordering::Relaxed);
-                }
-                if config.enable_adaptive_lead {
-                    update_estimator_after_send(
-                        &mut estimator,
-                        ActionKind::Up,
-                        result.send_completed_us.saturating_sub(started_us),
-                        result.sent.len(),
-                        scan_codes.len(),
-                        lead_up,
-                        0,
-                        result.success
-                            && result.sent.len() == scan_codes.len()
-                            && result.skipped_duplicates.is_empty()
-                            && result.send_attempts == 1,
-                    );
                 }
                 let bookkeeping_completed_us = qpc_now_us();
                 let first = due_pending
@@ -1116,10 +1238,40 @@ fn run_worker(
                     })
                     .max()
                     .unwrap_or(0);
+                let up_completion_error_us = signed_delta(completed_effective, scheduled_us);
+                let up_saturated_positive = pending_plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.lead_saturated)
+                    && up_completion_error_us > 0;
+                up_saturation_positive_streak = if up_saturated_positive {
+                    up_saturation_positive_streak.saturating_add(1)
+                } else {
+                    0
+                };
+                let saturation_abort = config.strict_timing
+                    && up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
                 let mixed_source = due_pending.iter().any(|pending| {
                     pending.source_action_index != first.source_action_index
                         || pending.reason_id != first.reason_id
                 });
+                if config.enable_adaptive_lead {
+                    update_estimator_after_send_class(
+                        &mut estimator,
+                        ActionKind::Up,
+                        result.send_completed_us.saturating_sub(started_us),
+                        result.sent.len(),
+                        scan_codes.len(),
+                        lead_up,
+                        up_completion_error_us,
+                        result.success
+                            && result.sent.len() == scan_codes.len()
+                            && result.skipped_duplicates.is_empty()
+                            && result.send_attempts == 1
+                            && deferred_by_us == 0
+                            && !mixed_source,
+                        latency_class,
+                    );
+                }
                 let reason_id = if mixed_source {
                     telemetry.mixed_release_reason_id
                 } else {
@@ -1227,6 +1379,14 @@ fn run_worker(
                     coordinator.cancel_all();
                     break;
                 }
+                if saturation_abort {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!(
+                        "strict timing SLO exceeded: note-off lead saturated with positive residual for {} consecutive dispatches",
+                        STRICT_SATURATION_ABORT_STREAK
+                    ));
+                    break;
+                }
                 continue;
             }
 
@@ -1234,7 +1394,12 @@ fn run_worker(
             let (lead_down, lead_down_saturated) = if config.dispatch_lead_us > 0 {
                 (config.dispatch_lead_us, false)
             } else if config.enable_adaptive_lead {
-                let estimate = estimator.estimate_lead(ActionKind::Down, next_down_polyphony);
+                let estimate = estimator.estimate_lead_with_class_and_policy(
+                    ActionKind::Down,
+                    next_down_polyphony,
+                    latency_class,
+                    config.strict_timing,
+                );
                 (estimate.applied_us, estimate.saturated)
             } else {
                 (0, false)
@@ -1432,27 +1597,51 @@ fn run_worker(
                         let result = backend.key_down(&scan_codes);
                         let completed_effective =
                             clock_state.get_elapsed_us(result.send_completed_us);
-                        last_send_elapsed_us = completed_effective;
+                        last_send_elapsed_us = Some(completed_effective);
                         coordinator.activate_sent_downs(
                             &playable,
                             &result.sent,
                             actual_us,
                             completed_effective,
                         );
+                        let completion_error_us =
+                            signed_delta(completed_effective, batch.scheduled_us);
+                        let retry_late_threshold_us = config
+                            .late_pulse_drop_threshold_us
+                            .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US)
+                            .min(i64::MAX as u64)
+                            as i64;
+                        let recovered_retry_late = result.retried_after_zero_progress
+                            && completion_error_us > retry_late_threshold_us;
+                        let retry_late_abort = config.strict_timing && recovered_retry_late;
+                        if recovered_retry_late {
+                            metrics
+                                .recovered_zero_progress_but_late
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        down_saturation_positive_streak =
+                            if lead_down_saturated && completion_error_us > 0 {
+                                down_saturation_positive_streak.saturating_add(1)
+                            } else {
+                                0
+                            };
+                        let saturation_abort = config.strict_timing
+                            && down_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
                         if config.enable_adaptive_lead {
-                            update_estimator_after_send(
+                            update_estimator_after_send_class(
                                 &mut estimator,
                                 ActionKind::Down,
                                 result.send_completed_us.saturating_sub(started_us),
                                 result.sent.len(),
                                 playable.len(),
                                 lead_down,
-                                signed_delta(completed_effective, batch.scheduled_us),
+                                completion_error_us,
                                 result.success
                                     && result.sent.len() == playable.len()
                                     && result.skipped_duplicates.is_empty()
                                     && result.send_attempts == 1
                                     && !result.chord_integrity_lost,
+                                latency_class,
                             );
                         }
                         let bookkeeping_completed_us = qpc_now_us();
@@ -1485,7 +1674,9 @@ fn run_worker(
                                 .iter()
                                 .filter_map(|intent| intent.generation_id)
                                 .collect(),
-                            runtime_outcome: if result.chord_integrity_lost {
+                            runtime_outcome: if recovered_retry_late {
+                                "recovered_zero_progress_but_late"
+                            } else if result.chord_integrity_lost {
                                 "chord_integrity_lost"
                             } else if result.sent.len() == scan_codes.len() {
                                 "sent"
@@ -1555,6 +1746,24 @@ fn run_worker(
                             publish_backend_metrics(&backend, metrics, &mut last_published_error);
                             break;
                         }
+                        if retry_late_abort {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "strict timing rejected zero-progress retry at action {}: completion was {}us late",
+                                batch.source_action_index, completion_error_us
+                            ));
+                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            break;
+                        }
+                        if saturation_abort {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "strict timing SLO exceeded: note-on lead saturated with positive residual for {} consecutive dispatches",
+                                STRICT_SATURATION_ABORT_STREAK
+                            ));
+                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            break;
+                        }
                     }
                 } else {
                     let (_, suppressed) = coordinator.request_releases(&batch.intents);
@@ -1605,7 +1814,12 @@ fn run_worker(
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
                 estimator
-                    .estimate_lead(ActionKind::Down, next_down_polyphony)
+                    .estimate_lead_with_class_and_policy(
+                        ActionKind::Down,
+                        next_down_polyphony,
+                        latency_class,
+                        config.strict_timing,
+                    )
                     .applied_us
             } else {
                 0
@@ -1614,7 +1828,12 @@ fn run_worker(
                 if config.dispatch_lead_us > 0 {
                     (config.dispatch_lead_us, false)
                 } else if config.enable_adaptive_lead {
-                    let estimate = estimator.estimate_lead(ActionKind::Up, polyphony);
+                    let estimate = estimator.estimate_lead_with_class_and_policy(
+                        ActionKind::Up,
+                        polyphony,
+                        latency_class,
+                        config.strict_timing,
+                    );
                     (estimate.applied_us, estimate.saturated)
                 } else {
                     (0, false)
@@ -1653,14 +1872,15 @@ fn run_worker(
                         }
                         continue;
                     }
-                    let target_qpc = deadline_target_ticks(
+                    let target_qpc = deadline_target_ticks_from_anchor(
                         target_sample_ticks,
-                        target_sample_elapsed_us,
+                        qpc_ticks_to_us(target_sample_ticks),
+                        clock_state.epoch_us,
                         deadline_us,
                     );
-                    let cold_warmup_us = if deadline_us.saturating_sub(last_send_elapsed_us)
-                        > SEND_COLD_THRESHOLD_US
-                    {
+                    let cold_warmup_us = if last_send_elapsed_us.is_none_or(|last| {
+                        deadline_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US
+                    }) {
                         config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US)
                     } else {
                         0
@@ -1676,11 +1896,25 @@ fn run_worker(
                         .fetch_add(wait_result.spin_us, Ordering::Relaxed);
                     pending_pre_send_spin_us = wait_result.spin_us;
                     let wake_elapsed_us = clock_state.get_elapsed_us(qpc_now_us());
-                    if wait_result.outcome == WaitOutcome::Deadline {
-                        metrics.wait_target_error_us.fetch_max(
-                            wake_elapsed_us.saturating_sub(deadline_us),
-                            Ordering::Relaxed,
-                        );
+                    match wait_result.outcome {
+                        WaitOutcome::Deadline => {
+                            metrics.wait_target_error_us.fetch_max(
+                                wake_elapsed_us.saturating_sub(deadline_us),
+                                Ordering::Relaxed,
+                            );
+                        }
+                        WaitOutcome::Failed(failure) => {
+                            metrics.wait_path_degraded.store(true, Ordering::Release);
+                            if config.strict_timing {
+                                force_full_cleanup = true;
+                                terminal_error = Some(wait_failure_message(failure));
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_micros(500));
+                            pending_pre_send_spin_us = 0;
+                            continue;
+                        }
+                        WaitOutcome::Interrupted => {}
                     }
                     if config.input_path_warn_us > 0
                         && wake_elapsed_us > deadline_us.saturating_add(config.input_path_warn_us)
@@ -1837,6 +2071,7 @@ fn release_runtime_outcome(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn update_estimator_after_send(
     estimator: &mut SendLatencyEstimator,
     kind: ActionKind,
@@ -1847,11 +2082,36 @@ fn update_estimator_after_send(
     completion_error_us: i64,
     clean_sample: bool,
 ) {
+    update_estimator_after_send_class(
+        estimator,
+        kind,
+        duration_us,
+        sent_count,
+        authored_polyphony,
+        applied_lead_us,
+        completion_error_us,
+        clean_sample,
+        LatencyClass::Hot,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_estimator_after_send_class(
+    estimator: &mut SendLatencyEstimator,
+    kind: ActionKind,
+    duration_us: u64,
+    sent_count: usize,
+    authored_polyphony: usize,
+    applied_lead_us: u64,
+    completion_error_us: i64,
+    clean_sample: bool,
+    latency_class: LatencyClass,
+) {
     if !clean_sample || sent_count == 0 {
         return;
     }
-    estimator.update(kind, duration_us, authored_polyphony);
-    if kind == ActionKind::Down && applied_lead_us > 0 {
+    estimator.update_with_class(kind, duration_us, authored_polyphony, latency_class);
+    if applied_lead_us > 0 {
         estimator.update_completion_error(kind, completion_error_us);
     }
 }
@@ -1874,9 +2134,49 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
-/// Map a logical playback deadline to an absolute QPC target using one clock
-/// sample.  Keeping this as a small pure helper makes the A->B timing rule
-/// explicit and prevents future callers from accidentally mixing samples.
+/// Map a non-negative logical deadline to an absolute QPC target using the
+/// clock's physical anchor and one current sample.
+fn deadline_target_ticks_from_anchor(
+    now_ticks: QpcTicks,
+    now_qpc_us: u64,
+    anchor_us: u64,
+    deadline_us: u64,
+) -> QpcTicks {
+    let target_us = anchor_us.saturating_add(deadline_us);
+    if target_us <= now_qpc_us {
+        return now_ticks;
+    }
+    QpcTicks(
+        now_ticks
+            .0
+            .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
+    )
+}
+
+/// Map an authored timestamp minus lead, including the negative interval that
+/// is intentionally needed for a first note at authored t=0.
+fn anchored_dispatch_target_ticks(
+    now_ticks: QpcTicks,
+    now_qpc_us: u64,
+    anchor_us: u64,
+    scheduled_us: u64,
+    lead_us: u64,
+) -> QpcTicks {
+    let target_us = anchor_us
+        .saturating_add(scheduled_us)
+        .saturating_sub(lead_us);
+    if target_us <= now_qpc_us {
+        return now_ticks;
+    }
+    QpcTicks(
+        now_ticks
+            .0
+            .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
+    )
+}
+
+/// Legacy relative helper retained for unit-test compatibility.
+#[cfg(test)]
 fn deadline_target_ticks(now_ticks: QpcTicks, logical_now_us: u64, deadline_us: u64) -> QpcTicks {
     QpcTicks(
         now_ticks
@@ -1898,6 +2198,23 @@ fn publish_wake_error_stats(stats: WakeErrorStats, metrics: &SharedMetrics) {
     metrics
         .wake_error_max_us
         .store(stats.max_us, Ordering::Relaxed);
+}
+
+fn wait_failure_message(failure: WaitFailure) -> String {
+    match failure {
+        WaitFailure::TimerCreate { win32_error } => {
+            format!("high-resolution waitable timer creation failed (Win32 error {win32_error})")
+        }
+        WaitFailure::TimerArm { win32_error } => {
+            format!("high-resolution waitable timer arm failed (Win32 error {win32_error})")
+        }
+        WaitFailure::TimerWait { win32_error } => {
+            format!("high-resolution waitable timer wait failed (Win32 error {win32_error})")
+        }
+        WaitFailure::MultiWait { win32_error } => {
+            format!("interruptible wait failed (Win32 error {win32_error})")
+        }
+    }
 }
 
 fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
@@ -2025,8 +2342,9 @@ fn publish_backend_metrics(
 mod tests {
     use super::{
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
-        deadline_target_ticks, derive_spin_threshold_us, drain_commands, focus_gate_matches,
-        record_input_path_health, release_runtime_outcome, update_estimator_after_send,
+        anchored_dispatch_target_ticks, deadline_target_ticks, derive_spin_threshold_us,
+        drain_commands, focus_gate_matches, record_input_path_health, release_runtime_outcome,
+        update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
@@ -2041,6 +2359,20 @@ mod tests {
         let logical_now_us = qpc_ticks_to_us(now_ticks);
         let target = deadline_target_ticks(now_ticks, logical_now_us, logical_now_us + 1_000);
         assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(1_000));
+    }
+
+    #[test]
+    fn first_authored_zero_timestamp_can_use_a_future_physical_anchor() {
+        let now_ticks = QpcTicks(10_000_000);
+        let now_qpc_us = qpc_ticks_to_us(now_ticks);
+        let startup_guard_us = 1_000;
+        let lead_us = 500;
+        let anchor_us = now_qpc_us
+            .saturating_add(startup_guard_us)
+            .saturating_add(lead_us);
+        let target = anchored_dispatch_target_ticks(now_ticks, now_qpc_us, anchor_us, 0, lead_us);
+
+        assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(startup_guard_us));
     }
 
     #[test]

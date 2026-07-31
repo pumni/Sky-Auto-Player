@@ -91,8 +91,9 @@ Gate: frozen app startup/playback/selftests.
 
 - default Rust on supported Windows 3.14t;
 - fallback automatically when the native extension is missing/incompatible, with
-  `SKY_USE_PYTHON_DISPATCH=1` as the explicit rollback switch and
-  `SKY_REQUIRE_RUST_DISPATCH=1` as the fail-closed validation switch;
+  `SKY_USE_PYTHON_DISPATCH=1` as the explicit diagnostic rollback switch;
+  Rust is fail-closed by default, while `SKY_REQUIRE_RUST_DISPATCH=1` remains
+  accepted for backwards-compatible deployment configuration;
 - production telemetry records backend implementation/version;
 - soak testing across song corpus/FPS/profiles/focus/pause/panic;
 - publish migration notes.

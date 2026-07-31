@@ -164,6 +164,7 @@ class ProgressRenderer:
         force: bool = False,
         input_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
+        dispatch_backend: str = "python",
     ) -> None:
         now = time.perf_counter()
         if not force and now - self.last_render_at < PROGRESS_RENDER_INTERVAL_SECONDS:
@@ -212,6 +213,8 @@ class ProgressRenderer:
             (f"{self.tempo_scale:.2f}×", styles["accent"]),
             "  ·  theme ",
             (self.theme_name, styles["accent"]),
+            "  ·  dispatch ",
+            (dispatch_backend, styles["accent"]),
         )
 
         # Song title

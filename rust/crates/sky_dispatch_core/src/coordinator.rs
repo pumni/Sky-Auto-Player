@@ -82,6 +82,43 @@ mod tests {
     }
 
     #[test]
+    fn sublead_authored_batches_keep_distinct_deadlines() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "first".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x16],
+                    reason: "second".to_string(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+
+        let (first, _) = coordinator
+            .pop_next_due_authored(0, 2_000)
+            .expect("first action is due");
+        assert_eq!(first.scheduled_us, 0);
+        assert_eq!(coordinator.next_authored_us(2_000), Some(1_000));
+        assert!(coordinator.pop_next_due_authored(0, 2_000).is_none());
+
+        let (second, _) = coordinator
+            .pop_next_due_authored(1_000, 2_000)
+            .expect("second action keeps its authored ordering");
+        assert_eq!(second.scheduled_us, 1_000);
+    }
+
+    #[test]
     fn failed_release_is_requeued_and_unblocks_later_same_key_down() {
         let schedule = compile_runtime_intents(
             &[
@@ -358,7 +395,9 @@ pub struct PendingRelease {
 
 impl PendingRelease {
     pub fn get_effective_release_us(&self, lead_up: u64) -> u64 {
-        let led = self.scheduled_release_us.saturating_sub(lead_up);
+        let effective_lead =
+            RuntimeDispatchCoordinator::effective_authored_lead(self.scheduled_release_us, lead_up);
+        let led = self.scheduled_release_us.saturating_sub(effective_lead);
         self.release_not_before_us.max(led).max(self.next_retry_us)
     }
 }
@@ -449,6 +488,19 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
+    fn effective_authored_lead(scheduled_us: u64, requested_lead_us: u64) -> u64 {
+        // The logical timeline is unsigned.  Applying a lead to an authored
+        // timestamp smaller than that lead would saturate several distinct
+        // deadlines to zero and could dispatch them as one burst.  The first
+        // authored action is handled by the native worker's future physical
+        // startup anchor; subsequent sub-lead actions stay ordered here.
+        if scheduled_us >= requested_lead_us {
+            requested_lead_us
+        } else {
+            0
+        }
+    }
+
     pub fn next_authored_us(&self, dispatch_lead_us: u64) -> Option<u64> {
         if self.cursor >= self.schedule.batches.len() {
             return None;
@@ -458,12 +510,9 @@ impl RuntimeDispatchCoordinator {
         if lead > 0 && self.early_pop_blocked(batch) {
             return Some(batch.scheduled_us.saturating_add(self.recovery_offset_us));
         }
-        Some(
-            batch
-                .scheduled_us
-                .saturating_add(self.recovery_offset_us)
-                .saturating_sub(lead),
-        )
+        let effective_scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
+        let effective_lead = Self::effective_authored_lead(effective_scheduled_us, lead);
+        Some(effective_scheduled_us.saturating_sub(effective_lead))
     }
 
     /// Polyphony of the next authored down batch, used to select its lead
@@ -670,9 +719,10 @@ impl RuntimeDispatchCoordinator {
             return None;
         }
         let batch = &self.schedule.batches[self.cursor];
-        let lead = dispatch_lead_us;
         let effective_scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
-        if effective_scheduled_us > now_us.saturating_add(lead) {
+        let effective_lead =
+            Self::effective_authored_lead(effective_scheduled_us, dispatch_lead_us);
+        if effective_scheduled_us > now_us.saturating_add(effective_lead) {
             return None;
         }
         if effective_scheduled_us > now_us && self.early_pop_blocked(batch) {
@@ -682,7 +732,7 @@ impl RuntimeDispatchCoordinator {
             .schedule
             .materialize_batch(self.cursor, self.recovery_offset_us);
         self.cursor += 1;
-        Some((popped, lead))
+        Some((popped, effective_lead))
     }
 
     pub fn activate_sent_downs(

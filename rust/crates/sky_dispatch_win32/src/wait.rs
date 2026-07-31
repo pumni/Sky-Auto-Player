@@ -5,9 +5,18 @@ use crate::event::OwnedEvent;
 use crate::timer::{TimerResolutionGuard, WaitableTimer};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WaitFailure {
+    TimerCreate { win32_error: u32 },
+    TimerArm { win32_error: u32 },
+    TimerWait { win32_error: u32 },
+    MultiWait { win32_error: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitOutcome {
     Deadline,
     Interrupted,
+    Failed(WaitFailure),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +42,7 @@ pub struct HybridWaiter {
     timer: Option<WaitableTimer>,
     _timer_resolution: Option<TimerResolutionGuard>,
     event_wait_enabled: bool,
+    initial_failure: Option<WaitFailure>,
 }
 
 impl HybridWaiter {
@@ -41,7 +51,14 @@ impl HybridWaiter {
     }
 
     pub fn with_options(waitable_timer_enabled: bool, event_wait_enabled: bool) -> Self {
-        let timer = waitable_timer_enabled.then(WaitableTimer::new).flatten();
+        let (timer, initial_failure) = if waitable_timer_enabled {
+            match WaitableTimer::new_with_error() {
+                Ok(timer) => (Some(timer), None),
+                Err(win32_error) => (None, Some(WaitFailure::TimerCreate { win32_error })),
+            }
+        } else {
+            (None, None)
+        };
         let timer_resolution = timer
             .is_none()
             .then(TimerResolutionGuard::acquire_1ms)
@@ -50,7 +67,12 @@ impl HybridWaiter {
             timer,
             _timer_resolution: timer_resolution,
             event_wait_enabled,
+            initial_failure,
         }
+    }
+
+    pub fn initial_failure(&self) -> Option<WaitFailure> {
+        self.initial_failure
     }
 
     pub fn mode(&self) -> &'static str {
@@ -121,9 +143,17 @@ impl HybridWaiter {
             ));
             #[cfg(windows)]
             if self.event_wait_enabled {
-                if let Some(timer) = &self.timer
-                    && timer.arm_relative_us(kernel_wait_us)
-                {
+                if let Some(timer) = &self.timer {
+                    let arm_result = timer.arm_relative_us(kernel_wait_us);
+                    if let Err(error) = arm_result {
+                        return WaitResult {
+                            outcome: WaitOutcome::Failed(WaitFailure::TimerArm {
+                                win32_error: error,
+                            }),
+                            spin_us: 0,
+                        };
+                    }
+
                     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
                     use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
@@ -143,14 +173,29 @@ impl HybridWaiter {
                     if result == WAIT_OBJECT_0 + 1 {
                         continue;
                     }
+                    return WaitResult {
+                        outcome: WaitOutcome::Failed(WaitFailure::MultiWait {
+                            win32_error: unsafe { windows_sys::Win32::Foundation::GetLastError() },
+                        }),
+                        spin_us: 0,
+                    };
                 }
             } else if let Some(timer) = &self.timer
-                // `sleep_us` arms and waits once. Do not arm the same timer
-                // above and then re-arm it to a 1 ms cap: that turns every
-                // long gap into a polling loop and distorts wake metrics.
-                && timer.sleep_us(kernel_wait_us)
+            // `sleep_us` arms and waits once. Do not arm the same timer
+            // above and then re-arm it to a 1 ms cap: that turns every
+            // long gap into a polling loop and distorts wake metrics.
             {
-                continue;
+                match timer.sleep_us(kernel_wait_us) {
+                    Ok(()) => continue,
+                    Err(error) => {
+                        return WaitResult {
+                            outcome: WaitOutcome::Failed(WaitFailure::TimerWait {
+                                win32_error: error,
+                            }),
+                            spin_us: 0,
+                        };
+                    }
+                }
             }
 
             // Portable/degraded fallback remains bounded so a command cannot
@@ -175,12 +220,12 @@ impl HybridWaiter {
         let mut errors = Vec::with_capacity(samples);
         for _ in 0..samples {
             let target_ticks = QpcTicks(qpc_now_ticks().0.saturating_add(qpc_us_to_ticks(2_000)));
-            if self
+            match self
                 .wait_until_ticks_with_metrics(target_ticks, 0, interrupt)
                 .outcome
-                == WaitOutcome::Interrupted
             {
-                return None;
+                WaitOutcome::Interrupted | WaitOutcome::Failed(_) => return None,
+                WaitOutcome::Deadline => {}
             }
             let now_ticks = qpc_now_ticks();
             errors.push(qpc_ticks_to_us(QpcTicks(

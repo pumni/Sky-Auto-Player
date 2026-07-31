@@ -41,6 +41,10 @@ impl Drop for TimerResolutionGuard {
 
 impl WaitableTimer {
     pub fn new() -> Option<Self> {
+        Self::new_with_error().ok()
+    }
+
+    pub fn new_with_error() -> Result<Self, u32> {
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::Threading::{
@@ -58,52 +62,60 @@ impl WaitableTimer {
                 )
             };
             if !handle.is_null() {
-                return Some(WaitableTimer { handle });
+                return Ok(WaitableTimer { handle });
             }
-            None
+            Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
         #[cfg(not(windows))]
         {
-            None
+            Err(120)
         }
     }
 
-    pub fn sleep_us(&self, us: u64) -> bool {
+    pub fn sleep_us(&self, us: u64) -> Result<(), u32> {
         if us == 0 {
-            return true;
+            return Ok(());
         }
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
-            if !self.arm_relative_us(us) {
-                return false;
-            }
+            self.arm_relative_us(us)?;
             // SAFETY: waiting borrows the live handle without transferring it.
             let wait_result = unsafe { WaitForSingleObject(self.handle, INFINITE) };
-            wait_result == windows_sys::Win32::Foundation::WAIT_OBJECT_0
+            if wait_result == windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+                Ok(())
+            } else {
+                Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
+            }
         }
         #[cfg(not(windows))]
         {
             std::thread::sleep(std::time::Duration::from_micros(us));
-            true
+            Ok(())
         }
     }
 
     #[cfg(windows)]
-    pub(crate) fn arm_relative_us(&self, us: u64) -> bool {
+    pub(crate) fn arm_relative_us(&self, us: u64) -> Result<(), u32> {
         use windows_sys::Win32::System::Threading::SetWaitableTimer;
 
         let Some(ticks_100ns) = us.checked_mul(10) else {
-            return false;
+            return Err(87);
         };
         let Ok(ticks_100ns) = i64::try_from(ticks_100ns) else {
-            return false;
+            return Err(87);
         };
         let due_time_100ns = -ticks_100ns;
         // SAFETY: the handle is a live waitable timer and the due-time
         // pointer remains valid for the duration of this call.
-        unsafe { SetWaitableTimer(self.handle, &due_time_100ns, 0, None, std::ptr::null(), 0) != 0 }
+        if unsafe { SetWaitableTimer(self.handle, &due_time_100ns, 0, None, std::ptr::null(), 0) }
+            != 0
+        {
+            Ok(())
+        } else {
+            Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
+        }
     }
 
     #[cfg(windows)]

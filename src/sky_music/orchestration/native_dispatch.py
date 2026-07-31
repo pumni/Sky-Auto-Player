@@ -100,9 +100,20 @@ def native_dispatch_explicitly_requested() -> bool:
 
 
 def native_dispatch_required() -> bool:
-    """Return whether validation must fail instead of falling back to Python."""
-    value = os.environ.get("SKY_REQUIRE_RUST_DISPATCH", "").strip().casefold()
-    return value in {"1", "true", "yes", "on"}
+    """Return whether an eligible production session must have Rust.
+
+    The real Win32 dispatch path is fidelity-first.  Python is therefore not
+    an implicit compatibility fallback: callers must opt into the diagnostic
+    rollback switch (``SKY_USE_PYTHON_DISPATCH=1``), which is checked before
+    this function is consulted.
+
+    ``SKY_REQUIRE_RUST_DISPATCH`` remains accepted as an explicit, backwards
+    compatible affirmative setting.  A false/unset value no longer weakens
+    the release policy.
+    """
+    # The legacy variable remains accepted by deployment configuration, but
+    # the safe default is now fail-closed regardless of whether it is present.
+    return True
 
 
 def is_native_dispatch_available() -> bool:
@@ -180,6 +191,7 @@ class RustDispatchRuntime:
         controls: Any,
         renderer: Any,
         poll_s: float,
+        strict_timing: bool = True,
         core_warmup_budget_us: int = 200,
         dispatch_lead_us: int = 0,
         chord_stagger_us: int = 0,
@@ -224,6 +236,7 @@ class RustDispatchRuntime:
             input_path_warn_us=input_path_warn_us,
             enable_adaptive_lead=enable_adaptive_lead,
             estimator_state_json=estimator_state_json,
+            strict_timing=strict_timing,
         )
         self._actions = actions
         self._song_name = song_name
@@ -370,6 +383,7 @@ class RustDispatchRuntime:
                     status=status,
                     input_path_degraded=bool(latest["input_path_degraded"]),
                     backend_health=self._health(latest),
+                    dispatch_backend="rust",
                 )
             time.sleep(self._sleep_s)
 

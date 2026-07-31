@@ -319,6 +319,28 @@ def test_native_worker_retries_transient_note_off_before_same_key_down() -> None
     )
 
 
+def test_native_worker_rejects_zero_progress_retry_that_completes_late() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [(0, "down", 0, [0x15], "retry-late")],
+        [0x15],
+        mock_backend=True,
+        mock_failure_mode="zero_progress_down_once",
+        mock_latency_base_us=3_000,
+        telemetry_enabled=True,
+        strict_timing=True,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
+
+    assert snapshot["status"] == "error"
+    assert snapshot["recovered_zero_progress_but_late"] == 1
+    assert "zero-progress retry" in snapshot["terminal_error"]
+    assert output["records"][0]["runtime_outcome"] == "recovered_zero_progress_but_late"
+
+
 def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [
@@ -479,7 +501,7 @@ def test_native_dispatch_estimator_cache_round_trip() -> None:
     session.start()
     assert session.join() is True
     exported = cast(dict[str, Any], json.loads(session.estimator_state_json()))
-    assert exported["version"] == 3
+    assert exported["version"] == 4
     assert exported["count_down"][1] == 6
 
 

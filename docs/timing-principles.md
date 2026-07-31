@@ -91,12 +91,23 @@ The sender-side completion-to-completion proxy preserves the intended hold floor
 ### Interaction with Adaptive Dispatch Lead (2026-07)
 Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a bounded rolling p95 of `send_duration_us`, bucketed by action kind and polyphony, so completions land on `scheduled_us`. Cold buckets use a conservative prior and lower-bucket/global evidence; the resulting lead is monotonic with polyphony and clamped to the configured maximum. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
 $$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
-and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. Version-2 lead caches are migrated to the version-3 rolling model. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. Version-2 and version-3 lead caches are migrated to the version-4 rolling model, which also persists separate Up residual correction. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
 Pending releases use a bounded cohort fixed point: the Up lead is selected from the releases that
 share the next effective deadline, rather than from all currently pending keys. The resulting
 deadline/lead/polyphony plan is reused for waiting and popping. The native accuracy-first path
 also requires `chord_stagger_us == 0`; staggered chords remain an explicit Python diagnostic path.
+A future physical anchor is created before the worker loop; the first authored action is gated at
+`startup_anchor + scheduled_us - lead_us`, including the negative offset for a note at `t=0`.
+Because the logical timeline is unsigned, later authored timestamps smaller than the requested
+lead do not saturate to the same zero deadline: the coordinator temporarily applies no early
+lead to those sub-lead actions, preserving their order. Only the first action receives the
+startup-anchor negative offset.
+The worker records a separate Up completion residual only from clean, non-deferred, single-source
+release cohorts.
+Normal estimator operation uses the rolling p95. Native strict timing uses the clamped rolling
+upper tail instead, so a recent outlier remains visible; repeated positive residual at the lead
+cap is a controlled timing error rather than an unreported tail.
 
 ---
 

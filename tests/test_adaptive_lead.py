@@ -130,7 +130,7 @@ def test_send_latency_estimator_ema() -> None:
 
 
 def test_send_latency_estimator_residual_prologue_bias() -> None:
-    """Systematic positive completion error is folded into down lead (not up)."""
+    """Systematic positive completion error is folded into the matching kind."""
     estimator = SendLatencyEstimator(alpha=0.2, max_lead_us=2000)
     for _ in range(5):
         estimator.update(ActionKind.DOWN, 800)
@@ -145,13 +145,17 @@ def test_send_latency_estimator_residual_prologue_bias() -> None:
 
     estimator.update_completion_error(ActionKind.DOWN, 100)
     assert estimator.get_lead_us(ActionKind.DOWN) == 900  # 800 send + 100 residual
-    # Ups ignore residual prologue bias
+    # A Down residual does not contaminate the independent Up lead.
     assert estimator.get_lead_us(ActionKind.UP) == 400
 
     # Early residual reduces lead slowly once its EMA is warm.
     for _ in range(20):
         estimator.update_completion_error(ActionKind.DOWN, -200)
     assert estimator.get_lead_us(ActionKind.DOWN) == 751
+
+    for _ in range(5):
+        estimator.update_completion_error(ActionKind.UP, 120)
+    assert estimator.get_lead_us(ActionKind.UP) == 520
 
 
 def test_no_early_conflict_guard() -> None:

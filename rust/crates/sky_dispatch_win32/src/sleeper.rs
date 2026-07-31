@@ -35,7 +35,7 @@ pub fn sleep_until_ticks(target_ticks: QpcTicks, spin_margin_us: u64) -> u64 {
         let sleep_duration_us = remaining_us - spin_margin_us;
         THREAD_TIMER.with(|timer_opt| {
             if let Some(ref timer) = *timer_opt {
-                timer.sleep_us(sleep_duration_us);
+                let _ = timer.sleep_us(sleep_duration_us);
             } else {
                 std::thread::sleep(std::time::Duration::from_micros(sleep_duration_us));
             }

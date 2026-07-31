@@ -16,7 +16,13 @@ const MAX_SAMPLE_US: u64 = 60_000_000;
 const BASE_COLD_PRIOR_US: u64 = 100;
 const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const EARLY_CORRECTION_DECAY: f64 = 0.25;
-pub const ESTIMATOR_STATE_VERSION: u32 = 3;
+pub const ESTIMATOR_STATE_VERSION: u32 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LatencyClass {
+    Hot,
+    Cold,
+}
 
 pub fn round_half_to_even(x: f64) -> i64 {
     let floor = x.floor();
@@ -78,6 +84,15 @@ pub struct EstimatorStateJson {
     pub samples_down_total: Vec<u64>,
     #[serde(default)]
     pub samples_up_total: Vec<u64>,
+    /// Version 4 residual completion bias for note-off dispatches.
+    #[serde(default)]
+    pub ema_residual_up: f64,
+    #[serde(default)]
+    pub warm_residual_up: bool,
+    #[serde(default)]
+    pub count_residual_up: u64,
+    #[serde(default)]
+    pub sum_residual_up: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +135,11 @@ impl RollingSamples {
         self.cached_p95
     }
 
+    fn max(&self) -> Option<u64> {
+        let len = usize::from(self.len);
+        (len > 0).then(|| self.values[..len].iter().copied().max().unwrap_or(0))
+    }
+
     fn refresh_p95(&mut self) {
         if !self.is_warm() {
             self.cached_p95 = None;
@@ -133,7 +153,13 @@ impl RollingSamples {
     }
 
     fn to_vec(&self) -> Vec<u64> {
-        self.values[..usize::from(self.len)].to_vec()
+        let len = usize::from(self.len);
+        if len < ROLLING_WINDOW {
+            return self.values[..len].to_vec();
+        }
+        (0..ROLLING_WINDOW)
+            .map(|offset| self.values[(usize::from(self.cursor) + offset) % ROLLING_WINDOW])
+            .collect()
     }
 
     fn from_values(values: &[u64]) -> Result<Self, String> {
@@ -188,6 +214,12 @@ pub struct SendLatencyEstimator {
     sum_residual: i64,
     ema_residual: f64,
     warm_residual: bool,
+    count_residual_up: u64,
+    sum_residual_up: i64,
+    ema_residual_up: f64,
+    warm_residual_up: bool,
+    cold_down_windows: Vec<RollingSamples>,
+    cold_up_windows: Vec<RollingSamples>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,10 +252,26 @@ impl SendLatencyEstimator {
             sum_residual: 0,
             ema_residual: 0.0,
             warm_residual: false,
+            count_residual_up: 0,
+            sum_residual_up: 0,
+            ema_residual_up: 0.0,
+            warm_residual_up: false,
+            cold_down_windows: vec![RollingSamples::default(); size],
+            cold_up_windows: vec![RollingSamples::default(); size],
         }
     }
 
     pub fn update(&mut self, kind: ActionKind, duration_us: u64, n_keys: usize) {
+        self.update_with_class(kind, duration_us, n_keys, LatencyClass::Hot);
+    }
+
+    pub fn update_with_class(
+        &mut self,
+        kind: ActionKind,
+        duration_us: u64,
+        n_keys: usize,
+        latency_class: LatencyClass,
+    ) {
         let duration_us = duration_us.min(MAX_SAMPLE_US);
         let n = 1.max(self.max_poly.min(n_keys));
         match kind {
@@ -231,6 +279,9 @@ impl SendLatencyEstimator {
                 self.count_down[n] = self.count_down[n].saturating_add(1);
                 self.sum_down[n] = self.sum_down[n].saturating_add(duration_us);
                 self.down_windows[n].push(duration_us);
+                if latency_class == LatencyClass::Cold {
+                    self.cold_down_windows[n].push(duration_us);
+                }
                 self.count_down_total = self.count_down_total.saturating_add(1);
                 self.sum_down_total = self.sum_down_total.saturating_add(duration_us);
                 self.down_total_window.push(duration_us);
@@ -239,6 +290,9 @@ impl SendLatencyEstimator {
                 self.count_up[n] = self.count_up[n].saturating_add(1);
                 self.sum_up[n] = self.sum_up[n].saturating_add(duration_us);
                 self.up_windows[n].push(duration_us);
+                if latency_class == LatencyClass::Cold {
+                    self.cold_up_windows[n].push(duration_us);
+                }
                 self.count_up_total = self.count_up_total.saturating_add(1);
                 self.sum_up_total = self.sum_up_total.saturating_add(duration_us);
                 self.up_total_window.push(duration_us);
@@ -247,17 +301,28 @@ impl SendLatencyEstimator {
     }
 
     pub fn update_completion_error(&mut self, kind: ActionKind, error_us: i64) {
-        if kind != ActionKind::Down {
-            return;
-        }
         let sample = error_us.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
-        self.count_residual = self.count_residual.saturating_add(1);
-        self.sum_residual = self.sum_residual.saturating_add(sample);
-        if self.warm_residual {
-            self.ema_residual = self.alpha * sample as f64 + (1.0 - self.alpha) * self.ema_residual;
-        } else if self.count_residual >= SEED_SAMPLES as u64 {
-            self.ema_residual = self.sum_residual as f64 / self.count_residual as f64;
-            self.warm_residual = true;
+        let (count, sum, ema, warm) = match kind {
+            ActionKind::Down => (
+                &mut self.count_residual,
+                &mut self.sum_residual,
+                &mut self.ema_residual,
+                &mut self.warm_residual,
+            ),
+            ActionKind::Up => (
+                &mut self.count_residual_up,
+                &mut self.sum_residual_up,
+                &mut self.ema_residual_up,
+                &mut self.warm_residual_up,
+            ),
+        };
+        *count = count.saturating_add(1);
+        *sum = sum.saturating_add(sample);
+        if *warm {
+            *ema = self.alpha * sample as f64 + (1.0 - self.alpha) * *ema;
+        } else if *count >= SEED_SAMPLES as u64 {
+            *ema = *sum as f64 / *count as f64;
+            *warm = true;
         }
     }
 
@@ -271,10 +336,18 @@ impl SendLatencyEstimator {
     /// reduces it at a quarter rate so a short-lived early sample cannot
     /// immediately erase a safety margin.
     pub fn residual_adjustment_us(&self) -> i64 {
-        if !self.warm_residual {
+        self.residual_adjustment_us_for(ActionKind::Down)
+    }
+
+    pub fn residual_adjustment_us_for(&self, kind: ActionKind) -> i64 {
+        let (warm, ema) = match kind {
+            ActionKind::Down => (self.warm_residual, self.ema_residual),
+            ActionKind::Up => (self.warm_residual_up, self.ema_residual_up),
+        };
+        if !warm {
             return 0;
         }
-        let rounded = round_half_to_even(self.ema_residual);
+        let rounded = round_half_to_even(ema);
         if rounded >= 0 {
             rounded.min(MAX_RESIDUAL_US)
         } else {
@@ -287,16 +360,40 @@ impl SendLatencyEstimator {
             .saturating_add(PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(1) as u64))
     }
 
-    fn raw_estimate_us(&self, kind: ActionKind, n: usize) -> u64 {
+    fn raw_estimate_us(
+        &self,
+        kind: ActionKind,
+        n: usize,
+        latency_class: LatencyClass,
+        strict_upper_tail: bool,
+    ) -> u64 {
         let (windows, total_window) = match kind {
             ActionKind::Down => (&self.down_windows, &self.down_total_window),
             ActionKind::Up => (&self.up_windows, &self.up_total_window),
         };
-        let local = windows[n].p95();
-        let global = total_window.p95();
+        let cold_local = match kind {
+            ActionKind::Down => self.cold_down_windows[n].p95(),
+            ActionKind::Up => self.cold_up_windows[n].p95(),
+        };
+        let quantile = |window: &RollingSamples| {
+            if strict_upper_tail {
+                window.max()
+            } else {
+                window.p95()
+            }
+        };
+        let local = quantile(&windows[n])
+            .into_iter()
+            .chain(
+                (latency_class == LatencyClass::Cold)
+                    .then_some(cold_local)
+                    .flatten(),
+            )
+            .max();
+        let global = quantile(total_window);
         let lower_bucket = (1..=n)
             .rev()
-            .find_map(|bucket| windows[bucket].p95().map(|estimate| (bucket, estimate)))
+            .find_map(|bucket| quantile(&windows[bucket]).map(|estimate| (bucket, estimate)))
             .map(|(bucket, estimate)| {
                 estimate.saturating_add(
                     PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
@@ -311,24 +408,45 @@ impl SendLatencyEstimator {
             .unwrap_or_else(|| Self::cold_prior_us(n))
     }
 
-    fn base_lead_us(&self, kind: ActionKind, n: usize) -> u64 {
-        let raw = self.raw_estimate_us(kind, n) as i64;
-        let residual = if kind == ActionKind::Down {
-            self.residual_adjustment_us()
-        } else {
-            0
-        };
+    fn base_lead_us(
+        &self,
+        kind: ActionKind,
+        n: usize,
+        latency_class: LatencyClass,
+        strict_upper_tail: bool,
+    ) -> u64 {
+        let raw = self.raw_estimate_us(kind, n, latency_class, strict_upper_tail) as i64;
+        let residual = self.residual_adjustment_us_for(kind);
         raw.saturating_add(residual).max(0) as u64
     }
 
     pub fn estimate_lead(&self, kind: ActionKind, n_keys: usize) -> LeadEstimate {
+        self.estimate_lead_with_class(kind, n_keys, LatencyClass::Hot)
+    }
+
+    pub fn estimate_lead_with_class(
+        &self,
+        kind: ActionKind,
+        n_keys: usize,
+        latency_class: LatencyClass,
+    ) -> LeadEstimate {
+        self.estimate_lead_with_class_and_policy(kind, n_keys, latency_class, false)
+    }
+
+    pub fn estimate_lead_with_class_and_policy(
+        &self,
+        kind: ActionKind,
+        n_keys: usize,
+        latency_class: LatencyClass,
+        strict_upper_tail: bool,
+    ) -> LeadEstimate {
         let n = 1.max(self.max_poly.min(n_keys));
         // The envelope is intentional: independently observed buckets must
         // never make a larger chord receive a smaller lead than a smaller
         // chord.  This also makes cold-start behaviour conservative when a
         // new polyphony bucket has not yet accumulated five samples.
         let monotonic = (1..=n)
-            .map(|bucket| self.base_lead_us(kind, bucket))
+            .map(|bucket| self.base_lead_us(kind, bucket, latency_class, strict_upper_tail))
             .max()
             .unwrap_or(0);
         LeadEstimate {
@@ -387,13 +505,17 @@ impl SendLatencyEstimator {
             samples_up: self.up_windows.iter().map(RollingSamples::to_vec).collect(),
             samples_down_total: self.down_total_window.to_vec(),
             samples_up_total: self.up_total_window.to_vec(),
+            ema_residual_up: self.ema_residual_up,
+            warm_residual_up: self.warm_residual_up,
+            count_residual_up: self.count_residual_up,
+            sum_residual_up: self.sum_residual_up,
         }
     }
 
     pub fn import_state(&mut self, json_str: &str) -> Result<(), String> {
         let state: EstimatorStateJson =
             serde_json::from_str(json_str).map_err(|e| format!("invalid estimator json: {e}"))?;
-        if !matches!(state.version, 2 | ESTIMATOR_STATE_VERSION) {
+        if !matches!(state.version, 2 | 3 | ESTIMATOR_STATE_VERSION) {
             return Err(format!("unsupported estimator version: {}", state.version));
         }
         if !(1..=32).contains(&state.max_poly) {
@@ -418,6 +540,9 @@ impl SendLatencyEstimator {
         if !state.ema_residual.is_finite()
             || state.ema_residual < -(MAX_RESIDUAL_US as f64)
             || state.ema_residual > (MAX_RESIDUAL_US * 2) as f64
+            || !state.ema_residual_up.is_finite()
+            || state.ema_residual_up < -(MAX_RESIDUAL_US as f64)
+            || state.ema_residual_up > (MAX_RESIDUAL_US * 2) as f64
         {
             return Err("estimator residual value is outside the accepted range".to_string());
         }
@@ -426,7 +551,7 @@ impl SendLatencyEstimator {
         let mut imported_up = Vec::with_capacity(expected_len);
         let imported_down_total;
         let imported_up_total;
-        if state.version == ESTIMATOR_STATE_VERSION {
+        if state.version >= 3 {
             if state.samples_down.len() != expected_len || state.samples_up.len() != expected_len {
                 return Err("estimator rolling bucket arrays do not match max_poly".to_string());
             }
@@ -475,7 +600,7 @@ impl SendLatencyEstimator {
         sums_down.resize(target_poly + 1, 0);
         let mut counts_up = vec![0; target_poly + 1];
         let mut sums_up = vec![0; target_poly + 1];
-        if state.version == ESTIMATOR_STATE_VERSION {
+        if state.version >= 3 {
             // Version 3 has bucket counts only for Down for compatibility;
             // bucket Up counts are represented by the rolling windows.
             for (index, window) in imported_up.iter().enumerate() {
@@ -504,6 +629,12 @@ impl SendLatencyEstimator {
         self.warm_residual = state.warm_residual;
         self.count_residual = state.count_residual;
         self.sum_residual = state.sum_residual;
+        self.ema_residual_up = state.ema_residual_up;
+        self.warm_residual_up = state.warm_residual_up;
+        self.count_residual_up = state.count_residual_up;
+        self.sum_residual_up = state.sum_residual_up;
+        self.cold_down_windows = vec![RollingSamples::default(); target_poly + 1];
+        self.cold_up_windows = vec![RollingSamples::default(); target_poly + 1];
         Ok(())
     }
 }
@@ -541,6 +672,28 @@ mod tests {
         samples.push(2_000);
         assert_eq!(usize::from(samples.len), ROLLING_WINDOW);
         assert_eq!(samples.p95(), Some(131));
+    }
+
+    #[test]
+    fn strict_upper_tail_keeps_a_single_recent_outlier_visible() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 4_000, 1);
+        for _ in 0..32 {
+            estimator.update(ActionKind::Down, 100, 1);
+        }
+        estimator.update(ActionKind::Down, 2_000, 1);
+
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Hot)
+                .applied_us,
+            100
+        );
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true,)
+                .applied_us,
+            2_000
+        );
     }
 
     #[test]
@@ -583,6 +736,40 @@ mod tests {
         assert_eq!(restored.get_lead_us(ActionKind::Down, 2), 140);
         assert_eq!(restored.get_lead_us(ActionKind::Up, 2), 150);
         assert_eq!(restored.max_poly, 6);
+    }
+
+    #[test]
+    fn wrapped_state_round_trip_preserves_ring_order_and_future_updates() {
+        let mut source = SendLatencyEstimator::new(0.2, 4_000, 2);
+        for value in 100..139 {
+            source.update(ActionKind::Down, value, 2);
+        }
+        let json = serde_json::to_string(&source.export_state()).unwrap();
+        let mut restored = SendLatencyEstimator::new(0.2, 4_000, 2);
+        restored.import_state(&json).unwrap();
+
+        source.update(ActionKind::Down, 2_000, 2);
+        restored.update(ActionKind::Down, 2_000, 2);
+        assert_eq!(
+            source.get_lead_us(ActionKind::Down, 2),
+            restored.get_lead_us(ActionKind::Down, 2)
+        );
+        assert_eq!(
+            source.export_state().samples_down,
+            restored.export_state().samples_down
+        );
+    }
+
+    #[test]
+    fn up_residual_is_learned_separately_from_down_residual() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 4_000, 2);
+        for _ in 0..5 {
+            estimator.update(ActionKind::Up, 100, 1);
+            estimator.update_completion_error(ActionKind::Up, 300);
+        }
+        assert_eq!(estimator.residual_adjustment_us_for(ActionKind::Up), 300);
+        assert_eq!(estimator.residual_adjustment_us_for(ActionKind::Down), 0);
+        assert_eq!(estimator.get_lead_us(ActionKind::Up, 1), 400);
     }
 
     #[test]

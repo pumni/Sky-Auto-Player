@@ -1,7 +1,7 @@
-# RT Dispatch Architecture (Python oracle + native Rust worker)
+# RT Dispatch Architecture (native Rust worker + explicit Python oracle)
 
-Status: CURRENT — Rust owns the eligible native real-time sender path; Python remains the
-deterministic oracle and rollback path.
+Status: CURRENT — Rust is mandatory for the eligible real-time Win32 sender path; Python remains
+the deterministic oracle and an explicit diagnostic rollback path only.
 History: built by `archive/2026-06_rt-pipeline-extreme-optimization-plan.md`; A/B numbers in
 `perf-baselines/2026-06-baseline.md`.
 
@@ -102,7 +102,9 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 - **Deadline mapping is single-sample.** The worker samples QPC ticks once, derives logical
   elapsed time from that same sample, and maps the remaining logical interval to an absolute QPC
   target. Bookkeeping between two independent samples must not be charged as extra deadline
-  lateness.
+  lateness. The physical playback anchor is placed in the future by the initial lead plus a wake
+  guard, so an authored first note at `t=0` can dispatch at `anchor - lead` rather than being
+  forced late by the worker prologue.
 - **Chord conflict default is fidelity-first.** `drop_chord` rejects the whole authored chord;
   `strict` also terminates playback; `degraded` is an explicit legacy/diagnostic mode that may
   send a partial chord. Multiple same-timestamp Down batches are rejected by the native compiler
@@ -118,8 +120,10 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   reprobe uses a robust `median + 6 × MAD + 200 µs` candidate over its small cooperative sample,
   raises the threshold immediately, and lowers it by at most 50 µs per update. This keeps one timer
   outlier from forcing a 3 ms spin window while retaining fast protection when the timer path degrades.
-- **Cross-session lead cache:** `SendLatencyEstimator` exports/imports version-3 rolling p95
-  samples via `.cache/lead_estimator.json`; version-2 EMA caches are migrated conservatively.
+- **Cross-session lead cache:** `SendLatencyEstimator` exports/imports version-4 rolling p95
+  samples plus separate Up residual state via `.cache/lead_estimator.json`; version-2 and
+  version-3 caches are migrated conservatively. Wrapped ring windows are exported oldest-first so
+  restore preserves the next overwrite position.
   Corrupt/version-mismatched cache is silently dropped. Loaded flag is recorded in
   `runtime_options.lead_cache_loaded`.
 - **Idle-gap core warmup (Phase 1/6):** When the gap since last `SendInput` completion ≥ 20 ms, a
@@ -193,11 +197,12 @@ worker teardown.
 
 ### 5.1 Native rollout boundary
 
-The native implementation is default on only for the real Windows backend with the production
+The native implementation is required for the real Windows backend with the production
 clock/sleeper/thread mode. Dry-run, fake-clock tests, and explicit
-`SKY_USE_PYTHON_DISPATCH=1` use the Python oracle. Missing or incompatible native metadata falls
-back to Python and records a runtime warning; `SKY_REQUIRE_RUST_DISPATCH=1` is the fail-closed
-validation switch. The Python dispatcher remains available as the rollback path.
+`SKY_USE_PYTHON_DISPATCH=1` use the Python oracle. Missing or incompatible native metadata fails
+closed before playback; it never silently changes the timing engine. The selected backend is
+shown in HUD/runtime telemetry. `SKY_REQUIRE_RUST_DISPATCH=1` remains accepted for compatibility,
+but fail-closed is now the default policy.
 
 ## 6. Production defaults & kill switches
 
@@ -242,7 +247,8 @@ cleanest send tail of all runs.
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
-The Rust path reserves its retain-first record buffer before the playback epoch. The compiled
+The Rust path reserves a small initial retain-first record buffer before the playback epoch and
+grows only as records are actually accepted; the hard cap remains explicit. The compiled
 schedule uses a flat 8-byte packed `CompactIntent` arena plus small batch headers; only the current batch is
 materialized into full intent views. Runtime active/release ownership uses 15-key arrays and
 bitmasks rather than hash tables. Per-record scan/generation fields use inline storage and
@@ -251,6 +257,13 @@ available in every native run, including summary-only runs where the retain-firs
 disabled. Reason strings and JSON are materialized only after terminal join. This preserves the
 existing CSV fields and outcome strings without per-send disk I/O while making production health
 histograms available without retaining every event.
+
+The unsigned logical timeline also guards against sub-lead collapse: authored timestamps smaller
+than the requested lead are not all saturated to deadline zero. The first action uses the future
+physical startup anchor; later sub-lead actions temporarily dispatch without early lead so their
+relative ordering remains observable.
+Normal adaptive lead uses the rolling p95; native strict timing selects the clamped rolling upper
+tail and aborts after the configured repeated positive-at-cap condition.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
 engine prewarms the platform INPUT cache in two passes under the cache cap

@@ -99,7 +99,9 @@ class SendLatencyEstimator:
     [1, MAX_POLY]) so that each chord size gets its own EMA. Fallback chain for an unseeded
     bucket: nearest seeded bucket ≤ N → total down EMA → conservative prior.
 
-    Up durations use a single scalar EMA (unchanged from the original design).
+    Up durations use a single scalar EMA. Down and Up completion residuals are
+    tracked independently so a release-side scheduler/prologue bias does not
+    contaminate note-on lead.
 
     Unseeded buckets use a small polyphony-scaled prior. The prior is deliberately lower than
     normal measured send latency, but prevents the first note or chord from being dispatched at
@@ -131,18 +133,22 @@ class SendLatencyEstimator:
         "_count_down",
         "_count_down_total",
         "_count_residual",
+        "_count_residual_up",
         "_count_up",
         "_ema_down",
         "_ema_down_total",
         "_ema_residual",
+        "_ema_residual_up",
         "_ema_up",
         "_max_lead_us",
         "_sum_down",
         "_sum_down_total",
         "_sum_residual",
+        "_sum_residual_up",
         "_sum_up",
         "_warm_down",
         "_warm_residual",
+        "_warm_residual_up",
         "max_poly",
     )
 
@@ -166,6 +172,10 @@ class SendLatencyEstimator:
         self._sum_residual: int = 0
         self._ema_residual: float = 0.0
         self._warm_residual: bool = False
+        self._count_residual_up: int = 0
+        self._sum_residual_up: int = 0
+        self._ema_residual_up: float = 0.0
+        self._warm_residual_up: bool = False
 
     def update(self, kind: ActionKind, duration_us: int, n_keys: int = 1) -> None:
         if kind == "down":
@@ -201,37 +211,60 @@ class SendLatencyEstimator:
                 self._ema_up = self._alpha * duration_us + (1.0 - self._alpha) * self._ema_up
 
     def update_completion_error(self, kind: ActionKind, error_us: int) -> None:
-        """Fold residual completion error into the prologue bias EMA (downs only).
+        """Fold clean completion error into the kind-specific prologue bias EMA.
 
         ``error_us`` is ``visible_lateness_us`` after a lead was applied: positive means the
         note still completed late (prologue residual), negative means early. Spikes are
         hard-clamped so one OS hitch cannot dominate the bias.
         """
-        if kind != "down":
-            return
         sample = max(-self._MAX_RESIDUAL_US, min(self._MAX_RESIDUAL_US * 2, error_us))
-        self._count_residual += 1
-        if self._warm_residual:
-            self._ema_residual = (
-                self._alpha * sample + (1.0 - self._alpha) * self._ema_residual
-            )
+        if kind == "down":
+            count = self._count_residual
+            if self._warm_residual:
+                self._ema_residual = (
+                    self._alpha * sample + (1.0 - self._alpha) * self._ema_residual
+                )
+            else:
+                self._sum_residual += sample
+                self._count_residual += 1
+                if self._count_residual >= self._SEED_SAMPLES:
+                    self._ema_residual = self._sum_residual / self._count_residual
+                    self._warm_residual = True
+                return
+            self._count_residual = count + 1
         else:
-            self._sum_residual += sample
-            if self._count_residual >= self._SEED_SAMPLES:
-                self._ema_residual = self._sum_residual / self._count_residual
-                self._warm_residual = True
+            count = self._count_residual_up
+            if self._warm_residual_up:
+                self._ema_residual_up = (
+                    self._alpha * sample
+                    + (1.0 - self._alpha) * self._ema_residual_up
+                )
+            else:
+                self._sum_residual_up += sample
+                self._count_residual_up += 1
+                if self._count_residual_up >= self._SEED_SAMPLES:
+                    self._ema_residual_up = self._sum_residual_up / self._count_residual_up
+                    self._warm_residual_up = True
+                return
+            self._count_residual_up = count + 1
 
-    def _residual_adjustment_us(self) -> int:
+    def _residual_adjustment_us(self, kind: ActionKind = ActionKind.DOWN) -> int:
         """Return an asymmetric signed correction for the completion residual."""
-        if not self._warm_residual:
+        if kind == "down":
+            warm = self._warm_residual
+            ema = self._ema_residual
+        else:
+            warm = self._warm_residual_up
+            ema = self._ema_residual_up
+        if not warm:
             return 0
-        rounded = round(self._ema_residual)
+        rounded = round(ema)
         if rounded >= 0:
             return min(self._MAX_RESIDUAL_US, rounded)
         return round(rounded * self._EARLY_CORRECTION_DECAY)
 
     def get_lead_us(self, kind: ActionKind, n_keys: int = 1) -> int:
-        residual = self._residual_adjustment_us()
+        residual = self._residual_adjustment_us(kind)
         if kind == "down":
             n = max(1, min(self.max_poly, n_keys))
             prior = self._BASE_PRIOR_US + self._PER_KEY_PRIOR_US * (n - 1)
@@ -252,8 +285,10 @@ class SendLatencyEstimator:
         if kind == "up":
             if self._count_up < self._SEED_SAMPLES:
                 return 0
-            # Ups do not include residual prologue bias — residual is an onset (down) effect.
-            return max(0, min(self._max_lead_us, round(self._ema_up)))
+            return max(
+                0,
+                min(self._max_lead_us, max(0, round(self._ema_up) + residual)),
+            )
         return 0
 
     def export_state(self) -> dict[str, object]:
@@ -277,13 +312,17 @@ class SendLatencyEstimator:
             "warm_residual": self._warm_residual,
             "count_residual": self._count_residual,
             "sum_residual": self._sum_residual,
+            "ema_residual_up": self._ema_residual_up,
+            "warm_residual_up": self._warm_residual_up,
+            "count_residual_up": self._count_residual_up,
+            "sum_residual_up": self._sum_residual_up,
         }
 
     def import_state(self, data: dict[str, object]) -> bool:
         try:
             if not isinstance(data, dict):
                 return False
-            if data.get("version") != 2:
+            if data.get("version") not in {2, 3, 4}:
                 return False
             max_poly = data.get("max_poly", 0)
             if not isinstance(max_poly, int) or max_poly < 1 or max_poly > 32:
@@ -292,7 +331,7 @@ class SendLatencyEstimator:
             if not isinstance(ema_down, list) or len(ema_down) != max_poly + 1:
                 return False
             for v in ema_down:
-                if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 <= v <= self._max_lead_us):
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 <= v <= 60_000_000):
                     return False
             warm_down = data.get("warm_down", [])
             if not isinstance(warm_down, list) or len(warm_down) != max_poly + 1:
@@ -312,24 +351,32 @@ class SendLatencyEstimator:
                 if isinstance(v, bool) or not isinstance(v, int) or v < 0:
                     return False
             ema_down_total = data.get("ema_down_total", 0.0)
-            if isinstance(ema_down_total, bool) or not isinstance(ema_down_total, (int, float)) or not (0 <= ema_down_total <= self._max_lead_us):
+            if isinstance(ema_down_total, bool) or not isinstance(ema_down_total, (int, float)) or not (0 <= ema_down_total <= 60_000_000):
                 return False
             ema_up = data.get("ema_up", 0.0)
-            if isinstance(ema_up, bool) or not isinstance(ema_up, (int, float)) or not (0 <= ema_up <= self._max_lead_us):
+            if isinstance(ema_up, bool) or not isinstance(ema_up, (int, float)) or not (0 <= ema_up <= 60_000_000):
                 return False
             ema_residual = data.get("ema_residual", 0.0)
             if isinstance(ema_residual, bool) or not isinstance(ema_residual, (int, float)) or not (-self._MAX_RESIDUAL_US <= ema_residual <= self._MAX_RESIDUAL_US * 2):
                 return False
-            for key in ("warm_down_total", "warm_up", "warm_residual"):
+            ema_residual_up = data.get("ema_residual_up", 0.0)
+            if isinstance(ema_residual_up, bool) or not isinstance(ema_residual_up, (int, float)) or not (-self._MAX_RESIDUAL_US <= ema_residual_up <= self._MAX_RESIDUAL_US * 2):
+                return False
+            for key in ("warm_down_total", "warm_up", "warm_residual", "warm_residual_up"):
                 if not isinstance(data.get(key), bool):
+                    if key == "warm_residual_up" and key not in data:
+                        continue
                     return False
-            for key in ("count_down_total", "count_up", "count_residual"):
+            for key in ("count_down_total", "count_up", "count_residual", "count_residual_up"):
                 val = data.get(key, 0)
                 if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                     return False
-            for key in ("sum_down_total", "sum_up"):
+            for key in ("sum_down_total", "sum_up", "sum_residual_up"):
                 val = data.get(key, 0)
-                if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                if key == "sum_residual_up":
+                    if isinstance(val, bool) or not isinstance(val, int):
+                        return False
+                elif isinstance(val, bool) or not isinstance(val, int) or val < 0:
                     return False
             val = data.get("sum_residual", 0)
             if isinstance(val, bool) or not isinstance(val, int):
@@ -357,6 +404,10 @@ class SendLatencyEstimator:
             self._warm_residual = cast(bool, data["warm_residual"])
             self._count_residual = cast(int, data["count_residual"])
             self._sum_residual = cast(int, data.get("sum_residual", 0))
+            self._ema_residual_up = float(ema_residual_up)
+            self._warm_residual_up = bool(data.get("warm_residual_up", False))
+            self._count_residual_up = cast(int, data.get("count_residual_up", 0))
+            self._sum_residual_up = cast(int, data.get("sum_residual_up", 0))
             return True
         except (KeyError, TypeError, ValueError):
             return False
@@ -401,7 +452,7 @@ class PlaybackEngine:
         enable_adaptive_spin: bool = False,
         rt_priority_mode: RtPriorityMode = "auto",
         dispatch_lead_us: int = 0,
-        enable_event_wait: bool = False,
+        enable_event_wait: bool = True,
         # Default True to match the production RuntimeState default: the supervisor rebases the
         # playback anchor on the dispatch thread as the final pre-run statement, so thread-spawn
         # and MMCSS-acquisition time (~165us p50 / ~1ms p99 measured) is not charged as lateness
@@ -581,7 +632,12 @@ class PlaybackEngine:
         )
 
     def _should_use_native_dispatch(self) -> bool:
-        """Select Rust by default for the eligible real Windows sender path."""
+        """Select Rust for every eligible real Windows sender session.
+
+        The Python dispatcher remains available only through the explicit
+        diagnostic rollback switch.  Silently falling back here would make a
+        packaged run look healthy while using a different timing engine.
+        """
         from sky_music.infrastructure.backend import WinSendInputBackend
         from sky_music.orchestration.native_dispatch import (
             is_native_dispatch_available,
@@ -608,7 +664,11 @@ class PlaybackEngine:
                     "rust_dispatch_fallback_reason": reason,
                 }
             )
-            _LOGGER.warning("Rust dispatch disabled: %s", reason)
+            if native_dispatch_required():
+                raise RuntimeError(
+                    "Native Rust dispatch is required, but chord_stagger_us is non-zero. "
+                    "Disable stagger or set SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+                )
             return False
         if eligible and not is_native_dispatch_available():
             reason = "missing or incompatible native extension"
@@ -621,16 +681,12 @@ class PlaybackEngine:
                     "rust_dispatch_fallback_reason": reason,
                 }
             )
-            _LOGGER.warning(
-                "Rust dispatch unavailable (%s); falling back to Python dispatcher. "
-                "Set SKY_REQUIRE_RUST_DISPATCH=1 to fail closed.",
-                reason,
-            )
             if native_dispatch_required():
                 raise RuntimeError(
                     "Native Rust dispatch is unavailable. Reinstall the application, or set "
                     "SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
                 )
+            _LOGGER.warning("Rust dispatch unavailable (%s); diagnostic rollback is enabled.", reason)
             return False
         return eligible
 
@@ -657,6 +713,7 @@ class PlaybackEngine:
             spin_floor_us=self.spin_floor_us,
             input_path_warn_us=self.input_path_warn_us,
             enable_adaptive_lead=self.enable_adaptive_lead,
+            strict_timing=True,
             estimator_state_json=(
                 json.dumps(self.estimator.export_state())
                 if self.enable_adaptive_lead
@@ -711,6 +768,9 @@ class PlaybackEngine:
                 ),
                 "positive_residual_at_cap": snapshot.get(
                     "positive_residual_at_cap", 0
+                ),
+                "recovered_zero_progress_but_late": snapshot.get(
+                    "recovered_zero_progress_but_late", 0
                 ),
             }
         )

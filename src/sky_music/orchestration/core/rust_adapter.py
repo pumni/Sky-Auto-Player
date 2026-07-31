@@ -1,7 +1,8 @@
 """Python Adapter Bridge for Rust sky_player_rs core components.
 
 Wraps native Rust structs/functions (sky_player_rs) behind Python core protocol interfaces
-(LeadEstimator, InputBackend, etc.) with automatic fallback to pure Python when unavailable.
+(LeadEstimator, InputBackend, etc.). Real Win32 playback fails closed when the extension is
+unavailable; the pure-Python path is an explicit diagnostic rollback selected by the caller.
 """
 
 from __future__ import annotations
