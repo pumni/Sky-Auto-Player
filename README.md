@@ -31,8 +31,8 @@ debugger, or touches game files.
 
 Sky Auto Player doesn't replay a fixed macro. It schedules every note like a small performance:
 
-- **Frame-aligned chords** — chord notes arrive in the same game frame, so they ring together instead of straggling.
-- **Learns your machine's latency** — the more you play, the more it compensates for the small delay between "send" and "land", keeping notes under a thousandth of a second off the beat.
+- **Contiguous chord batches** — chord notes are submitted in one `SendInput` batch to reduce sender-side skew; when the game observes them still depends on Windows and the game's sampling loop.
+- **Learns your machine's latency** — adaptive lead reduces sender-side completion error from measurements on the current machine; telemetry reports the measured result instead of promising a universal absolute threshold.
 - **Holds keep their full duration** — long notes don't get clipped short, even when the next note is close behind.
 - **Per-song timing profiles** — fast arpeggios and slow ballads get different timing, not one global setting.
 - **A separate timing thread** — the player and the on-screen display run on separate threads, so the HUD stays smooth while notes fire on beat.

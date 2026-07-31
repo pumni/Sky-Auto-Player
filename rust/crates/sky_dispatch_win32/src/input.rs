@@ -320,6 +320,7 @@ pub fn emit_up(scan_codes: &[u16]) -> EmitResult {
 
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
+#[derive(Default)]
 pub struct TrackedKeyState {
     pub active_mask: u16,
     pub possibly_active_mask: u16,
@@ -328,20 +329,6 @@ pub struct TrackedKeyState {
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub custom_emitter: Option<CustomEmitterFn>,
-}
-
-impl Default for TrackedKeyState {
-    fn default() -> Self {
-        Self {
-            active_mask: 0,
-            possibly_active_mask: 0,
-            failed_release_mask: 0,
-            last_error: None,
-            keys_dropped: 0,
-            chord_split_events: 0,
-            custom_emitter: None,
-        }
-    }
 }
 
 impl fmt::Debug for TrackedKeyState {

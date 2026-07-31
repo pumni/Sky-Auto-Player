@@ -541,13 +541,18 @@ class RuntimeDispatchCoordinator:
         releases: tuple[PendingRelease, ...],
         sent_scan_codes: tuple[int, ...],
         skipped_scan_codes: tuple[int, ...],
-        now_us: int,
+        recovery_started_us: int,
         last_win32_error: int | None = None,
+        *,
+        retry_base_us: int | None = None,
     ) -> bool:
         """Keep failed note-offs pending until bounded recovery is required."""
         max_retries = 8
         backoff_us = (2_000, 5_000, 10_000, 20_000)
         recovery_required = False
+        retry_anchor_us = (
+            recovery_started_us if retry_base_us is None else retry_base_us
+        )
         sent = set(sent_scan_codes)
         skipped = set(skipped_scan_codes)
         for pending in releases:
@@ -564,11 +569,11 @@ class RuntimeDispatchCoordinator:
             retry = replace(
                 pending,
                 retry_count=retry_count,
-                next_retry_us=now_us + delay,
+                next_retry_us=retry_anchor_us + delay,
                 first_failure_us=(
                     pending.first_failure_us
                     if pending.first_failure_us is not None
-                    else now_us
+                    else recovery_started_us
                 ),
                 last_win32_error=(
                     last_win32_error

@@ -33,11 +33,18 @@ def test_failed_release_is_requeued_before_same_key_down() -> None:
 
     due = coordinator.pop_due_pending(1_000)
     assert len(due) == 1
-    assert not coordinator.requeue_failed_releases(due, (), (), 1_000)
-    assert coordinator.next_pending_release_us() == 3_000
+    assert not coordinator.requeue_failed_releases(
+        due,
+        (),
+        (),
+        1_000,
+        retry_base_us=1_500,
+    )
+    assert next(iter(coordinator.pending_by_generation.values())).first_failure_us == 1_000
+    assert coordinator.next_pending_release_us() == 3_500
     assert not coordinator.is_finished()
 
-    retry = coordinator.pop_due_pending(3_000)
+    retry = coordinator.pop_due_pending(3_500)
     assert len(retry) == 1
     coordinator.complete_releases(retry, (21,))
     assert coordinator.active_by_scan_code == {}

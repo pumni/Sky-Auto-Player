@@ -97,9 +97,9 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   `start_perf` (same rule as `gc.collect`), deriving
   `effective_spin_threshold = clamp(spin_floor_us, 3000, p95_wake_error + 200)` µs (default
   `spin_floor_us = 700`, cap 3000 µs). The probe also retains p50/p99/max diagnostics. A later
-  reprobe raises the threshold immediately and lowers it by at most 50 µs per update, preventing
-  one timer outlier from permanently forcing a 3 ms spin window while retaining fast protection
-  when the timer path degrades.
+  reprobe uses a robust `median + 6 × MAD + 200 µs` candidate over its small cooperative sample,
+  raises the threshold immediately, and lowers it by at most 50 µs per update. This keeps one timer
+  outlier from forcing a 3 ms spin window while retaining fast protection when the timer path degrades.
 - **Cross-session EMA lead cache (Phase D):** `SendLatencyEstimator` exports/imports per-kind
   EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
   warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
@@ -112,8 +112,8 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   since the last reprobe, the dispatch thread starts an eight-sample cooperative attempt. It takes
   at most one 2 ms sample per outer wait iteration and services command/focus state between
   samples; pause, focus, stop, or an unsafe deadline discards the partial attempt. A candidate is
-  committed only after all eight samples using `p95 + 200 µs`, floor/cap and asymmetric
-  hysteresis. Kill switch: `enable_spin_reprobe`
+  committed only after all eight samples using robust `median + 6 × MAD + 200 µs`, floor/cap and
+  asymmetric hysteresis. Kill switch: `enable_spin_reprobe`
   (auto-off when `enable_adaptive_spin = False`). Applied thresholds are recorded in
   `runtime_options.reprobe_applied_thresholds`.
 
@@ -248,3 +248,11 @@ build duration, and entries/slots cleared at teardown — meaningful as admissio
 diagnostics. The counters remain diagnostic only; they do not impose a payload
 budget or change cache representation. Working-set and RSS claims remain
 benchmark evidence, not an inference from cache-entry or `gc.collect()` counts.
+
+**Windows acceptance benchmark.** Run `scripts/bench_native_acceptance.py` on the
+baseline and follow-up revisions with the same `--actions`, `--repeats`, power state,
+priority mode, and background-load conditions. The report must retain sender-side
+completion-error p50/p95/p99/max, spin CPU time, peak RSS, command-interrupt latency,
+drop/release counters, and outcome. This mock-backend harness does not measure game
+sampling, frame observation, audio onset, or real `SendInput` delivery; those remain
+separate Windows test-window evidence gates.

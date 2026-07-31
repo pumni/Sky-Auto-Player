@@ -22,6 +22,11 @@ pub struct WakeErrorStats {
     pub p95_us: u64,
     pub p99_us: u64,
     pub max_us: u64,
+    /// Robust periodic-reprobe estimate: median + 6 * MAD.
+    ///
+    /// This is separate from p95/p99 telemetry so a small periodic sample
+    /// cannot let one scheduler outlier expand the spin window to its cap.
+    pub robust_us: u64,
 }
 
 pub struct HybridWaiter {
@@ -189,8 +194,31 @@ impl HybridWaiter {
             p95_us: percentile(95),
             p99_us: percentile(99),
             max_us: *errors.last().unwrap_or(&0),
+            robust_us: robust_wake_error_us(&errors),
         })
     }
+}
+
+fn median_sorted(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        values[middle - 1].saturating_add(values[middle]) / 2
+    } else {
+        values[middle]
+    }
+}
+
+fn robust_wake_error_us(sorted_errors: &[u64]) -> u64 {
+    let median = median_sorted(sorted_errors);
+    let mut deviations: Vec<u64> = sorted_errors
+        .iter()
+        .map(|value| value.abs_diff(median))
+        .collect();
+    deviations.sort_unstable();
+    median.saturating_add(median_sorted(&deviations).saturating_mul(6))
 }
 
 impl Default for HybridWaiter {
@@ -201,7 +229,7 @@ impl Default for HybridWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{HybridWaiter, WaitOutcome};
+    use super::{HybridWaiter, WaitOutcome, robust_wake_error_us};
     use crate::clock::qpc_now_us;
     use crate::event::OwnedEvent;
 
@@ -220,5 +248,13 @@ mod tests {
     fn disabled_waitable_timer_reports_explicit_fallback() {
         let waiter = HybridWaiter::with_options(false, true);
         assert_eq!(waiter.mode(), "event+timer_resolution_fallback");
+    }
+
+    #[test]
+    fn robust_wake_error_ignores_one_periodic_outlier() {
+        let mut errors = vec![300; 7];
+        errors.push(1_500);
+        errors.sort_unstable();
+        assert_eq!(robust_wake_error_us(&errors), 300);
     }
 }

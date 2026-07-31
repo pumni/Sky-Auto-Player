@@ -89,6 +89,12 @@ def test_reprobe_runs_and_records_telemetry() -> None:
     assert len(loop._reprobe_applied_thresholds) == 1
 
 
+def test_single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() -> None:
+    loop, _sleeper = _make_loop_for_reprobe()
+    candidate = loop._reprobe_candidate([300, 300, 300, 300, 300, 300, 300, 1_500])
+    assert candidate == 700
+
+
 def test_reprobe_second_within_interval_guard_prevents() -> None:
     """Second reprobe within REPROBE_MIN_INTERVAL_US is blocked by the guard."""
     loop, sleeper = _make_loop_for_reprobe()

@@ -44,7 +44,7 @@ CORE_WARMUP_SPIN_MAX_US = 500
 # Phase H: Mid-song spin re-probe constants.
 REPROBE_MIN_GAP_US = 500_000          # next deadline at least 0.5 s away
 REPROBE_MIN_INTERVAL_US = 30_000_000  # at most once per 30 s of elapsed time
-REPROBE_SAMPLES = 8                   # shorter than the 30-sample pre-play probe
+REPROBE_SAMPLES = 8                   # robust MAD estimator makes this small window safe
 REPROBE_SLEEP_S = 0.002              # 2 ms sleeps (same as pre-play)
 REPROBE_HYSTERESIS_US = 50            # ignore changes smaller than this
 
@@ -851,8 +851,9 @@ class DispatchLoop:
                 releases,
                 result.sent_scan_codes,
                 result.skipped_scan_codes,
-                state.get_elapsed_us(self.clock),
+                result.actual_us,
                 result.last_win32_error,
+                retry_base_us=result.dispatch_completed_us,
             )
             self.coordinator.complete_releases(
                 releases,
@@ -930,8 +931,9 @@ class DispatchLoop:
             releases,
             result.sent_scan_codes,
             result.skipped_scan_codes,
-            state.get_elapsed_us(self.clock),
+            result.actual_us,
             result.last_win32_error,
+            retry_base_us=result.dispatch_completed_us,
         )
         self.coordinator.complete_releases(
             releases,
@@ -1182,7 +1184,8 @@ class DispatchLoop:
         Compatibility helper for a caller that explicitly requests a complete
         attempt. Production playback uses the cooperative state machine below:
         one sample per outer wait iteration, with command/focus service between
-        samples. The candidate uses p95 + 200 and retains the raw samples in telemetry.
+        samples. The candidate uses median + 6 * MAD + 200 so one wake outlier
+        cannot expand the spin window to its cap.
         """
         wake_errors: list[int] = []
         for _ in range(REPROBE_SAMPLES):
@@ -1207,8 +1210,19 @@ class DispatchLoop:
         if not wake_errors:
             return self.spin_threshold_us
         ordered = sorted(wake_errors)
-        p95_index = max(0, min(len(ordered) - 1, (len(ordered) * 95 + 99) // 100 - 1))
-        return max(self._spin_floor_us, min(3_000, ordered[p95_index] + 200))
+        middle = len(ordered) // 2
+        if len(ordered) % 2 == 0:
+            median = (ordered[middle - 1] + ordered[middle]) // 2
+        else:
+            median = ordered[middle]
+        deviations = sorted(abs(value - median) for value in ordered)
+        deviation_middle = len(deviations) // 2
+        if len(deviations) % 2 == 0:
+            mad = (deviations[deviation_middle - 1] + deviations[deviation_middle]) // 2
+        else:
+            mad = deviations[deviation_middle]
+        robust_error = median + 6 * mad
+        return max(self._spin_floor_us, min(3_000, robust_error + 200))
 
     def _discard_mid_song_reprobe(self) -> None:
         self._reprobe_active = False

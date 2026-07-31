@@ -951,6 +951,7 @@ fn run_worker(
                     &due_pending,
                     &result.sent,
                     &result.skipped_duplicates,
+                    actual_us,
                     completed_effective,
                     result.last_win32_error,
                 );
@@ -1447,7 +1448,7 @@ fn run_worker(
                         if let Some(stats) = waiter.probe_wake_error_stats(interrupt, 8) {
                             publish_wake_error_stats(stats, metrics);
                             let candidate =
-                                derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
+                                derive_spin_threshold_us(stats.robust_us, config.spin_floor_us);
                             let adjusted =
                                 adjust_spin_threshold(effective_spin_threshold_us, candidate);
                             if adjusted != effective_spin_threshold_us {
@@ -1781,9 +1782,9 @@ fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_PATH_WINDOW_CAPACITY, WorkerCommand, adjust_spin_threshold, drain_commands,
-        focus_gate_matches, record_input_path_health, release_runtime_outcome,
-        update_estimator_after_send,
+        INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
+        derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
+        release_runtime_outcome, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
@@ -1889,6 +1890,18 @@ mod tests {
         assert_eq!(adjust_spin_threshold(700, 1_000), 1_000);
         assert_eq!(adjust_spin_threshold(1_000, 700), 950);
         assert_eq!(adjust_spin_threshold(1_000, 100), 950);
+    }
+
+    #[test]
+    fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
+        let stats = WakeErrorStats {
+            p50_us: 300,
+            p95_us: 1_500,
+            p99_us: 1_500,
+            max_us: 1_500,
+            robust_us: 300,
+        };
+        assert_eq!(derive_spin_threshold_us(stats.robust_us, 700), 700);
     }
 
     #[test]

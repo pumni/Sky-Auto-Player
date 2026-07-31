@@ -91,12 +91,12 @@ fn strict_scan_codes(
                 "{field} contains duplicate scan code {scan_code}"
             )));
         }
-        if let Some(allowed) = allowed {
-            if !allowed.contains(&scan_code) {
-                return Err(PyValueError::new_err(format!(
-                    "{item_field} scan code {scan_code} is outside the prepared allowlist"
-                )));
-            }
+        if let Some(allowed) = allowed
+            && !allowed.contains(&scan_code)
+        {
+            return Err(PyValueError::new_err(format!(
+                "{item_field} scan code {scan_code} is outside the prepared allowlist"
+            )));
         }
         seen.push(scan_code);
         result.push(scan_code);

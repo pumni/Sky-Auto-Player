@@ -124,7 +124,7 @@ mod tests {
 
         let due = coordinator.pop_due_pending(1_000, 0);
         assert_eq!(due.len(), 1);
-        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, Some(5)));
+        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, 1_000, Some(5),));
         assert_eq!(coordinator.next_pending_release_us(0), Some(3_000));
         assert!(!coordinator.is_finished());
 
@@ -181,7 +181,7 @@ mod tests {
             .expect("up is due");
         let _ = coordinator.request_releases(&up.intents);
         let due = coordinator.pop_due_pending(1_000, 0);
-        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, Some(5)));
+        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, 1_000, Some(5),));
 
         assert!(coordinator.pop_next_due_authored(2_000, 0).is_none());
         assert_eq!(coordinator.next_deadline_us(0, 0), Some(3_000));
@@ -198,6 +198,58 @@ mod tests {
         let (playable, conflicts) = coordinator.split_down_intents(&next_down.intents);
         assert_eq!(playable.len(), 1);
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn blocked_authored_deadline_includes_recovery_offset_when_lead_is_enabled() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "down-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "down-2".to_string(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("first down is due");
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, 10);
+        let (up, _) = coordinator
+            .pop_next_due_authored(1_000, 0)
+            .expect("release is due");
+        let _ = coordinator.request_releases(&up.intents);
+        let due = coordinator.pop_due_pending(1_000, 0);
+        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, 1_500, Some(5),));
+        assert_eq!(coordinator.next_pending_release_us(0), Some(3_500));
+
+        let retry = coordinator.pop_due_pending(3_500, 0);
+        coordinator.complete_releases(&retry, &[0x15], &[]);
+        assert_eq!(coordinator.finish_release_recovery(3_500), Some(2_500));
+
+        // Key 0x16 remains active, so the next chord cannot be early-popped.
+        // Its blocked deadline must still use the effective timeline offset.
+        assert_eq!(coordinator.next_authored_us(100), Some(4_500));
     }
 }
 
@@ -327,7 +379,7 @@ impl RuntimeDispatchCoordinator {
         let batch = &self.schedule.batches[self.cursor];
         let lead = dispatch_lead_us;
         if lead > 0 && self.early_pop_blocked(batch) {
-            return Some(batch.scheduled_us);
+            return Some(batch.scheduled_us.saturating_add(self.recovery_offset_us));
         }
         Some(
             batch
@@ -701,12 +753,17 @@ impl RuntimeDispatchCoordinator {
     /// stream. The active generation remains owned by the coordinator while
     /// bounded retries are pending; callers must stop playback and perform
     /// full-instrument recovery when this returns `true`.
+    ///
+    /// `recovery_started_us` is sampled immediately before the failed backend
+    /// call. `retry_base_us` is sampled from backend completion and is used
+    /// only to schedule the next retry after the call has returned.
     pub fn requeue_failed_releases(
         &mut self,
         releases: &[PendingRelease],
         sent_scan_codes: &[u16],
         skipped_scan_codes: &[u16],
-        now_us: u64,
+        recovery_started_us: u64,
+        retry_base_us: u64,
         last_win32_error: Option<u32>,
     ) -> bool {
         let mut recovery_required = false;
@@ -731,10 +788,12 @@ impl RuntimeDispatchCoordinator {
             let delay_index =
                 usize::from(retry_count.saturating_sub(1)).min(RELEASE_RETRY_BACKOFF_US.len() - 1);
             let mut retry = pending.clone();
-            self.release_recovery_started_us.get_or_insert(now_us);
+            self.release_recovery_started_us
+                .get_or_insert(recovery_started_us);
             retry.retry_count = retry_count;
-            retry.next_retry_us = now_us.saturating_add(RELEASE_RETRY_BACKOFF_US[delay_index]);
-            retry.first_failure_us = Some(pending.first_failure_us.unwrap_or(now_us));
+            retry.next_retry_us =
+                retry_base_us.saturating_add(RELEASE_RETRY_BACKOFF_US[delay_index]);
+            retry.first_failure_us = Some(pending.first_failure_us.unwrap_or(recovery_started_us));
             retry.last_win32_error = last_win32_error.or(pending.last_win32_error);
             let retry_slot = retry.key_slot;
             self.pending_mask |= Self::bit_for_slot(retry_slot);
