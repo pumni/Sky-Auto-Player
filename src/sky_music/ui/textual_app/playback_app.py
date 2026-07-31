@@ -123,6 +123,7 @@ class SnapshotRenderer:
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
+        dispatch_backend: str = "auto",
     ) -> None:
         with self._lock:
             self.snapshot = PlaybackSnapshot(
