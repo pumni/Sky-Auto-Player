@@ -580,43 +580,29 @@ def test_native_dispatch_rejects_bool_for_runtime_integer_arguments() -> None:
 
 
 def test_native_dispatch_strict_conflict_is_contained_and_reported() -> None:
-    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
-        [
-            (0, "down", 0, [0x15], "first"),
-            (1, "down", 1_000, [0x15], "overlap"),
-        ],
-        [0x15],
-        mock_backend=True,
-        same_key_conflict_policy="strict",
-    )
-    session.start()
-    assert session.join() is True
-    snapshot = cast(dict[str, Any], session.snapshot())
-    assert snapshot["status"] == "error"
-    assert snapshot["outcome"] == "error"
-    assert "same-key conflict" in snapshot["terminal_error"]
-    assert snapshot["active_count"] == 0
-    assert snapshot["abort_counts_by_reason"] == {"error": 1}
-    assert len(snapshot["release_outcome"]["attempted"]) == 15
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+            [
+                (0, "down", 0, [0x15], "first"),
+                (1, "down", 1_000, [0x15], "overlap"),
+            ],
+            [0x15],
+            mock_backend=True,
+            same_key_conflict_policy="strict",
+        )
 
 
 def test_native_strict_timing_overrides_default_drop_chord_policy() -> None:
-    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
-        [
-            (0, "down", 0, [0x15], "first"),
-            (1, "down", 1_000, [0x15], "overlap"),
-        ],
-        [0x15],
-        mock_backend=True,
-        strict_timing=True,
-    )
-    session.start()
-    assert session.join() is True
-
-    snapshot = cast(dict[str, Any], session.snapshot())
-    assert snapshot["status"] == "error"
-    assert snapshot["outcome"] == "error"
-    assert "same-key conflict" in snapshot["terminal_error"]
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+            [
+                (0, "down", 0, [0x15], "first"),
+                (1, "down", 1_000, [0x15], "overlap"),
+            ],
+            [0x15],
+            mock_backend=True,
+            strict_timing=True,
+        )
 
 
 def test_native_strict_down_completion_slo_rejects_clean_late_send() -> None:

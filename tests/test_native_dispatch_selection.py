@@ -112,8 +112,8 @@ def test_native_dispatch_rejects_stale_build_id(monkeypatch) -> None:
         "sky_player_rs",
         SimpleNamespace(
             build_info=lambda: {
-                "schema_version": 1,
-                "native_schema_version": 1,
+                "schema_version": 2,
+                "native_schema_version": 2,
                 "native_abi": "cp314t-win_amd64",
                 "native_build_commit": "old-commit",
                 "native_source_fingerprint": "fingerprint",
@@ -135,8 +135,8 @@ def test_native_dispatch_accepts_exact_build_id_and_abi(monkeypatch) -> None:
         "sky_player_rs",
         SimpleNamespace(
             build_info=lambda: {
-                "schema_version": 1,
-                "native_schema_version": 1,
+                "schema_version": 2,
+                "native_schema_version": 2,
                 "native_abi": "cp314t-win_amd64",
                 "native_build_commit": "new-commit",
                 "native_source_fingerprint": "fingerprint",

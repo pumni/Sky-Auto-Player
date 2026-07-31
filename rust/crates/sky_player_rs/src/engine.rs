@@ -3,6 +3,7 @@
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
+use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
@@ -964,7 +965,7 @@ fn run_worker(
             .expect("estimator state was validated during prepare");
     }
     let telemetry_reason_table = config.schedule.reason_table.clone();
-    let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us);
+    let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, |us| TimelineTicks(qpc_us_to_ticks(us)));
     metrics
         .total_us
         .store(coordinator.effective_total_us(), Ordering::Relaxed);
@@ -1032,7 +1033,7 @@ fn run_worker(
     let startup_anchor_us = qpc_now_us()
         .saturating_add(startup_guard_us)
         .saturating_add(startup_lead_us);
-    let mut clock_state = PlaybackClockState::new(startup_anchor_us, 0);
+    let mut clock_state = PlaybackClockState::new(QpcTicks(qpc_us_to_ticks(startup_anchor_us)), sky_dispatch_core::time::DurationTicks(0));
     let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
     let mut force_full_cleanup = false;
@@ -1090,7 +1091,7 @@ fn run_worker(
                     let _ = backend.release_all();
                     coordinator.cancel_all();
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    clock_state.enter_pause("focus", now_us);
+                    clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
                     publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
             } else if clock_state.has_pause_reason("focus") {
@@ -1105,7 +1106,7 @@ fn run_worker(
                     // included in the focus pause rather than lost from the
                     // playback clock.
                     let resumed_us = qpc_now_us();
-                    let _ = clock_state.exit_pause("focus", resumed_us);
+                    let _ = clock_state.exit_pause("focus", QpcTicks(qpc_us_to_ticks(resumed_us)));
                     focus_restore_started_us = None;
                     publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
@@ -1118,9 +1119,9 @@ fn run_worker(
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
-                clock_state.enter_pause("manual", now_us);
+                clock_state.enter_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
-                let _ = clock_state.exit_pause("manual", now_us);
+                let _ = clock_state.exit_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
             }
 
             let paused = clock_state.is_paused();
@@ -1151,7 +1152,7 @@ fn run_worker(
                 let target_qpc = anchored_dispatch_target_ticks(
                     target_sample_ticks,
                     target_sample_qpc_us,
-                    clock_state.epoch_us,
+                    qpc_ticks_to_us(clock_state.epoch),
                     startup_scheduled_us,
                     startup_lead_us,
                 );
@@ -1190,7 +1191,8 @@ fn run_worker(
                 now_us = qpc_now_us();
             }
 
-            let effective_now_us = clock_state.get_elapsed_us(now_us);
+            let effective_now_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us))).0);
+            let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.0));
             metrics
                 .elapsed_us
                 .store(effective_now_us, Ordering::Relaxed);
@@ -1219,9 +1221,10 @@ fn run_worker(
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
                 let started_us = qpc_now_us();
-                let actual_us = clock_state.get_elapsed_us(started_us);
+                let actual_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(started_us))).0));
                 let result = backend.key_up(&scan_codes);
-                let completed_effective = clock_state.get_elapsed_us(result.send_completed_us);
+                let completed_effective_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(result.send_completed_us))).0);
+                let completed_effective = qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
                 last_send_qpc_us = Some(result.send_completed_us);
                 let recovery_required = coordinator.requeue_failed_releases(
                     &due_pending,
@@ -1468,7 +1471,7 @@ fn run_worker(
                         coordinator.drop_expired_downs(&batch.intents);
                         let _ = backend.release_all();
                         coordinator.cancel_all();
-                        clock_state.enter_pause("focus", now_us);
+                        clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
                         focus_restore_started_us = None;
                         telemetry.push(|| NativeTelemetryRecord {
                             event_index: batch.source_action_index,
@@ -1645,16 +1648,49 @@ fn run_worker(
                         let scan_codes: SmallVec<[u16; 15]> =
                             playable.iter().map(|intent| intent.scan_code).collect();
                         let started_us = qpc_now_us();
-                        let actual_us = clock_state.get_elapsed_us(started_us);
+                        let actual_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(started_us))).0));
                         let result = backend.key_down(&scan_codes);
+
+                        let (
+                            result_completed_us,
+                            result_sent,
+                            result_skipped_duplicates,
+                            result_send_attempts,
+                            result_zero_progress_retries,
+                            result_retried_after_zero_progress,
+                            result_chord_integrity_lost,
+                            result_first_win32_error,
+                            result_last_win32_error,
+                            result_success,
+                        ) = match &result {
+                            sky_dispatch_win32::input::DownSendOutcome::Complete {
+                                completed_us, sent, skipped_duplicates, send_attempts, zero_progress_retries, retried_after_zero_progress
+                            } => (
+                                *completed_us, sent.clone(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *retried_after_zero_progress, false, None, None, true
+                            ),
+                            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
+                                completed_us, skipped_duplicates, send_attempts, zero_progress_retries, first_error, last_error, ..
+                            } => (
+                                *completed_us, smallvec::SmallVec::<[u16; 15]>::new(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *zero_progress_retries > 0, false, *first_error, *last_error, false
+                            ),
+                            sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
+                                completed_us, sent, skipped_duplicates, send_attempts, zero_progress_retries, first_error, last_error, ..
+                            } => (
+                                *completed_us, sent.clone(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *zero_progress_retries > 0, true, *first_error, *last_error, false
+                            ),
+                        };
+
+                        let completed_effective_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(result_completed_us))).0);
                         let completed_effective =
-                            clock_state.get_elapsed_us(result.send_completed_us);
-                        last_send_qpc_us = Some(result.send_completed_us);
+                            qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
+                        last_send_qpc_us = Some(result_completed_us);
                         coordinator.activate_sent_downs(
                             &playable,
-                            &result.sent,
+                            &result_sent,
                             actual_us,
+                            effective_now_ticks,
                             completed_effective,
+                            completed_effective_ticks,
                         );
                         let completion_error_us =
                             signed_delta(completed_effective, batch.scheduled_us);
@@ -1663,12 +1699,12 @@ fn run_worker(
                             .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US)
                             .min(i64::MAX as u64)
                             as i64;
-                        let clean_down_sample = result.success
-                            && result.sent.len() == playable.len()
-                            && result.skipped_duplicates.is_empty()
-                            && result.send_attempts == 1
-                            && !result.chord_integrity_lost;
-                        let recovered_retry_late = result.retried_after_zero_progress
+                        let clean_down_sample = result_success
+                            && result_sent.len() == playable.len()
+                            && result_skipped_duplicates.is_empty()
+                            && result_send_attempts == 1
+                            && !result_chord_integrity_lost;
+                        let recovered_retry_late = result_retried_after_zero_progress
                             && completion_error_us > retry_late_threshold_us;
                         let retry_late_abort = config.strict_timing && recovered_retry_late;
                         let strict_down_completion_late = config.strict_timing
@@ -1692,8 +1728,8 @@ fn run_worker(
                             update_estimator_after_send_class(
                                 &mut estimator,
                                 ActionKind::Down,
-                                result.send_completed_us.saturating_sub(started_us),
-                                result.sent.len(),
+                                result_completed_us.saturating_sub(started_us),
+                                result_sent.len(),
                                 playable.len(),
                                 lead_down,
                                 completion_error_us,
@@ -1715,18 +1751,17 @@ fn run_worker(
                                 batch.scheduled_us,
                             ),
                             send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
-                            send_duration_pure_us: result
-                                .send_completed_us
+                            send_duration_pure_us: result_completed_us
                                 .saturating_sub(started_us),
                             bookkeeping_us: bookkeeping_completed_us
-                                .saturating_sub(result.send_completed_us),
+                                .saturating_sub(result_completed_us),
                             dispatch_lateness_us: signed_delta(actual_us, batch.scheduled_us)
                                 .saturating_add(
-                                    result.send_completed_us.saturating_sub(started_us) as i64,
+                                    result_completed_us.saturating_sub(started_us) as i64,
                                 ),
                             scan_codes: scan_codes.clone(),
-                            sent_scan_codes: result.sent.clone(),
-                            skipped_scan_codes: result.skipped_duplicates.clone(),
+                            sent_scan_codes: result_sent.clone(),
+                            skipped_scan_codes: result_skipped_duplicates.clone(),
                             generation_ids: playable
                                 .iter()
                                 .filter_map(|intent| intent.generation_id)
@@ -1735,9 +1770,9 @@ fn run_worker(
                                 "recovered_zero_progress_but_late"
                             } else if strict_down_completion_late {
                                 "strict_completion_slo_exceeded"
-                            } else if result.chord_integrity_lost {
+                            } else if result_chord_integrity_lost {
                                 "chord_integrity_lost"
-                            } else if result.sent.len() == scan_codes.len() {
+                            } else if result_sent.len() == scan_codes.len() {
                                 "sent"
                             } else {
                                 "partial_note_on"
@@ -1748,10 +1783,10 @@ fn run_worker(
                             reason_id: batch.reason_id,
                             reason: None,
                             applied_lead_us: lead_down,
-                            first_win32_error: result.first_win32_error,
-                            last_win32_error: result.last_win32_error,
-                            send_attempts: result.send_attempts,
-                            zero_progress_retries: result.zero_progress_retries,
+                            first_win32_error: result_first_win32_error,
+                            last_win32_error: result_last_win32_error,
+                            send_attempts: result_send_attempts,
+                            zero_progress_retries: result_zero_progress_retries,
                         });
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
@@ -1772,7 +1807,7 @@ fn run_worker(
                             &metrics.input_path_degraded,
                         );
                         record_input_path_health(
-                            result.send_completed_us.saturating_sub(started_us),
+                            result_completed_us.saturating_sub(started_us),
                             completed_effective,
                             config.input_path_warn_us,
                             &mut send_pure_window,
@@ -1781,7 +1816,7 @@ fn run_worker(
                             &metrics.sendinput_path_degraded,
                         );
                         record_input_path_health(
-                            bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                            bookkeeping_completed_us.saturating_sub(result_completed_us),
                             completed_effective,
                             config.input_path_warn_us,
                             &mut bookkeeping_window,
@@ -1796,7 +1831,7 @@ fn run_worker(
                             metrics,
                             latency_tx,
                         );
-                        if result.chord_integrity_lost {
+                        if result_chord_integrity_lost {
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "SendInput split authored chord at action {}",
@@ -1916,7 +1951,7 @@ fn run_worker(
                 // late by the whole A->B overhead interval.
                 let target_sample_ticks = qpc_now_ticks();
                 let target_sample_elapsed_us =
-                    clock_state.get_elapsed_us(qpc_ticks_to_us(target_sample_ticks));
+                    qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_ticks_to_us(target_sample_ticks)))).0));
                 if deadline_us > target_sample_elapsed_us {
                     let remaining_us = deadline_us - target_sample_elapsed_us;
                     if config.enable_adaptive_spin
@@ -1943,7 +1978,7 @@ fn run_worker(
                     let target_qpc = deadline_target_ticks_from_anchor(
                         target_sample_ticks,
                         qpc_ticks_to_us(target_sample_ticks),
-                        clock_state.epoch_us,
+                        qpc_ticks_to_us(clock_state.epoch),
                         deadline_us,
                     );
                     let cold_warmup_us = if last_send_qpc_us.is_none_or(|last| {
@@ -1969,7 +2004,7 @@ fn run_worker(
                         .spin_time_us
                         .fetch_add(wait_result.spin_us, Ordering::Relaxed);
                     pending_pre_send_spin_us = wait_result.spin_us;
-                    let wake_elapsed_us = clock_state.get_elapsed_us(qpc_now_us());
+                    let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_now_us()))).0));
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
                             metrics.wait_target_error_us.fetch_max(

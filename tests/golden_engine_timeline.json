@@ -23,22 +23,6 @@
     {
       "kind": "down",
       "scan_codes": [
-        21
-      ],
-      "started_us": 30000,
-      "completed_us": 30100
-    },
-    {
-      "kind": "up",
-      "scan_codes": [
-        21
-      ],
-      "started_us": 40100,
-      "completed_us": 40200
-    },
-    {
-      "kind": "down",
-      "scan_codes": [
         22
       ],
       "started_us": 50000,
@@ -93,6 +77,14 @@
       "completed_us": 350300
     },
     {
+      "kind": "up",
+      "scan_codes": [
+        21
+      ],
+      "started_us": 360300,
+      "completed_us": 360400
+    },
+    {
       "kind": "down",
       "scan_codes": [
         22
@@ -107,14 +99,6 @@
       ],
       "started_us": 435100,
       "completed_us": 435200
-    },
-    {
-      "kind": "release_all",
-      "scan_codes": [
-        21
-      ],
-      "started_us": 435200,
-      "completed_us": 435300
     }
   ],
   "generation_status_counts": {
@@ -122,9 +106,9 @@
     "active": 0,
     "release_pending": 0,
     "released": 8,
-    "dropped_conflict": 1,
+    "dropped_conflict": 0,
     "dropped_backend": 0,
     "dropped_expired": 0,
-    "cancelled": 1
+    "cancelled": 0
   }
 }

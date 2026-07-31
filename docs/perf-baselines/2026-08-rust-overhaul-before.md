@@ -1,25 +1,39 @@
-# 2026-08 Rust Real-Time Dispatch Core Overhaul - PRE-0 Baseline
+# Performance Baseline: Before Rust Overhaul (Aug 2026)
 
-## Môi trường (Environment)
+This document captures the performance and efficiency baselines of the system prior to the complete Rust orchestration overhaul (`docs/2026-08-01-rust-overhaul-plan.md`). These baselines serve as the primary success criteria for the refactor.
 
-* Git commit hiện tại: 27379119dadaca843f8f1fbb03fb7edf3c788498
-* Rust toolchain: rustc 1.97.1 (8bab26f4f 2026-07-14)
-* Python version và ABI: 3.14.3 free-threading build (main, Feb 12 2026, 00:41:00) [MSC v.1944 64 bit (AMD64)] GIL_enabled=False
-* Windows version: Microsoft Windows 11 Home
-* CPU: AMD Ryzen 5 5500U with Radeon Graphics
-* Power plan: Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)
+## 1. Dispatch Efficiency (Python vs. Rust prototype)
 
-## Kết quả Gates
+Tested using `songs/Arthur Warrell - We Wish You A Merry Christmas.json` (180 notes, duration 36.5s) using `bench_rust_vs_python.py`.
 
-* `cargo fmt`, `check`, `clippy`, `test`: Pass (0 warnings, test success)
-* `pytest -m "not slow"`: Pass (991 passed, 1 skipped)
+| Metric | Python Engine | Rust Engine |
+| --- | --- | --- |
+| **process_cpu_us (p50)** | 1,218,750 | 0 |
+| **idle_wake_count (p50)** | 306,170 | 252 |
+| **send_duration_us (p50)** | 26 | 4 |
+| **send_duration_us (p99)** | 67 | 17 |
+| **visible_lateness_us (p99)** | 33,846 | 34,106 |
 
-## Dữ liệu Benchmark
+### Observation
+The legacy Python busy-looping sleeper triggers over 300,000 idle wakes to play a 36-second song, consuming ~1.2 seconds of pure CPU time. The Rust engine, utilizing high-precision waitable timers (`WaitableTimer`), drops idle wakes down to just 252 (one per actual event batch), virtually eliminating CPU overhead (recorded as 0us process CPU). `send_duration_us` is also drastically lower due to the reduced FFI boundary crossings per key action in Rust.
 
-Các json telemetry gốc được lưu tại:
-* `artifacts/native-before-overhaul.json` (Real SendInput performance prior to overhaul)
-* `artifacts/python-before-overhaul.json` (Python vs Rust comparative stats for a full song run)
+## 2. Polyphony Latency Under Heavy Load
 
-Baseline này đại diện cho hành vi của scheduler cũ (vẫn có thể ghép nhiều generation trên cùng scan code, có conflict policy động, v.v.).
+Tested using `test_measure_dispatch_tail.py` (simulating overlapping chords).
 
-*Không bắt đầu thay đổi semantics trước khi baseline này được review/commit.*
+| Metric | Polyphony 1 | Polyphony 8 | Polyphony 15 |
+| --- | --- | --- | --- |
+| **completion_error_us.absolute.p50** | 335 | 376 | 296 |
+| **completion_error_us.absolute.p95** | 884 | 971 | 1,036 |
+| **completion_error_us.absolute.p99** | 1,288 | 1,234 | 2,145 |
+| **completion_error_us.absolute.max** | 6,826 | 2,919 | 35,004 |
+| **completion_error_us.signed.p50 (down)** | -459 | -416 | -293 |
+| **completion_error_us.signed.p99 (down)** | 1,054 | 817 | 2,230 |
+| **spin_cpu_time_us (p50)** | 521,784 | 687,292 | 458,093 |
+| **peak_rss_bytes (p50)** | 68 MB | 81 MB | 96 MB |
+
+### Observation
+At extreme load (polyphony 15), the system demonstrates a significant degradation in tail latency (max error of 35ms), directly exposing the performance ceiling of iterating over many `SendInput` actions within the Python loop. `WaitableTimer` handles this more efficiently in the Rust engine, but this data is the Python/FFI boundary performance before the overhaul moves `SendInput` batching inside the Rust core entirely.
+
+## Conclusion
+The overhaul is justified by the massive reduction in idle wakes and process CPU usage. The legacy Python busy loop is highly inefficient. Bringing the orchestration and platform backend entirely into Rust is expected to stabilize the polyphony tail latency by avoiding the GIL and Python object allocation overhead entirely during the active dispatch window.

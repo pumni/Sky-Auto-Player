@@ -46,7 +46,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
 
     row = logger.records[0]._materialize()
     assert row["dispatch_id"] == 7
-    assert row["evidence_scope"] == "sendinput_side"
+    assert row["evidence_scope"] == "sender_completion"
     assert row["send_duration_pure_us"] == 10
     assert row["bookkeeping_us"] == 2
     assert row["generation_ids"] == "1"

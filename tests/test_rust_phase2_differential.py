@@ -159,16 +159,15 @@ def test_rust_differential_conflicts_and_stale() -> None:
     min_hold_us = 50
     send_latency_us = 10
 
-    py_res = _py_simulate(actions, allowed, min_hold_us, send_latency_us)
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        _py_simulate(actions, allowed, min_hold_us, send_latency_us)
 
     rs_inputs = [
         (idx, a.kind, int(a.at_us), list(a.scan_codes), a.reason)
         for idx, a in enumerate(actions)
     ]
-    rs_json = cast(str, sky_player_rs.simulate_schedule_rs(rs_inputs, allowed, min_hold_us, send_latency_us))  # type: ignore[attr-defined]
-    rs_res = cast(dict[str, Any], json.loads(rs_json))
-
-    assert rs_res == py_res
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        sky_player_rs.simulate_schedule_rs(rs_inputs, allowed, min_hold_us, send_latency_us)  # type: ignore[attr-defined]
 
 
 def test_rust_differential_seeded_schedule_corpus() -> None:
@@ -196,30 +195,40 @@ def test_rust_differential_seeded_schedule_corpus() -> None:
         min_hold_us = rng.randint(0, 5_000)
         send_latency_us = rng.randint(0, 500)
 
-        py_result = _py_simulate(
-            actions,
-            allowed,
-            min_hold_us,
-            send_latency_us,
-        )
+        try:
+            py_result = _py_simulate(
+                actions,
+                allowed,
+                min_hold_us,
+                send_latency_us,
+            )
+        except ValueError as e:
+            if "overlapping same-key down actions" in str(e):
+                py_result = "ValueError"
+            else:
+                raise
+
         rust_inputs = [
             (index, action.kind, int(action.at_us), list(action.scan_codes), action.reason)
             for index, action in enumerate(actions)
         ]
-        rust_result = cast(
-            dict[str, Any],
-            json.loads(
-                cast(
-                    str,
-                    sky_player_rs.simulate_schedule_rs(  # type: ignore[attr-defined]
-                        rust_inputs,
-                        allowed,
-                        min_hold_us,
-                        send_latency_us,
-                    ),
+        
+        try:
+            rust_result_json = cast(
+                str,
+                sky_player_rs.simulate_schedule_rs(  # type: ignore[attr-defined]
+                    rust_inputs,
+                    allowed,
+                    min_hold_us,
+                    send_latency_us,
                 )
-            ),
-        )
+            )
+            rust_result = cast(dict[str, Any], json.loads(rust_result_json))
+        except ValueError as e:
+            if "overlapping same-key down actions" in str(e):
+                rust_result = "ValueError"
+            else:
+                raise
 
         assert rust_result == py_result, f"differential mismatch in case {case_index}"
 

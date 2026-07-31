@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import pytest
 from test_runtime_dispatch import FakeClock, FakeSleeper, TimedBackend, action
 
 from sky_music.domain import Song
 from sky_music.infrastructure.timing import SleepPolicy
-from sky_music.orchestration.engine import PLAYBACK_FINISHED, PlaybackEngine
+from sky_music.orchestration.engine import PlaybackEngine
 
 
 def test_audit_baseline_inventory_markers():
@@ -41,22 +42,16 @@ def test_h2_guard_same_key_equality_dropped_conflict():
         action(2000, "up", 21),
     )
     
-    engine = PlaybackEngine(
-        song=Song(name="h2_guard", notes=()),
-        actions=actions,
-        backend=backend,
-        telemetry_enabled=True,
-        require_focus=False,
-        clock=clock,
-        sleeper=FakeSleeper(clock),
-        sleep_policy=SleepPolicy(spin_threshold_us=-1),
-        min_hold_us=1000,
-        same_key_conflict_policy="degraded",
-    )
-    
-    assert engine.play() == PLAYBACK_FINISHED
-    
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    # We expect 1 dropped conflict because the second down overlaps with the anchored release of the first.
-    assert summary["dropped_conflict_count"] == 1
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        PlaybackEngine(
+            song=Song(name="h2_guard", notes=()),
+            actions=actions,
+            backend=backend,
+            telemetry_enabled=True,
+            require_focus=False,
+            clock=clock,
+            sleeper=FakeSleeper(clock),
+            sleep_policy=SleepPolicy(spin_threshold_us=-1),
+            min_hold_us=1000,
+            same_key_conflict_policy="degraded",
+        )

@@ -41,8 +41,11 @@ mod tests {
         assert_eq!(state.active_mask, 0);
 
         let res_down = state.key_down(&[0x15, 0x16]);
-        assert!(res_down.success);
-        assert_eq!(res_down.sent.as_slice(), &[0x15, 0x16]);
+        if let input::DownSendOutcome::Complete { sent, .. } = res_down {
+            assert_eq!(sent.as_slice(), &[0x15, 0x16]);
+        } else {
+            panic!("Expected Complete");
+        }
         assert_eq!(state.active_mask.count_ones(), 2);
 
         let res_up = state.key_up(&[0x15]);

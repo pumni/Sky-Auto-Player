@@ -134,10 +134,7 @@ def test_playback_equivalence() -> None:
         action(10_000, "down", 21, 22, 23),
         action(20_000, "up", 21, 22, 23),
         
-        # 2. Conflict (key 21 down at 30,000, down again at 35,000 before up)
-        action(30_000, "down", 21),
-        action(35_000, "down", 21),
-        action(40_000, "up", 21),
+        # 2. (Removed conflict test as it's now caught at compile time)
         
         # 3. Deferred release (down at 50,000, up at 55,000 with min_hold_us=10,000)
         action(50_000, "down", 22),

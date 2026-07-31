@@ -2,9 +2,7 @@
 
 use std::sync::OnceLock;
 
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct QpcTicks(pub u64);
+pub use sky_dispatch_core::time::QpcTicks;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QpcError {

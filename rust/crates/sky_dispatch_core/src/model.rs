@@ -72,6 +72,7 @@ pub struct RuntimeKeyIntent {
     pub key_slot: KeySlot,
     pub scheduled_us: u64,
     pub reason_id: ReasonId,
+    pub packet_id: PacketId,
 }
 
 /// Compact immutable intent stored in the schedule arena.
@@ -163,6 +164,7 @@ impl RuntimeSchedule {
                 key_slot: compact.key_slot(),
                 scheduled_us,
                 reason_id: header.reason_id,
+                packet_id: header.packet_id,
             })
             .collect();
         RuntimeBatch {

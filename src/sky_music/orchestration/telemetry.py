@@ -30,6 +30,7 @@ _CSV_FIELDS: list[str] = [
     "song",
     "event_index",
     "dispatch_id",
+    "packet_id",
     "kind",
     "scheduled_us",
     "actual_us",
@@ -55,12 +56,27 @@ _CSV_FIELDS: list[str] = [
     "last_win32_error",
     "send_attempts",
     "zero_progress_retries",
+    "head_of_line_delay_us",
+    "same_timestamp_release_before_down",
+    "authored_us",
+    "wait_target_us",
+    "wake_us",
+    "wake_error_us",
+    "send_started_us",
+    "send_completed_us",
+    "sender_completion_error_us",
+    "delivery_first_us",
+    "delivery_last_us",
+    "delivery_last_error_us",
+    "intra_chord_delivery_spread_us",
+    "lead_components",
 ]
 
 _CSV_INT_FIELDS: frozenset[str] = frozenset(
     {
         "event_index",
         "dispatch_id",
+        "packet_id",
         "scheduled_us",
         "actual_us",
         "dispatch_completed_us",
@@ -78,6 +94,18 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "last_win32_error",
         "send_attempts",
         "zero_progress_retries",
+        "head_of_line_delay_us",
+        "authored_us",
+        "wait_target_us",
+        "wake_us",
+        "wake_error_us",
+        "send_started_us",
+        "send_completed_us",
+        "sender_completion_error_us",
+        "delivery_first_us",
+        "delivery_last_us",
+        "delivery_last_error_us",
+        "intra_chord_delivery_spread_us",
     }
 )
 
@@ -87,30 +115,45 @@ class TelemetryRecord:
         "_dict",
         "actual_us",
         "applied_lead_us",
+        "authored_us",
         "bookkeeping_us",
         "deferred_by_us",
+        "delivery_first_us",
+        "delivery_last_error_us",
+        "delivery_last_us",
         "dispatch_completed_us",
         "dispatch_id",
         "dispatch_lateness_us",
         "event_index",
         "first_win32_error",
         "generation_ids",
+        "head_of_line_delay_us",
         "idle_gap_us",
+        "intra_chord_delivery_spread_us",
         "kind",
         "last_win32_error",
         "lateness_us",
+        "lead_components",
+        "packet_id",
         "pre_send_spin_us",
         "reason",
         "runtime_outcome",
+        "same_timestamp_release_before_down",
         "scan_codes",
         "scheduled_us",
         "send_attempts",
+        "send_completed_us",
         "send_duration_pure_us",
         "send_duration_us",
+        "send_started_us",
+        "sender_completion_error_us",
         "sent_scan_codes",
         "skipped_scan_codes",
         "song_name",
         "visible_lateness_us",
+        "wait_target_us",
+        "wake_error_us",
+        "wake_us",
         "zero_progress_retries",
     )
 
@@ -143,6 +186,21 @@ class TelemetryRecord:
         last_win32_error: int | None = None,
         send_attempts: int = 0,
         zero_progress_retries: int = 0,
+        head_of_line_delay_us: int | None = None,
+        same_timestamp_release_before_down: bool | None = None,
+        packet_id: int | None = None,
+        authored_us: int | None = None,
+        wait_target_us: int | None = None,
+        wake_us: int | None = None,
+        wake_error_us: int | None = None,
+        send_started_us: int | None = None,
+        send_completed_us: int | None = None,
+        sender_completion_error_us: int | None = None,
+        delivery_first_us: int | None = None,
+        delivery_last_us: int | None = None,
+        delivery_last_error_us: int | None = None,
+        intra_chord_delivery_spread_us: int | None = None,
+        lead_components: int | None = None,
     ) -> None:
         self._dict = None
         self.song_name = song_name
@@ -172,6 +230,21 @@ class TelemetryRecord:
         self.last_win32_error = last_win32_error
         self.send_attempts = send_attempts
         self.zero_progress_retries = zero_progress_retries
+        self.head_of_line_delay_us = head_of_line_delay_us
+        self.same_timestamp_release_before_down = same_timestamp_release_before_down
+        self.packet_id = packet_id
+        self.authored_us = authored_us
+        self.wait_target_us = wait_target_us
+        self.wake_us = wake_us
+        self.wake_error_us = wake_error_us
+        self.send_started_us = send_started_us
+        self.send_completed_us = send_completed_us
+        self.sender_completion_error_us = sender_completion_error_us
+        self.delivery_first_us = delivery_first_us
+        self.delivery_last_us = delivery_last_us
+        self.delivery_last_error_us = delivery_last_error_us
+        self.intra_chord_delivery_spread_us = intra_chord_delivery_spread_us
+        self.lead_components = lead_components
 
     def _materialize(self) -> dict:
         if self._dict is None:
@@ -186,7 +259,8 @@ class TelemetryRecord:
                 "song": self.song_name,
                 "event_index": self.event_index,
                 "dispatch_id": self.event_index if self.dispatch_id is None else self.dispatch_id,
-                "evidence_scope": "sendinput_side",
+                "packet_id": 0 if self.packet_id is None else self.packet_id,
+                "evidence_scope": "sender_completion",
                 "kind": self.kind,
                 "scheduled_us": self.scheduled_us,
                 "actual_us": self.actual_us,
@@ -215,6 +289,20 @@ class TelemetryRecord:
                 "send_duration_pure_us": self.send_duration_pure_us,
                 "bookkeeping_us": self.bookkeeping_us,
                 "dispatch_lateness_us": self.dispatch_lateness_us,
+                "head_of_line_delay_us": self.head_of_line_delay_us,
+                "same_timestamp_release_before_down": self.same_timestamp_release_before_down,
+                "authored_us": self.authored_us,
+                "wait_target_us": self.wait_target_us,
+                "wake_us": self.wake_us,
+                "wake_error_us": self.wake_error_us,
+                "send_started_us": self.send_started_us,
+                "send_completed_us": self.send_completed_us,
+                "sender_completion_error_us": self.sender_completion_error_us,
+                "delivery_first_us": self.delivery_first_us,
+                "delivery_last_us": self.delivery_last_us,
+                "delivery_last_error_us": self.delivery_last_error_us,
+                "intra_chord_delivery_spread_us": self.intra_chord_delivery_spread_us,
+                "lead_components": self.lead_components,
             }
         return self._dict
 
@@ -346,6 +434,21 @@ class TelemetryLogger:
         last_win32_error: int | None = None,
         send_attempts: int = 0,
         zero_progress_retries: int = 0,
+        head_of_line_delay_us: int | None = None,
+        same_timestamp_release_before_down: bool | None = None,
+        packet_id: int | None = None,
+        authored_us: int | None = None,
+        wait_target_us: int | None = None,
+        wake_us: int | None = None,
+        wake_error_us: int | None = None,
+        send_started_us: int | None = None,
+        send_completed_us: int | None = None,
+        sender_completion_error_us: int | None = None,
+        delivery_first_us: int | None = None,
+        delivery_last_us: int | None = None,
+        delivery_last_error_us: int | None = None,
+        intra_chord_delivery_spread_us: int | None = None,
+        lead_components: int | None = None,
     ) -> None:
         send_duration_pure_us = 0
         bookkeeping_us = 0
@@ -374,6 +477,21 @@ class TelemetryLogger:
             send_duration_pure_us = getattr(result, "send_duration_pure_us", 0)
             bookkeeping_us = getattr(result, "bookkeeping_us", 0)
             dispatch_lateness_us = getattr(result, "dispatch_lateness_us", 0)
+            head_of_line_delay_us = getattr(result, "head_of_line_delay_us", None)
+            same_timestamp_release_before_down = getattr(result, "same_timestamp_release_before_down", None)
+            packet_id = getattr(result, "packet_id", None)
+            authored_us = getattr(result, "authored_us", None)
+            wait_target_us = getattr(result, "wait_target_us", None)
+            wake_us = getattr(result, "wake_us", None)
+            wake_error_us = getattr(result, "wake_error_us", None)
+            send_started_us = getattr(result, "send_started_us", None)
+            send_completed_us = getattr(result, "send_completed_us", None)
+            sender_completion_error_us = getattr(result, "sender_completion_error_us", None)
+            delivery_first_us = getattr(result, "delivery_first_us", None)
+            delivery_last_us = getattr(result, "delivery_last_us", None)
+            delivery_last_error_us = getattr(result, "delivery_last_error_us", None)
+            intra_chord_delivery_spread_us = getattr(result, "intra_chord_delivery_spread_us", None)
+            lead_components = getattr(result, "lead_components", None)
 
         assert event_index is not None
         assert kind is not None
@@ -421,6 +539,21 @@ class TelemetryLogger:
                 last_win32_error,
                 send_attempts,
                 zero_progress_retries,
+                head_of_line_delay_us,
+                same_timestamp_release_before_down,
+                packet_id,
+                authored_us,
+                wait_target_us,
+                wake_us,
+                wake_error_us,
+                send_started_us,
+                send_completed_us,
+                sender_completion_error_us,
+                delivery_first_us,
+                delivery_last_us,
+                delivery_last_error_us,
+                intra_chord_delivery_spread_us,
+                lead_components,
             )
         )
         self._accepted_record_count += 1
@@ -481,6 +614,9 @@ class TelemetryLogger:
                     _optional_int(row.get("last_win32_error")),
                     int(row.get("send_attempts", 0)),
                     int(row.get("zero_progress_retries", 0)),
+                    _optional_int(row.get("head_of_line_delay_us")),
+                    row.get("same_timestamp_release_before_down"),
+                    _optional_int(row.get("packet_id")),
                 )
             )
             self._accepted_record_count += 1
@@ -930,7 +1066,7 @@ class TelemetryLogger:
                     "runtime_backend_dropped_down_count": runtime_backend_dropped_down_count,
                     "before_send_missing_down_count": before_send_missing_down_count,
                 },
-                "sendinput_side": {
+                "sender_completion": {
                     "sent_down_count": sent_down_count,
                     "sent_up_count": sent_up_count,
                     "backend_skipped_down_count": backend_skipped_down_count,

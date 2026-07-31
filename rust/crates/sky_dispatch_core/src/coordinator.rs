@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use crate::model::*;
+use crate::time::{DurationTicks, TimelineTicks};
 
 pub const MAX_RELEASE_RETRIES: u8 = 8;
 const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
@@ -41,7 +42,7 @@ impl GenerationStatus {
 mod tests {
     use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
-    use crate::model::{ActionKind, KeyActionInput};
+    use crate::model::{ActionKind, KeyActionInput, PacketId};
 
     #[test]
     fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -65,7 +66,7 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
         let (batch, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down batch is due");
@@ -103,7 +104,7 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
 
         let (first, _) = coordinator
             .pop_next_due_authored(0, 2_000)
@@ -147,11 +148,11 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
-        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, 10);
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, crate::time::TimelineTicks(0), 10, crate::time::TimelineTicks(10));
 
         let (up, _) = coordinator
             .pop_next_due_authored(1_000, 0)
@@ -208,11 +209,11 @@ mod tests {
             &[0x15],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
-        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, 10);
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, crate::time::TimelineTicks(0), 10, crate::time::TimelineTicks(10));
         let (up, _) = coordinator
             .pop_next_due_authored(1_000, 0)
             .expect("up is due");
@@ -252,7 +253,7 @@ mod tests {
                     source_action_index: 1,
                     kind: ActionKind::Up,
                     scheduled_us: 1_000,
-                    scan_codes: vec![0x15],
+                    scan_codes: vec![0x15, 0x16],
                     reason: "up-1".to_string(),
                 },
                 KeyActionInput {
@@ -266,12 +267,12 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
 
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("first down is due");
-        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, 10);
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, crate::time::TimelineTicks(0), 10, crate::time::TimelineTicks(10));
         let (up, _) = coordinator
             .pop_next_due_authored(1_000, 0)
             .expect("release is due");
@@ -318,11 +319,11 @@ mod tests {
             &[0x15, 0x16],
         )
         .expect("valid schedule");
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, |us| crate::time::TimelineTicks(us));
         let (down, _) = coordinator
             .pop_next_due_authored(0, 0)
             .expect("down is due");
-        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, 0);
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
 
         let (up_a, _) = coordinator
             .pop_next_due_authored(1_000, 0)
@@ -372,9 +373,13 @@ pub struct ActiveGeneration {
     pub key_slot: KeySlot,
     pub source_action_index: u32,
     pub scheduled_down_us: u64,
+    pub scheduled_down_ticks: TimelineTicks,
     pub down_dispatch_started_us: u64,
+    pub down_dispatch_started_ticks: TimelineTicks,
     pub down_dispatch_completed_us: u64,
+    pub down_dispatch_completed_ticks: TimelineTicks,
     pub release_not_before_us: u64,
+    pub release_not_before_ticks: TimelineTicks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,13 +388,19 @@ pub struct PendingRelease {
     pub scan_code: u16,
     pub key_slot: KeySlot,
     pub source_action_index: u32,
+    pub packet_id: PacketId,
     pub scheduled_release_us: u64,
+    pub scheduled_release_ticks: TimelineTicks,
     pub down_dispatch_started_us: u64,
+    pub down_dispatch_started_ticks: TimelineTicks,
     pub release_not_before_us: u64,
+    pub release_not_before_ticks: TimelineTicks,
     pub reason_id: ReasonId,
     pub retry_count: u8,
     pub next_retry_us: u64,
+    pub next_retry_ticks: TimelineTicks,
     pub first_failure_us: Option<u64>,
+    pub first_failure_ticks: Option<TimelineTicks>,
     pub last_win32_error: Option<u32>,
 }
 
@@ -419,6 +430,8 @@ pub struct PendingDispatchPlan {
 pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
+    pub min_hold_ticks: DurationTicks,
+    pub batch_scheduled_ticks: Box<[TimelineTicks]>,
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
     active_mask: u16,
@@ -428,15 +441,30 @@ pub struct RuntimeDispatchCoordinator {
     terminal_counts: HashMap<GenerationStatus, u64>,
     generation_count: u64,
     recovery_offset_us: u64,
+    recovery_offset_ticks: DurationTicks,
     release_recovery_started_us: Option<u64>,
+    release_recovery_started_ticks: Option<TimelineTicks>,
 }
 
 impl RuntimeDispatchCoordinator {
-    pub fn new(schedule: RuntimeSchedule, min_hold_us: u64) -> Self {
+    pub fn new<F>(schedule: RuntimeSchedule, min_hold_us: u64, us_to_ticks: F) -> Self
+    where
+        F: Fn(u64) -> TimelineTicks,
+    {
         let generation_count = schedule.generation_count;
+        let batch_scheduled_ticks = schedule
+            .batches
+            .iter()
+            .map(|b| us_to_ticks(b.scheduled_us))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let min_hold_ticks = DurationTicks(us_to_ticks(min_hold_us).0);
+        
         Self {
             schedule,
             min_hold_us,
+            min_hold_ticks,
+            batch_scheduled_ticks,
             cursor: 0,
             active_by_slot: std::array::from_fn(|_| None),
             active_mask: 0,
@@ -446,7 +474,9 @@ impl RuntimeDispatchCoordinator {
             terminal_counts: HashMap::with_capacity(ALL_GENERATION_STATUSES.len()),
             generation_count,
             recovery_offset_us: 0,
+            recovery_offset_ticks: DurationTicks(0),
             release_recovery_started_us: None,
+            release_recovery_started_ticks: None,
         }
     }
 
@@ -740,9 +770,12 @@ impl RuntimeDispatchCoordinator {
         intents: &[RuntimeKeyIntent],
         sent_scan_codes: &[u16],
         dispatch_started_us: u64,
+        dispatch_started_ticks: TimelineTicks,
         dispatch_completed_us: u64,
+        dispatch_completed_ticks: TimelineTicks,
     ) {
         let release_not_before_us = dispatch_completed_us + self.min_hold_us;
+        let release_not_before_ticks = dispatch_completed_ticks.saturating_add(self.min_hold_ticks);
 
         if sent_scan_codes.len() == 1 {
             let only_sent = sent_scan_codes[0];
@@ -760,9 +793,13 @@ impl RuntimeDispatchCoordinator {
                     key_slot: intent.key_slot,
                     source_action_index: intent.source_action_index,
                     scheduled_down_us: intent.scheduled_us,
+                    scheduled_down_ticks: self.batch_scheduled_ticks[intent.source_action_index as usize],
                     down_dispatch_started_us: dispatch_started_us,
+                    down_dispatch_started_ticks: dispatch_started_ticks,
                     down_dispatch_completed_us: dispatch_completed_us,
+                    down_dispatch_completed_ticks: dispatch_completed_ticks,
                     release_not_before_us,
+                    release_not_before_ticks,
                 });
                 self.active_mask |= Self::bit_for_slot(intent.key_slot);
                 self.status_by_generation
@@ -785,9 +822,13 @@ impl RuntimeDispatchCoordinator {
                 key_slot: intent.key_slot,
                 source_action_index: intent.source_action_index,
                 scheduled_down_us: intent.scheduled_us,
+                scheduled_down_ticks: self.batch_scheduled_ticks[intent.source_action_index as usize],
                 down_dispatch_started_us: dispatch_started_us,
+                down_dispatch_started_ticks: dispatch_started_ticks,
                 down_dispatch_completed_us: dispatch_completed_us,
+                down_dispatch_completed_ticks: dispatch_completed_ticks,
                 release_not_before_us,
+                release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(intent.key_slot);
             self.status_by_generation
@@ -865,13 +906,19 @@ impl RuntimeDispatchCoordinator {
                 scan_code: intent.scan_code,
                 key_slot: intent.key_slot,
                 source_action_index: intent.source_action_index,
+                packet_id: intent.packet_id,
                 scheduled_release_us: intent.scheduled_us,
+                scheduled_release_ticks: self.batch_scheduled_ticks[intent.source_action_index as usize],
                 down_dispatch_started_us: active.down_dispatch_started_us,
+                down_dispatch_started_ticks: active.down_dispatch_started_ticks,
                 release_not_before_us: active.release_not_before_us,
+                release_not_before_ticks: active.release_not_before_ticks,
                 reason_id: intent.reason_id,
                 retry_count: 0,
                 next_retry_us: 0,
+                next_retry_ticks: crate::time::TimelineTicks(0),
                 first_failure_us: None,
+                first_failure_ticks: None,
                 last_win32_error: None,
             };
 
@@ -905,13 +952,19 @@ impl RuntimeDispatchCoordinator {
                 scan_code: intent.scan_code,
                 key_slot: intent.key_slot,
                 source_action_index: intent.source_action_index,
+                packet_id: intent.packet_id,
                 scheduled_release_us: intent.scheduled_us,
+                scheduled_release_ticks: self.batch_scheduled_ticks[intent.source_action_index as usize],
                 down_dispatch_started_us: active.down_dispatch_started_us,
+                down_dispatch_started_ticks: active.down_dispatch_started_ticks,
                 release_not_before_us: active.release_not_before_us,
+                release_not_before_ticks: active.release_not_before_ticks,
                 reason_id: intent.reason_id,
                 retry_count: 0,
                 next_retry_us: 0,
+                next_retry_ticks: crate::time::TimelineTicks(0),
                 first_failure_us: None,
+                first_failure_ticks: None,
                 last_win32_error: None,
             };
 

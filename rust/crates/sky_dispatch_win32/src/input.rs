@@ -94,6 +94,39 @@ pub struct InputSendResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownSendOutcome {
+    Complete {
+        completed_us: u64,
+        sent: SmallVec<[u16; 15]>,
+        skipped_duplicates: SmallVec<[u16; 15]>,
+        send_attempts: u8,
+        zero_progress_retries: u8,
+        retried_after_zero_progress: bool,
+    },
+    ZeroProgress {
+        error: Option<u32>,
+        completed_us: u64,
+        skipped_duplicates: SmallVec<[u16; 15]>,
+        send_attempts: u8,
+        zero_progress_retries: u8,
+        first_error: Option<u32>,
+        last_error: Option<u32>,
+    },
+    IntegrityLost {
+        inserted_prefix: u8,
+        rolled_back: u8,
+        rollback_residue: u8,
+        first_error: Option<u32>,
+        last_error: Option<u32>,
+        completed_us: u64,
+        sent: SmallVec<[u16; 15]>,
+        skipped_duplicates: SmallVec<[u16; 15]>,
+        send_attempts: u8,
+        zero_progress_retries: u8,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmitResult {
     pub sent: SmallVec<[u16; 15]>,
     pub completed_us: u64,
@@ -523,25 +556,15 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn key_down(&mut self, scan_codes: &[u16]) -> InputSendResult {
+    pub fn key_down(&mut self, scan_codes: &[u16]) -> DownSendOutcome {
         if scan_codes.is_empty() {
-            return InputSendResult {
+            return DownSendOutcome::Complete {
+                completed_us: crate::clock::qpc_now_us(),
                 sent: SmallVec::new(),
                 skipped_duplicates: SmallVec::new(),
-                success: true,
-                error: None,
-                send_completed_us: crate::clock::qpc_now_us(),
-                first_win32_error: None,
-                last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
-                first_inserted: 0,
-                partial_progress: false,
                 retried_after_zero_progress: false,
-                chord_integrity_lost: false,
-                keys_inserted_before_failure: 0,
-                keys_rolled_back: 0,
-                rollback_residue_keys: 0,
             };
         }
 
@@ -557,23 +580,13 @@ impl TrackedKeyState {
         }
 
         if to_send.is_empty() {
-            return InputSendResult {
+            return DownSendOutcome::Complete {
+                completed_us: crate::clock::qpc_now_us(),
                 sent: SmallVec::new(),
                 skipped_duplicates: duplicates,
-                success: true,
-                error: None,
-                send_completed_us: crate::clock::qpc_now_us(),
-                first_win32_error: None,
-                last_win32_error: None,
                 send_attempts: 0,
                 zero_progress_retries: 0,
-                first_inserted: 0,
-                partial_progress: false,
                 retried_after_zero_progress: false,
-                chord_integrity_lost: false,
-                keys_inserted_before_failure: 0,
-                keys_rolled_back: 0,
-                rollback_residue_keys: 0,
             };
         }
 
@@ -630,31 +643,38 @@ impl TrackedKeyState {
             ));
         }
 
-        InputSendResult {
-            sent: emitted.sent,
-            skipped_duplicates: duplicates,
-            success: emitted.success,
-            error: if emitted.success {
-                None
-            } else {
-                Some(format!(
-                    "note-on rejected: {}/{} dropped",
-                    emitted.keys_dropped,
-                    to_send.len()
-                ))
-            },
-            send_completed_us: emitted.completed_us,
-            first_win32_error: emitted.first_win32_error,
-            last_win32_error: emitted.last_win32_error,
-            send_attempts: emitted.send_attempts,
-            zero_progress_retries: emitted.zero_progress_retries,
-            first_inserted: emitted.first_inserted,
-            partial_progress: emitted.partial_progress,
-            retried_after_zero_progress: emitted.retried_after_zero_progress,
-            chord_integrity_lost: emitted.chord_integrity_lost,
-            keys_inserted_before_failure: emitted.keys_inserted_before_failure,
-            keys_rolled_back: emitted.keys_rolled_back,
-            rollback_residue_keys: emitted.rollback_residue_keys,
+        if emitted.chord_integrity_lost {
+            DownSendOutcome::IntegrityLost {
+                inserted_prefix: emitted.keys_inserted_before_failure,
+                rolled_back: emitted.keys_rolled_back,
+                rollback_residue: emitted.rollback_residue_keys,
+                first_error: emitted.first_win32_error,
+                last_error: emitted.last_win32_error,
+                completed_us: emitted.completed_us,
+                sent: emitted.sent,
+                skipped_duplicates: duplicates,
+                send_attempts: emitted.send_attempts,
+                zero_progress_retries: emitted.zero_progress_retries,
+            }
+        } else if !emitted.success {
+            DownSendOutcome::ZeroProgress {
+                error: emitted.last_win32_error.or(emitted.first_win32_error),
+                completed_us: emitted.completed_us,
+                skipped_duplicates: duplicates,
+                send_attempts: emitted.send_attempts,
+                zero_progress_retries: emitted.zero_progress_retries,
+                first_error: emitted.first_win32_error,
+                last_error: emitted.last_win32_error,
+            }
+        } else {
+            DownSendOutcome::Complete {
+                completed_us: emitted.completed_us,
+                sent: emitted.sent,
+                skipped_duplicates: duplicates,
+                send_attempts: emitted.send_attempts,
+                zero_progress_retries: emitted.zero_progress_retries,
+                retried_after_zero_progress: emitted.retried_after_zero_progress,
+            }
         }
     }
 
@@ -1096,7 +1116,7 @@ mod tests {
         });
 
         let result = state.key_down(&[2, 3]);
-        assert!(!result.success);
+        assert!(matches!(result, DownSendOutcome::ZeroProgress { .. }));
         assert_eq!(state.chords_rejected, 1);
         assert_eq!(state.authored_keys_rejected, 2);
         assert_eq!(state.sendinput_partial_events, 0);

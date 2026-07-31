@@ -222,28 +222,88 @@ impl RustInputBackend {
         )?;
         let res = self.state.lock().key_down(&scan_codes);
         let dict = PyDict::new(py);
-        dict.set_item("sent", res.sent.to_vec())?;
-        dict.set_item("skipped_duplicates", res.skipped_duplicates.to_vec())?;
-        dict.set_item("success", res.success)?;
-        dict.set_item("error", res.error)?;
-        dict.set_item("send_completed_us", res.send_completed_us)?;
-        dict.set_item("first_win32_error", res.first_win32_error)?;
-        dict.set_item("last_win32_error", res.last_win32_error)?;
-        dict.set_item("send_attempts", res.send_attempts)?;
-        dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
-        dict.set_item("first_inserted", res.first_inserted)?;
-        dict.set_item("partial_progress", res.partial_progress)?;
-        dict.set_item(
-            "retried_after_zero_progress",
-            res.retried_after_zero_progress,
-        )?;
-        dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
-        dict.set_item(
-            "keys_inserted_before_failure",
-            res.keys_inserted_before_failure,
-        )?;
-        dict.set_item("keys_rolled_back", res.keys_rolled_back)?;
-        dict.set_item("rollback_residue_keys", res.rollback_residue_keys)?;
+        match res {
+            sky_dispatch_win32::input::DownSendOutcome::Complete {
+                completed_us,
+                sent,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+                retried_after_zero_progress,
+            } => {
+                dict.set_item("sent", sent.to_vec())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", true)?;
+                dict.set_item("error", None::<String>)?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", None::<u32>)?;
+                dict.set_item("last_win32_error", None::<u32>)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", false)?;
+                dict.set_item("retried_after_zero_progress", retried_after_zero_progress)?;
+                dict.set_item("chord_integrity_lost", false)?;
+                dict.set_item("keys_inserted_before_failure", 0)?;
+                dict.set_item("keys_rolled_back", 0)?;
+                dict.set_item("rollback_residue_keys", 0)?;
+            }
+            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
+                error,
+                completed_us,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+                first_error,
+                last_error,
+            } => {
+                dict.set_item("sent", Vec::<u16>::new())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", false)?;
+                dict.set_item("error", error.map(|e| e.to_string()))?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", first_error)?;
+                dict.set_item("last_win32_error", last_error)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", false)?;
+                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
+                dict.set_item("chord_integrity_lost", false)?;
+                dict.set_item("keys_inserted_before_failure", 0)?;
+                dict.set_item("keys_rolled_back", 0)?;
+                dict.set_item("rollback_residue_keys", 0)?;
+            }
+            sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
+                inserted_prefix,
+                rolled_back,
+                rollback_residue,
+                first_error,
+                last_error,
+                completed_us,
+                sent,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+            } => {
+                dict.set_item("sent", sent.to_vec())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", false)?;
+                dict.set_item("error", last_error.or(first_error).map(|e| e.to_string()))?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", first_error)?;
+                dict.set_item("last_win32_error", last_error)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", true)?;
+                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
+                dict.set_item("chord_integrity_lost", true)?;
+                dict.set_item("keys_inserted_before_failure", inserted_prefix)?;
+                dict.set_item("keys_rolled_back", rolled_back)?;
+                dict.set_item("rollback_residue_keys", rollback_residue)?;
+            }
+        }
         Ok(dict)
     }
 

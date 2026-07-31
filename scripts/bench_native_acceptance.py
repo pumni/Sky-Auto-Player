@@ -500,11 +500,7 @@ def main() -> int:
         if args.backend == "mock"
         else None,
         "by_polyphony": by_polyphony,
-        "evidence_scope": (
-            "sender_side_polyphony_latency_model"
-            if args.backend == "mock"
-            else "sender_side_real_sendinput_fixed_host"
-        ),
+        "evidence_scope": "sender_completion",
     }
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
