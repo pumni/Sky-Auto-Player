@@ -1,3 +1,4 @@
+from sky_music.orchestration.engine import PLAYBACK_ERROR as PLAYBACK_ERROR
 from sky_music.orchestration.engine import PLAYBACK_FINISHED as PLAYBACK_FINISHED
 from sky_music.orchestration.engine import PLAYBACK_QUIT as PLAYBACK_QUIT
 from sky_music.orchestration.engine import PLAYBACK_SKIPPED as PLAYBACK_SKIPPED

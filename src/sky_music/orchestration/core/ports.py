@@ -72,6 +72,7 @@ PLAYBACK_FINISHED = "finished"
 PLAYBACK_QUIT = "quit"
 PLAYBACK_SKIPPED = "skipped"
 PLAYBACK_SHUTDOWN_TIMEOUT = "shutdown_timeout"
+PLAYBACK_ERROR = "error"
 
 
 class PlaybackCommand(StrEnum):

@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 # core boundary test can verify the seam. Tests still import these names
 # from orchestration.playback_supervisor; the symbols are kept alive here.
 from sky_music.orchestration.core.ports import (
+    PLAYBACK_ERROR as PLAYBACK_ERROR,
+)
+from sky_music.orchestration.core.ports import (
     PLAYBACK_FINISHED as PLAYBACK_FINISHED,
 )
 from sky_music.orchestration.core.ports import (

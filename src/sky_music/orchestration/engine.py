@@ -56,6 +56,9 @@ from sky_music.orchestration.dispatch_loop import (
     RuntimeSameKeyConflictError as RuntimeSameKeyConflictError,
 )
 from sky_music.orchestration.playback_supervisor import (
+    PLAYBACK_ERROR as PLAYBACK_ERROR,
+)
+from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_FINISHED as PLAYBACK_FINISHED,
 )
 from sky_music.orchestration.playback_supervisor import (
@@ -720,6 +723,11 @@ class PlaybackEngine:
             warn_us=self.input_path_warn_us,
         )
         self._input_path_degraded = bool(snapshot["input_path_degraded"])
+        if outcome == PLAYBACK_ERROR:
+            from sky_music.orchestration.native_dispatch import NativeDispatchError
+
+            detail = str(snapshot.get("terminal_error") or "native dispatch failed")
+            raise NativeDispatchError(detail)
         return outcome
 
     def _release_all_and_cancel_runtime(self) -> ReleaseAllOutcome:

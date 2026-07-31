@@ -131,10 +131,68 @@ mod tests {
         let retry = coordinator.pop_due_pending(3_000, 0);
         assert_eq!(retry.len(), 1);
         coordinator.complete_releases(&retry, &[0x15], &[]);
+        assert_eq!(coordinator.finish_release_recovery(3_000), Some(2_000));
 
         let (next_down, _) = coordinator
-            .pop_next_due_authored(4_000, 0)
+            .pop_next_due_authored(6_000, 0)
             .expect("same-key down remains schedulable after recovery");
+        let (playable, conflicts) = coordinator.split_down_intents(&next_down.intents);
+        assert_eq!(playable.len(), 1);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn same_key_down_waits_for_recovery_and_timeline_does_not_catch_up() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up-1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x15],
+                    reason: "down-2".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("first down is due");
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, 10);
+        let (up, _) = coordinator
+            .pop_next_due_authored(1_000, 0)
+            .expect("up is due");
+        let _ = coordinator.request_releases(&up.intents);
+        let due = coordinator.pop_due_pending(1_000, 0);
+        assert!(!coordinator.requeue_failed_releases(&due, &[], &[], 1_000, Some(5)));
+
+        assert!(coordinator.pop_next_due_authored(2_000, 0).is_none());
+        assert_eq!(coordinator.next_deadline_us(0, 0), Some(3_000));
+
+        let retry = coordinator.pop_due_pending(3_000, 0);
+        coordinator.complete_releases(&retry, &[0x15], &[]);
+        assert_eq!(coordinator.finish_release_recovery(3_000), Some(2_000));
+        assert!(coordinator.pop_next_due_authored(3_000, 0).is_none());
+        let (next_down, _) = coordinator
+            .pop_next_due_authored(4_000, 0)
+            .expect("timeline-shifted same-key down is due");
+        assert_eq!(next_down.scheduled_us, 4_000);
         let (playable, conflicts) = coordinator.split_down_intents(&next_down.intents);
         assert_eq!(playable.len(), 1);
         assert!(conflicts.is_empty());
@@ -198,6 +256,7 @@ pub struct RuntimeDispatchCoordinator {
     generation_count: u64,
     pub pending_by_generation: HashMap<GenerationId, PendingRelease>,
     pub pending_scan_codes: HashSet<u16>,
+    release_recovery_started_us: Option<u64>,
 }
 
 impl RuntimeDispatchCoordinator {
@@ -213,6 +272,7 @@ impl RuntimeDispatchCoordinator {
             generation_count,
             pending_by_generation: HashMap::with_capacity(MAX_KEYS),
             pending_scan_codes: HashSet::with_capacity(MAX_KEYS),
+            release_recovery_started_us: None,
         }
     }
 
@@ -267,6 +327,9 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn next_deadline_us(&self, dispatch_lead_us: u64, lead_up: u64) -> Option<u64> {
+        if self.release_recovery_active() {
+            return self.next_pending_release_us(lead_up);
+        }
         let authored = self.next_authored_us(dispatch_lead_us);
         let pending = self.next_pending_release_us(lead_up);
         match (authored, pending) {
@@ -363,6 +426,12 @@ impl RuntimeDispatchCoordinator {
         dispatch_lead_us: u64,
     ) -> Option<(RuntimeBatch, u64)> {
         if self.cursor >= self.schedule.batches.len() {
+            return None;
+        }
+        // A failed release recovery is a contiguous pause interval for the
+        // authored timeline. Do not pop overdue batches and turn recovery
+        // into a same-key conflict or a catch-up burst.
+        if self.release_recovery_active() {
             return None;
         }
         let batch = &self.schedule.batches[self.cursor];
@@ -588,6 +657,32 @@ impl RuntimeDispatchCoordinator {
         }
     }
 
+    pub fn release_recovery_active(&self) -> bool {
+        self.release_recovery_started_us.is_some()
+    }
+
+    /// End a recovery pause after the pending release set is empty and shift
+    /// all authored work that remains in the schedule by the elapsed recovery
+    /// interval. This freezes the authored timeline instead of emitting a
+    /// catch-up burst after a successful retry.
+    pub fn finish_release_recovery(&mut self, completed_us: u64) -> Option<u64> {
+        if !self.pending_by_generation.is_empty() {
+            return None;
+        }
+        let started_us = self.release_recovery_started_us.take()?;
+        let pause_us = completed_us.saturating_sub(started_us);
+        if pause_us == 0 {
+            return Some(0);
+        }
+        for batch in self.schedule.batches.iter_mut().skip(self.cursor) {
+            batch.scheduled_us = batch.scheduled_us.saturating_add(pause_us);
+            for intent in &mut batch.intents {
+                intent.scheduled_us = intent.scheduled_us.saturating_add(pause_us);
+            }
+        }
+        Some(pause_us)
+    }
+
     /// Requeue release work that did not reach the operating-system input
     /// stream. The active generation remains owned by the coordinator while
     /// bounded retries are pending; callers must stop playback and perform
@@ -622,6 +717,7 @@ impl RuntimeDispatchCoordinator {
             let delay_index =
                 usize::from(retry_count.saturating_sub(1)).min(RELEASE_RETRY_BACKOFF_US.len() - 1);
             let mut retry = pending.clone();
+            self.release_recovery_started_us.get_or_insert(now_us);
             retry.retry_count = retry_count;
             retry.next_retry_us = now_us.saturating_add(RELEASE_RETRY_BACKOFF_US[delay_index]);
             retry.first_failure_us = Some(pending.first_failure_us.unwrap_or(now_us));

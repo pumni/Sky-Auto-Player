@@ -1,8 +1,9 @@
 """Build script and gate for native Rust extension wheel (sky_player_rs).
 
 Builds the extension wheel using Maturin under CPython 3.14t, verifies the
-exact wheel tag, installs only that artifact into a clean uv environment, and
-asserts that importing `sky_player_rs` does not re-enable the GIL.
+exact wheel tag, installs only that artifact into both a clean uv environment
+and the active test/build interpreter, and asserts that importing
+`sky_player_rs` does not re-enable the GIL.
 """
 
 from __future__ import annotations
@@ -206,6 +207,52 @@ def main() -> int:
         if test_res.returncode != 0:
             print("[build_rust_wheel] ERROR: clean extension verification failed!", file=sys.stderr)
             return test_res.returncode
+
+    # The clean venv proves the artifact itself is valid, but pytest and
+    # PyInstaller run from this interpreter. Reinstall the exact wheel there
+    # so neither step can accidentally use a stale extension or no extension.
+    print("[build_rust_wheel] Installing exact wheel into the active environment...")
+    active_install = subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
+            "--reinstall",
+            "--no-deps",
+            str(latest_wheel),
+        ],
+        cwd=str(repo_root),
+        check=False,
+    )
+    if active_install.returncode != 0:
+        print(
+            f"[build_rust_wheel] ERROR: active environment install failed with code {active_install.returncode}",
+            file=sys.stderr,
+        )
+        return active_install.returncode
+
+    active_env = os.environ.copy()
+    active_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+    active_env.pop("PYTHONPATH", None)
+    print("[build_rust_wheel] Verifying the active environment wheel...")
+    active_test = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sky_player_rs; info = sky_player_rs.build_info(); "
+            "print('active_build_info:', info); "
+            "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
+            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info",
+        ],
+        cwd=str(repo_root),
+        env=active_env,
+        check=False,
+    )
+    if active_test.returncode != 0:
+        print("[build_rust_wheel] ERROR: active environment verification failed!", file=sys.stderr)
+        return active_test.returncode
 
     print("[build_rust_wheel] Native Rust wheel build & verification PASSED cleanly.")
     return 0

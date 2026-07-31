@@ -566,10 +566,12 @@ impl NativeDispatchSession {
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.lifecycle.load(Ordering::Acquire);
         let paused = self.metrics.is_paused.load(Ordering::Relaxed);
+        let terminal_error = self.terminal_outcome.load(Ordering::Acquire) == OUTCOME_ERROR;
         let status = match lifecycle {
             LIFECYCLE_NEW => "ready",
             LIFECYCLE_RUNNING if paused => "paused",
             LIFECYCLE_RUNNING => "playing",
+            LIFECYCLE_FINISHED if terminal_error => "error",
             LIFECYCLE_FINISHED => "finished",
             LIFECYCLE_POISONED if self.metrics.panicked.load(Ordering::Acquire) => "panicked",
             LIFECYCLE_POISONED => "poisoned",
@@ -776,6 +778,7 @@ fn run_worker(
     let mut focus_restore_started_us: Option<u64> = None;
     let mut force_full_cleanup = false;
     let mut terminal_error: Option<String> = None;
+    let mut last_published_error: Option<String> = None;
 
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         while !coordinator.is_finished() {
@@ -787,7 +790,7 @@ fn run_worker(
                 let _ = backend.release_all_full_instrument();
                 coordinator.cancel_all();
                 *abort_counts.entry("panic").or_insert(0) += 1;
-                publish_backend_metrics(&backend, metrics);
+                publish_backend_metrics(&backend, metrics, &mut last_published_error);
             }
 
             let now_us = qpc_now_us();
@@ -801,7 +804,7 @@ fn run_worker(
                     coordinator.cancel_all();
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
                     clock_state.enter_pause("focus", now_us);
-                    publish_backend_metrics(&backend, metrics);
+                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
             } else if clock_state.has_pause_reason("focus") {
                 let restored_at = *focus_restore_started_us.get_or_insert(now_us);
@@ -812,7 +815,7 @@ fn run_worker(
                     coordinator.cancel_all();
                     let _ = clock_state.exit_pause("focus", now_us);
                     focus_restore_started_us = None;
-                    publish_backend_metrics(&backend, metrics);
+                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
             }
 
@@ -821,7 +824,7 @@ fn run_worker(
                     let _ = backend.release_all();
                     coordinator.cancel_all();
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
-                    publish_backend_metrics(&backend, metrics);
+                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 }
                 clock_state.enter_pause("manual", now_us);
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
@@ -868,6 +871,10 @@ fn run_worker(
                     &result.sent,
                     &result.skipped_duplicates,
                 );
+                // A successful retry closes the recovery pause. The
+                // coordinator shifts the remaining authored timeline so
+                // overdue work cannot burst immediately after recovery.
+                let _ = coordinator.finish_release_recovery(completed_effective);
                 if config.enable_adaptive_lead {
                     update_estimator_after_send(
                         &mut estimator,
@@ -972,7 +979,7 @@ fn run_worker(
                     metrics,
                     latency_tx,
                 );
-                publish_backend_metrics(&backend, metrics);
+                publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 if recovery_required {
                     force_full_cleanup = true;
                     terminal_error = Some(format!(
@@ -1051,7 +1058,7 @@ fn run_worker(
                             send_attempts: 0,
                             zero_progress_retries: 0,
                         });
-                        publish_backend_metrics(&backend, metrics);
+                        publish_backend_metrics(&backend, metrics, &mut last_published_error);
                         continue;
                     }
                     if config
@@ -1279,7 +1286,7 @@ fn run_worker(
                         });
                     }
                 }
-                publish_backend_metrics(&backend, metrics);
+                publish_backend_metrics(&backend, metrics, &mut last_published_error);
                 continue;
             }
 
@@ -1377,7 +1384,7 @@ fn run_worker(
         .map(|(reason, count)| (reason.to_string(), count))
         .collect();
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
-    publish_backend_metrics(&backend, metrics);
+    publish_backend_metrics(&backend, metrics, &mut last_published_error);
     metrics.is_paused.store(false, Ordering::Relaxed);
     *telemetry_output.lock() = Some(telemetry.output);
     *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();
@@ -1569,7 +1576,11 @@ fn focus_gate_matches(
     validated_focus_active && hwnd_matches
 }
 
-fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
+fn publish_backend_metrics(
+    backend: &TrackedKeyState,
+    metrics: &SharedMetrics,
+    last_published_error: &mut Option<String>,
+) {
     metrics
         .active_count
         .store(backend.active_keys.len() as u64, Ordering::Relaxed);
@@ -1585,9 +1596,10 @@ fn publish_backend_metrics(backend: &TrackedKeyState, metrics: &SharedMetrics) {
     // The healthy dispatch path never takes this lock. Error text is
     // published only when the backend error state changes, including the
     // transition back to None after a successful recovery.
-    let mut published = metrics.last_error.lock();
-    if published.as_ref() != backend.last_error.as_ref() {
+    if last_published_error.as_ref() != backend.last_error.as_ref() {
+        let mut published = metrics.last_error.lock();
         *published = backend.last_error.clone();
+        *last_published_error = backend.last_error.clone();
     }
     metrics
         .chord_split_events

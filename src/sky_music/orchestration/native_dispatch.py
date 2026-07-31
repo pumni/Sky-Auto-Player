@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from sky_music.domain.scheduler_types import KeyAction
 from sky_music.infrastructure.backend import BackendHealth
 from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.orchestration.core.ports import (
+    PLAYBACK_ERROR,
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
     PLAYBACK_SHUTDOWN_TIMEOUT,
@@ -27,6 +30,11 @@ from sky_music.orchestration.core.ports import (
 
 _RUST_AVAILABLE: bool | None = None
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class NativeDispatchError(RuntimeError):
+    """A controlled native worker failure after cleanup and telemetry capture."""
 
 
 def _expected_native_build_id() -> str:
@@ -37,13 +45,43 @@ def _expected_native_build_id() -> str:
     ``build_app.py``. This keeps local development usable without allowing a
     packaged release to silently accept an extension from another commit.
     """
+    if getattr(sys, "frozen", False):
+        try:
+            from sky_music._native_build import (  # type: ignore[reportMissingImports]
+                EXPECTED_NATIVE_BUILD_ID,
+            )
+        except ImportError:
+            return ""
+        return EXPECTED_NATIVE_BUILD_ID.strip()
+
+    configured = os.environ.get("SKY_EXPECTED_NATIVE_BUILD_ID", "").strip()
+    if configured:
+        return configured
     try:
-        from sky_music._native_build import (  # type: ignore[reportMissingImports]
-            EXPECTED_NATIVE_BUILD_ID,
+        head = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            check=False,
+            text=True,
+            cwd=_REPO_ROOT,
         )
-    except ImportError:
-        return os.environ.get("SKY_EXPECTED_NATIVE_BUILD_ID", "").strip()
-    return EXPECTED_NATIVE_BUILD_ID.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            capture_output=True,
+            check=False,
+            text=True,
+            cwd=_REPO_ROOT,
+        )
+    except OSError:
+        return ""
+    if head.returncode != 0 or status.returncode != 0 or not head.stdout.strip():
+        return ""
+    if status.stdout.strip():
+        allow_dirty = os.environ.get("SKY_ALLOW_DIRTY_NATIVE_BUILD", "").strip().casefold()
+        if allow_dirty not in {"1", "true", "yes", "on"}:
+            return "!dirty-source-checkout!"
+        return f"{head.stdout.strip()}-dirty"
+    return head.stdout.strip()
 
 
 def python_dispatch_explicitly_requested() -> bool:
@@ -328,6 +366,7 @@ class RustDispatchRuntime:
             outcome = str(latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED)
             if outcome not in {
                 PLAYBACK_FINISHED,
+                PLAYBACK_ERROR,
                 PLAYBACK_QUIT,
                 PLAYBACK_SKIPPED,
                 PLAYBACK_SHUTDOWN_TIMEOUT,
@@ -336,6 +375,7 @@ class RustDispatchRuntime:
 
         if self._renderer is not None:
             verb = {
+                PLAYBACK_ERROR: "Error",
                 PLAYBACK_FINISHED: "Finished",
                 PLAYBACK_QUIT: "Stopped",
                 PLAYBACK_SKIPPED: "Skipped",

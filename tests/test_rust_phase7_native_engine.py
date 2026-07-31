@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -11,6 +13,7 @@ import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
 from sky_music.domain.scheduler_types import ActionKind
 from sky_music.orchestration.engine import SendLatencyEstimator
+from sky_music.orchestration.native_dispatch import RustDispatchRuntime
 from sky_music.platform.win32 import inputs
 
 
@@ -335,7 +338,7 @@ def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None
     snapshot = cast(dict[str, Any], session.snapshot())
     output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
 
-    assert snapshot["status"] == "finished"
+    assert snapshot["status"] == "error"
     assert snapshot["outcome"] == "error"
     assert "note-off recovery exhausted" in snapshot["terminal_error"]
     assert snapshot["release_outcome"]["released_successfully"] is False
@@ -343,6 +346,70 @@ def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None
         row["event_index"] == 2 and row["runtime_outcome"] == "sent"
         for row in output["records"]
     )
+
+
+def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) -> None:
+    snapshot: dict[str, object] = {
+        "is_finished": True,
+        "status": "error",
+        "outcome": "error",
+        "terminal_error": "note-off recovery exhausted",
+    }
+
+    class _ErrorSession:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def update_focus(self, _active: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def snapshot(self) -> dict[str, object]:
+            return snapshot
+
+        def join(self, timeout_ms: int = 5_000) -> bool:
+            assert timeout_ms == 5_000
+            return True
+
+        def take_telemetry_json(self) -> str:
+            return json.dumps({"records": [{"runtime_outcome": "failed_note_off"}]})
+
+        def estimator_state_json(self) -> str:
+            return "{}"
+
+    monkeypatch.setitem(sys.modules, "sky_player_rs", SimpleNamespace(DispatchSession=_ErrorSession))
+    runtime = RustDispatchRuntime(
+        actions=(),
+        song_name="controlled-error",
+        min_hold_us=0,
+        max_lead_us=2_000,
+        focus_restore_grace_us=100_000,
+        spin_threshold_us=150,
+        late_pulse_drop_threshold_us=None,
+        same_key_conflict_policy="degraded",
+        telemetry_enabled=True,
+        rt_priority_mode="off",
+        enable_waitable_timer=True,
+        enable_event_wait=True,
+        enable_adaptive_spin=False,
+        spin_floor_us=700,
+        input_path_warn_us=300,
+        enable_adaptive_lead=False,
+        estimator_state_json=None,
+        require_focus=False,
+        focus_guard=None,
+        controls=None,
+        renderer=None,
+        poll_s=0.002,
+    )
+
+    outcome, latest, telemetry, estimator = runtime.run()
+    assert outcome == "error"
+    assert latest["terminal_error"] == "note-off recovery exhausted"
+    assert telemetry["records"][0]["runtime_outcome"] == "failed_note_off"
+    assert estimator == "{}"
 
 
 def test_native_dispatch_fixed_lead_overrides_adaptive_estimator() -> None:
