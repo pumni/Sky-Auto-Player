@@ -415,6 +415,7 @@ class PlaybackEngine:
         # Passed by callers that resolve a FrameTimingPolicy so the summary is self-describing.
         min_hold_margin_us: int = 0,
         min_hold_margin_source: str = "default_500",
+        chord_stagger_us: int = 0,
     ):
         self.song = song
         self.actions = actions
@@ -425,6 +426,7 @@ class PlaybackEngine:
         self.backend = backend
         self.focus_restore_grace_us = focus_restore_grace_us
         self.min_hold_us = max(0, min_hold_us)
+        self.chord_stagger_us = max(0, int(chord_stagger_us))
         self.same_key_conflict_policy = same_key_conflict_policy
         self.late_pulse_drop_threshold_us = (
             None
@@ -595,6 +597,19 @@ class PlaybackEngine:
             and isinstance(self.sleeper, RealSleeper)
             and self.use_dispatch_thread
         )
+        if eligible and self.chord_stagger_us != 0:
+            reason = "chord_stagger_us is incompatible with atomic native chords"
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "dispatch_backend": "python",
+                    "rust_dispatch_default": True,
+                    "rust_dispatch_fallback": True,
+                    "rust_dispatch_fallback_reason": reason,
+                }
+            )
+            _LOGGER.warning("Rust dispatch disabled: %s", reason)
+            return False
         if eligible and not is_native_dispatch_available():
             reason = "missing or incompatible native extension"
             self.telemetry.record_runtime_options(
@@ -626,6 +641,7 @@ class PlaybackEngine:
             actions=self.actions,
             song_name=self.song.name,
             min_hold_us=self.min_hold_us,
+            chord_stagger_us=self.chord_stagger_us,
             max_lead_us=max(self.dispatch_lead_us, 2_000),
             dispatch_lead_us=self.dispatch_lead_us,
             focus_restore_grace_us=self.focus_restore_grace_us,
@@ -686,6 +702,16 @@ class PlaybackEngine:
                 ),
                 "bookkeeping_degraded": snapshot.get("bookkeeping_degraded", False),
                 "wait_path_degraded": snapshot.get("wait_path_degraded", False),
+                "wait_target_error_us": snapshot.get("wait_target_error_us", 0),
+                "lead_saturation_count_down": snapshot.get(
+                    "lead_saturation_count_down", []
+                ),
+                "lead_saturation_count_up": snapshot.get(
+                    "lead_saturation_count_up", []
+                ),
+                "positive_residual_at_cap": snapshot.get(
+                    "positive_residual_at_cap", 0
+                ),
             }
         )
         self.telemetry.record_backend_health(
@@ -696,6 +722,27 @@ class PlaybackEngine:
                 last_error=snapshot["last_error"],
                 keys_dropped=int(snapshot["keys_dropped"]),
                 chord_split_events=int(snapshot["chord_split_events"]),
+                sendinput_partial_events=int(
+                    snapshot.get("sendinput_partial_events", 0)
+                ),
+                sendinput_zero_progress_failures=int(
+                    snapshot.get("sendinput_zero_progress_failures", 0)
+                ),
+                chords_rejected=int(snapshot.get("chords_rejected", 0)),
+                authored_conflict_events=int(
+                    snapshot.get("authored_conflict_events", 0)
+                ),
+                authored_chords_rejected=int(
+                    snapshot.get("authored_chords_rejected", 0)
+                ),
+                authored_keys_rejected=int(
+                    snapshot.get("authored_keys_rejected", 0)
+                ),
+                keys_inserted_before_failure=int(
+                    snapshot.get("keys_inserted_before_failure", 0)
+                ),
+                keys_rolled_back=int(snapshot.get("keys_rolled_back", 0)),
+                rollback_residue_keys=int(snapshot.get("rollback_residue_keys", 0)),
             )
         )
         self.telemetry.record_generation_status_counts(

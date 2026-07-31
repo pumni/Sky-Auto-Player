@@ -610,6 +610,7 @@ def play_selected_song(
         focus_restore_grace_us=active_policy.focus_restore_grace_us,
         fps=getattr(active_policy, "fps", None),
         min_hold_us=int(active_policy.min_hold_us),
+        chord_stagger_us=int(getattr(active_policy, "chord_stagger_us", 0)),
         same_key_conflict_policy=active_policy.same_key_conflict_policy,
         use_dispatch_thread=RUNTIME_STATE.use_dispatch_thread,
         input_path_warn_us=user_cfg.input_path_warn_us if RUNTIME_STATE.check_input_path else 0,

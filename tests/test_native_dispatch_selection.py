@@ -17,7 +17,7 @@ from sky_music.orchestration import native_dispatch
 from sky_music.orchestration.engine import PlaybackEngine
 
 
-def _production_engine() -> PlaybackEngine:
+def _production_engine(*, chord_stagger_us: int = 0) -> PlaybackEngine:
     return PlaybackEngine(
         song=Song(name="native-selection", notes=()),
         actions=(
@@ -29,6 +29,7 @@ def _production_engine() -> PlaybackEngine:
         ),
         backend=WinSendInputBackend(),
         require_focus=False,
+        chord_stagger_us=chord_stagger_us,
     )
 
 
@@ -68,6 +69,18 @@ def test_native_dispatch_is_default_when_eligible(monkeypatch) -> None:
     monkeypatch.delenv("SKY_USE_RUST_DISPATCH", raising=False)
     monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
     assert _production_engine()._should_use_native_dispatch() is True
+
+
+def test_native_dispatch_falls_back_explicitly_for_staggered_chords(monkeypatch) -> None:
+    monkeypatch.delenv("SKY_USE_PYTHON_DISPATCH", raising=False)
+    monkeypatch.delenv("SKY_USE_RUST_DISPATCH", raising=False)
+    monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
+    engine = _production_engine(chord_stagger_us=100)
+    assert engine._should_use_native_dispatch() is False
+    assert (
+        engine.telemetry.runtime_options["rust_dispatch_fallback_reason"]
+        == "chord_stagger_us is incompatible with atomic native chords"
+    )
 
 
 def test_native_dispatch_rejects_stale_build_id(monkeypatch) -> None:

@@ -83,8 +83,9 @@ pub struct EstimatorStateJson {
 #[derive(Debug, Clone)]
 struct RollingSamples {
     values: [u64; ROLLING_WINDOW],
-    len: usize,
-    cursor: usize,
+    len: u8,
+    cursor: u8,
+    cached_p95: Option<u64>,
 }
 
 impl Default for RollingSamples {
@@ -93,38 +94,46 @@ impl Default for RollingSamples {
             values: [0; ROLLING_WINDOW],
             len: 0,
             cursor: 0,
+            cached_p95: None,
         }
     }
 }
 
 impl RollingSamples {
     fn push(&mut self, value: u64) {
-        if self.len < ROLLING_WINDOW {
-            self.values[self.len] = value;
+        if usize::from(self.len) < ROLLING_WINDOW {
+            self.values[usize::from(self.len)] = value;
             self.len += 1;
-            self.cursor = self.len % ROLLING_WINDOW;
+            self.cursor = self.len % ROLLING_WINDOW as u8;
         } else {
-            self.values[self.cursor] = value;
-            self.cursor = (self.cursor + 1) % ROLLING_WINDOW;
+            self.values[usize::from(self.cursor)] = value;
+            self.cursor = (self.cursor + 1) % ROLLING_WINDOW as u8;
         }
+        self.refresh_p95();
     }
 
     fn is_warm(&self) -> bool {
-        self.len >= SEED_SAMPLES
+        usize::from(self.len) >= SEED_SAMPLES
     }
 
     fn p95(&self) -> Option<u64> {
+        self.cached_p95
+    }
+
+    fn refresh_p95(&mut self) {
         if !self.is_warm() {
-            return None;
+            self.cached_p95 = None;
+            return;
         }
+        let len = usize::from(self.len);
         let mut sorted = self.values;
-        sorted[..self.len].sort_unstable();
-        let rank = (self.len * 95).saturating_add(99) / 100;
-        Some(sorted[rank.saturating_sub(1).min(self.len - 1)])
+        sorted[..len].sort_unstable();
+        let rank = (len * 95).saturating_add(99) / 100;
+        self.cached_p95 = Some(sorted[rank.saturating_sub(1).min(len - 1)]);
     }
 
     fn to_vec(&self) -> Vec<u64> {
-        self.values[..self.len].to_vec()
+        self.values[..usize::from(self.len)].to_vec()
     }
 
     fn from_values(values: &[u64]) -> Result<Self, String> {
@@ -179,6 +188,13 @@ pub struct SendLatencyEstimator {
     sum_residual: i64,
     ema_residual: f64,
     warm_residual: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeadEstimate {
+    pub applied_us: u64,
+    pub uncapped_us: u64,
+    pub saturated: bool,
 }
 
 impl SendLatencyEstimator {
@@ -305,7 +321,7 @@ impl SendLatencyEstimator {
         raw.saturating_add(residual).max(0) as u64
     }
 
-    pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
+    pub fn estimate_lead(&self, kind: ActionKind, n_keys: usize) -> LeadEstimate {
         let n = 1.max(self.max_poly.min(n_keys));
         // The envelope is intentional: independently observed buckets must
         // never make a larger chord receive a smaller lead than a smaller
@@ -315,7 +331,15 @@ impl SendLatencyEstimator {
             .map(|bucket| self.base_lead_us(kind, bucket))
             .max()
             .unwrap_or(0);
-        monotonic.min(self.max_lead_us)
+        LeadEstimate {
+            applied_us: monotonic.min(self.max_lead_us),
+            uncapped_us: monotonic,
+            saturated: monotonic > self.max_lead_us,
+        }
+    }
+
+    pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
+        self.estimate_lead(kind, n_keys).applied_us
     }
 
     /// Returns true when the uncapped monotonic lead would exceed the
@@ -323,12 +347,7 @@ impl SendLatencyEstimator {
     /// decision, so callers can distinguish a healthy capped value from a
     /// model that is no longer able to compensate the observed path.
     pub fn lead_saturated(&self, kind: ActionKind, n_keys: usize) -> bool {
-        let n = 1.max(self.max_poly.min(n_keys));
-        let uncapped = (1..=n)
-            .map(|bucket| self.base_lead_us(kind, bucket))
-            .max()
-            .unwrap_or(0);
-        uncapped > self.max_lead_us
+        self.estimate_lead(kind, n_keys).saturated
     }
 
     pub fn export_state(&self) -> EstimatorStateJson {
@@ -461,7 +480,7 @@ impl SendLatencyEstimator {
             // bucket Up counts are represented by the rolling windows.
             for (index, window) in imported_up.iter().enumerate() {
                 counts_up[index] = window.len as u64;
-                sums_up[index] = window.values[..window.len].iter().sum();
+                sums_up[index] = window.values[..usize::from(window.len)].iter().sum();
             }
         } else {
             counts_up[0] = state.count_up;
@@ -520,7 +539,7 @@ mod tests {
         }
         assert_eq!(samples.p95(), Some(130));
         samples.push(2_000);
-        assert_eq!(samples.len, ROLLING_WINDOW);
+        assert_eq!(usize::from(samples.len), ROLLING_WINDOW);
         assert_eq!(samples.p95(), Some(131));
     }
 

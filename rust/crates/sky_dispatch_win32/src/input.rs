@@ -425,7 +425,7 @@ where
         send_attempts: 2,
         zero_progress_retries: u8::from(first_inserted == 0),
         first_inserted: first_inserted as u8,
-        partial_progress: false,
+        partial_progress: sent_total > 0 && !success,
         retried_after_zero_progress: first_inserted == 0,
         chord_integrity_lost: false,
         keys_inserted_before_failure: if success { 0 } else { sent_total as u8 },
@@ -456,6 +456,7 @@ pub struct TrackedKeyState {
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub sendinput_partial_events: u64,
+    pub sendinput_zero_progress_failures: u64,
     pub chords_rejected: u64,
     pub authored_keys_rejected: u64,
     pub keys_inserted_before_failure: u64,
@@ -474,6 +475,10 @@ impl fmt::Debug for TrackedKeyState {
             .field("keys_dropped", &self.keys_dropped)
             .field("chord_split_events", &self.chord_split_events)
             .field("sendinput_partial_events", &self.sendinput_partial_events)
+            .field(
+                "sendinput_zero_progress_failures",
+                &self.sendinput_zero_progress_failures,
+            )
             .field("chords_rejected", &self.chords_rejected)
             .field("authored_keys_rejected", &self.authored_keys_rejected)
             .field(
@@ -581,6 +586,10 @@ impl TrackedKeyState {
         if emitted.partial_progress {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
         }
+        if !emitted.success && emitted.retried_after_zero_progress && emitted.sent.is_empty() {
+            self.sendinput_zero_progress_failures =
+                self.sendinput_zero_progress_failures.saturating_add(1);
+        }
         self.keys_inserted_before_failure = self
             .keys_inserted_before_failure
             .saturating_add(emitted.keys_inserted_before_failure as u64);
@@ -599,12 +608,14 @@ impl TrackedKeyState {
             self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
         }
 
-        if emitted.chord_integrity_lost {
-            self.chord_split_events += 1;
+        if !emitted.success {
             self.chords_rejected = self.chords_rejected.saturating_add(1);
             self.authored_keys_rejected = self
                 .authored_keys_rejected
                 .saturating_add(to_send.len() as u64);
+        }
+        if emitted.chord_integrity_lost {
+            self.chord_split_events += 1;
         }
         if emitted.success {
             if self.failed_release_mask == 0 {
@@ -707,8 +718,12 @@ impl TrackedKeyState {
 
         let emitted = self.do_emit_up(&to_release);
 
-        if emitted.partial_progress || !emitted.success {
+        if emitted.partial_progress {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
+        }
+        if !emitted.success && emitted.retried_after_zero_progress && emitted.sent.is_empty() {
+            self.sendinput_zero_progress_failures =
+                self.sendinput_zero_progress_failures.saturating_add(1);
         }
         self.keys_inserted_before_failure = self
             .keys_inserted_before_failure
@@ -1065,6 +1080,28 @@ mod tests {
         assert_eq!(emitted.last_win32_error, Some(1460));
         assert_eq!(emitted.send_attempts, 2);
         assert_eq!(emitted.zero_progress_retries, 1);
+        assert!(!emitted.partial_progress);
+    }
+
+    #[test]
+    fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
+        let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
+            assert!(!key_up);
+            PlatformSendResult {
+                requested: codes.len() as u32,
+                inserted: 0,
+                completed_us: 1,
+                win32_error: 5,
+            }
+        });
+
+        let result = state.key_down(&[2, 3]);
+        assert!(!result.success);
+        assert_eq!(state.chords_rejected, 1);
+        assert_eq!(state.authored_keys_rejected, 2);
+        assert_eq!(state.sendinput_partial_events, 0);
+        assert_eq!(state.sendinput_zero_progress_failures, 1);
+        assert_eq!(state.chord_split_events, 0);
     }
 
     #[test]

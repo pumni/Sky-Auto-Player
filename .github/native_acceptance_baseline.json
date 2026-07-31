@@ -1,10 +1,31 @@
 {
-  "schema": 1,
+  "schema": 2,
   "evidence_scope": "sender_side_mock_backend",
   "description": "Generous Windows CI sanity ceilings. Fixed-host performance baselines belong in soak-test infrastructure.",
   "sender_completion_error_us": {
     "p95": 10000,
     "p99": 20000
+  },
+  "by_polyphony": {
+    "default": {
+      "completion_error_us": {
+        "absolute": {"p95": 10000, "p99": 20000},
+        "late": {"p95": 10000, "p99": 20000},
+        "early": {"p95": 10000, "p99": 20000},
+        "by_kind": {
+          "down": {
+            "absolute": {"p95": 10000, "p99": 20000},
+            "late": {"p95": 10000, "p99": 20000},
+            "early": {"p95": 10000, "p99": 20000}
+          },
+          "up": {
+            "absolute": {"p95": 10000, "p99": 20000},
+            "late": {"p95": 10000, "p99": 20000},
+            "early": {"p95": 10000, "p99": 20000}
+          }
+        }
+      }
+    }
   },
   "command_interrupt_latency_us": {
     "p95": 20000

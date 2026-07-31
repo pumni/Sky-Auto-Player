@@ -182,7 +182,12 @@ class RustDispatchRuntime:
         poll_s: float,
         core_warmup_budget_us: int = 200,
         dispatch_lead_us: int = 0,
+        chord_stagger_us: int = 0,
     ) -> None:
+        if chord_stagger_us != 0:
+            raise ValueError(
+                "native accuracy-first dispatch requires chord_stagger_us == 0"
+            )
         import sky_player_rs  # type: ignore[import-not-found]
 
         native_actions = [
@@ -301,6 +306,9 @@ class RustDispatchRuntime:
             keys_dropped=int(snapshot["keys_dropped"]),
             chord_split_events=int(snapshot["chord_split_events"]),
             sendinput_partial_events=int(snapshot.get("sendinput_partial_events", 0)),
+            sendinput_zero_progress_failures=int(
+                snapshot.get("sendinput_zero_progress_failures", 0)
+            ),
             chords_rejected=int(snapshot.get("chords_rejected", 0)),
             authored_conflict_events=int(snapshot.get("authored_conflict_events", 0)),
             authored_chords_rejected=int(snapshot.get("authored_chords_rejected", 0)),

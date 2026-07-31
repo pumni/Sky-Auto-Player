@@ -93,6 +93,11 @@ Since the RT-pipeline optimization, dispatch targets **onset = SendInput complet
 $$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
 and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. Version-2 lead caches are migrated to the version-3 rolling model. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
+Pending releases use a bounded cohort fixed point: the Up lead is selected from the releases that
+share the next effective deadline, rather than from all currently pending keys. The resulting
+deadline/lead/polyphony plan is reused for waiting and popping. The native accuracy-first path
+also requires `chord_stagger_us == 0`; staggered chords remain an explicit Python diagnostic path.
+
 ---
 
 ## 4. Profile Classes

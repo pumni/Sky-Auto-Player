@@ -68,6 +68,36 @@ def _stats(values: list[int]) -> dict[str, int]:
     }
 
 
+def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return signed, absolute, early and late error distributions.
+
+    Signed aggregate percentiles are retained for report compatibility, but
+    regression gates must inspect all three non-negative views.  The per-kind
+    split prevents a Down-only or Up-only regression from being diluted by the
+    other half of the timeline.
+    """
+
+    def values_for(rows: list[dict[str, Any]]) -> list[int]:
+        return [int(row["visible_lateness_us"]) for row in rows]
+
+    def report_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        signed = values_for(rows)
+        return {
+            "signed": _stats(signed),
+            "absolute": _stats([abs(value) for value in signed]),
+            "late": _stats([max(value, 0) for value in signed]),
+            "early": _stats([max(-value, 0) for value in signed]),
+        }
+
+    by_kind = {
+        kind: report_for([row for row in records if row.get("kind") == kind])
+        for kind in ("down", "up")
+    }
+    result = report_for(records)
+    result["by_kind"] = by_kind
+    return result
+
+
 def _peak_working_set_bytes() -> int | None:
     """Read this benchmark process's peak working set without Python Win32 ctypes."""
     if os.name != "nt":
@@ -157,13 +187,18 @@ def _run_dispatch(
         "polyphony": polyphony,
         "wall_us": wall_us,
         "_sender_error_values": sender_errors,
+        "_records": records,
         "sender_completion_error_us": _stats(sender_errors),
+        "completion_error_us": _completion_error_report(records),
         "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
         "peak_rss_bytes": peak_rss,
         "keys_dropped": int(snapshot.get("keys_dropped", 0)),
         "failed_release_count": int(snapshot.get("failed_release_count", 0)),
         "chord_split_events": int(snapshot.get("chord_split_events", 0)),
         "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
+        "sendinput_zero_progress_failures": int(
+            snapshot.get("sendinput_zero_progress_failures", 0)
+        ),
         "lead_saturation_count_down": list(
             snapshot.get("lead_saturation_count_down", [])
         ),
@@ -307,6 +342,42 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
                 f"observed={observed:g}, baseline={expected:g}, allowed={expected * ratio:g}"
             )
 
+    for polyphony, observed in report.get("by_polyphony", {}).items():
+        expected_poly = baseline.get("by_polyphony", {}).get(polyphony) or baseline.get(
+            "by_polyphony", {}
+        ).get("default", {})
+        expected_errors = expected_poly.get("completion_error_us", {})
+        observed_errors = observed.get("completion_error_us", {})
+        for dimension in ("absolute", "late", "early"):
+            for field in ("p95", "p99"):
+                expected = float(expected_errors.get(dimension, {}).get(field, 0))
+                observed_value = float(observed_errors.get(dimension, {}).get(field, 0))
+                if expected <= 0:
+                    continue
+                if observed_value > expected * 1.25:
+                    raise SystemExit(
+                        "native benchmark regression in "
+                        f"by_polyphony.{polyphony}.completion_error_us.{dimension}.{field}: "
+                        f"observed={observed_value:g}, baseline={expected:g}, "
+                        f"allowed={expected * 1.25:g}"
+                    )
+            for kind in ("down", "up"):
+                expected_kind = expected_errors.get("by_kind", {}).get(kind, {})
+                observed_kind = observed_errors.get("by_kind", {}).get(kind, {})
+                for dimension in ("absolute", "late", "early"):
+                    for field in ("p95", "p99"):
+                        expected = float(expected_kind.get(dimension, {}).get(field, 0))
+                        observed_value = float(observed_kind.get(dimension, {}).get(field, 0))
+                        if expected <= 0:
+                            continue
+                        if observed_value > expected * 1.25:
+                            raise SystemExit(
+                                "native benchmark regression in "
+                                f"by_polyphony.{polyphony}.completion_error_us.by_kind."
+                                f"{kind}.{dimension}.{field}: observed={observed_value:g}, "
+                                f"baseline={expected:g}, allowed={expected * 1.25:g}"
+                            )
+
 
 def main() -> int:
     args = _parse_args()
@@ -348,6 +419,9 @@ def main() -> int:
             "sender_completion_error_us": {
                 key: _stats(values)[key] for key in ("p50", "p95", "p99", "max")
             },
+            "completion_error_us": _completion_error_report(
+                [record for run in runs for record in run["_records"]]
+            ),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "peak_rss_bytes": _stats(
                 [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
@@ -357,6 +431,9 @@ def main() -> int:
             "chord_split_events": sum(run["chord_split_events"] for run in runs),
             "sendinput_partial_events": sum(
                 run["sendinput_partial_events"] for run in runs
+            ),
+            "sendinput_zero_progress_failures": sum(
+                run["sendinput_zero_progress_failures"] for run in runs
             ),
             "positive_residual_at_cap": sum(
                 run["positive_residual_at_cap"] for run in runs
@@ -395,6 +472,9 @@ def main() -> int:
             key: _stats(sender_errors)[key]
             for key in ("p50", "p95", "p99", "max")
         },
+        "completion_error_us": _completion_error_report(
+            [record for run in dispatch_runs for record in run["_records"]]
+        ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
         "peak_rss_bytes": _stats(
             [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None]
@@ -405,6 +485,9 @@ def main() -> int:
         "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),
         "sendinput_partial_events": sum(
             run["sendinput_partial_events"] for run in dispatch_runs
+        ),
+        "sendinput_zero_progress_failures": sum(
+            run["sendinput_zero_progress_failures"] for run in dispatch_runs
         ),
         "positive_residual_at_cap": sum(
             run["positive_residual_at_cap"] for run in dispatch_runs

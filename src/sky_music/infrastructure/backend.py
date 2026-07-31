@@ -33,6 +33,7 @@ class BackendHealth:
     keys_dropped: int = 0
     chord_split_events: int = 0
     sendinput_partial_events: int = 0
+    sendinput_zero_progress_failures: int = 0
     chords_rejected: int = 0
     authored_conflict_events: int = 0
     authored_chords_rejected: int = 0

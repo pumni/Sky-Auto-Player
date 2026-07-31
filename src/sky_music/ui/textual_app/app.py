@@ -879,6 +879,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             focus_restore_grace_us=plan.active_policy.focus_restore_grace_us,
             fps=getattr(plan.active_policy, "fps", None),
             min_hold_us=int(plan.active_policy.min_hold_us),
+            chord_stagger_us=int(getattr(plan.active_policy, "chord_stagger_us", 0)),
             same_key_conflict_policy=plan.active_policy.same_key_conflict_policy,
             use_dispatch_thread=use_dispatch_thread,
             input_path_warn_us=input_path_warn_us,

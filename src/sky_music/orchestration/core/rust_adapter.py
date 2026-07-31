@@ -100,6 +100,9 @@ class RustInputAdapter(InputBackend):
             keys_dropped=int(h["keys_dropped"]),
             chord_split_events=int(h["chord_split_events"]),
             sendinput_partial_events=int(h.get("sendinput_partial_events", 0)),
+            sendinput_zero_progress_failures=int(
+                h.get("sendinput_zero_progress_failures", 0)
+            ),
             chords_rejected=int(h.get("chords_rejected", 0)),
             authored_conflict_events=int(h.get("authored_conflict_events", 0)),
             authored_chords_rejected=int(h.get("authored_chords_rejected", 0)),
@@ -115,6 +118,9 @@ class RustInputAdapter(InputBackend):
             "keys_dropped": int(h["keys_dropped"]),
             "chord_split_events": int(h["chord_split_events"]),
             "sendinput_partial_events": int(h.get("sendinput_partial_events", 0)),
+            "sendinput_zero_progress_failures": int(
+                h.get("sendinput_zero_progress_failures", 0)
+            ),
             "chords_rejected": int(h.get("chords_rejected", 0)),
             "authored_conflict_events": int(h.get("authored_conflict_events", 0)),
             "authored_chords_rejected": int(h.get("authored_chords_rejected", 0)),

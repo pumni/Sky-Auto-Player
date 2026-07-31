@@ -326,6 +326,10 @@ impl RustInputBackend {
         dict.set_item("keys_dropped", state.keys_dropped)?;
         dict.set_item("chord_split_events", state.chord_split_events)?;
         dict.set_item("sendinput_partial_events", state.sendinput_partial_events)?;
+        dict.set_item(
+            "sendinput_zero_progress_failures",
+            state.sendinput_zero_progress_failures,
+        )?;
         dict.set_item("chords_rejected", state.chords_rejected)?;
         dict.set_item("authored_keys_rejected", state.authored_keys_rejected)?;
         dict.set_item(
@@ -624,6 +628,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("keys_dropped", snap.keys_dropped)?;
         dict.set_item("chord_split_events", snap.chord_split_events)?;
         dict.set_item("sendinput_partial_events", snap.sendinput_partial_events)?;
+        dict.set_item(
+            "sendinput_zero_progress_failures",
+            snap.sendinput_zero_progress_failures,
+        )?;
         dict.set_item("chords_rejected", snap.chords_rejected)?;
         dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
         dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;

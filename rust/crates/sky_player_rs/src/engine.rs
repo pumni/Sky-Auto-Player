@@ -80,6 +80,7 @@ pub struct EngineSnapshot {
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub sendinput_partial_events: u64,
+    pub sendinput_zero_progress_failures: u64,
     pub chords_rejected: u64,
     pub authored_conflict_events: u64,
     pub authored_chords_rejected: u64,
@@ -316,6 +317,7 @@ struct SharedMetrics {
     keys_dropped: AtomicU64,
     chord_split_events: AtomicU64,
     sendinput_partial_events: AtomicU64,
+    sendinput_zero_progress_failures: AtomicU64,
     chords_rejected: AtomicU64,
     authored_conflict_events: AtomicU64,
     authored_chords_rejected: AtomicU64,
@@ -717,6 +719,10 @@ impl NativeDispatchSession {
                 .metrics
                 .sendinput_partial_events
                 .load(Ordering::Relaxed),
+            sendinput_zero_progress_failures: self
+                .metrics
+                .sendinput_zero_progress_failures
+                .load(Ordering::Relaxed),
             chords_rejected: self.metrics.chords_rejected.load(Ordering::Relaxed),
             authored_conflict_events: self
                 .metrics
@@ -1023,15 +1029,20 @@ fn run_worker(
                 .elapsed_us
                 .store(effective_now_us, Ordering::Relaxed);
 
-            let pending_polyphony = coordinator.next_pending_polyphony().max(1);
-            let lead_up = if config.dispatch_lead_us > 0 {
-                config.dispatch_lead_us
-            } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Up, pending_polyphony)
-            } else {
-                0
-            };
-            let due_pending = coordinator.pop_due_pending(effective_now_us, lead_up);
+            let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
+                if config.dispatch_lead_us > 0 {
+                    (config.dispatch_lead_us, false)
+                } else if config.enable_adaptive_lead {
+                    let estimate = estimator.estimate_lead(ActionKind::Up, polyphony);
+                    (estimate.applied_us, estimate.saturated)
+                } else {
+                    (0, false)
+                }
+            });
+            let lead_up = pending_plan.as_ref().map_or(0, |plan| plan.lead_us);
+            let due_pending = pending_plan.as_ref().map_or_else(SmallVec::new, |plan| {
+                coordinator.pop_due_pending_with_plan(effective_now_us, plan)
+            });
             if !due_pending.is_empty() {
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
@@ -1155,7 +1166,9 @@ fn run_worker(
                     zero_progress_retries: result.zero_progress_retries,
                 });
                 if config.enable_adaptive_lead
-                    && estimator.lead_saturated(ActionKind::Up, scan_codes.len())
+                    && pending_plan
+                        .as_ref()
+                        .is_some_and(|plan| plan.lead_saturated)
                 {
                     record_lead_saturation(
                         &metrics.lead_saturation_count_up,
@@ -1218,12 +1231,13 @@ fn run_worker(
             }
 
             let next_down_polyphony = coordinator.next_authored_polyphony();
-            let lead_down = if config.dispatch_lead_us > 0 {
-                config.dispatch_lead_us
+            let (lead_down, lead_down_saturated) = if config.dispatch_lead_us > 0 {
+                (config.dispatch_lead_us, false)
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Down, next_down_polyphony)
+                let estimate = estimator.estimate_lead(ActionKind::Down, next_down_polyphony);
+                (estimate.applied_us, estimate.saturated)
             } else {
-                0
+                (0, false)
             };
             if let Some((batch, _lead)) =
                 coordinator.pop_next_due_authored(effective_now_us, lead_down)
@@ -1489,9 +1503,7 @@ fn run_worker(
                             send_attempts: result.send_attempts,
                             zero_progress_retries: result.zero_progress_retries,
                         });
-                        if config.enable_adaptive_lead
-                            && estimator.lead_saturated(ActionKind::Down, batch.intents.len())
-                        {
+                        if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
                                 &metrics.lead_saturation_count_down,
                                 &metrics.positive_residual_at_cap,
@@ -1592,19 +1604,25 @@ fn run_worker(
             let lead_down = if config.dispatch_lead_us > 0 {
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Down, next_down_polyphony)
+                estimator
+                    .estimate_lead(ActionKind::Down, next_down_polyphony)
+                    .applied_us
             } else {
                 0
             };
-            let pending_polyphony = coordinator.next_pending_polyphony().max(1);
-            let lead_up = if config.dispatch_lead_us > 0 {
-                config.dispatch_lead_us
-            } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Up, pending_polyphony)
-            } else {
-                0
-            };
-            if let Some(deadline_us) = coordinator.next_deadline_us(lead_down, lead_up) {
+            let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
+                if config.dispatch_lead_us > 0 {
+                    (config.dispatch_lead_us, false)
+                } else if config.enable_adaptive_lead {
+                    let estimate = estimator.estimate_lead(ActionKind::Up, polyphony);
+                    (estimate.applied_us, estimate.saturated)
+                } else {
+                    (0, false)
+                }
+            });
+            if let Some(deadline_us) =
+                coordinator.next_deadline_with_pending_plan(lead_down, pending_plan.as_ref())
+            {
                 // Take the QPC tick and its logical elapsed-time sample from
                 // the same instant.  Reusing the older outer-loop elapsed
                 // sample after doing bookkeeping shifts the absolute target
@@ -1986,6 +2004,9 @@ fn publish_backend_metrics(
     metrics
         .sendinput_partial_events
         .store(backend.sendinput_partial_events, Ordering::Relaxed);
+    metrics
+        .sendinput_zero_progress_failures
+        .store(backend.sendinput_zero_progress_failures, Ordering::Relaxed);
     metrics
         .chords_rejected
         .store(backend.chords_rejected, Ordering::Relaxed);

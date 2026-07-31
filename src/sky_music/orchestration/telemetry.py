@@ -816,6 +816,22 @@ class TelemetryLogger:
             backend_info["panic_release_failures"] = self.backend_health.failed_release_count
             backend_info["keys_dropped"] = self.backend_health.keys_dropped
             backend_info["chord_split_events"] = self.backend_health.chord_split_events
+            backend_info["sendinput_partial_events"] = (
+                self.backend_health.sendinput_partial_events
+            )
+            backend_info["sendinput_zero_progress_failures"] = (
+                self.backend_health.sendinput_zero_progress_failures
+            )
+            backend_info["chords_rejected"] = self.backend_health.chords_rejected
+            backend_info["authored_conflict_events"] = (
+                self.backend_health.authored_conflict_events
+            )
+            backend_info["authored_chords_rejected"] = (
+                self.backend_health.authored_chords_rejected
+            )
+            backend_info["authored_keys_rejected"] = (
+                self.backend_health.authored_keys_rejected
+            )
             
         if self.release_outcome is not None:
             backend_info["release_attempted"] = self.release_outcome.attempted
@@ -921,6 +937,12 @@ class TelemetryLogger:
                     "backend_skipped_up_count": backend_skipped_up_count,
                     "keys_dropped": int(getattr(self.backend_health, "keys_dropped", 0)) if self.backend_health is not None else 0,
                     "chord_split_events": int(getattr(self.backend_health, "chord_split_events", 0)) if self.backend_health is not None else 0,
+                    "sendinput_partial_events": int(getattr(self.backend_health, "sendinput_partial_events", 0)) if self.backend_health is not None else 0,
+                    "sendinput_zero_progress_failures": int(getattr(self.backend_health, "sendinput_zero_progress_failures", 0)) if self.backend_health is not None else 0,
+                    "chords_rejected": int(getattr(self.backend_health, "chords_rejected", 0)) if self.backend_health is not None else 0,
+                    "authored_conflict_events": int(getattr(self.backend_health, "authored_conflict_events", 0)) if self.backend_health is not None else 0,
+                    "authored_chords_rejected": int(getattr(self.backend_health, "authored_chords_rejected", 0)) if self.backend_health is not None else 0,
+                    "authored_keys_rejected": int(getattr(self.backend_health, "authored_keys_rejected", 0)) if self.backend_health is not None else 0,
                     "sender_clean": sender_clean,
                 },
                 "game_observed": {

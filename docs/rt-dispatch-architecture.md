@@ -88,6 +88,10 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   lower bucket/global p95. Lead is capped at the configured maximum and the estimator exports
   saturation/residual evidence through runtime telemetry. `lateness_us` may legitimately be
   negative; `visible_lateness_us` is the on-time metric.
+- **Pending-release cohort planning is fixed-point.** Up lead selection counts only the pending
+  releases in the next effective-release cohort, not every pending key. The bounded plan carries
+  deadline, lead, polyphony and saturation state and is reused for both the wait deadline and the
+  pop operation, so a later release cannot over-lead an earlier one-key release.
 - **Lead is symmetric** (downs and pending releases) and floor-clamped: a release becomes due at
   `max(scheduled_release − lead_up, release_not_before)` where
   `release_not_before = down_dispatch_completed + min_hold` — the 1-frame floor always wins.
@@ -103,6 +107,10 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   `strict` also terminates playback; `degraded` is an explicit legacy/diagnostic mode that may
   send a partial chord. Multiple same-timestamp Down batches are rejected by the native compiler
   because they cannot be made atomic after the Python boundary.
+- **Estimator query cost is bounded.** Rolling p95 values are refreshed only when a sample is
+  inserted or state is imported; real-time lead queries are O(polyphony) integer comparisons and
+  do not sort the rolling window. Saturation is returned with the applied lead from the same
+  estimate.
 - **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
   `effective_spin_threshold = clamp(spin_floor_us, 3000, p95_wake_error + 200)` µs (default
@@ -263,7 +271,12 @@ benchmark evidence, not an inference from cache-entry or `gc.collect()` counts.
 **Windows acceptance benchmark.** Run `scripts/bench_native_acceptance.py` on the
 baseline and follow-up revisions with the same `--actions`, `--repeats`, power state,
 priority mode, and background-load conditions. The report must retain sender-side
-completion-error p50/p95/p99/max, spin CPU time, peak RSS, command-interrupt latency,
-drop/release counters, and outcome. This mock-backend harness does not measure game
+completion-error p50/p95/p99/max, signed/absolute/early/late distributions split by Down/Up
+and polyphony, spin CPU time, peak RSS, command-interrupt latency, drop/release and
+zero-progress counters, and outcome. This mock-backend harness does not measure game
 sampling, frame observation, audio onset, or real `SendInput` delivery; those remain
 separate Windows test-window evidence gates.
+
+The native accuracy-first path requires `chord_stagger_us == 0`. A nonzero stagger is retained
+for the Python diagnostic/remote-listener path, but the native selector records an explicit
+fallback instead of silently sending the logical chord through multiple syscalls.

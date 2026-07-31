@@ -251,6 +251,70 @@ mod tests {
         // Its blocked deadline must still use the effective timeline offset.
         assert_eq!(coordinator.next_authored_us(100), Some(4_500));
     }
+
+    #[test]
+    fn pending_plan_uses_the_next_release_cohort_not_all_pending_keys() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up-a".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_100,
+                    scan_codes: vec![0x16],
+                    reason: "up-b".to_string(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0);
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("down is due");
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, 0);
+
+        let (up_a, _) = coordinator
+            .pop_next_due_authored(1_000, 0)
+            .expect("first release is due");
+        let _ = coordinator.request_releases(&up_a.intents);
+        let (up_b, _) = coordinator
+            .pop_next_due_authored(1_100, 0)
+            .expect("second release is due");
+        let _ = coordinator.request_releases(&up_b.intents);
+
+        let plan = coordinator
+            .plan_pending_dispatch(|polyphony| match polyphony {
+                1 => (100, false),
+                2 => (200, false),
+                _ => (200, false),
+            })
+            .expect("pending plan");
+        assert_eq!(plan.polyphony, 1);
+        assert_eq!(plan.deadline_us, 900);
+        assert_eq!(
+            coordinator.next_deadline_with_pending_plan(0, Some(&plan)),
+            Some(900)
+        );
+
+        let due = coordinator.pop_due_pending_with_plan(1_000, &plan);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].scan_code, 0x15);
+        assert_eq!(coordinator.pending_mask.count_ones(), 1);
+    }
 }
 
 pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
@@ -297,6 +361,19 @@ impl PendingRelease {
         let led = self.scheduled_release_us.saturating_sub(lead_up);
         self.release_not_before_us.max(led).max(self.next_retry_us)
     }
+}
+
+/// The release cohort selected for one upcoming dispatch.
+///
+/// The worker must use the same lead both when calculating the next deadline
+/// and when popping pending releases.  Keeping the result together prevents
+/// a larger pending population from over-leading an earlier one-key release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingDispatchPlan {
+    pub deadline_us: u64,
+    pub lead_us: u64,
+    pub polyphony: usize,
+    pub lead_saturated: bool,
 }
 
 #[derive(Debug)]
@@ -410,12 +487,71 @@ impl RuntimeDispatchCoordinator {
             .min()
     }
 
-    /// Number of release intents that can be emitted in the next pending
-    /// release batch.  The worker uses this to select the Up lead before
-    /// popping the batch, so release latency is modelled by release
-    /// polyphony rather than by a permanent one-key estimate.
-    pub fn next_pending_polyphony(&self) -> usize {
-        self.pending_mask.count_ones() as usize
+    pub fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize {
+        self.pending_by_slot
+            .iter()
+            .filter_map(Option::as_ref)
+            .filter(|pending| pending.get_effective_release_us(lead_up) <= deadline_us)
+            .count()
+    }
+
+    /// Select the next release cohort by solving the lead/polyphony fixed
+    /// point.  A larger cohort may receive a larger lead and therefore move
+    /// the effective deadline earlier, so the cohort must be re-counted until
+    /// stable.  The bound is tiny because the instrument has at most 15 keys.
+    pub fn plan_pending_dispatch<F>(&self, lead_for_polyphony: F) -> Option<PendingDispatchPlan>
+    where
+        F: Fn(usize) -> (u64, bool),
+    {
+        if self.pending_mask == 0 {
+            return None;
+        }
+
+        let mut polyphony = 1usize;
+        for _ in 0..=MAX_KEYS {
+            let (lead_us, lead_saturated) = lead_for_polyphony(polyphony);
+            let deadline_us = self.next_pending_release_us(lead_us)?;
+            let next_polyphony = self.pending_count_due_at(deadline_us, lead_us).max(1);
+            let plan = PendingDispatchPlan {
+                deadline_us,
+                lead_us,
+                polyphony,
+                lead_saturated,
+            };
+            if next_polyphony == polyphony {
+                return Some(plan);
+            }
+            polyphony = next_polyphony.min(MAX_KEYS);
+        }
+
+        // The monotonic estimator should converge within MAX_KEYS steps.  If
+        // a future custom estimator violates that assumption, return the last
+        // bounded plan rather than looping on the real-time worker.
+        let (lead_us, lead_saturated) = lead_for_polyphony(polyphony);
+        Some(PendingDispatchPlan {
+            deadline_us: self.next_pending_release_us(lead_us)?,
+            lead_us,
+            polyphony,
+            lead_saturated,
+        })
+    }
+
+    pub fn next_deadline_with_pending_plan(
+        &self,
+        dispatch_lead_us: u64,
+        pending_plan: Option<&PendingDispatchPlan>,
+    ) -> Option<u64> {
+        if self.release_recovery_active() {
+            return pending_plan.map(|plan| plan.deadline_us);
+        }
+        let authored = self.next_authored_us(dispatch_lead_us);
+        let pending = pending_plan.map(|plan| plan.deadline_us);
+        match (authored, pending) {
+            (Some(a), Some(p)) => Some(a.min(p)),
+            (Some(a), None) => Some(a),
+            (None, Some(p)) => Some(p),
+            (None, None) => None,
+        }
     }
 
     pub fn next_deadline_us(&self, dispatch_lead_us: u64, lead_up: u64) -> Option<u64> {
@@ -466,6 +602,22 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn pop_due_pending(
+        &mut self,
+        now_us: u64,
+        lead_up: u64,
+    ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
+        self.pop_due_pending_until(now_us, lead_up)
+    }
+
+    pub fn pop_due_pending_with_plan(
+        &mut self,
+        now_us: u64,
+        plan: &PendingDispatchPlan,
+    ) -> SmallVec<[PendingRelease; MAX_KEYS]> {
+        self.pop_due_pending_until(now_us.min(plan.deadline_us), plan.lead_us)
+    }
+
+    fn pop_due_pending_until(
         &mut self,
         now_us: u64,
         lead_up: u64,
