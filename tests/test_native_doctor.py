@@ -21,7 +21,15 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
         "sky_player_rs",
         SimpleNamespace(build_info=lambda: info),
     )
-    monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: True)
+    monkeypatch.setattr(
+        native_dispatch,
+        "probe_native_dispatch",
+        lambda **_kwargs: native_dispatch.NativeProbeResult(
+            available=True,
+            reason=native_dispatch.NativeProbeReason.AVAILABLE,
+            detail="test native dispatch",
+        ),
+    )
     monkeypatch.setattr(native_dispatch, "native_dispatch_required", lambda: False)
     monkeypatch.setattr(
         native_dispatch,

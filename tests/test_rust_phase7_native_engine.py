@@ -341,6 +341,23 @@ def test_native_worker_rejects_zero_progress_retry_that_completes_late() -> None
     assert output["records"][0]["runtime_outcome"] == "recovered_zero_progress_but_late"
 
 
+def test_native_worker_stops_when_supervisor_lease_expires() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [(0, "down", 1_000_000, [0x15], "lease")],
+        [0x15],
+        min_hold_us=0,
+        mock_backend=True,
+        supervisor_lease_timeout_us=50_000,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    snapshot = cast(dict[str, Any], session.snapshot())
+    assert snapshot["status"] == "error"
+    assert snapshot["terminal_error"] == "supervisor_lease_expired"
+    assert snapshot["release_outcome"]["released_successfully"] is True
+
+
 def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [
@@ -530,6 +547,7 @@ def test_native_dispatch_rejects_invalid_estimator_cache_atomically() -> None:
         ("spin_floor_us", True),
         ("strict_down_completion_late_us", True),
         ("strict_up_completion_late_us", True),
+        ("supervisor_lease_timeout_us", True),
     ],
 )
 def test_native_dispatch_rejects_bool_for_integer_config(

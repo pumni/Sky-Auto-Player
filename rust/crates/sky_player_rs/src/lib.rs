@@ -351,7 +351,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), supervisor_lease_timeout_us = StrictU64(0), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -379,6 +379,7 @@ impl NativeDispatchSessionPy {
         strict_timing: bool,
         strict_down_completion_late_us: StrictU64,
         strict_up_completion_late_us: StrictU64,
+        supervisor_lease_timeout_us: StrictU64,
         mock_failure_mode: &str,
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
@@ -398,6 +399,7 @@ impl NativeDispatchSessionPy {
         let input_path_warn_us = input_path_warn_us.0;
         let strict_down_completion_late_us = strict_down_completion_late_us.0;
         let strict_up_completion_late_us = strict_up_completion_late_us.0;
+        let supervisor_lease_timeout_us = supervisor_lease_timeout_us.0;
         let mock_failure_mode = match mock_failure_mode {
             "none" => MockFailureMode::None,
             "transient_release" if mock_backend => MockFailureMode::TransientRelease,
@@ -480,6 +482,11 @@ impl NativeDispatchSessionPy {
                 "strict_up_completion_late_us must be at most 60000000",
             ));
         }
+        if supervisor_lease_timeout_us > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "supervisor_lease_timeout_us must be at most 60000000",
+            ));
+        }
         if telemetry_capacity == 0 || telemetry_capacity > 200_000 {
             return Err(PyValueError::new_err(
                 "telemetry_capacity must be between 1 and 200000",
@@ -556,6 +563,7 @@ impl NativeDispatchSessionPy {
             strict_timing,
             strict_down_completion_late_us,
             strict_up_completion_late_us,
+            supervisor_lease_timeout_us,
         )
         .map_err(PyRuntimeError::new_err)?;
 
@@ -588,6 +596,10 @@ impl NativeDispatchSessionPy {
         self.session
             .panic_release()
             .map_err(PyRuntimeError::new_err)
+    }
+
+    fn heartbeat(&self) {
+        self.session.heartbeat();
     }
 
     fn send_command(&self, command: &str) -> PyResult<bool> {
@@ -631,6 +643,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("version", 1)?;
         dict.set_item("native_build_version", env!("CARGO_PKG_VERSION"))?;
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
+        dict.set_item(
+            "native_source_fingerprint",
+            env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
+        )?;
         dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
         dict.set_item("pyo3_version", "0.29.0")?;
         dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
@@ -768,6 +784,10 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("pyo3_version", "0.29.0")?;
     dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
+    dict.set_item(
+        "native_source_fingerprint",
+        env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
+    )?;
     dict.set_item("free_threaded", true)?;
     dict.set_item("win32_backend", sky_dispatch_win32::win32_available())?;
     Ok(dict)

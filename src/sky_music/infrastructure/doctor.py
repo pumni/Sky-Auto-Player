@@ -111,8 +111,8 @@ def check_calibration_cache() -> dict:
 def check_native_dispatch() -> dict[str, Any]:
     """Report native module/toolchain/ABI status for the default-on sender."""
     from sky_music.orchestration.native_dispatch import (
-        is_native_dispatch_available,
         native_dispatch_required,
+        probe_native_dispatch,
         python_dispatch_explicitly_requested,
     )
 
@@ -130,7 +130,11 @@ def check_native_dispatch() -> dict[str, Any]:
 
         info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
         status.update(info)
-        status["available"] = is_native_dispatch_available()
+        probe = probe_native_dispatch(force=True)
+        status["available"] = probe.available
+        status["probe_reason"] = probe.reason.value
+        status["probe_detail"] = probe.detail
+        status["native_module_path"] = probe.module_path
         status["ok"] = status["available"]
         mode = "rollback forced" if rollback_enabled else "default-on"
         status["msg"] = (
@@ -142,7 +146,7 @@ def check_native_dispatch() -> dict[str, Any]:
             f"commit={info.get('native_build_commit', 'unknown')}."
         )
         if not status["available"]:
-            status["msg"] += " Module metadata or no-GIL/Win32 compatibility check failed."
+            status["msg"] += f" Admission failed ({probe.reason.value}): {probe.detail}"
     except (ImportError, AttributeError, RuntimeError, TypeError) as exc:
         status["msg"] = (
             "Rust dispatch module is unavailable"

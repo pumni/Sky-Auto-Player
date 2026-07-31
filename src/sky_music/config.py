@@ -217,6 +217,8 @@ class AppConfig:
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
     use_dispatch_thread:         bool          = True
+    dispatch_backend:            Literal["auto", "rust", "python"] = "auto"
+    fidelity_mode:               Literal["normal", "strict"] = "normal"
     input_path_warn_us:          int           = 3000
     rt_priority_mode:            RtPriorityMode = "auto"  # Replaces dead rt_time_critical. Old "true" maps to "auto", "false" to "off".
     # Graduated 2026-06-11 after live A/B (see docs/perf-baselines/2026-06-baseline.md §3 and
@@ -457,6 +459,20 @@ def _build_config_from_disk() -> AppConfig:
     default_timing_profile = canonical_profile_name(
         str(raw.get("default_timing_profile", AppConfig.default_timing_profile))
     )
+    raw_dispatch_backend = raw.get("dispatch_backend")
+    dispatch_backend = (
+        cast(Literal["auto", "rust", "python"], raw_dispatch_backend)
+        if isinstance(raw_dispatch_backend, str)
+        and raw_dispatch_backend in {"auto", "rust", "python"}
+        else AppConfig.dispatch_backend
+    )
+    raw_fidelity_mode = raw.get("fidelity_mode")
+    fidelity_mode = (
+        cast(Literal["normal", "strict"], raw_fidelity_mode)
+        if isinstance(raw_fidelity_mode, str)
+        and raw_fidelity_mode in {"normal", "strict"}
+        else AppConfig.fidelity_mode
+    )
 
     return AppConfig(
         theme                        = str(raw.get("theme", AppConfig.theme)),
@@ -467,6 +483,8 @@ def _build_config_from_disk() -> AppConfig:
         telemetry_enabled_by_default = _parse_bool(raw.get("telemetry_enabled_by_default"), AppConfig.telemetry_enabled_by_default),
         verbose_hud                  = _parse_bool(raw.get("verbose_hud"), AppConfig.verbose_hud),
         use_dispatch_thread          = _parse_bool(raw.get("use_dispatch_thread"), AppConfig.use_dispatch_thread),
+        dispatch_backend             = dispatch_backend,
+        fidelity_mode                = fidelity_mode,
         input_path_warn_us           = max(0, _parse_int(raw.get("input_path_warn_us"), AppConfig.input_path_warn_us)),
         # The legacy rt_time_critical flag was DEAD config (never wired to anything), so its value
         # carries no user intent and must not pin the new ladder off: it is ignored entirely and
@@ -527,6 +545,8 @@ def save_config(cfg: AppConfig) -> None:
         raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
         raw["verbose_hud"]                  = cfg.verbose_hud
         raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
+        raw["dispatch_backend"]             = cfg.dispatch_backend
+        raw["fidelity_mode"]                = cfg.fidelity_mode
         raw["input_path_warn_us"]           = cfg.input_path_warn_us
         raw.pop("rt_time_critical", None)
         raw["rt_priority_mode"]             = cfg.rt_priority_mode

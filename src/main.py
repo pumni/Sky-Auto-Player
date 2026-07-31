@@ -624,14 +624,18 @@ def _run_optimize_selftest() -> int:
 
 
 def _run_rust_selftest() -> int:
-    """Verify the frozen native module with a mock worker that sends no input."""
+    """Verify production native admission and a mock worker that sends no input."""
     try:
         import sky_player_rs  # type: ignore[import-not-found]
 
         from sky_music.orchestration.core.ports import (
             RUST_DISPATCH_SCHEMA_VERSION,
         )
+        from sky_music.orchestration.native_dispatch import probe_native_dispatch
 
+        probe = probe_native_dispatch(force=True)
+        if not probe.available:
+            raise RuntimeError(f"native admission failed ({probe.reason}): {probe.detail}")
         info = sky_player_rs.build_info()  # type: ignore[attr-defined]
         if (
             info.get("schema_version") != RUST_DISPATCH_SCHEMA_VERSION

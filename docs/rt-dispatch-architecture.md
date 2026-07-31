@@ -1,7 +1,8 @@
 # RT Dispatch Architecture (native Rust worker + explicit Python oracle)
 
-Status: CURRENT — Rust is mandatory for the eligible real-time Win32 sender path; Python remains
-the deterministic oracle and an explicit diagnostic rollback path only.
+Status: CURRENT — Rust is the preferred eligible real-time Win32 sender path; Python remains the
+deterministic oracle and an explicit diagnostic backend. Backend selection and fidelity strictness
+are separate policies.
 History: built by `archive/2026-06_rt-pipeline-extreme-optimization-plan.md`; A/B numbers in
 `perf-baselines/2026-06-baseline.md`.
 
@@ -207,12 +208,15 @@ worker teardown.
 
 ### 5.1 Native rollout boundary
 
-The native implementation is required for the real Windows backend with the production
-clock/sleeper/thread mode. Dry-run, fake-clock tests, and explicit
-`SKY_USE_PYTHON_DISPATCH=1` use the Python oracle. Missing or incompatible native metadata fails
-closed before playback; it never silently changes the timing engine. The selected backend is
-shown in HUD/runtime telemetry. `SKY_REQUIRE_RUST_DISPATCH=1` remains accepted for compatibility,
-but fail-closed is now the default policy.
+`DispatchPolicy.backend` is `auto`, `rust`, or `python`. `auto` selects Rust for the eligible
+real Windows backend and selects Python for an explicit unsupported feature such as nonzero chord
+stagger; missing/incompatible native metadata remains fail-closed. `rust` always fails closed on
+any admission or capability mismatch. `python` is an explicit diagnostic/oracle choice.
+`DispatchPolicy.fidelity` is independently `normal` or `strict`: normal keeps integrity failures
+terminal but records isolated timing tails, while strict also applies completion SLO aborts.
+The selected backend, reason, probe diagnostics and fidelity mode are shown in runtime telemetry.
+The Python supervisor owns a `try/finally` cleanup path, and the Rust worker has a bounded
+supervisor lease that performs full-instrument release if heartbeats stop.
 
 ## 6. Production defaults & kill switches
 
@@ -221,6 +225,8 @@ deterministic tests are unaffected):
 
 | Feature | Default | Kill switch |
 |---|---|---|
+| Dispatch backend | `dispatch_backend: auto` (Rust preferred when eligible) | `dispatch_backend: python` / `SKY_USE_PYTHON_DISPATCH=1` |
+| Fidelity policy | `fidelity_mode: normal` | `fidelity_mode: strict` for acceptance/soak |
 | MMCSS/priority ladder | `rt_priority_mode: auto` (config) | `--rt-priority-mode off` |
 | Adaptive dispatch lead | `enable_adaptive_lead: true` (config) | `--no-adaptive-lead` |
 | Same-key chord conflict | `drop_chord` for best-effort; Rust strict timing coerces to abort | `degraded` legacy or explicit `strict` abort |
@@ -276,8 +282,9 @@ than the requested lead are not all saturated to deadline zero. The first action
 physical startup anchor; later sub-lead actions temporarily dispatch without early lead so their
 relative ordering remains observable.
 Normal adaptive lead uses the rolling p95; native strict timing selects the clamped rolling upper
-tail and keeps the global upper-tail guard for sparse local buckets. It aborts after the configured
-repeated positive-at-cap condition or any clean completion SLO violation.
+tail and keeps the global upper-tail guard for sparse local buckets. Strict mode aborts after the
+configured repeated positive-at-cap condition or any clean completion SLO violation. Normal mode
+still aborts integrity, cleanup, focus and worker-health failures but records isolated timing tails.
 
 **Prewarm observability.** Before a threaded playback dispatch loop starts, the
 engine prewarms the platform INPUT cache in two passes under the cache cap
@@ -305,5 +312,6 @@ sampling, frame observation, audio onset, or real `SendInput` delivery; those re
 separate Windows test-window evidence gates.
 
 The native accuracy-first path requires `chord_stagger_us == 0`. A nonzero stagger is retained
-for the Python diagnostic/remote-listener path, but the native selector records an explicit
-fallback instead of silently sending the logical chord through multiple syscalls.
+for the Python diagnostic/remote-listener path. In `auto` the selector records an explicit Python
+fallback reason; forcing Rust reports an unsupported-capability error instead of silently changing
+the logical chord into multiple syscalls.

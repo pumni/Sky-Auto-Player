@@ -55,6 +55,12 @@ from sky_music.orchestration.dispatch_loop import (
 from sky_music.orchestration.dispatch_loop import (
     RuntimeSameKeyConflictError as RuntimeSameKeyConflictError,
 )
+from sky_music.orchestration.dispatch_policy import (
+    DispatchBackend,
+    DispatchPlan,
+    DispatchPolicy,
+    FidelityMode,
+)
 from sky_music.orchestration.playback_supervisor import (
     PLAYBACK_ERROR as PLAYBACK_ERROR,
 )
@@ -469,6 +475,8 @@ class PlaybackEngine:
         chord_stagger_us: int = 0,
         strict_down_completion_late_us: int = 2_000,
         strict_up_completion_late_us: int = 2_000,
+        dispatch_backend: DispatchBackend = "auto",
+        fidelity_mode: FidelityMode = "normal",
     ):
         self.song = song
         self.actions = actions
@@ -477,10 +485,17 @@ class PlaybackEngine:
         self.runtime_schedule: RuntimeSchedule | None = compile_runtime_intents(actions)
         self.total_time_us = max((int(action.at_us) for action in actions), default=0)
         self.backend = backend
+        self.dispatch_policy = DispatchPolicy(
+            backend=dispatch_backend,
+            fidelity=fidelity_mode,
+        )
+        self._dispatch_plan: DispatchPlan | None = None
         self.focus_restore_grace_us = focus_restore_grace_us
         self.min_hold_us = max(0, min_hold_us)
         self.chord_stagger_us = max(0, int(chord_stagger_us))
-        self.same_key_conflict_policy = same_key_conflict_policy
+        self.same_key_conflict_policy = (
+            "strict" if self.dispatch_policy.strict_timing else same_key_conflict_policy
+        )
         self.late_pulse_drop_threshold_us = (
             None
             if late_pulse_drop_threshold_us is None
@@ -570,6 +585,8 @@ class PlaybackEngine:
                 "epoch_rebase": self.enable_epoch_rebase,
                 "lead_cache_loaded": self._lead_cache_loaded,
                 "lead_cache_path": self.lead_cache_path,
+                "dispatch_backend_requested": self.dispatch_policy.backend,
+                "fidelity_mode": self.dispatch_policy.fidelity,
             }
         )
         self.require_focus = require_focus
@@ -644,63 +661,109 @@ class PlaybackEngine:
         )
 
     def _should_use_native_dispatch(self) -> bool:
-        """Select Rust for every eligible real Windows sender session.
+        """Return the resolved implementation for this session."""
+        return self._resolve_dispatch_plan().backend == "rust"
 
-        The Python dispatcher remains available only through the explicit
-        diagnostic rollback switch.  Silently falling back here would make a
-        packaged run look healthy while using a different timing engine.
-        """
-        from sky_music.infrastructure.backend import WinSendInputBackend
+    def _resolve_dispatch_plan(self) -> DispatchPlan:
+        """Resolve backend, capability and fidelity once before playback."""
+        if self._dispatch_plan is not None:
+            return self._dispatch_plan
+
         from sky_music.orchestration.native_dispatch import (
-            is_native_dispatch_available,
-            native_dispatch_required,
+            probe_native_dispatch,
             python_dispatch_explicitly_requested,
         )
 
-        if python_dispatch_explicitly_requested():
-            return False
+        requested = self.dispatch_policy.backend
+        if requested == "python" or (
+            requested == "auto" and python_dispatch_explicitly_requested()
+        ):
+            reason = (
+                "explicit dispatch_backend=python"
+                if requested == "python"
+                else "SKY_USE_PYTHON_DISPATCH=1"
+            )
+            plan = DispatchPlan("python", reason, self.dispatch_policy.fidelity)
+            self.telemetry.record_runtime_options(
+                {
+                    **self.telemetry.runtime_options,
+                    "dispatch_backend": "python",
+                    "dispatch_selection_reason": reason,
+                    "fidelity_mode": self.dispatch_policy.fidelity,
+                }
+            )
+            self._dispatch_plan = plan
+            return plan
+
         eligible = (
-            isinstance(self.backend, WinSendInputBackend)
+            getattr(self.backend, "native_dispatch_compatible", False) is True
             and isinstance(self.clock, PerfCounterClock)
             and isinstance(self.sleeper, RealSleeper)
             and self.use_dispatch_thread
         )
-        if eligible and self.chord_stagger_us != 0:
-            reason = "chord_stagger_us is incompatible with atomic native chords"
+
+        if not eligible:
+            if requested == "rust":
+                raise RuntimeError(
+                    "dispatch_backend='rust' requires the real Win32 SendInput backend, "
+                    "PerfCounterClock, RealSleeper, and the dispatch thread"
+                )
+            plan = DispatchPlan("python", "native capability not eligible", self.dispatch_policy.fidelity)
             self.telemetry.record_runtime_options(
                 {
                     **self.telemetry.runtime_options,
                     "dispatch_backend": "python",
-                    "rust_dispatch_default": True,
-                    "rust_dispatch_fallback": True,
-                    "rust_dispatch_fallback_reason": reason,
+                    "dispatch_selection_reason": plan.reason,
+                    "fidelity_mode": self.dispatch_policy.fidelity,
                 }
             )
-            if native_dispatch_required():
+
+            self._dispatch_plan = plan
+            return plan
+
+        if self.chord_stagger_us != 0:
+            reason = "chord_stagger_us is unsupported by the native atomic-chord capability"
+            if requested == "rust":
                 raise RuntimeError(
-                    "Native Rust dispatch is required, but chord_stagger_us is non-zero. "
-                    "Disable stagger or set SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+                    "dispatch_backend='rust' does not support chord_stagger_us; "
+                    "choose dispatch_backend='python' for the diagnostic stagger path"
                 )
-            return False
-        if eligible and not is_native_dispatch_available():
-            reason = "missing or incompatible native extension"
+            plan = DispatchPlan("python", reason, self.dispatch_policy.fidelity)
             self.telemetry.record_runtime_options(
                 {
                     **self.telemetry.runtime_options,
                     "dispatch_backend": "python",
-                    "rust_dispatch_default": True,
+                    "dispatch_selection_reason": reason,
                     "rust_dispatch_fallback": True,
                     "rust_dispatch_fallback_reason": reason,
+                    "fidelity_mode": self.dispatch_policy.fidelity,
                 }
             )
-            if native_dispatch_required():
+            self._dispatch_plan = plan
+            return plan
+
+        probe = probe_native_dispatch()
+        if not probe.available:
+            detail = probe.detail
+            if requested == "rust" or requested == "auto":
                 raise RuntimeError(
-                    "Native Rust dispatch is unavailable. Reinstall the application, or set "
-                    "SKY_USE_PYTHON_DISPATCH=1 for diagnostic rollback."
+                    f"Native Rust dispatch is unavailable ({probe.reason}): {detail}"
                 )
-            _LOGGER.warning("Rust dispatch unavailable (%s); diagnostic rollback is enabled.", reason)
-            return False
-        return eligible
+            plan = DispatchPlan("python", detail, self.dispatch_policy.fidelity, probe)
+        else:
+            plan = DispatchPlan("rust", "native Rust dispatch selected", self.dispatch_policy.fidelity, probe)
+        self.telemetry.record_runtime_options(
+            {
+                **self.telemetry.runtime_options,
+                "dispatch_backend": plan.backend,
+                "dispatch_selection_reason": plan.reason,
+                "fidelity_mode": self.dispatch_policy.fidelity,
+                "native_probe_reason": getattr(probe, "reason", None),
+                "native_probe_detail": getattr(probe, "detail", None),
+            }
+        )
+        self._dispatch_plan = plan
+        return plan
 
     def _play_native(self) -> str:
         from sky_music.orchestration.native_dispatch import RustDispatchRuntime
@@ -725,7 +788,7 @@ class PlaybackEngine:
             spin_floor_us=self.spin_floor_us,
             input_path_warn_us=self.input_path_warn_us,
             enable_adaptive_lead=self.enable_adaptive_lead,
-            strict_timing=True,
+            strict_timing=self.dispatch_policy.strict_timing,
             strict_down_completion_late_us=self.strict_down_completion_late_us,
             strict_up_completion_late_us=self.strict_up_completion_late_us,
             estimator_state_json=(
@@ -754,6 +817,9 @@ class PlaybackEngine:
                 "rust_dispatch_schema_version": snapshot["schema_version"],
                 "rust_native_build_version": snapshot["native_build_version"],
                 "rust_native_build_commit": snapshot["native_build_commit"],
+                "rust_native_source_fingerprint": snapshot.get(
+                    "native_source_fingerprint"
+                ),
                 "rustc_version": snapshot["rustc_version"],
                 "pyo3_version": snapshot["pyo3_version"],
                 "native_abi": snapshot["native_abi"],

@@ -57,6 +57,19 @@ def test_config_booleans_strictness(monkeypatch):
     assert cfg.verbose_hud == AppConfig.verbose_hud
 
 
+def test_dispatch_policy_config_is_strict_and_independent(monkeypatch):
+    import sky_music.config as config
+
+    monkeypatch.setattr(
+        config,
+        "_load_raw",
+        lambda: {"dispatch_backend": ["rust"], "fidelity_mode": "strict"},
+    )
+    cfg = config._build_config_from_disk()
+    assert cfg.dispatch_backend == "auto"
+    assert cfg.fidelity_mode == "strict"
+
+
 def test_tempo_scale_nan_inf_rejected(monkeypatch):
     import sky_music.config as config
     def mock_load_raw():
@@ -126,4 +139,3 @@ def test_scan_code_strictness():
         
     # Valid
     _cached_key_input(21, 0)
-

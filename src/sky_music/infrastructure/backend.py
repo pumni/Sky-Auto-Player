@@ -126,6 +126,16 @@ class _TrackedKeyState(ABC):
         self.failed_release_keys: set[int] = set()
         self.last_error: str | None = None
 
+    @property
+    def native_dispatch_compatible(self) -> bool:
+        """Whether this backend represents the real native SendInput seam.
+
+        Wrappers/proxies may forward this capability without inheriting from a
+        concrete backend class.  The selector uses the capability when present
+        and never treats a dry-run tracker as a native sender.
+        """
+        return False
+
     def _decide_down(self, scan_codes: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Return (to_send, duplicates). Reuses *scan_codes* when the batch is uniform."""
         if not scan_codes:
@@ -456,6 +466,10 @@ class WinSendInputBackend(_TrackedKeyState):
         # Default wall clock; PlaybackEngine.set_clock replaces with the injected timeline.
         self._now_us: Callable[[], int] = lambda: time.perf_counter_ns() // 1000
         _start_watchdog_once()
+
+    @property
+    def native_dispatch_compatible(self) -> bool:
+        return True
 
     def set_clock(self, clock: Clock) -> None:
         """Align send_completed_us with the playback timeline clock (finding A6a)."""

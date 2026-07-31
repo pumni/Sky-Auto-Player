@@ -31,6 +31,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_ABI");
+    println!("cargo:rerun-if-env-changed=SKY_NATIVE_SOURCE_FINGERPRINT");
 
     let rustc_version =
         command_output("rustc", &["--version"]).unwrap_or_else(|| "unknown".to_string());
@@ -43,4 +44,7 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=SKY_NATIVE_BUILD_COMMIT={build_commit}");
     println!("cargo:rustc-env=SKY_NATIVE_ABI={}", native_abi());
+    let source_fingerprint =
+        std::env::var("SKY_NATIVE_SOURCE_FINGERPRINT").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=SKY_NATIVE_SOURCE_FINGERPRINT={source_fingerprint}");
 }

@@ -391,6 +391,7 @@ struct WorkerConfig {
     strict_timing: bool,
     strict_down_completion_late_us: u64,
     strict_up_completion_late_us: u64,
+    supervisor_lease_timeout_us: u64,
 }
 
 pub struct NativeDispatchSession {
@@ -415,6 +416,7 @@ pub struct NativeDispatchSession {
     telemetry_output: Arc<Mutex<Option<NativeTelemetryOutput>>>,
     priority_acquired: Arc<Mutex<String>>,
     estimator_output: Arc<Mutex<Option<String>>>,
+    supervisor_heartbeat_us: Arc<AtomicU64>,
 }
 
 impl NativeDispatchSession {
@@ -449,6 +451,7 @@ impl NativeDispatchSession {
         strict_timing: bool,
         strict_down_completion_late_us: u64,
         strict_up_completion_late_us: u64,
+        supervisor_lease_timeout_us: u64,
     ) -> Result<Self, String> {
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
@@ -497,6 +500,7 @@ impl NativeDispatchSession {
                 strict_timing,
                 strict_down_completion_late_us,
                 strict_up_completion_late_us,
+                supervisor_lease_timeout_us,
             })),
             generation_count,
             command_tx,
@@ -518,6 +522,7 @@ impl NativeDispatchSession {
             telemetry_output: Arc::new(Mutex::new(None)),
             priority_acquired: Arc::new(Mutex::new("pending".to_string())),
             estimator_output: Arc::new(Mutex::new(None)),
+            supervisor_heartbeat_us: Arc::new(AtomicU64::new(qpc_now_us())),
         })
     }
 
@@ -550,7 +555,9 @@ impl NativeDispatchSession {
         let telemetry_output = Arc::clone(&self.telemetry_output);
         let priority_acquired = Arc::clone(&self.priority_acquired);
         let estimator_output = Arc::clone(&self.estimator_output);
+        let supervisor_heartbeat_us = Arc::clone(&self.supervisor_heartbeat_us);
         let latency_tx = self.latency_tx.clone();
+        supervisor_heartbeat_us.store(qpc_now_us(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
@@ -571,6 +578,7 @@ impl NativeDispatchSession {
                         &priority_acquired,
                         &estimator_output,
                         &latency_tx,
+                        &supervisor_heartbeat_us,
                     )
                 }));
                 let (worker_outcome, panic_message) = match worker_result {
@@ -689,6 +697,13 @@ impl NativeDispatchSession {
     pub fn update_focus(&self, active: bool) {
         if self.focus_active.swap(active, Ordering::AcqRel) != active {
             let _ = self.interrupt.signal();
+        }
+    }
+
+    pub fn heartbeat(&self) {
+        if self.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING {
+            self.supervisor_heartbeat_us
+                .store(qpc_now_us(), Ordering::Release);
         }
     }
 
@@ -898,6 +913,7 @@ fn run_worker(
     priority_acquired: &Mutex<String>,
     estimator_output: &Mutex<Option<String>>,
     latency_tx: &Sender<i64>,
+    supervisor_heartbeat_us: &AtomicU64,
 ) -> u8 {
     let mut backend = if config.mock_backend {
         let failure_mode = config.mock_failure_mode;
@@ -1047,6 +1063,12 @@ fn run_worker(
             return;
         }
         while !coordinator.is_finished() {
+            if supervisor_lease_expired(config.supervisor_lease_timeout_us, supervisor_heartbeat_us)
+            {
+                force_full_cleanup = true;
+                terminal_error = Some("supervisor_lease_expired".to_string());
+                break;
+            }
             drain_commands(rx, quit_requested, skip_requested, panic_requested);
             if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
                 break;
@@ -1104,8 +1126,13 @@ fn run_worker(
             let paused = clock_state.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
+                let pause_target_us = lease_bounded_us(
+                    now_us.saturating_add(PAUSED_POLL_US),
+                    config.supervisor_lease_timeout_us,
+                    supervisor_heartbeat_us,
+                );
                 if let WaitOutcome::Failed(failure) =
-                    waiter.wait_until_us(now_us.saturating_add(PAUSED_POLL_US), 0, interrupt)
+                    waiter.wait_until_us(pause_target_us, 0, interrupt)
                 {
                     metrics.wait_path_degraded.store(true, Ordering::Release);
                     if config.strict_timing {
@@ -1129,8 +1156,14 @@ fn run_worker(
                     startup_lead_us,
                 );
                 if target_sample_ticks < target_qpc {
-                    let wait_result = waiter.wait_until_ticks_with_metrics(
+                    let bounded_target_qpc = lease_bounded_ticks(
                         target_qpc,
+                        target_sample_ticks,
+                        config.supervisor_lease_timeout_us,
+                        supervisor_heartbeat_us,
+                    );
+                    let wait_result = waiter.wait_until_ticks_with_metrics(
+                        bounded_target_qpc,
                         effective_spin_threshold_us,
                         interrupt,
                     );
@@ -1922,7 +1955,12 @@ fn run_worker(
                         0
                     };
                     let wait_result = waiter.wait_until_ticks_with_metrics(
-                        target_qpc,
+                        lease_bounded_ticks(
+                            target_qpc,
+                            target_sample_ticks,
+                            config.supervisor_lease_timeout_us,
+                            supervisor_heartbeat_us,
+                        ),
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
                     );
@@ -2017,6 +2055,47 @@ fn run_worker(
     } else {
         OUTCOME_FINISHED
     }
+}
+
+fn supervisor_lease_expired(timeout_us: u64, heartbeat_us: &AtomicU64) -> bool {
+    timeout_us > 0 && qpc_now_us().saturating_sub(heartbeat_us.load(Ordering::Acquire)) > timeout_us
+}
+
+fn lease_bounded_us(target_us: u64, timeout_us: u64, heartbeat_us: &AtomicU64) -> u64 {
+    if timeout_us == 0 {
+        return target_us;
+    }
+    let heartbeat = heartbeat_us.load(Ordering::Acquire);
+    if heartbeat == 0 {
+        return target_us;
+    }
+    target_us.min(heartbeat.saturating_add(timeout_us))
+}
+
+fn lease_bounded_ticks(
+    target: QpcTicks,
+    now_ticks: QpcTicks,
+    timeout_us: u64,
+    heartbeat_us: &AtomicU64,
+) -> QpcTicks {
+    if timeout_us == 0 {
+        return target;
+    }
+    let heartbeat = heartbeat_us.load(Ordering::Acquire);
+    if heartbeat == 0 {
+        return target;
+    }
+    let lease_deadline_us = heartbeat.saturating_add(timeout_us);
+    let now_us = qpc_ticks_to_us(now_ticks);
+    if lease_deadline_us <= now_us {
+        return now_ticks;
+    }
+    let lease_deadline = QpcTicks(
+        now_ticks
+            .0
+            .saturating_add(qpc_us_to_ticks(lease_deadline_us - now_us)),
+    );
+    target.min(lease_deadline)
 }
 
 fn drain_commands(

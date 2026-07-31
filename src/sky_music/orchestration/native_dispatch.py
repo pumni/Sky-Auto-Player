@@ -7,13 +7,16 @@ and maps latest-wins snapshots into the existing renderer contract.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sky_music.domain.scheduler_types import KeyAction
 from sky_music.infrastructure.backend import BackendHealth
@@ -27,10 +30,49 @@ from sky_music.orchestration.core.ports import (
     RUST_DISPATCH_SCHEMA_VERSION,
     ProgressCounters,
 )
+from sky_music.orchestration.native_provenance import native_source_fingerprint
 
-_RUST_AVAILABLE: bool | None = None
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
+SUPERVISOR_LEASE_TIMEOUT_US = 500_000
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class NativeProbeReason(StrEnum):
+    AVAILABLE = "available"
+    MODULE_NOT_FOUND = "module_not_found"
+    DLL_LOAD_FAILED = "dll_load_failed"
+    BUILD_METADATA_MISSING = "build_metadata_missing"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    ABI_MISMATCH = "abi_mismatch"
+    BUILD_ID_MISMATCH = "build_id_mismatch"
+    GIL_ENABLED = "gil_enabled"
+    NOT_FREE_THREADED = "not_free_threaded"
+    WIN32_BACKEND_MISSING = "win32_backend_missing"
+    PROBE_EXCEPTION = "probe_exception"
+
+
+@dataclass(frozen=True, slots=True)
+class NativeProbeResult:
+    """Structured result of one native extension admission probe."""
+
+    available: bool
+    reason: NativeProbeReason
+    detail: str
+    module_path: str | None = None
+    expected_build_id: str | None = None
+    actual_build_id: str | None = None
+    expected_source_fingerprint: str | None = None
+    actual_source_fingerprint: str | None = None
+    expected_abi: str = EXPECTED_NATIVE_ABI
+    actual_abi: str | None = None
+    schema_version: int | None = None
+    native_schema_version: int | None = None
+    free_threaded: bool | None = None
+    win32_backend: bool | None = None
+
+
+_NATIVE_PROBE: NativeProbeResult | None = None
+_NATIVE_PROBE_KEY: tuple[str | None, str | None, int | None, str | None] | None = None
 
 
 class NativeDispatchError(RuntimeError):
@@ -51,7 +93,7 @@ def _expected_native_build_id() -> str:
                 EXPECTED_NATIVE_BUILD_ID,
             )
         except ImportError:
-            return ""
+            return "!missing-native-build-metadata!"
         return EXPECTED_NATIVE_BUILD_ID.strip()
 
     configured = os.environ.get("SKY_EXPECTED_NATIVE_BUILD_ID", "").strip()
@@ -77,11 +119,26 @@ def _expected_native_build_id() -> str:
     if head.returncode != 0 or status.returncode != 0 or not head.stdout.strip():
         return ""
     if status.stdout.strip():
-        allow_dirty = os.environ.get("SKY_ALLOW_DIRTY_NATIVE_BUILD", "").strip().casefold()
-        if allow_dirty not in {"1", "true", "yes", "on"}:
-            return "!dirty-source-checkout!"
-        return f"{head.stdout.strip()}-dirty"
+        # A dirty checkout is accepted only through the native source
+        # fingerprint below.  Python/UI/docs edits no longer invalidate a
+        # compatible wheel, while native source edits still do.
+        return ""
     return head.stdout.strip()
+
+
+def _expected_native_source_fingerprint() -> str:
+    if getattr(sys, "frozen", False):
+        try:
+            from sky_music._native_build import (  # type: ignore[reportMissingImports]
+                EXPECTED_NATIVE_SOURCE_FINGERPRINT,  # type: ignore[reportAttributeAccessIssue]
+            )
+        except ImportError:
+            return "!missing-native-build-metadata!"
+        return EXPECTED_NATIVE_SOURCE_FINGERPRINT.strip()
+    try:
+        return native_source_fingerprint(_REPO_ROOT, EXPECTED_NATIVE_ABI)
+    except (OSError, ValueError):
+        return ""
 
 
 def python_dispatch_explicitly_requested() -> bool:
@@ -116,34 +173,231 @@ def native_dispatch_required() -> bool:
     return True
 
 
-def is_native_dispatch_available() -> bool:
-    """Validate the installed extension and no-GIL ABI once per process."""
-    global _RUST_AVAILABLE
-    if _RUST_AVAILABLE is not None:
-        return _RUST_AVAILABLE
+def _module_cache_key(
+    module: Any,
+    expected_build_id: str | None,
+    expected_source_fingerprint: str | None,
+) -> tuple[str | None, str | None, int | None, str | None]:
+    origin = getattr(module, "__file__", None)
+    origin_text = str(origin) if origin is not None else None
+    mtime_ns: int | None = None
+    if origin_text:
+        with contextlib.suppress(OSError):
+            mtime_ns = Path(origin_text).stat().st_mtime_ns
+    return expected_build_id, origin_text, mtime_ns, expected_source_fingerprint
+
+
+def _probe_result(
+    reason: NativeProbeReason,
+    detail: str,
+    *,
+    module_path: str | None = None,
+    expected_build_id: str | None = None,
+    actual_build_id: str | None = None,
+    expected_source_fingerprint: str | None = None,
+    actual_source_fingerprint: str | None = None,
+    actual_abi: str | None = None,
+    schema_version: int | None = None,
+    native_schema_version: int | None = None,
+    free_threaded: bool | None = None,
+    win32_backend: bool | None = None,
+) -> NativeProbeResult:
+    return NativeProbeResult(
+        available=reason is NativeProbeReason.AVAILABLE,
+        reason=reason,
+        detail=detail,
+        module_path=module_path,
+        expected_build_id=expected_build_id,
+        actual_build_id=actual_build_id,
+        expected_source_fingerprint=expected_source_fingerprint,
+        actual_source_fingerprint=actual_source_fingerprint,
+        actual_abi=actual_abi,
+        schema_version=schema_version,
+        native_schema_version=native_schema_version,
+        free_threaded=free_threaded,
+        win32_backend=win32_backend,
+    )
+
+
+def probe_native_dispatch(*, force: bool = False) -> NativeProbeResult:
+    """Return actionable native compatibility diagnostics.
+
+    Only successful probes are cached, and the cache is keyed by the expected
+    build ID plus module origin/mtime.  A failed probe is intentionally retried
+    so installing a wheel during a long-lived development process can recover
+    without a process restart.
+    """
+    global _NATIVE_PROBE, _NATIVE_PROBE_KEY
+    expected_build_id = _expected_native_build_id()
+    expected_source_fingerprint = _expected_native_source_fingerprint()
     try:
         import sky_player_rs  # type: ignore[import-not-found]
 
-        info = sky_player_rs.build_info()  # type: ignore[attr-defined]
-        gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
-        expected_build_id = _expected_native_build_id()
-        _RUST_AVAILABLE = (
-            info.get("schema_version") == RUST_DISPATCH_SCHEMA_VERSION
-            and info.get("native_schema_version") == RUST_DISPATCH_SCHEMA_VERSION
-            and info.get("native_abi") == EXPECTED_NATIVE_ABI
-            and info.get("free_threaded") is True
-            and info.get("win32_backend") is True
-            and gil_enabled is False
-            and (not expected_build_id or info.get("native_build_commit") == expected_build_id)
+        module_path = getattr(sky_player_rs, "__file__", None)
+        module_path_text = str(module_path) if module_path is not None else None
+        cache_key = _module_cache_key(
+            sky_player_rs,
+            expected_build_id or None,
+            expected_source_fingerprint or None,
         )
-    except (ImportError, AttributeError, RuntimeError, TypeError):
-        _RUST_AVAILABLE = False
-    return _RUST_AVAILABLE
+        if (
+            not force
+            and _NATIVE_PROBE is not None
+            and _NATIVE_PROBE.available
+            and cache_key == _NATIVE_PROBE_KEY
+        ):
+            return _NATIVE_PROBE
+
+        build_info = getattr(sky_player_rs, "build_info", None)
+        if not callable(build_info):
+            return _probe_result(
+                NativeProbeReason.BUILD_METADATA_MISSING,
+                "sky_player_rs.build_info() is missing",
+                module_path=module_path_text,
+                expected_build_id=expected_build_id or None,
+                expected_source_fingerprint=expected_source_fingerprint or None,
+            )
+        try:
+            info = cast(dict[str, Any], dict(cast(Any, build_info)()))
+        except Exception as exc:
+            return _probe_result(
+                NativeProbeReason.PROBE_EXCEPTION,
+                f"sky_player_rs.build_info() failed: {type(exc).__name__}: {exc}",
+                module_path=module_path_text,
+                expected_build_id=expected_build_id or None,
+                expected_source_fingerprint=expected_source_fingerprint or None,
+            )
+
+        required_metadata = (
+            "schema_version",
+            "native_schema_version",
+            "native_abi",
+            "native_build_commit",
+            "native_source_fingerprint",
+            "free_threaded",
+            "win32_backend",
+        )
+        if any(field not in info for field in required_metadata):
+            missing = ", ".join(field for field in required_metadata if field not in info)
+            return _probe_result(
+                NativeProbeReason.BUILD_METADATA_MISSING,
+                f"native build metadata is missing: {missing}",
+                module_path=module_path_text,
+                expected_build_id=expected_build_id or None,
+                expected_source_fingerprint=expected_source_fingerprint or None,
+            )
+
+        actual_build_id = str(info["native_build_commit"])
+        actual_source_fingerprint = str(info["native_source_fingerprint"])
+        actual_abi = str(info["native_abi"])
+        schema_version = info["schema_version"] if isinstance(info["schema_version"], int) else None
+        native_schema_version = (
+            info["native_schema_version"]
+            if isinstance(info["native_schema_version"], int)
+            else None
+        )
+        free_threaded = info["free_threaded"] if isinstance(info["free_threaded"], bool) else None
+        win32_backend = info["win32_backend"] if isinstance(info["win32_backend"], bool) else None
+        common: dict[str, Any] = {
+            "module_path": module_path_text,
+            "expected_build_id": expected_build_id or None,
+            "actual_build_id": actual_build_id,
+            "expected_source_fingerprint": expected_source_fingerprint or None,
+            "actual_source_fingerprint": actual_source_fingerprint,
+            "actual_abi": actual_abi,
+            "schema_version": schema_version,
+            "native_schema_version": native_schema_version,
+            "free_threaded": free_threaded,
+            "win32_backend": win32_backend,
+        }
+
+        if schema_version != RUST_DISPATCH_SCHEMA_VERSION or native_schema_version != RUST_DISPATCH_SCHEMA_VERSION:
+            return _probe_result(
+                NativeProbeReason.SCHEMA_MISMATCH,
+                f"native schema {schema_version}/{native_schema_version} does not match expected {RUST_DISPATCH_SCHEMA_VERSION}",
+                **common,
+            )
+        if actual_abi != EXPECTED_NATIVE_ABI:
+            return _probe_result(
+                NativeProbeReason.ABI_MISMATCH,
+                f"native ABI {actual_abi!r} does not match expected {EXPECTED_NATIVE_ABI!r}",
+                **common,
+            )
+        if free_threaded is not True:
+            return _probe_result(
+                NativeProbeReason.NOT_FREE_THREADED,
+                "native extension was not built for free-threaded CPython",
+                **common,
+            )
+        gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
+        if gil_enabled:
+            return _probe_result(
+                NativeProbeReason.GIL_ENABLED,
+                "the active Python interpreter has the GIL enabled",
+                **common,
+            )
+        if win32_backend is not True:
+            return _probe_result(
+                NativeProbeReason.WIN32_BACKEND_MISSING,
+                "native extension does not expose the Win32 SendInput backend",
+                **common,
+            )
+        if expected_build_id.startswith("!") or expected_source_fingerprint.startswith("!"):
+            reason = NativeProbeReason.BUILD_METADATA_MISSING
+            detail = "frozen release is missing sky_music._native_build"
+            return _probe_result(reason, detail, **common)
+        if expected_build_id and actual_build_id != expected_build_id:
+            return _probe_result(
+                NativeProbeReason.BUILD_ID_MISMATCH,
+                f"native wheel build {actual_build_id!r} does not match expected {expected_build_id!r}",
+                **common,
+            )
+        if (
+            expected_source_fingerprint
+            and actual_source_fingerprint != expected_source_fingerprint
+        ):
+            return _probe_result(
+                NativeProbeReason.BUILD_ID_MISMATCH,
+                "native source fingerprint does not match the current native contract",
+                **common,
+            )
+
+        result = _probe_result(
+            NativeProbeReason.AVAILABLE,
+            "native Rust dispatch is available",
+            **common,
+        )
+        _NATIVE_PROBE = result
+        _NATIVE_PROBE_KEY = cache_key
+        return result
+    except ModuleNotFoundError as exc:
+        reason = (
+            NativeProbeReason.MODULE_NOT_FOUND
+            if exc.name in {None, "sky_player_rs"}
+            else NativeProbeReason.DLL_LOAD_FAILED
+        )
+        return _probe_result(reason, f"cannot import sky_player_rs: {exc}")
+    except ImportError as exc:
+        return _probe_result(
+            NativeProbeReason.DLL_LOAD_FAILED,
+            f"sky_player_rs import failed: {exc}",
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return _probe_result(
+            NativeProbeReason.PROBE_EXCEPTION,
+            f"native probe failed: {type(exc).__name__}: {exc}",
+        )
+
+
+def is_native_dispatch_available() -> bool:
+    """Compatibility boolean for callers that only need admission."""
+    return probe_native_dispatch().available
 
 
 def reset_native_dispatch_availability_cache() -> None:
-    global _RUST_AVAILABLE
-    _RUST_AVAILABLE = None
+    global _NATIVE_PROBE, _NATIVE_PROBE_KEY
+    _NATIVE_PROBE = None
+    _NATIVE_PROBE_KEY = None
 
 
 class RustDispatchRuntime:
@@ -191,7 +445,7 @@ class RustDispatchRuntime:
         controls: Any,
         renderer: Any,
         poll_s: float,
-        strict_timing: bool = True,
+        strict_timing: bool = False,
         strict_down_completion_late_us: int = 2_000,
         strict_up_completion_late_us: int = 2_000,
         core_warmup_budget_us: int = 200,
@@ -241,6 +495,7 @@ class RustDispatchRuntime:
             strict_timing=strict_timing,
             strict_down_completion_late_us=strict_down_completion_late_us,
             strict_up_completion_late_us=strict_up_completion_late_us,
+            supervisor_lease_timeout_us=SUPERVISOR_LEASE_TIMEOUT_US,
         )
         self._actions = actions
         self._song_name = song_name
@@ -294,24 +549,63 @@ class RustDispatchRuntime:
             self._last_hwnd = 0
 
     def _handle_command(self, command: str | None) -> str | None:
+        def terminal_race_is_done() -> bool:
+            try:
+                return bool(self._session.snapshot().get("is_finished"))
+            except Exception:
+                return False
+
         if command == "quit":
-            self._session.quit()
-            return PLAYBACK_QUIT
+            try:
+                self._session.quit()
+                return PLAYBACK_QUIT
+            except RuntimeError:
+                if terminal_race_is_done():
+                    return None
+                raise
         if command == "skip":
-            self._session.skip()
-            return PLAYBACK_SKIPPED
+            try:
+                self._session.skip()
+                return PLAYBACK_SKIPPED
+            except RuntimeError:
+                if terminal_race_is_done():
+                    return None
+                raise
         if command == "pause":
-            self._manual_paused = not self._manual_paused
-            if self._manual_paused:
-                self._session.pause()
-            else:
-                self._session.resume()
+            next_paused = not self._manual_paused
+            try:
+                if next_paused:
+                    self._session.pause()
+                else:
+                    self._session.resume()
+                self._manual_paused = next_paused
+            except RuntimeError:
+                if not terminal_race_is_done():
+                    raise
         elif command == "panic":
-            self._session.panic_release()
+            try:
+                self._session.panic_release()
+            except RuntimeError:
+                if not terminal_race_is_done():
+                    raise
         elif command == "refocus":
             self._focus_guard.focus()
             self._set_initial_target()
         return None
+
+    def _heartbeat(self) -> None:
+        heartbeat = getattr(self._session, "heartbeat", None)
+        if callable(heartbeat):
+            heartbeat()
+
+    def _join_owned(self) -> bool:
+        """Join the worker, escalating once if the first bounded wait expires."""
+        joined = bool(self._session.join(timeout_ms=5_000))
+        if not joined:
+            with contextlib.suppress(Exception):
+                self._session.quit()
+            joined = bool(self._session.join(timeout_ms=5_000))
+        return joined
 
     @staticmethod
     def _health(snapshot: dict[str, Any]) -> BackendHealth:
@@ -341,93 +635,113 @@ class RustDispatchRuntime:
         """Run supervisor polling until the native worker reaches a terminal state."""
         import time
 
-        self._set_initial_target()
-        self._publish_focus()
-        self._session.start()
+        started = False
+        joined = False
         requested_outcome: str | None = None
-        latest: dict[str, Any] = self._session.snapshot()
-
-        while not latest["is_finished"]:
-            command = self._controls.poll() if self._controls is not None else None
-            requested_outcome = self._handle_command(command) or requested_outcome
+        latest: dict[str, Any] = {}
+        try:
+            self._set_initial_target()
             self._publish_focus()
+            self._session.start()
+            started = True
+            self._heartbeat()
             latest = self._session.snapshot()
 
-            if self._renderer is not None:
-                if hasattr(self._renderer, "update_counters_batch"):
-                    self._renderer.update_counters_batch(
-                        ProgressCounters(
-                            max_lateness_us=int(latest["max_lateness_us"]),
-                            late_2ms=int(latest["late_2ms"]),
-                            late_5ms=int(latest["late_5ms"]),
-                            late_10ms=int(latest["late_10ms"]),
-                            release_max_us=int(latest["release_max_us"]),
-                            release_late_2ms=int(latest["release_late_2ms"]),
-                            recent_latencies_us=tuple(
-                                int(value)
-                                for value in latest["recent_latencies_us"]
-                            ),
+            while not latest["is_finished"]:
+                self._heartbeat()
+                command = self._controls.poll() if self._controls is not None else None
+                requested_outcome = self._handle_command(command) or requested_outcome
+                self._publish_focus()
+                latest = self._session.snapshot()
+
+                if self._renderer is not None:
+                    if hasattr(self._renderer, "update_counters_batch"):
+                        self._renderer.update_counters_batch(
+                            ProgressCounters(
+                                max_lateness_us=int(latest["max_lateness_us"]),
+                                late_2ms=int(latest["late_2ms"]),
+                                late_5ms=int(latest["late_5ms"]),
+                                late_10ms=int(latest["late_10ms"]),
+                                release_max_us=int(latest["release_max_us"]),
+                                release_late_2ms=int(latest["release_late_2ms"]),
+                                recent_latencies_us=tuple(
+                                    int(value) for value in latest["recent_latencies_us"]
+                                ),
+                            )
                         )
+                    if latest["is_paused"]:
+                        status = (
+                            "paused"
+                            if self._manual_paused
+                            else "focus_lost"
+                            if self._has_played
+                            else "waiting_for_focus"
+                        )
+                    else:
+                        status = "playing"
+                        self._has_played = True
+                    self._renderer.render(
+                        latest["elapsed_us"] / 1_000_000,
+                        max(self._total_us, 1) / 1_000_000,
+                        self._song_name,
+                        status=status,
+                        input_path_degraded=bool(latest["input_path_degraded"]),
+                        backend_health=self._health(latest),
+                        dispatch_backend="rust",
                     )
-                if latest["is_paused"]:
-                    status = (
-                        "paused"
-                        if self._manual_paused
-                        else "focus_lost"
-                        if self._has_played
-                        else "waiting_for_focus"
-                    )
-                else:
-                    status = "playing"
-                    self._has_played = True
-                self._renderer.render(
-                    latest["elapsed_us"] / 1_000_000,
-                    max(self._total_us, 1) / 1_000_000,
-                    self._song_name,
-                    status=status,
-                    input_path_degraded=bool(latest["input_path_degraded"]),
-                    backend_health=self._health(latest),
-                    dispatch_backend="rust",
-                )
-            time.sleep(self._sleep_s)
+                time.sleep(self._sleep_s)
 
-        joined = bool(self._session.join(timeout_ms=5_000))
-        latest = self._session.snapshot()
-        if not joined:
-            outcome = PLAYBACK_SHUTDOWN_TIMEOUT
-        elif latest["status"] in {"panicked", "poisoned"}:
-            detail = latest.get("terminal_error") or latest["status"]
-            raise RuntimeError(f"native dispatch terminated: {detail}")
-        else:
-            outcome = str(latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED)
-            if outcome not in {
-                PLAYBACK_FINISHED,
-                PLAYBACK_ERROR,
-                PLAYBACK_QUIT,
-                PLAYBACK_SKIPPED,
-                PLAYBACK_SHUTDOWN_TIMEOUT,
-            }:
-                raise RuntimeError(f"unknown native playback outcome: {outcome}")
+            joined = self._join_owned()
+            latest = self._session.snapshot()
+            if not joined:
+                outcome = PLAYBACK_SHUTDOWN_TIMEOUT
+            elif latest["status"] in {"panicked", "poisoned"}:
+                detail = latest.get("terminal_error") or latest["status"]
+                raise RuntimeError(f"native dispatch terminated: {detail}")
+            else:
+                outcome = str(latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED)
+                if outcome not in {
+                    PLAYBACK_FINISHED,
+                    PLAYBACK_ERROR,
+                    PLAYBACK_QUIT,
+                    PLAYBACK_SKIPPED,
+                    PLAYBACK_SHUTDOWN_TIMEOUT,
+                }:
+                    raise RuntimeError(f"unknown native playback outcome: {outcome}")
 
-        if self._renderer is not None:
-            verb = {
-                PLAYBACK_ERROR: "Error",
-                PLAYBACK_FINISHED: "Finished",
-                PLAYBACK_QUIT: "Stopped",
-                PLAYBACK_SKIPPED: "Skipped",
-                PLAYBACK_SHUTDOWN_TIMEOUT: "Shutdown timeout",
-            }[outcome]
-            self._renderer.finish(f"{verb}: {self._song_name}")
-        if not joined:
-            # A timed-out/poisoned worker still owns its buffers and handles.
-            # Do not inspect or tear down worker-owned state.
-            telemetry = {
-                "records": [],
-                "attempted": 0,
-                "accepted": 0,
-                "dropped": 0,
-                "truncated": False,
-            }
-            return outcome, latest, telemetry, None
-        telemetry = json.loads(self._session.take_telemetry_json())
-        return outcome, latest, telemetry, self._session.estimator_state_json()
+            if self._renderer is not None:
+                verb = {
+                    PLAYBACK_ERROR: "Error",
+                    PLAYBACK_FINISHED: "Finished",
+                    PLAYBACK_QUIT: "Stopped",
+                    PLAYBACK_SKIPPED: "Skipped",
+                    PLAYBACK_SHUTDOWN_TIMEOUT: "Shutdown timeout",
+                }[outcome]
+                self._renderer.finish(f"{verb}: {self._song_name}")
+            if not joined:
+                telemetry = {
+                    "records": [],
+                    "attempted": 0,
+                    "accepted": 0,
+                    "dropped": 0,
+                    "truncated": False,
+                }
+                return outcome, latest, telemetry, None
+            telemetry = json.loads(self._session.take_telemetry_json())
+            return outcome, latest, telemetry, self._session.estimator_state_json()
+        except BaseException:
+            if started:
+                with contextlib.suppress(Exception):
+                    self._session.panic_release()
+                with contextlib.suppress(Exception):
+                    self._session.quit()
+                if not joined:
+                    with contextlib.suppress(Exception):
+                        joined = self._join_owned()
+            raise
+        finally:
+            if started and not joined:
+                with contextlib.suppress(Exception):
+                    self._session.quit()
+                with contextlib.suppress(Exception):
+                    self._join_owned()

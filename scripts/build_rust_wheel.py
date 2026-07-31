@@ -18,7 +18,10 @@ from pathlib import Path
 from packaging.tags import Tag
 from packaging.utils import canonicalize_name, parse_wheel_filename
 
+from sky_music.orchestration.native_provenance import native_source_fingerprint
+
 EXPECTED_NATIVE_TAG = Tag("cp314", "cp314t", "win_amd64")
+EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
 
 
 def git_head(repo_root: Path) -> str:
@@ -116,6 +119,11 @@ def main() -> int:
         print(f"[build_rust_wheel] ERROR: {exc}", file=sys.stderr)
         return 1
     print(f"[build_rust_wheel] Expected build commit: {expected_commit}")
+    source_fingerprint = native_source_fingerprint(
+        repo_root,
+        EXPECTED_NATIVE_ABI,
+    )
+    print(f"[build_rust_wheel] Native source fingerprint: {source_fingerprint}")
     print(f"[build_rust_wheel] Building wheel via maturin (manifest={cargo_manifest})...")
 
     cmd = [
@@ -133,6 +141,7 @@ def main() -> int:
     build_env = os.environ.copy()
     build_env["GITHUB_SHA"] = expected_commit
     build_env["SKY_NATIVE_BUILD_COMMIT"] = expected_commit
+    build_env["SKY_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
     res = subprocess.run(cmd, cwd=str(repo_root), env=build_env, check=False)
     if res.returncode != 0:
         print(f"[build_rust_wheel] ERROR: maturin build failed with code {res.returncode}", file=sys.stderr)
@@ -189,6 +198,7 @@ def main() -> int:
             "print('build_info:', info); "
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
             "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
+            "assert info.get('native_source_fingerprint') == os.environ['SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT'], info; "
             "gil_after = sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else True; "
             "print('gil_after_import:', gil_after); "
             "assert not gil_after, 'GIL was re-enabled by sky_player_rs import!'"
@@ -197,6 +207,7 @@ def main() -> int:
         clean_env.pop("PYTHONPATH", None)
         clean_env.pop("VIRTUAL_ENV", None)
         clean_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+        clean_env["SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
         print("[build_rust_wheel] Verifying exact wheel import, ABI, commit and GIL...")
         test_res = subprocess.run(
             [str(clean_python), "-c", test_code],
@@ -235,6 +246,7 @@ def main() -> int:
 
     active_env = os.environ.copy()
     active_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
+    active_env["SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
     active_env.pop("PYTHONPATH", None)
     print("[build_rust_wheel] Verifying the active environment wheel...")
     active_test = subprocess.run(
@@ -244,7 +256,8 @@ def main() -> int:
             "import os, sky_player_rs; info = sky_player_rs.build_info(); "
             "print('active_build_info:', info); "
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
-            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info",
+            "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
+            "assert info.get('native_source_fingerprint') == os.environ['SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT'], info",
         ],
         cwd=str(repo_root),
         env=active_env,

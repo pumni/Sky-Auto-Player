@@ -882,6 +882,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             chord_stagger_us=int(getattr(plan.active_policy, "chord_stagger_us", 0)),
             same_key_conflict_policy=plan.active_policy.same_key_conflict_policy,
             use_dispatch_thread=use_dispatch_thread,
+            dispatch_backend=getattr(self.cfg, "dispatch_backend", "auto"),
+            fidelity_mode=getattr(self.cfg, "fidelity_mode", "normal"),
             input_path_warn_us=input_path_warn_us,
             enable_timer_guard=enable_timer_guard,
             enable_waitable_timer=enable_waitable_timer,
