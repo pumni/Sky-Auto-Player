@@ -28,6 +28,13 @@ from sky_music.ui.text_render import (
 )
 from sky_music.ui.textual_app.theme_css import TEXTUAL_THEME_TOKENS, TextualThemeTokens
 
+PLAYBACK_ERROR_PREFIX = "error:"
+
+
+def _playback_error_result(exc: BaseException) -> str:
+    """Preserve a worker exception for the UI instead of treating it as quit."""
+    return f"{PLAYBACK_ERROR_PREFIX}{type(exc).__name__}: {exc}"
+
 if TYPE_CHECKING:
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.domain.validation import ScheduleInvariantViolation
@@ -511,11 +518,11 @@ class PlaybackCard(Static):
             with contextlib.suppress(Exception):
                 self.engine.release_song_data()
             self.app.call_from_thread(self._safe_finish, result)
-        except Exception:
+        except Exception as exc:
             if self.engine is not None:
                 with contextlib.suppress(Exception):
                     self.engine.release_song_data()
-            self.app.call_from_thread(self._safe_finish, "quit")
+            self.app.call_from_thread(self._safe_finish, _playback_error_result(exc))
 
     def _safe_finish(self, result: str) -> None:
         if self._exited:
@@ -897,10 +904,10 @@ class PlaybackApp(App[str]):
             with contextlib.suppress(Exception):
                 self.engine.release_song_data()
             self.call_from_thread(self._safe_exit, result)
-        except Exception:
+        except Exception as exc:
             with contextlib.suppress(Exception):
                 self.engine.release_song_data()
-            self.call_from_thread(self._safe_exit, "quit")
+            self.call_from_thread(self._safe_exit, _playback_error_result(exc))
 
     def _safe_exit(self, result: str) -> None:
         if not self._exited:
@@ -1055,10 +1062,10 @@ class PlaybackScreen(Screen[str]):
             with contextlib.suppress(Exception):
                 self.engine.release_song_data()
             self.app.call_from_thread(self._safe_exit, result)
-        except Exception:
+        except Exception as exc:
             with contextlib.suppress(Exception):
                 self.engine.release_song_data()
-            self.app.call_from_thread(self._safe_exit, "quit")
+            self.app.call_from_thread(self._safe_exit, _playback_error_result(exc))
 
     def _safe_exit(self, result: str) -> None:
         if not self._exited:

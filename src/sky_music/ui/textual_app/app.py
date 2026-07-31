@@ -906,6 +906,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 self._shutting_down_playback = False
                 self.exit(None)
                 return
+            playback_error = None
+            if isinstance(result, str) and result.startswith("error:"):
+                playback_error = result.removeprefix("error:").strip()
             if picker is not None:
                 picker.rearm()
             if not self.unified_mode:
@@ -914,6 +917,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 self.metadata.refresh([choice.path for choice in self._choices])
             self._focus_table()
             self._restore_picker_after_playback()
+            if playback_error is not None:
+                self._show_playback_error("Playback Error", playback_error)
+                return
             self.update_session_state(picker_result)
 
         def run_playback() -> None:

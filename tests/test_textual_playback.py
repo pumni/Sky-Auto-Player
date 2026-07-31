@@ -39,6 +39,11 @@ class FakeEngine:
         self.renderer.finish(self.finish_msg)
         return self.result
 
+
+class FailingEngine(FakeEngine):
+    def play(self) -> str:
+        raise RuntimeError("native dispatch terminated: test failure")
+
 def test_snapshot_renderer_unit() -> None:
     renderer = SnapshotRenderer()
     assert renderer.get_snapshot() is None
@@ -126,6 +131,27 @@ async def _run_app_test_quit() -> PlaybackApp:
 def test_playback_app_runs_and_exits_quit() -> None:
     app = asyncio.run(_run_app_test_quit())
     assert app.return_value == "quit"
+
+
+async def _run_playback_app_failure() -> PlaybackApp:
+    renderer = SnapshotRenderer()
+    app = PlaybackApp(
+        FailingEngine(renderer, 5_000_000),  # type: ignore[arg-type]
+        renderer,
+        "aurora",
+        "Test Song",
+        5_000_000,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0.2)
+    return app
+
+
+def test_playback_app_preserves_native_failure_as_error_result() -> None:
+    app = asyncio.run(_run_playback_app_failure())
+    assert isinstance(app.return_value, str)
+    assert app.return_value.startswith("error:RuntimeError:")
 
 def test_playback_app_handles_heavy_lateness_updates() -> None:
     renderer = SnapshotRenderer()
