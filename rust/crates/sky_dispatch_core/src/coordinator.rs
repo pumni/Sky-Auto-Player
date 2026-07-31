@@ -367,7 +367,7 @@ impl RuntimeDispatchCoordinator {
             return false;
         }
         self.schedule.intent_slice(batch).iter().any(|intent| {
-            let bit = Self::bit_for_slot(intent.key_slot);
+            let bit = Self::bit_for_slot(intent.key_slot());
             self.active_mask & bit != 0 || self.pending_mask & bit != 0
         })
     }
@@ -408,6 +408,14 @@ impl RuntimeDispatchCoordinator {
             .filter_map(Option::as_ref)
             .map(|pending| pending.get_effective_release_us(lead_up))
             .min()
+    }
+
+    /// Number of release intents that can be emitted in the next pending
+    /// release batch.  The worker uses this to select the Up lead before
+    /// popping the batch, so release latency is modelled by release
+    /// polyphony rather than by a permanent one-key estimate.
+    pub fn next_pending_polyphony(&self) -> usize {
+        self.pending_mask.count_ones() as usize
     }
 
     pub fn next_deadline_us(&self, dispatch_lead_us: u64, lead_up: u64) -> Option<u64> {

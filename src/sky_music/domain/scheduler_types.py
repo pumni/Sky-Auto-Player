@@ -29,7 +29,7 @@ class TimingPolicy:
 
     focus_restore_grace_us: Microseconds = Microseconds(100_000) # Default is overridden in from_dict
 
-    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "degraded"
+    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "drop_chord"
     hold_frames: float = 1.25
     min_hold_frames: float = 1.25
     hold_override_us: Microseconds | None = None
@@ -163,9 +163,9 @@ class TimingPolicy:
             min_hold_margin_source=min_hold_margin_source,
             focus_restore_grace_us=Microseconds(int_value("focus_restore_grace_us", int(base["focus_restore_grace_us"]))),
             same_key_conflict_policy=(
-                p_dict.get("same_key_conflict_policy", "degraded")
-                if p_dict.get("same_key_conflict_policy", "degraded") in ("degraded", "drop_chord", "strict")
-                else "degraded"
+                p_dict.get("same_key_conflict_policy", "drop_chord")
+                if p_dict.get("same_key_conflict_policy", "drop_chord") in ("degraded", "drop_chord", "strict")
+                else "drop_chord"
             ),
             hold_frames=hold_frames,
             min_hold_frames=min_hold_frames,
@@ -206,7 +206,7 @@ class FrameTimingPolicy:
 
     focus_restore_grace_us: Microseconds
 
-    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "degraded"
+    same_key_conflict_policy: Literal["degraded", "drop_chord", "strict"] = "drop_chord"
     profile_name: str | None = None
 
     # Carried unchanged from TimingPolicy; consumed by build_key_actions. See TimingPolicy docstring.
@@ -275,7 +275,7 @@ class FrameTimingPolicy:
             
         conflict_policy = same_key_conflict_policy if same_key_conflict_policy is not None else policy.same_key_conflict_policy
         if conflict_policy not in ("strict", "drop_chord", "degraded"):
-            conflict_policy = "degraded"
+            conflict_policy = "drop_chord"
 
         return cls(
             fps=fps if fps is not None else 0,

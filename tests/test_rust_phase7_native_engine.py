@@ -479,7 +479,7 @@ def test_native_dispatch_estimator_cache_round_trip() -> None:
     session.start()
     assert session.join() is True
     exported = cast(dict[str, Any], json.loads(session.estimator_state_json()))
-    assert exported["version"] == 2
+    assert exported["version"] == 3
     assert exported["count_down"][1] == 6
 
 

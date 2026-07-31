@@ -31,7 +31,7 @@ class PlaybackSessionContext:
     tempo_scale: float = 1.0
     fps: int = 60
     scan_code_mode: str = "physical"
-    same_key_conflict_policy: ConflictPolicy = "degraded"
+    same_key_conflict_policy: ConflictPolicy = "drop_chord"
     policy_overrides: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:

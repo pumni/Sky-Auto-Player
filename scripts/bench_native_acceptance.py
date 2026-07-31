@@ -1,8 +1,11 @@
 """Bounded Windows acceptance benchmark for the native dispatch worker.
 
-The benchmark uses the Rust worker with ``mock_backend=True``. It never emits
-input to a game or another process. It measures sender-side completion error,
-spin CPU time, peak working set, and command interrupt latency.
+The default benchmark uses the Rust worker with an explicit, polyphony-aware
+mock latency model. It never emits input to a game or another process. This
+isolates estimator behaviour while still exercising non-zero completion
+latency. ``--backend sendinput --allow-real-input`` is an explicit fixed-host
+run against the real SendInput seam; it must not be used while an unintended
+foreground application can receive the test keys.
 
 Run the same command on the baseline and follow-up revisions, then compare the
 JSON files::
@@ -89,7 +92,14 @@ def _peak_working_set_bytes() -> int | None:
     return None
 
 
-def _new_session(actions: list[tuple[int, str, int, list[int], str]]) -> Any:
+def _new_session(
+    actions: list[tuple[int, str, int, list[int], str]],
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+) -> Any:
     import sky_player_rs
 
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
@@ -97,23 +107,37 @@ def _new_session(actions: list[tuple[int, str, int, list[int], str]]) -> Any:
         list(SKY_15_SCAN_CODES),
         min_hold_us=100,
         max_lead_us=2_000,
-        mock_backend=True,
+        mock_backend=backend == "mock",
+        mock_latency_base_us=mock_base_latency_us,
+        mock_latency_per_key_us=mock_per_key_latency_us,
         require_focus=False,
         telemetry_enabled=True,
         telemetry_capacity=max(1_024, len(actions) + 16),
         rt_priority_mode="off",
         enable_waitable_timer=True,
         enable_event_wait=True,
-        enable_adaptive_spin=False,
-        enable_spin_reprobe=False,
-        enable_adaptive_lead=False,
+        enable_adaptive_spin=adaptive_spin,
+        enable_spin_reprobe=adaptive_spin,
+        enable_adaptive_lead=True,
     )
 
 
 def _run_dispatch(
-    actions: list[tuple[int, str, int, list[int], str]], polyphony: int
+    actions: list[tuple[int, str, int, list[int], str]],
+    polyphony: int,
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
 ) -> dict[str, Any]:
-    session = _new_session(actions)
+    session = _new_session(
+        actions,
+        backend=backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=adaptive_spin,
+    )
     started_ns = time.perf_counter_ns()
     session.start()
     if not session.join(timeout_ms=60_000):
@@ -123,6 +147,11 @@ def _run_dispatch(
     telemetry = json.loads(session.take_telemetry_json())
     records = telemetry.get("records", [])
     sender_errors = [int(record["visible_lateness_us"]) for record in records]
+    lead_by_polyphony = {
+        str(len(record.get("scan_codes", []))): int(record.get("applied_lead_us", 0))
+        for record in records
+        if record.get("kind") == "down" and record.get("scan_codes")
+    }
     peak_rss = _peak_working_set_bytes()
     result: dict[str, Any] = {
         "polyphony": polyphony,
@@ -134,17 +163,36 @@ def _run_dispatch(
         "keys_dropped": int(snapshot.get("keys_dropped", 0)),
         "failed_release_count": int(snapshot.get("failed_release_count", 0)),
         "chord_split_events": int(snapshot.get("chord_split_events", 0)),
+        "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
+        "lead_saturation_count_down": list(
+            snapshot.get("lead_saturation_count_down", [])
+        ),
+        "lead_saturation_count_up": list(snapshot.get("lead_saturation_count_up", [])),
+        "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
+        "lead_by_polyphony": lead_by_polyphony,
         "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
         "outcome": snapshot.get("outcome"),
     }
     return result
 
 
-def _measure_command_interrupt() -> int:
+def _measure_command_interrupt(
+    *,
+    backend: str,
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+    adaptive_spin: bool,
+) -> int:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
     actions = [(0, "down", 10_000_000, [int(SKY_15_SCAN_CODES[0])], "interrupt")]
-    session = _new_session(actions)
+    session = _new_session(
+        actions,
+        backend=backend,
+        mock_base_latency_us=mock_base_latency_us,
+        mock_per_key_latency_us=mock_per_key_latency_us,
+        adaptive_spin=adaptive_spin,
+    )
     session.start()
     deadline = time.perf_counter() + 2.0
     while not bool(dict(session.snapshot()).get("is_running")):
@@ -177,6 +225,24 @@ def _parse_args() -> argparse.Namespace:
         "--polyphony",
         default="1,2,3,5,8,15",
         help="comma-separated chord sizes to exercise (default: 1,2,3,5,8,15)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("mock", "sendinput"),
+        default="mock",
+        help="mock = injected polyphony-aware latency (default), sendinput = real fixed-host seam",
+    )
+    parser.add_argument(
+        "--allow-real-input",
+        action="store_true",
+        help="required with --backend sendinput; keys may reach the foreground window",
+    )
+    parser.add_argument("--mock-base-latency-us", type=int, default=80)
+    parser.add_argument("--mock-per-key-latency-us", type=int, default=40)
+    parser.add_argument(
+        "--no-adaptive-spin",
+        action="store_true",
+        help="disable adaptive wait probing; adaptive lead remains enabled",
     )
     parser.add_argument(
         "--baseline",
@@ -248,13 +314,31 @@ def main() -> int:
         raise SystemExit("this acceptance benchmark requires Windows")
     if args.actions <= 0 or args.repeats <= 0:
         raise SystemExit("--actions and --repeats must be positive")
+    if args.backend == "sendinput" and not args.allow_real_input:
+        raise SystemExit("--backend sendinput requires --allow-real-input")
+    if args.mock_base_latency_us < 0 or args.mock_per_key_latency_us < 0:
+        raise SystemExit("mock latency values must be non-negative")
+    if args.backend == "sendinput" and (
+        args.mock_base_latency_us or args.mock_per_key_latency_us
+    ):
+        raise SystemExit("mock latency values are only valid with --backend mock")
 
     polyphonies = _parse_polyphony(args.polyphony)
     dispatch_runs: list[dict[str, Any]] = []
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
         actions = _actions(args.actions, polyphony)
-        runs = [_run_dispatch(actions, polyphony) for _ in range(args.repeats)]
+        runs = [
+            _run_dispatch(
+                actions,
+                polyphony,
+                backend=args.backend,
+                mock_base_latency_us=args.mock_base_latency_us,
+                mock_per_key_latency_us=args.mock_per_key_latency_us,
+                adaptive_spin=not args.no_adaptive_spin,
+            )
+            for _ in range(args.repeats)
+        ]
         for run in runs:
             _assert_correctness(run)
         values = [value for run in runs for value in run["_sender_error_values"]]
@@ -271,11 +355,31 @@ def main() -> int:
             "keys_dropped": sum(run["keys_dropped"] for run in runs),
             "failed_release_count": sum(run["failed_release_count"] for run in runs),
             "chord_split_events": sum(run["chord_split_events"] for run in runs),
+            "sendinput_partial_events": sum(
+                run["sendinput_partial_events"] for run in runs
+            ),
+            "positive_residual_at_cap": sum(
+                run["positive_residual_at_cap"] for run in runs
+            ),
+            "lead_by_polyphony": {
+                key: max(
+                    int(run["lead_by_polyphony"].get(key, 0)) for run in runs
+                )
+                for key in {str(polyphony)}
+            },
             "outcomes": sorted({run["outcome"] for run in runs}),
         }
         by_polyphony[str(polyphony)] = poly_report
         dispatch_runs.extend(runs)
-    interrupt_runs = [_measure_command_interrupt() for _ in range(args.repeats)]
+    interrupt_runs = [
+        _measure_command_interrupt(
+            backend=args.backend,
+            mock_base_latency_us=args.mock_base_latency_us,
+            mock_per_key_latency_us=args.mock_per_key_latency_us,
+            adaptive_spin=not args.no_adaptive_spin,
+        )
+        for _ in range(args.repeats)
+    ]
     sender_errors = [
         value
         for run in dispatch_runs
@@ -283,7 +387,7 @@ def main() -> int:
     ]
     report: dict[str, Any] = {
         "label": args.label,
-        "backend": "mock",
+        "backend": args.backend,
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
         "repeats": args.repeats,
@@ -298,9 +402,26 @@ def main() -> int:
         "command_interrupt_latency_us": _stats(interrupt_runs),
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
         "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
+        "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),
+        "sendinput_partial_events": sum(
+            run["sendinput_partial_events"] for run in dispatch_runs
+        ),
+        "positive_residual_at_cap": sum(
+            run["positive_residual_at_cap"] for run in dispatch_runs
+        ),
         "outcomes": sorted({run["outcome"] for run in dispatch_runs}),
+        "mock_latency_model": {
+            "base_us": args.mock_base_latency_us,
+            "per_key_us": args.mock_per_key_latency_us,
+        }
+        if args.backend == "mock"
+        else None,
         "by_polyphony": by_polyphony,
-        "evidence_scope": "sender_side_mock_backend",
+        "evidence_scope": (
+            "sender_side_polyphony_latency_model"
+            if args.backend == "mock"
+            else "sender_side_real_sendinput_fixed_host"
+        ),
     }
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)

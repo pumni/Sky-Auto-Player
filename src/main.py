@@ -182,8 +182,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     timing.add_argument(
         "--same-key-conflict-policy",
-        choices=["degraded", "strict"],
-        help="degraded = warn and compress timing (default), strict = reject and abort playback",
+        choices=["drop_chord", "degraded", "strict"],
+        help="drop_chord = preserve chord fidelity (default), degraded = legacy partial chord, strict = reject and abort playback",
     )
     timing.add_argument(
         "--dispatch-lead-us",

@@ -284,7 +284,7 @@ class DispatchLoop:
         spin_threshold_us: int,
         focus_restore_grace_us: int = 100_000,
         late_pulse_drop_threshold_us: int | None = None,
-        same_key_conflict_policy: str = "degraded",
+        same_key_conflict_policy: str = "drop_chord",
         # ``enable_event_wait`` is intentionally retained as a no-op kwarg
         # for source-compatibility with downstream callers that still pass
         # it. The polling-vs-event decision is driven by ``command_event``

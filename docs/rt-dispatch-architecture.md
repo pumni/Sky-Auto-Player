@@ -19,7 +19,7 @@ PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle o
  │   └─ sky_player_rs.DispatchSession                worker owns core/wait/backend/telemetry
  ├─ Python rollback/oracle path:
  │   ├─ compile_runtime_intents → RuntimeSchedule    per-key generations (core/coordinator.py)
- ├─ SendLatencyEstimator                             per-kind EMA of SendInput durations
+ ├─ SendLatencyEstimator                             p95 latency buckets by kind/polyphony
  ├─ wake-error probe (pre start_perf)                derives effective spin threshold
  ├─ RealtimeProcessScope (infrastructure/realtime)   gc.collect→gc.disable + setswitchinterval(1ms)
  ├─ DispatchLoop (orchestration/core/loop.py)        wait → drain → execute; RT thread only
@@ -82,10 +82,12 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 
 ## 3. Timing semantics
 
-- **Onset = dispatch completion.** The adaptive lead (per-kind EMA of `send_duration_us`, seeded
-  by the average of the first 5 samples, clamped to 2 ms) pops work early so that SendInput
-  *completion* lands on `scheduled_us`. `lateness_us` may legitimately be negative;
-  `visible_lateness_us` is the on-time metric. Live A/B: down-onset median +420 µs → −3 µs.
+- **Onset = dispatch completion.** The adaptive lead uses a bounded rolling p95 of
+  `send_duration_us` for each Down/Up polyphony bucket, with a monotonic envelope across chord
+  sizes. Five samples warm a bucket; cold buckets use a conservative static prior plus the last
+  lower bucket/global p95. Lead is capped at the configured maximum and the estimator exports
+  saturation/residual evidence through runtime telemetry. `lateness_us` may legitimately be
+  negative; `visible_lateness_us` is the on-time metric.
 - **Lead is symmetric** (downs and pending releases) and floor-clamped: a release becomes due at
   `max(scheduled_release − lead_up, release_not_before)` where
   `release_not_before = down_dispatch_completed + min_hold` — the 1-frame floor always wins.
@@ -93,6 +95,14 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   its scan codes is active or pending release (an early pop would become a dropped note).
   `next_authored_us` is guard-aware so a blocked batch reports its authored time as the deadline
   (no busy-loop while waiting for the blocking release).
+- **Deadline mapping is single-sample.** The worker samples QPC ticks once, derives logical
+  elapsed time from that same sample, and maps the remaining logical interval to an absolute QPC
+  target. Bookkeeping between two independent samples must not be charged as extra deadline
+  lateness.
+- **Chord conflict default is fidelity-first.** `drop_chord` rejects the whole authored chord;
+  `strict` also terminates playback; `degraded` is an explicit legacy/diagnostic mode that may
+  send a partial chord. Multiple same-timestamp Down batches are rejected by the native compiler
+  because they cannot be made atomic after the Python boundary.
 - **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
   `effective_spin_threshold = clamp(spin_floor_us, 3000, p95_wake_error + 200)` µs (default
@@ -100,9 +110,9 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
   reprobe uses a robust `median + 6 × MAD + 200 µs` candidate over its small cooperative sample,
   raises the threshold immediately, and lowers it by at most 50 µs per update. This keeps one timer
   outlier from forcing a 3 ms spin window while retaining fast protection when the timer path degrades.
-- **Cross-session EMA lead cache (Phase D):** `SendLatencyEstimator` exports/imports per-kind
-  EMA state via `.cache/lead_estimator.json` so the first note benefits from the last session's
-  warm lead. Corrupt/version-mismatched cache is silently dropped. Loaded flag recorded in
+- **Cross-session lead cache:** `SendLatencyEstimator` exports/imports version-3 rolling p95
+  samples via `.cache/lead_estimator.json`; version-2 EMA caches are migrated conservatively.
+  Corrupt/version-mismatched cache is silently dropped. Loaded flag is recorded in
   `runtime_options.lead_cache_loaded`.
 - **Idle-gap core warmup (Phase 1/6):** When the gap since last `SendInput` completion ≥ 20 ms, a
   `core_warmup_budget_us` (default 200 µs, capped at 500 µs) is added directly to the
@@ -190,7 +200,8 @@ deterministic tests are unaffected):
 |---|---|---|
 | MMCSS/priority ladder | `rt_priority_mode: auto` (config) | `--rt-priority-mode off` |
 | Adaptive dispatch lead | `enable_adaptive_lead: true` (config) | `--no-adaptive-lead` |
-| Lead EMA cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
+| Same-key chord conflict | `drop_chord` (whole authored chord) | `degraded` legacy or `strict` abort |
+| Lead p95 cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
 | Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
 | Idle-gap core warmup | `core_warmup_budget_us = 200`, threshold 20 ms | `core_warmup_budget_us = 0` |
@@ -224,7 +235,7 @@ cleanest send tail of all runs.
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
 The Rust path reserves its retain-first record buffer before the playback epoch. The compiled
-schedule uses a flat `CompactIntent` arena plus small batch headers; only the current batch is
+schedule uses a flat 8-byte packed `CompactIntent` arena plus small batch headers; only the current batch is
 materialized into full intent views. Runtime active/release ownership uses 15-key arrays and
 bitmasks rather than hash tables. Per-record scan/generation fields use inline storage and
 reasons remain compact IDs on the worker; bounded summary counters and 50 µs histograms remain

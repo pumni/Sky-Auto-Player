@@ -141,6 +141,8 @@ def build_key_actions(
     ### Same-Key Conflict Policies:
     - **strict**: If a same-key repeat interval is shorter than the minimum hold time (min_hold_us),
       raises a ScheduleBuildError and refuses to schedule.
+    - **drop_chord**: Preserves the timeline and rejects the whole conflicting chord at runtime,
+      so playback never substitutes a partial chord.
     - **degraded**: Preserves the minimum hold time of the previous note, pushing its release to
       `down_at_us + min_hold_us`. Since the next same-key press occurs before this release, the subsequent
       press will conflict and be dropped at runtime (dropped_conflict) to avoid stuck keys.
@@ -395,8 +397,8 @@ def build_key_actions(
     if impossible_same_key_repeats > 0:
         warnings.append(
             f"Detected {impossible_same_key_repeats} infeasible same-key repeat(s): "
-            "authored interval is below min_hold, so degraded playback "
-            "preserves min_hold and overlaps the next down."
+            "authored interval is below min_hold; the next same-key down "
+            "preserves min_hold and overlaps the previous release."
         )
     if risky_same_key_repeats > 0:
         warnings.append(

@@ -513,7 +513,7 @@ def test_dropped_generation_up_cannot_release_later_generation():
     assert summary["runtime_conflict_dropped_down_count"] == 1
 
 
-def test_mixed_chord_conflict_still_sends_playable_key():
+def test_mixed_chord_conflict_drops_whole_chord_by_default():
     backend, engine = play(
         (
             action(0, "down", 21),
@@ -524,7 +524,7 @@ def test_mixed_chord_conflict_still_sends_playable_key():
         min_hold_us=10,
     )
 
-    assert any(call.kind == "down" and call.scan_codes == (22,) for call in backend.calls)
+    assert not any(call.kind == "down" and call.scan_codes == (22,) for call in backend.calls)
     assert not any(call.kind == "down" and call.scan_codes == (21, 22) for call in backend.calls)
     summary = engine.telemetry.get_summary()
     assert summary is not None

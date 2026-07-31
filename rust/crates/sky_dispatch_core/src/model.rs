@@ -10,6 +10,11 @@ pub type ReasonId = u16;
 pub type PacketId = u32;
 pub type KeySlot = u8;
 pub const NO_GENERATION_ID: GenerationId = GenerationId::MAX;
+/// CompactIntent reserves the all-ones 60-bit generation value as the
+/// unmatched-up sentinel.  This is still far beyond the configured action
+/// cap, but keeping the bound explicit prevents a silent alias at the packed
+/// representation boundary.
+pub const MAX_COMPACT_GENERATION_ID: GenerationId = (u64::MAX >> 4) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,10 +80,34 @@ pub struct RuntimeKeyIntent {
 /// full `RuntimeKeyIntent` remains the short-lived materialized view consumed
 /// by the coordinator and worker, so the million-action schedule does not
 /// inline fifteen copies of those fields for every action.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompactIntent {
-    pub generation_id: GenerationId,
-    pub key_slot: KeySlot,
+pub struct CompactIntent(u64);
+
+impl CompactIntent {
+    pub fn new(generation_id: GenerationId, key_slot: KeySlot) -> Self {
+        debug_assert!(key_slot < 16, "compact key slot must fit in four bits");
+        let generation_bits = if generation_id == NO_GENERATION_ID {
+            u64::MAX >> 4
+        } else {
+            debug_assert!(generation_id <= MAX_COMPACT_GENERATION_ID);
+            generation_id
+        };
+        Self((generation_bits << 4) | u64::from(key_slot))
+    }
+
+    pub fn generation_id(self) -> GenerationId {
+        let generation = self.0 >> 4;
+        if generation == u64::MAX >> 4 {
+            NO_GENERATION_ID
+        } else {
+            generation
+        }
+    }
+
+    pub fn key_slot(self) -> KeySlot {
+        (self.0 & 0x0f) as KeySlot
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,14 +153,14 @@ impl RuntimeSchedule {
             .iter()
             .map(|compact| RuntimeKeyIntent {
                 source_action_index: header.source_action_index,
-                generation_id: (compact.generation_id != NO_GENERATION_ID)
-                    .then_some(compact.generation_id),
+                generation_id: (compact.generation_id() != NO_GENERATION_ID)
+                    .then_some(compact.generation_id()),
                 kind: header.kind,
                 scan_code: self
                     .key_registry
-                    .scan_code_for(compact.key_slot)
+                    .scan_code_for(compact.key_slot())
                     .expect("compiled key slot must belong to key registry"),
-                key_slot: compact.key_slot,
+                key_slot: compact.key_slot(),
                 scheduled_us,
                 reason_id: header.reason_id,
             })

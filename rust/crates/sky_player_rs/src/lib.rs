@@ -238,6 +238,12 @@ impl RustInputBackend {
             res.retried_after_zero_progress,
         )?;
         dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
+        dict.set_item(
+            "keys_inserted_before_failure",
+            res.keys_inserted_before_failure,
+        )?;
+        dict.set_item("keys_rolled_back", res.keys_rolled_back)?;
+        dict.set_item("rollback_residue_keys", res.rollback_residue_keys)?;
         Ok(dict)
     }
 
@@ -269,6 +275,12 @@ impl RustInputBackend {
             res.retried_after_zero_progress,
         )?;
         dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
+        dict.set_item(
+            "keys_inserted_before_failure",
+            res.keys_inserted_before_failure,
+        )?;
+        dict.set_item("keys_rolled_back", res.keys_rolled_back)?;
+        dict.set_item("rollback_residue_keys", res.rollback_residue_keys)?;
         Ok(dict)
     }
 
@@ -313,6 +325,15 @@ impl RustInputBackend {
         dict.set_item("last_error", state.last_error.clone())?;
         dict.set_item("keys_dropped", state.keys_dropped)?;
         dict.set_item("chord_split_events", state.chord_split_events)?;
+        dict.set_item("sendinput_partial_events", state.sendinput_partial_events)?;
+        dict.set_item("chords_rejected", state.chords_rejected)?;
+        dict.set_item("authored_keys_rejected", state.authored_keys_rejected)?;
+        dict.set_item(
+            "keys_inserted_before_failure",
+            state.keys_inserted_before_failure,
+        )?;
+        dict.set_item("keys_rolled_back", state.keys_rolled_back)?;
+        dict.set_item("rollback_residue_keys", state.rollback_residue_keys)?;
         Ok(dict)
     }
 }
@@ -326,7 +347,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "degraded", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), mock_failure_mode = "none"))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -352,10 +373,14 @@ impl NativeDispatchSessionPy {
         enable_adaptive_lead: bool,
         input_path_warn_us: StrictU64,
         mock_failure_mode: &str,
+        mock_latency_base_us: StrictU64,
+        mock_latency_per_key_us: StrictU64,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
         let max_lead_us = max_lead_us.0;
         let dispatch_lead_us = dispatch_lead_us.0;
+        let mock_latency_base_us = mock_latency_base_us.0;
+        let mock_latency_per_key_us = mock_latency_per_key_us.0;
         let focus_restore_grace_us = focus_restore_grace_us.0;
         let spin_threshold_us = spin_threshold_us.0;
         let core_warmup_budget_us = core_warmup_budget_us.0;
@@ -386,6 +411,16 @@ impl NativeDispatchSessionPy {
         }
         if max_lead_us > 10_000 {
             return Err(PyValueError::new_err("max_lead_us must be at most 10000"));
+        }
+        if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
+            return Err(PyValueError::new_err(
+                "mock latency values must be at most 1000000 microseconds",
+            ));
+        }
+        if !mock_backend && (mock_latency_base_us > 0 || mock_latency_per_key_us > 0) {
+            return Err(PyValueError::new_err(
+                "mock latency values require mock_backend=True",
+            ));
         }
         if dispatch_lead_us > 10_000 {
             return Err(PyValueError::new_err(
@@ -469,6 +504,8 @@ impl NativeDispatchSessionPy {
             dispatch_lead_us,
             allowed_scan_codes,
             mock_backend,
+            mock_latency_base_us,
+            mock_latency_per_key_us,
             mock_failure_mode,
             require_focus,
             focus_restore_grace_us,
@@ -586,6 +623,23 @@ impl NativeDispatchSessionPy {
         dict.set_item("last_error", snap.last_error)?;
         dict.set_item("keys_dropped", snap.keys_dropped)?;
         dict.set_item("chord_split_events", snap.chord_split_events)?;
+        dict.set_item("sendinput_partial_events", snap.sendinput_partial_events)?;
+        dict.set_item("chords_rejected", snap.chords_rejected)?;
+        dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
+        dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;
+        dict.set_item("authored_keys_rejected", snap.authored_keys_rejected)?;
+        dict.set_item(
+            "keys_inserted_before_failure",
+            snap.keys_inserted_before_failure,
+        )?;
+        dict.set_item("keys_rolled_back", snap.keys_rolled_back)?;
+        dict.set_item("rollback_residue_keys", snap.rollback_residue_keys)?;
+        dict.set_item(
+            "lead_saturation_count_down",
+            snap.lead_saturation_count_down,
+        )?;
+        dict.set_item("lead_saturation_count_up", snap.lead_saturation_count_up)?;
+        dict.set_item("positive_residual_at_cap", snap.positive_residual_at_cap)?;
         dict.set_item("outcome", snap.outcome)?;
         dict.set_item("rt_priority_acquired", snap.rt_priority_acquired)?;
         dict.set_item(
@@ -603,6 +657,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("sendinput_path_degraded", snap.sendinput_path_degraded)?;
         dict.set_item("bookkeeping_degraded", snap.bookkeeping_degraded)?;
         dict.set_item("wait_path_degraded", snap.wait_path_degraded)?;
+        dict.set_item("wait_target_error_us", snap.wait_target_error_us)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
         dict.set_item("generation_count", snap.generation_count)?;

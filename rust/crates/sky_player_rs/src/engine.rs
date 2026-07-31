@@ -6,7 +6,9 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
-use sky_dispatch_win32::clock::{QpcTicks, qpc_now_ticks, qpc_now_us, qpc_us_to_ticks};
+use sky_dispatch_win32::clock::{
+    QpcTicks, qpc_now_ticks, qpc_now_us, qpc_ticks_to_us, qpc_us_to_ticks,
+};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
@@ -77,6 +79,17 @@ pub struct EngineSnapshot {
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
+    pub sendinput_partial_events: u64,
+    pub chords_rejected: u64,
+    pub authored_conflict_events: u64,
+    pub authored_chords_rejected: u64,
+    pub authored_keys_rejected: u64,
+    pub keys_inserted_before_failure: u64,
+    pub keys_rolled_back: u64,
+    pub rollback_residue_keys: u64,
+    pub lead_saturation_count_down: Vec<u64>,
+    pub lead_saturation_count_up: Vec<u64>,
+    pub positive_residual_at_cap: u64,
     pub outcome: Option<String>,
     pub rt_priority_acquired: String,
     pub effective_spin_threshold_us: u64,
@@ -91,6 +104,7 @@ pub struct EngineSnapshot {
     pub sendinput_path_degraded: bool,
     pub bookkeeping_degraded: bool,
     pub wait_path_degraded: bool,
+    pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
     pub terminal_error: Option<String>,
     pub generation_count: u64,
@@ -301,6 +315,17 @@ struct SharedMetrics {
     last_error: Mutex<Option<String>>,
     keys_dropped: AtomicU64,
     chord_split_events: AtomicU64,
+    sendinput_partial_events: AtomicU64,
+    chords_rejected: AtomicU64,
+    authored_conflict_events: AtomicU64,
+    authored_chords_rejected: AtomicU64,
+    authored_keys_rejected: AtomicU64,
+    keys_inserted_before_failure: AtomicU64,
+    keys_rolled_back: AtomicU64,
+    rollback_residue_keys: AtomicU64,
+    lead_saturation_count_down: [AtomicU64; 16],
+    lead_saturation_count_up: [AtomicU64; 16],
+    positive_residual_at_cap: AtomicU64,
     is_paused: AtomicBool,
     panicked: AtomicBool,
     effective_spin_threshold_us: AtomicU64,
@@ -315,6 +340,7 @@ struct SharedMetrics {
     sendinput_path_degraded: AtomicBool,
     bookkeeping_degraded: AtomicBool,
     wait_path_degraded: AtomicBool,
+    wait_target_error_us: AtomicU64,
     idle_wake_count: AtomicU64,
     terminal_error: Mutex<Option<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
@@ -329,6 +355,8 @@ struct WorkerConfig {
     dispatch_lead_us: u64,
     allowed_count: usize,
     mock_backend: bool,
+    mock_latency_base_us: u64,
+    mock_latency_per_key_us: u64,
     mock_failure_mode: MockFailureMode,
     require_focus: bool,
     focus_restore_grace_us: u64,
@@ -382,6 +410,8 @@ impl NativeDispatchSession {
         dispatch_lead_us: u64,
         allowed_scan_codes: Vec<u16>,
         mock_backend: bool,
+        mock_latency_base_us: u64,
+        mock_latency_per_key_us: u64,
         mock_failure_mode: MockFailureMode,
         require_focus: bool,
         focus_restore_grace_us: u64,
@@ -425,6 +455,8 @@ impl NativeDispatchSession {
                 dispatch_lead_us,
                 allowed_count: allowed_scan_codes.len(),
                 mock_backend,
+                mock_latency_base_us,
+                mock_latency_per_key_us,
                 mock_failure_mode,
                 require_focus,
                 focus_restore_grace_us,
@@ -681,6 +713,42 @@ impl NativeDispatchSession {
             last_error: self.metrics.last_error.lock().clone(),
             keys_dropped: self.metrics.keys_dropped.load(Ordering::Relaxed),
             chord_split_events: self.metrics.chord_split_events.load(Ordering::Relaxed),
+            sendinput_partial_events: self
+                .metrics
+                .sendinput_partial_events
+                .load(Ordering::Relaxed),
+            chords_rejected: self.metrics.chords_rejected.load(Ordering::Relaxed),
+            authored_conflict_events: self
+                .metrics
+                .authored_conflict_events
+                .load(Ordering::Relaxed),
+            authored_chords_rejected: self
+                .metrics
+                .authored_chords_rejected
+                .load(Ordering::Relaxed),
+            authored_keys_rejected: self.metrics.authored_keys_rejected.load(Ordering::Relaxed),
+            keys_inserted_before_failure: self
+                .metrics
+                .keys_inserted_before_failure
+                .load(Ordering::Relaxed),
+            keys_rolled_back: self.metrics.keys_rolled_back.load(Ordering::Relaxed),
+            rollback_residue_keys: self.metrics.rollback_residue_keys.load(Ordering::Relaxed),
+            lead_saturation_count_down: self
+                .metrics
+                .lead_saturation_count_down
+                .iter()
+                .map(|value| value.load(Ordering::Relaxed))
+                .collect(),
+            lead_saturation_count_up: self
+                .metrics
+                .lead_saturation_count_up
+                .iter()
+                .map(|value| value.load(Ordering::Relaxed))
+                .collect(),
+            positive_residual_at_cap: self
+                .metrics
+                .positive_residual_at_cap
+                .load(Ordering::Relaxed),
             outcome: self.terminal_outcome().map(str::to_string),
             rt_priority_acquired: self.priority_acquired.lock().clone(),
             effective_spin_threshold_us: self
@@ -701,6 +769,7 @@ impl NativeDispatchSession {
             sendinput_path_degraded: self.metrics.sendinput_path_degraded.load(Ordering::Acquire),
             bookkeeping_degraded: self.metrics.bookkeeping_degraded.load(Ordering::Acquire),
             wait_path_degraded: self.metrics.wait_path_degraded.load(Ordering::Acquire),
+            wait_target_error_us: self.metrics.wait_target_error_us.load(Ordering::Relaxed),
             idle_wake_count: self.metrics.idle_wake_count.load(Ordering::Relaxed),
             terminal_error: self.metrics.terminal_error.lock().clone(),
             generation_count: self.generation_count,
@@ -802,9 +871,16 @@ fn run_worker(
 ) -> u8 {
     let mut backend = if config.mock_backend {
         let failure_mode = config.mock_failure_mode;
+        let latency_base_us = config.mock_latency_base_us;
+        let latency_per_key_us = config.mock_latency_per_key_us;
         let release_failures = Arc::new(AtomicU8::new(0));
         let emitter_failures = Arc::clone(&release_failures);
         TrackedKeyState::with_emitter(move |codes, key_up| {
+            let latency_us = latency_base_us
+                .saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
+            if latency_us > 0 {
+                std::thread::sleep(Duration::from_micros(latency_us));
+            }
             let should_fail = match failure_mode {
                 MockFailureMode::None => false,
                 MockFailureMode::TransientRelease => {
@@ -947,10 +1023,11 @@ fn run_worker(
                 .elapsed_us
                 .store(effective_now_us, Ordering::Relaxed);
 
+            let pending_polyphony = coordinator.next_pending_polyphony().max(1);
             let lead_up = if config.dispatch_lead_us > 0 {
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Up, 1)
+                estimator.get_lead_us(ActionKind::Up, pending_polyphony)
             } else {
                 0
             };
@@ -993,7 +1070,7 @@ fn run_worker(
                         ActionKind::Up,
                         result.send_completed_us.saturating_sub(started_us),
                         result.sent.len(),
-                        result.sent.len(),
+                        scan_codes.len(),
                         lead_up,
                         0,
                         result.success
@@ -1077,6 +1154,16 @@ fn run_worker(
                     send_attempts: result.send_attempts,
                     zero_progress_retries: result.zero_progress_retries,
                 });
+                if config.enable_adaptive_lead
+                    && estimator.lead_saturated(ActionKind::Up, scan_codes.len())
+                {
+                    record_lead_saturation(
+                        &metrics.lead_saturation_count_up,
+                        &metrics.positive_residual_at_cap,
+                        scan_codes.len(),
+                        signed_delta(completed_effective, scheduled_us),
+                    );
+                }
                 pending_pre_send_spin_us = 0;
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(started_us),
@@ -1249,6 +1336,21 @@ fn run_worker(
                     }
                     let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
                     if !conflicts.is_empty() {
+                        metrics
+                            .authored_conflict_events
+                            .fetch_add(1, Ordering::Relaxed);
+                        metrics.authored_keys_rejected.fetch_add(
+                            if matches!(
+                                config.chord_conflict_policy,
+                                ChordConflictPolicy::DropWholeChord
+                                    | ChordConflictPolicy::AbortPlayback
+                            ) {
+                                batch.intents.len() as u64
+                            } else {
+                                conflicts.len() as u64
+                            },
+                            Ordering::Relaxed,
+                        );
                         telemetry.push(|| NativeTelemetryRecord {
                             event_index: batch.source_action_index,
                             dispatch_id: 0,
@@ -1284,7 +1386,6 @@ fn run_worker(
                             send_attempts: 0,
                             zero_progress_retries: 0,
                         });
-                        backend.chord_split_events = backend.chord_split_events.saturating_add(1);
                     }
                     let send_playable = conflicts.is_empty()
                         || matches!(
@@ -1292,6 +1393,9 @@ fn run_worker(
                             ChordConflictPolicy::DropConflictingKeys
                         );
                     if !conflicts.is_empty() && !send_playable {
+                        metrics
+                            .authored_chords_rejected
+                            .fetch_add(1, Ordering::Relaxed);
                         coordinator.drop_conflicted_downs(&playable);
                         if matches!(
                             config.chord_conflict_policy,
@@ -1385,6 +1489,16 @@ fn run_worker(
                             send_attempts: result.send_attempts,
                             zero_progress_retries: result.zero_progress_retries,
                         });
+                        if config.enable_adaptive_lead
+                            && estimator.lead_saturated(ActionKind::Down, batch.intents.len())
+                        {
+                            record_lead_saturation(
+                                &metrics.lead_saturation_count_down,
+                                &metrics.positive_residual_at_cap,
+                                batch.intents.len(),
+                                signed_delta(completed_effective, batch.scheduled_us),
+                            );
+                        }
                         pending_pre_send_spin_us = 0;
                         record_input_path_health(
                             bookkeeping_completed_us.saturating_sub(started_us),
@@ -1482,16 +1596,24 @@ fn run_worker(
             } else {
                 0
             };
+            let pending_polyphony = coordinator.next_pending_polyphony().max(1);
             let lead_up = if config.dispatch_lead_us > 0 {
                 config.dispatch_lead_us
             } else if config.enable_adaptive_lead {
-                estimator.get_lead_us(ActionKind::Up, 1)
+                estimator.get_lead_us(ActionKind::Up, pending_polyphony)
             } else {
                 0
             };
             if let Some(deadline_us) = coordinator.next_deadline_us(lead_down, lead_up) {
-                if deadline_us > effective_now_us {
-                    let remaining_us = deadline_us - effective_now_us;
+                // Take the QPC tick and its logical elapsed-time sample from
+                // the same instant.  Reusing the older outer-loop elapsed
+                // sample after doing bookkeeping shifts the absolute target
+                // late by the whole A->B overhead interval.
+                let target_sample_ticks = qpc_now_ticks();
+                let target_sample_elapsed_us =
+                    clock_state.get_elapsed_us(qpc_ticks_to_us(target_sample_ticks));
+                if deadline_us > target_sample_elapsed_us {
+                    let remaining_us = deadline_us - target_sample_elapsed_us;
                     if config.enable_adaptive_spin
                         && config.enable_spin_reprobe
                         && remaining_us >= 500_000
@@ -1513,10 +1635,10 @@ fn run_worker(
                         }
                         continue;
                     }
-                    let target_qpc = QpcTicks(
-                        qpc_now_ticks()
-                            .0
-                            .saturating_add(qpc_us_to_ticks(deadline_us - effective_now_us)),
+                    let target_qpc = deadline_target_ticks(
+                        target_sample_ticks,
+                        target_sample_elapsed_us,
+                        deadline_us,
                     );
                     let cold_warmup_us = if deadline_us.saturating_sub(last_send_elapsed_us)
                         > SEND_COLD_THRESHOLD_US
@@ -1536,6 +1658,12 @@ fn run_worker(
                         .fetch_add(wait_result.spin_us, Ordering::Relaxed);
                     pending_pre_send_spin_us = wait_result.spin_us;
                     let wake_elapsed_us = clock_state.get_elapsed_us(qpc_now_us());
+                    if wait_result.outcome == WaitOutcome::Deadline {
+                        metrics.wait_target_error_us.fetch_max(
+                            wake_elapsed_us.saturating_sub(deadline_us),
+                            Ordering::Relaxed,
+                        );
+                    }
                     if config.input_path_warn_us > 0
                         && wake_elapsed_us > deadline_us.saturating_add(config.input_path_warn_us)
                     {
@@ -1710,9 +1838,33 @@ fn update_estimator_after_send(
     }
 }
 
+fn record_lead_saturation(
+    counters: &[AtomicU64; 16],
+    positive_residual_at_cap: &AtomicU64,
+    polyphony: usize,
+    completion_error_us: i64,
+) {
+    let bucket = polyphony.clamp(1, 15);
+    counters[bucket].fetch_add(1, Ordering::Relaxed);
+    if completion_error_us > 0 {
+        positive_residual_at_cap.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     let delta = lhs as i128 - rhs as i128;
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+}
+
+/// Map a logical playback deadline to an absolute QPC target using one clock
+/// sample.  Keeping this as a small pure helper makes the A->B timing rule
+/// explicit and prevents future callers from accidentally mixing samples.
+fn deadline_target_ticks(now_ticks: QpcTicks, logical_now_us: u64, deadline_us: u64) -> QpcTicks {
+    QpcTicks(
+        now_ticks
+            .0
+            .saturating_add(qpc_us_to_ticks(deadline_us.saturating_sub(logical_now_us))),
+    )
 }
 
 fn publish_wake_error_stats(stats: WakeErrorStats, metrics: &SharedMetrics) {
@@ -1831,20 +1983,44 @@ fn publish_backend_metrics(
     metrics
         .chord_split_events
         .store(backend.chord_split_events, Ordering::Relaxed);
+    metrics
+        .sendinput_partial_events
+        .store(backend.sendinput_partial_events, Ordering::Relaxed);
+    metrics
+        .chords_rejected
+        .store(backend.chords_rejected, Ordering::Relaxed);
+    metrics
+        .keys_inserted_before_failure
+        .store(backend.keys_inserted_before_failure, Ordering::Relaxed);
+    metrics
+        .keys_rolled_back
+        .store(backend.keys_rolled_back, Ordering::Relaxed);
+    metrics
+        .rollback_residue_keys
+        .store(backend.rollback_residue_keys, Ordering::Relaxed);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
-        derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
-        release_runtime_outcome, update_estimator_after_send,
+        deadline_target_ticks, derive_spin_threshold_us, drain_commands, focus_gate_matches,
+        record_input_path_health, release_runtime_outcome, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::SendLatencyEstimator;
     use sky_dispatch_core::model::ActionKind;
+    use sky_dispatch_win32::clock::{QpcTicks, qpc_ticks_to_us, qpc_us_to_ticks};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn deadline_mapper_uses_the_current_sample_without_overhead_drift() {
+        let now_ticks = QpcTicks(10_000_000);
+        let logical_now_us = qpc_ticks_to_us(now_ticks);
+        let target = deadline_target_ticks(now_ticks, logical_now_us, logical_now_us + 1_000);
+        assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(1_000));
+    }
 
     #[test]
     fn saturated_terminal_queue_cannot_overwrite_latest_pause_state() {

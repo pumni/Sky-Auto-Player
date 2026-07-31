@@ -88,6 +88,9 @@ pub struct InputSendResult {
     pub partial_progress: bool,
     pub retried_after_zero_progress: bool,
     pub chord_integrity_lost: bool,
+    pub keys_inserted_before_failure: u8,
+    pub keys_rolled_back: u8,
+    pub rollback_residue_keys: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +107,9 @@ pub struct EmitResult {
     pub partial_progress: bool,
     pub retried_after_zero_progress: bool,
     pub chord_integrity_lost: bool,
+    pub keys_inserted_before_failure: u8,
+    pub keys_rolled_back: u8,
+    pub rollback_residue_keys: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +217,9 @@ where
             partial_progress: false,
             retried_after_zero_progress: false,
             chord_integrity_lost: false,
+            keys_inserted_before_failure: 0,
+            keys_rolled_back: 0,
+            rollback_residue_keys: 0,
         };
     }
     let n = scan_codes.len();
@@ -233,6 +242,9 @@ where
             partial_progress: false,
             retried_after_zero_progress: false,
             chord_integrity_lost: false,
+            keys_inserted_before_failure: 0,
+            keys_rolled_back: 0,
+            rollback_residue_keys: 0,
         };
     }
 
@@ -263,6 +275,9 @@ where
             partial_progress: true,
             retried_after_zero_progress: false,
             chord_integrity_lost: true,
+            keys_inserted_before_failure: landed1 as u8,
+            keys_rolled_back: rollback_inserted as u8,
+            rollback_residue_keys: landed1.saturating_sub(rollback_inserted) as u8,
         };
     }
 
@@ -285,6 +300,9 @@ where
             partial_progress: false,
             retried_after_zero_progress: true,
             chord_integrity_lost: false,
+            keys_inserted_before_failure: 0,
+            keys_rolled_back: 0,
+            rollback_residue_keys: 0,
         };
     }
 
@@ -307,6 +325,7 @@ where
             .then_some(rollback.win32_error)
             .or(last_win32_error);
     }
+    let rollback_residue_keys = sent.len();
     EmitResult {
         sent,
         completed_us,
@@ -320,6 +339,13 @@ where
         partial_progress: retry_inserted > 0,
         retried_after_zero_progress: true,
         chord_integrity_lost: retry_inserted > 0,
+        keys_inserted_before_failure: retry_inserted as u8,
+        keys_rolled_back: if retry_inserted > 0 {
+            (retry_inserted.saturating_sub(rollback_residue_keys)) as u8
+        } else {
+            0
+        },
+        rollback_residue_keys: rollback_residue_keys as u8,
     }
 }
 
@@ -351,6 +377,9 @@ where
             partial_progress: false,
             retried_after_zero_progress: false,
             chord_integrity_lost: false,
+            keys_inserted_before_failure: 0,
+            keys_rolled_back: 0,
+            rollback_residue_keys: 0,
         };
     }
     let n = scan_codes.len();
@@ -371,6 +400,9 @@ where
             partial_progress: false,
             retried_after_zero_progress: false,
             chord_integrity_lost: false,
+            keys_inserted_before_failure: 0,
+            keys_rolled_back: 0,
+            rollback_residue_keys: 0,
         };
     }
 
@@ -396,6 +428,9 @@ where
         partial_progress: false,
         retried_after_zero_progress: first_inserted == 0,
         chord_integrity_lost: false,
+        keys_inserted_before_failure: if success { 0 } else { sent_total as u8 },
+        keys_rolled_back: 0,
+        rollback_residue_keys: 0,
     }
 }
 
@@ -420,6 +455,12 @@ pub struct TrackedKeyState {
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
+    pub sendinput_partial_events: u64,
+    pub chords_rejected: u64,
+    pub authored_keys_rejected: u64,
+    pub keys_inserted_before_failure: u64,
+    pub keys_rolled_back: u64,
+    pub rollback_residue_keys: u64,
     pub custom_emitter: Option<CustomEmitterFn>,
 }
 
@@ -432,6 +473,15 @@ impl fmt::Debug for TrackedKeyState {
             .field("last_error", &self.last_error)
             .field("keys_dropped", &self.keys_dropped)
             .field("chord_split_events", &self.chord_split_events)
+            .field("sendinput_partial_events", &self.sendinput_partial_events)
+            .field("chords_rejected", &self.chords_rejected)
+            .field("authored_keys_rejected", &self.authored_keys_rejected)
+            .field(
+                "keys_inserted_before_failure",
+                &self.keys_inserted_before_failure,
+            )
+            .field("keys_rolled_back", &self.keys_rolled_back)
+            .field("rollback_residue_keys", &self.rollback_residue_keys)
             .field("custom_emitter", &self.custom_emitter.is_some())
             .finish()
     }
@@ -484,6 +534,9 @@ impl TrackedKeyState {
                 partial_progress: false,
                 retried_after_zero_progress: false,
                 chord_integrity_lost: false,
+                keys_inserted_before_failure: 0,
+                keys_rolled_back: 0,
+                rollback_residue_keys: 0,
             };
         }
 
@@ -513,6 +566,9 @@ impl TrackedKeyState {
                 partial_progress: false,
                 retried_after_zero_progress: false,
                 chord_integrity_lost: false,
+                keys_inserted_before_failure: 0,
+                keys_rolled_back: 0,
+                rollback_residue_keys: 0,
             };
         }
 
@@ -522,6 +578,18 @@ impl TrackedKeyState {
 
         let emitted = self.do_emit_down(&to_send);
         self.keys_dropped += emitted.keys_dropped;
+        if emitted.partial_progress {
+            self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
+        }
+        self.keys_inserted_before_failure = self
+            .keys_inserted_before_failure
+            .saturating_add(emitted.keys_inserted_before_failure as u64);
+        self.keys_rolled_back = self
+            .keys_rolled_back
+            .saturating_add(emitted.keys_rolled_back as u64);
+        self.rollback_residue_keys = self
+            .rollback_residue_keys
+            .saturating_add(emitted.rollback_residue_keys as u64);
 
         for &sc in &emitted.sent {
             self.active_mask |= key_mask(sc).unwrap_or(0);
@@ -533,6 +601,10 @@ impl TrackedKeyState {
 
         if emitted.chord_integrity_lost {
             self.chord_split_events += 1;
+            self.chords_rejected = self.chords_rejected.saturating_add(1);
+            self.authored_keys_rejected = self
+                .authored_keys_rejected
+                .saturating_add(to_send.len() as u64);
         }
         if emitted.success {
             if self.failed_release_mask == 0 {
@@ -569,6 +641,9 @@ impl TrackedKeyState {
             partial_progress: emitted.partial_progress,
             retried_after_zero_progress: emitted.retried_after_zero_progress,
             chord_integrity_lost: emitted.chord_integrity_lost,
+            keys_inserted_before_failure: emitted.keys_inserted_before_failure,
+            keys_rolled_back: emitted.keys_rolled_back,
+            rollback_residue_keys: emitted.rollback_residue_keys,
         }
     }
 
@@ -588,6 +663,9 @@ impl TrackedKeyState {
                 partial_progress: false,
                 retried_after_zero_progress: false,
                 chord_integrity_lost: false,
+                keys_inserted_before_failure: 0,
+                keys_rolled_back: 0,
+                rollback_residue_keys: 0,
             };
         }
 
@@ -621,10 +699,26 @@ impl TrackedKeyState {
                 partial_progress: false,
                 retried_after_zero_progress: false,
                 chord_integrity_lost: false,
+                keys_inserted_before_failure: 0,
+                keys_rolled_back: 0,
+                rollback_residue_keys: 0,
             };
         }
 
         let emitted = self.do_emit_up(&to_release);
+
+        if emitted.partial_progress || !emitted.success {
+            self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
+        }
+        self.keys_inserted_before_failure = self
+            .keys_inserted_before_failure
+            .saturating_add(emitted.keys_inserted_before_failure as u64);
+        self.keys_rolled_back = self
+            .keys_rolled_back
+            .saturating_add(emitted.keys_rolled_back as u64);
+        self.rollback_residue_keys = self
+            .rollback_residue_keys
+            .saturating_add(emitted.rollback_residue_keys as u64);
 
         for &sc in &emitted.sent {
             let bit = key_mask(sc).unwrap_or(0);
@@ -666,6 +760,9 @@ impl TrackedKeyState {
             partial_progress: emitted.partial_progress,
             retried_after_zero_progress: emitted.retried_after_zero_progress,
             chord_integrity_lost: emitted.chord_integrity_lost,
+            keys_inserted_before_failure: emitted.keys_inserted_before_failure,
+            keys_rolled_back: emitted.keys_rolled_back,
+            rollback_residue_keys: emitted.rollback_residue_keys,
         }
     }
 

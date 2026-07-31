@@ -73,7 +73,8 @@ reject such repeats instead of silently treating them as guaranteed.
 
 If the authored interval is smaller than `min_hold_us`:
 1. **Strict Mode:** The scheduler rejects the playback and recommends a lower tempo.
-2. **Degraded Mode:** The scheduler preserves the minimum hold (`min_hold_us`) for the first note, which naturally overlaps the scheduled start of the second note. At runtime, the conflicting second down event is explicitly dropped to prevent stuck keys.
+2. **Drop-chord Mode (production default):** The scheduler preserves the minimum hold (`min_hold_us`) for the first note, which naturally overlaps the scheduled start of the second note. At runtime, the complete conflicting authored chord is dropped, preserving chord fidelity rather than emitting a partial chord.
+3. **Degraded Mode (legacy/diagnostic):** Only non-conflicting keys may be sent. This mode is explicit because it can change the musical content of an authored chord.
 
 ---
 
@@ -87,10 +88,10 @@ $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{rele
 ### Rationale
 The sender-side completion-to-completion proxy preserves the intended hold floor: measuring from down-dispatch start would subtract the down injection latency from the sender timeline. For `local_precise` at 144 FPS (6.94 ms hold), this avoided the previously observed sender-side shortfall. Completion-anchoring does not establish a game-observed hold, because game sampling and kernel delivery are not instrumented here. The constant `min_hold_margin_us` models residual sender-to-device delivery latency; it is a margin, not game-onset evidence.
 
-### Interaction with Adaptive Dispatch Lead (2026-06)
-Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a per-kind EMA of `send_duration_us` (clamped to 2 ms) so completions land on `scheduled_us`. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
+### Interaction with Adaptive Dispatch Lead (2026-07)
+Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a bounded rolling p95 of `send_duration_us`, bucketed by action kind and polyphony, so completions land on `scheduled_us`. Cold buckets use a conservative prior and lower-bucket/global evidence; the resulting lead is monotonic with polyphony and clamped to the configured maximum. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
 $$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
-and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). Live A/B on `blue` @144 FPS moved the median down-onset error from +420 µs to −3 µs with zero drops. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. Version-2 lead caches are migrated to the version-3 rolling model. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
 ---
 

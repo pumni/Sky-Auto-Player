@@ -682,7 +682,7 @@ def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
         )),
         ("min_hold_ms",          lambda _n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
         ("grace_ms",             lambda _n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
-        ("conflict_policy",      lambda _n, d: d.get("same_key_conflict_policy", "degraded")),
+        ("conflict_policy",      lambda _n, d: d.get("same_key_conflict_policy", "drop_chord")),
     ]
 
     accent = _resolve_cli_theme_style()

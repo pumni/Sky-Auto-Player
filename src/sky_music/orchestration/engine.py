@@ -389,7 +389,7 @@ class PlaybackEngine:
         focus_restore_grace_us: int = 100_000,
         fps: int | None = None,
         min_hold_us: int = 0,
-        same_key_conflict_policy: str = "degraded",
+        same_key_conflict_policy: str = "drop_chord",
         late_pulse_drop_threshold_us: int | None = None,
         use_dispatch_thread: bool = True,
         input_path_warn_us: int = 300,

@@ -22,6 +22,10 @@ pub enum CompileError {
     NonMonotonicSourceIndex { previous: u32, current: u32 },
     #[error("scheduled_us must be nondecreasing: previous={previous}, current={current}")]
     NonMonotonicSchedule { previous: u64, current: u64 },
+    #[error(
+        "multiple same-timestamp down actions are not one atomic chord; merge them before dispatch: timestamp={scheduled_us}"
+    )]
+    SameTimestampDownBatch { scheduled_us: u64 },
     #[error("action {action_index} must contain between 1 and {MAX_KEYS} scan codes")]
     InvalidBatchSize { action_index: u32 },
     #[error("action {action_index} contains duplicate scan code {scan_code}")]
@@ -79,6 +83,7 @@ pub fn compile_runtime_intents(
 
     let mut previous_source_index: Option<u32> = None;
     let mut previous_scheduled_us: Option<u64> = None;
+    let mut same_timestamp_down_seen = false;
 
     for action in actions {
         if let Some(previous) = previous_source_index
@@ -95,6 +100,14 @@ pub fn compile_runtime_intents(
             return Err(CompileError::NonMonotonicSchedule {
                 previous,
                 current: action.scheduled_us,
+            });
+        }
+        if previous_scheduled_us != Some(action.scheduled_us) {
+            same_timestamp_down_seen = false;
+        }
+        if action.kind == ActionKind::Down && same_timestamp_down_seen {
+            return Err(CompileError::SameTimestampDownBatch {
+                scheduled_us: action.scheduled_us,
             });
         }
         if action.scan_codes.is_empty() || action.scan_codes.len() > MAX_KEYS {
@@ -128,6 +141,9 @@ pub fn compile_runtime_intents(
 
         previous_source_index = Some(action.source_action_index);
         previous_scheduled_us = Some(action.scheduled_us);
+        if action.kind == ActionKind::Down {
+            same_timestamp_down_seen = true;
+        }
         let reason_id = get_or_insert_reason(&action.reason)?;
         let intent_start =
             u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
@@ -141,6 +157,9 @@ pub fn compile_runtime_intents(
                     })?;
             let generation_id = match action.kind {
                 ActionKind::Down => {
+                    if next_generation_id > MAX_COMPACT_GENERATION_ID {
+                        return Err(CompileError::GenerationOverflow);
+                    }
                     let gen_id = next_generation_id;
                     next_generation_id = next_generation_id
                         .checked_add(1)
@@ -151,10 +170,10 @@ pub fn compile_runtime_intents(
                 ActionKind::Up => unmatched_downs[key_slot as usize].pop_front(),
             };
 
-            intents.push(CompactIntent {
-                generation_id: generation_id.unwrap_or(NO_GENERATION_ID),
+            intents.push(CompactIntent::new(
+                generation_id.unwrap_or(NO_GENERATION_ID),
                 key_slot,
-            });
+            ));
         }
 
         batches.push(CompiledBatch {
@@ -243,6 +262,37 @@ mod tests {
     }
 
     #[test]
+    fn multiple_same_timestamp_down_batches_are_rejected_as_non_atomic() {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![1],
+                reason: "left".to_string(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![1],
+                reason: "release".to_string(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![2],
+                reason: "right".to_string(),
+            },
+        ];
+        assert!(matches!(
+            compile_runtime_intents(&actions, &[1, 2]),
+            Err(CompileError::SameTimestampDownBatch { scheduled_us: 100 })
+        ));
+    }
+
+    #[test]
     fn test_rejects_non_monotonic_and_untrusted_actions() {
         let allowed = vec![1];
         let invalid = vec![
@@ -305,6 +355,6 @@ mod tests {
         assert_eq!(schedule.batches[0].intent_len, 1);
         assert_eq!(schedule.batches[1].intent_len, 2);
         assert!(std::mem::size_of::<CompiledBatch>() <= 32);
-        assert!(std::mem::size_of::<CompactIntent>() <= 16);
+        assert_eq!(std::mem::size_of::<CompactIntent>(), 8);
     }
 }

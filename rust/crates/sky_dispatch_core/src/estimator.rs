@@ -1,13 +1,22 @@
-//! Adaptive send-latency lead estimator port with Python-compatible bankers rounding.
+//! Conservative adaptive SendInput completion-latency estimator.
+//!
+//! The estimator deliberately models the upper tail of the observed path
+//! rather than its mean.  Dispatch lead is a safety margin, so a p95 estimate
+//! is a better fit than an EMA-only centre estimate.  The state format is
+//! versioned; version 2 caches are accepted and migrated into a conservative
+//! synthetic rolling window on import.
 
 use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
 
-const SEED_SAMPLES: u64 = 5;
+const SEED_SAMPLES: usize = 5;
+const ROLLING_WINDOW: usize = 32;
 const MAX_RESIDUAL_US: i64 = 500;
-const BASE_PRIOR_US: u64 = 50;
-const PER_KEY_PRIOR_US: u64 = 15;
+const MAX_SAMPLE_US: u64 = 60_000_000;
+const BASE_COLD_PRIOR_US: u64 = 100;
+const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const EARLY_CORRECTION_DECAY: f64 = 0.25;
+pub const ESTIMATOR_STATE_VERSION: u32 = 3;
 
 pub fn round_half_to_even(x: f64) -> i64 {
     let floor = x.floor();
@@ -26,22 +35,127 @@ pub struct EstimatorStateJson {
     #[serde(default)]
     pub saved_at: String,
     pub max_poly: usize,
+    // Legacy summary fields remain in the on-disk format so version 2 caches
+    // can be inspected and migrated without a separate decoder.
+    #[serde(default)]
     pub ema_down: Vec<f64>,
+    #[serde(default)]
     pub warm_down: Vec<bool>,
+    #[serde(default)]
     pub count_down: Vec<u64>,
+    #[serde(default)]
     pub sum_down: Vec<u64>,
+    #[serde(default)]
     pub ema_down_total: f64,
+    #[serde(default)]
     pub warm_down_total: bool,
+    #[serde(default)]
     pub count_down_total: u64,
+    #[serde(default)]
     pub sum_down_total: u64,
+    #[serde(default)]
     pub ema_up: f64,
+    #[serde(default)]
     pub warm_up: bool,
+    #[serde(default)]
     pub count_up: u64,
+    #[serde(default)]
     pub sum_up: u64,
+    #[serde(default)]
     pub ema_residual: f64,
+    #[serde(default)]
     pub warm_residual: bool,
+    #[serde(default)]
     pub count_residual: u64,
+    #[serde(default)]
     pub sum_residual: i64,
+    /// Version 3 rolling samples, indexed by polyphony bucket.
+    #[serde(default)]
+    pub samples_down: Vec<Vec<u64>>,
+    #[serde(default)]
+    pub samples_up: Vec<Vec<u64>>,
+    #[serde(default)]
+    pub samples_down_total: Vec<u64>,
+    #[serde(default)]
+    pub samples_up_total: Vec<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct RollingSamples {
+    values: [u64; ROLLING_WINDOW],
+    len: usize,
+    cursor: usize,
+}
+
+impl Default for RollingSamples {
+    fn default() -> Self {
+        Self {
+            values: [0; ROLLING_WINDOW],
+            len: 0,
+            cursor: 0,
+        }
+    }
+}
+
+impl RollingSamples {
+    fn push(&mut self, value: u64) {
+        if self.len < ROLLING_WINDOW {
+            self.values[self.len] = value;
+            self.len += 1;
+            self.cursor = self.len % ROLLING_WINDOW;
+        } else {
+            self.values[self.cursor] = value;
+            self.cursor = (self.cursor + 1) % ROLLING_WINDOW;
+        }
+    }
+
+    fn is_warm(&self) -> bool {
+        self.len >= SEED_SAMPLES
+    }
+
+    fn p95(&self) -> Option<u64> {
+        if !self.is_warm() {
+            return None;
+        }
+        let mut sorted = self.values;
+        sorted[..self.len].sort_unstable();
+        let rank = (self.len * 95).saturating_add(99) / 100;
+        Some(sorted[rank.saturating_sub(1).min(self.len - 1)])
+    }
+
+    fn to_vec(&self) -> Vec<u64> {
+        self.values[..self.len].to_vec()
+    }
+
+    fn from_values(values: &[u64]) -> Result<Self, String> {
+        if values.len() > ROLLING_WINDOW {
+            return Err(format!(
+                "estimator rolling window must contain at most {ROLLING_WINDOW} samples"
+            ));
+        }
+        let mut result = Self::default();
+        for &value in values {
+            if value > MAX_SAMPLE_US {
+                return Err("estimator sample is outside the accepted range".to_string());
+            }
+            result.push(value);
+        }
+        Ok(result)
+    }
+
+    fn from_legacy(value: f64, warm: bool, count: u64) -> Result<Self, String> {
+        if !value.is_finite() || value < 0.0 || value > MAX_SAMPLE_US as f64 {
+            return Err("legacy estimator value is outside the accepted range".to_string());
+        }
+        let mut result = Self::default();
+        if warm && count >= SEED_SAMPLES as u64 {
+            let rounded = round_half_to_even(value).max(0) as u64;
+            for _ in 0..ROLLING_WINDOW.min(count as usize) {
+                result.push(rounded);
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,14 +165,16 @@ pub struct SendLatencyEstimator {
     max_lead_us: u64,
     count_down: Vec<u64>,
     sum_down: Vec<u64>,
-    ema_down: Vec<f64>,
-    warm_down: Vec<bool>,
+    down_windows: Vec<RollingSamples>,
+    down_total_window: RollingSamples,
     count_down_total: u64,
     sum_down_total: u64,
-    ema_down_total: f64,
-    count_up: u64,
-    sum_up: u64,
-    ema_up: f64,
+    count_up: Vec<u64>,
+    sum_up: Vec<u64>,
+    up_windows: Vec<RollingSamples>,
+    up_total_window: RollingSamples,
+    count_up_total: u64,
+    sum_up_total: u64,
     count_residual: u64,
     sum_residual: i64,
     ema_residual: f64,
@@ -74,14 +190,16 @@ impl SendLatencyEstimator {
             max_lead_us,
             count_down: vec![0; size],
             sum_down: vec![0; size],
-            ema_down: vec![0.0; size],
-            warm_down: vec![false; size],
+            down_windows: vec![RollingSamples::default(); size],
+            down_total_window: RollingSamples::default(),
             count_down_total: 0,
             sum_down_total: 0,
-            ema_down_total: 0.0,
-            count_up: 0,
-            sum_up: 0,
-            ema_up: 0.0,
+            count_up: vec![0; size],
+            sum_up: vec![0; size],
+            up_windows: vec![RollingSamples::default(); size],
+            up_total_window: RollingSamples::default(),
+            count_up_total: 0,
+            sum_up_total: 0,
             count_residual: 0,
             sum_residual: 0,
             ema_residual: 0.0,
@@ -90,43 +208,24 @@ impl SendLatencyEstimator {
     }
 
     pub fn update(&mut self, kind: ActionKind, duration_us: u64, n_keys: usize) {
-        let duration_f = duration_us as f64;
+        let duration_us = duration_us.min(MAX_SAMPLE_US);
+        let n = 1.max(self.max_poly.min(n_keys));
         match kind {
             ActionKind::Down => {
-                let n = 1.max(self.max_poly.min(n_keys));
-                self.count_down[n] += 1;
-                if self.warm_down[n] {
-                    self.ema_down[n] =
-                        self.alpha * duration_f + (1.0 - self.alpha) * self.ema_down[n];
-                } else {
-                    self.sum_down[n] += duration_us;
-                    if self.count_down[n] >= SEED_SAMPLES {
-                        self.ema_down[n] = self.sum_down[n] as f64 / self.count_down[n] as f64;
-                        self.warm_down[n] = true;
-                    }
-                }
-
-                self.count_down_total += 1;
-                if self.count_down_total <= SEED_SAMPLES {
-                    self.sum_down_total += duration_us;
-                    if self.count_down_total == SEED_SAMPLES {
-                        self.ema_down_total = self.sum_down_total as f64 / SEED_SAMPLES as f64;
-                    }
-                } else {
-                    self.ema_down_total =
-                        self.alpha * duration_f + (1.0 - self.alpha) * self.ema_down_total;
-                }
+                self.count_down[n] = self.count_down[n].saturating_add(1);
+                self.sum_down[n] = self.sum_down[n].saturating_add(duration_us);
+                self.down_windows[n].push(duration_us);
+                self.count_down_total = self.count_down_total.saturating_add(1);
+                self.sum_down_total = self.sum_down_total.saturating_add(duration_us);
+                self.down_total_window.push(duration_us);
             }
             ActionKind::Up => {
-                self.count_up += 1;
-                if self.count_up <= SEED_SAMPLES {
-                    self.sum_up += duration_us;
-                    if self.count_up == SEED_SAMPLES {
-                        self.ema_up = self.sum_up as f64 / SEED_SAMPLES as f64;
-                    }
-                } else {
-                    self.ema_up = self.alpha * duration_f + (1.0 - self.alpha) * self.ema_up;
-                }
+                self.count_up[n] = self.count_up[n].saturating_add(1);
+                self.sum_up[n] = self.sum_up[n].saturating_add(duration_us);
+                self.up_windows[n].push(duration_us);
+                self.count_up_total = self.count_up_total.saturating_add(1);
+                self.sum_up_total = self.sum_up_total.saturating_add(duration_us);
+                self.up_total_window.push(duration_us);
             }
         }
     }
@@ -135,17 +234,14 @@ impl SendLatencyEstimator {
         if kind != ActionKind::Down {
             return;
         }
-        let sample = (-MAX_RESIDUAL_US).max((MAX_RESIDUAL_US * 2).min(error_us));
-        self.count_residual += 1;
+        let sample = error_us.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
+        self.count_residual = self.count_residual.saturating_add(1);
+        self.sum_residual = self.sum_residual.saturating_add(sample);
         if self.warm_residual {
-            self.ema_residual =
-                self.alpha * (sample as f64) + (1.0 - self.alpha) * self.ema_residual;
-        } else {
-            self.sum_residual += sample;
-            if self.count_residual >= SEED_SAMPLES {
-                self.ema_residual = self.sum_residual as f64 / self.count_residual as f64;
-                self.warm_residual = true;
-            }
+            self.ema_residual = self.alpha * sample as f64 + (1.0 - self.alpha) * self.ema_residual;
+        } else if self.count_residual >= SEED_SAMPLES as u64 {
+            self.ema_residual = self.sum_residual as f64 / self.count_residual as f64;
+            self.warm_residual = true;
         }
     }
 
@@ -170,66 +266,115 @@ impl SendLatencyEstimator {
         }
     }
 
+    fn cold_prior_us(n: usize) -> u64 {
+        BASE_COLD_PRIOR_US
+            .saturating_add(PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(1) as u64))
+    }
+
+    fn raw_estimate_us(&self, kind: ActionKind, n: usize) -> u64 {
+        let (windows, total_window) = match kind {
+            ActionKind::Down => (&self.down_windows, &self.down_total_window),
+            ActionKind::Up => (&self.up_windows, &self.up_total_window),
+        };
+        let local = windows[n].p95();
+        let global = total_window.p95();
+        let lower_bucket = (1..=n)
+            .rev()
+            .find_map(|bucket| windows[bucket].p95().map(|estimate| (bucket, estimate)))
+            .map(|(bucket, estimate)| {
+                estimate.saturating_add(
+                    PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
+                )
+            });
+        local
+            .or(global)
+            .into_iter()
+            .chain(lower_bucket)
+            .chain(std::iter::once(Self::cold_prior_us(n)))
+            .max()
+            .unwrap_or_else(|| Self::cold_prior_us(n))
+    }
+
+    fn base_lead_us(&self, kind: ActionKind, n: usize) -> u64 {
+        let raw = self.raw_estimate_us(kind, n) as i64;
+        let residual = if kind == ActionKind::Down {
+            self.residual_adjustment_us()
+        } else {
+            0
+        };
+        raw.saturating_add(residual).max(0) as u64
+    }
+
     pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
-        let residual = self.residual_adjustment_us();
-        let max_lead = self.max_lead_us as i64;
-        match kind {
-            ActionKind::Down => {
-                let n = 1.max(self.max_poly.min(n_keys));
-                let prior = BASE_PRIOR_US
-                    .saturating_add(PER_KEY_PRIOR_US.saturating_mul(n.saturating_sub(1) as u64));
-                let estimate = if self.warm_down[n] {
-                    Some(round_half_to_even(self.ema_down[n]))
-                } else {
-                    (1..=n)
-                        .rev()
-                        .find(|&bucket| self.warm_down[bucket])
-                        .map(|bucket| round_half_to_even(self.ema_down[bucket]))
-                        .or_else(|| {
-                            (self.count_down_total >= SEED_SAMPLES)
-                                .then_some(round_half_to_even(self.ema_down_total))
-                        })
-                };
-                (estimate.unwrap_or(0).max(prior as i64) + residual).clamp(0, max_lead) as u64
-            }
-            ActionKind::Up => {
-                if self.count_up < SEED_SAMPLES {
-                    return 0;
-                }
-                let rounded = round_half_to_even(self.ema_up);
-                rounded.clamp(0, max_lead) as u64
-            }
-        }
+        let n = 1.max(self.max_poly.min(n_keys));
+        // The envelope is intentional: independently observed buckets must
+        // never make a larger chord receive a smaller lead than a smaller
+        // chord.  This also makes cold-start behaviour conservative when a
+        // new polyphony bucket has not yet accumulated five samples.
+        let monotonic = (1..=n)
+            .map(|bucket| self.base_lead_us(kind, bucket))
+            .max()
+            .unwrap_or(0);
+        monotonic.min(self.max_lead_us)
+    }
+
+    /// Returns true when the uncapped monotonic lead would exceed the
+    /// configured cap.  This is telemetry information, not a second dispatch
+    /// decision, so callers can distinguish a healthy capped value from a
+    /// model that is no longer able to compensate the observed path.
+    pub fn lead_saturated(&self, kind: ActionKind, n_keys: usize) -> bool {
+        let n = 1.max(self.max_poly.min(n_keys));
+        let uncapped = (1..=n)
+            .map(|bucket| self.base_lead_us(kind, bucket))
+            .max()
+            .unwrap_or(0);
+        uncapped > self.max_lead_us
     }
 
     pub fn export_state(&self) -> EstimatorStateJson {
         EstimatorStateJson {
-            version: 2,
+            version: ESTIMATOR_STATE_VERSION,
             saved_at: String::new(),
             max_poly: self.max_poly,
-            ema_down: self.ema_down.clone(),
-            warm_down: self.warm_down.clone(),
+            ema_down: self
+                .down_windows
+                .iter()
+                .map(|window| window.p95().unwrap_or(0) as f64)
+                .collect(),
+            warm_down: self
+                .down_windows
+                .iter()
+                .map(RollingSamples::is_warm)
+                .collect(),
             count_down: self.count_down.clone(),
             sum_down: self.sum_down.clone(),
-            ema_down_total: self.ema_down_total,
-            warm_down_total: self.count_down_total >= SEED_SAMPLES,
+            ema_down_total: self.down_total_window.p95().unwrap_or(0) as f64,
+            warm_down_total: self.down_total_window.is_warm(),
             count_down_total: self.count_down_total,
             sum_down_total: self.sum_down_total,
-            ema_up: self.ema_up,
-            warm_up: self.count_up >= SEED_SAMPLES,
-            count_up: self.count_up,
-            sum_up: self.sum_up,
+            ema_up: self.up_total_window.p95().unwrap_or(0) as f64,
+            warm_up: self.up_total_window.is_warm(),
+            count_up: self.count_up_total,
+            sum_up: self.sum_up_total,
             ema_residual: self.ema_residual,
             warm_residual: self.warm_residual,
             count_residual: self.count_residual,
             sum_residual: self.sum_residual,
+            samples_down: self
+                .down_windows
+                .iter()
+                .map(RollingSamples::to_vec)
+                .collect(),
+            samples_up: self.up_windows.iter().map(RollingSamples::to_vec).collect(),
+            samples_down_total: self.down_total_window.to_vec(),
+            samples_up_total: self.up_total_window.to_vec(),
         }
     }
 
     pub fn import_state(&mut self, json_str: &str) -> Result<(), String> {
         let state: EstimatorStateJson =
             serde_json::from_str(json_str).map_err(|e| format!("invalid estimator json: {e}"))?;
-        if state.version != 2 {
+        if !matches!(state.version, 2 | ESTIMATOR_STATE_VERSION) {
             return Err(format!("unsupported estimator version: {}", state.version));
         }
         if !(1..=32).contains(&state.max_poly) {
@@ -243,11 +388,11 @@ impl SendLatencyEstimator {
         {
             return Err("estimator bucket arrays do not match max_poly".to_string());
         }
-        let valid_lead =
-            |value: f64| value.is_finite() && value >= 0.0 && value <= self.max_lead_us as f64;
-        if !state.ema_down.iter().copied().all(valid_lead)
-            || !valid_lead(state.ema_down_total)
-            || !valid_lead(state.ema_up)
+        let valid_legacy =
+            |value: f64| value.is_finite() && value >= 0.0 && value <= MAX_SAMPLE_US as f64;
+        if !state.ema_down.iter().copied().all(valid_legacy)
+            || !valid_legacy(state.ema_down_total)
+            || !valid_legacy(state.ema_up)
         {
             return Err("estimator lead values are outside the accepted range".to_string());
         }
@@ -258,25 +403,84 @@ impl SendLatencyEstimator {
             return Err("estimator residual value is outside the accepted range".to_string());
         }
 
-        // Validate first, then apply atomically. Preserve the constructed polyphony
-        // when importing a cache produced by a lower-polyphony song.
+        let mut imported_down = Vec::with_capacity(expected_len);
+        let mut imported_up = Vec::with_capacity(expected_len);
+        let imported_down_total;
+        let imported_up_total;
+        if state.version == ESTIMATOR_STATE_VERSION {
+            if state.samples_down.len() != expected_len || state.samples_up.len() != expected_len {
+                return Err("estimator rolling bucket arrays do not match max_poly".to_string());
+            }
+            for values in &state.samples_down {
+                imported_down.push(RollingSamples::from_values(values)?);
+            }
+            for values in &state.samples_up {
+                imported_up.push(RollingSamples::from_values(values)?);
+            }
+            imported_down_total = RollingSamples::from_values(&state.samples_down_total)?;
+            imported_up_total = RollingSamples::from_values(&state.samples_up_total)?;
+        } else {
+            for index in 0..expected_len {
+                imported_down.push(RollingSamples::from_legacy(
+                    state.ema_down[index],
+                    state.warm_down[index],
+                    state.count_down[index],
+                )?);
+                imported_up.push(RollingSamples::default());
+            }
+            imported_down_total = RollingSamples::from_legacy(
+                state.ema_down_total,
+                state.warm_down_total,
+                state.count_down_total,
+            )?;
+            imported_up_total =
+                RollingSamples::from_legacy(state.ema_up, state.warm_up, state.count_up)?;
+            if state.warm_up && state.count_up >= SEED_SAMPLES as u64 {
+                for window in &mut imported_up {
+                    // Version 2 had one global Up estimate.  Give every
+                    // bucket the same conservative seed, then let new
+                    // observations specialize it.
+                    *window = imported_up_total.clone();
+                }
+            }
+        }
+
+        // Validate first, then apply atomically. Preserve the constructed
+        // polyphony when importing a lower-polyphony cache.
         let target_poly = self.max_poly.max(state.max_poly);
-        let pad = target_poly - state.max_poly;
+        imported_down.resize(target_poly + 1, RollingSamples::default());
+        imported_up.resize(target_poly + 1, RollingSamples::default());
+        let mut counts_down = state.count_down;
+        counts_down.resize(target_poly + 1, 0);
+        let mut sums_down = state.sum_down;
+        sums_down.resize(target_poly + 1, 0);
+        let mut counts_up = vec![0; target_poly + 1];
+        let mut sums_up = vec![0; target_poly + 1];
+        if state.version == ESTIMATOR_STATE_VERSION {
+            // Version 3 has bucket counts only for Down for compatibility;
+            // bucket Up counts are represented by the rolling windows.
+            for (index, window) in imported_up.iter().enumerate() {
+                counts_up[index] = window.len as u64;
+                sums_up[index] = window.values[..window.len].iter().sum();
+            }
+        } else {
+            counts_up[0] = state.count_up;
+            sums_up[0] = state.sum_up;
+        }
+
         self.max_poly = target_poly;
-        self.ema_down = state.ema_down;
-        self.ema_down.extend(std::iter::repeat_n(0.0, pad));
-        self.warm_down = state.warm_down;
-        self.warm_down.extend(std::iter::repeat_n(false, pad));
-        self.count_down = state.count_down;
-        self.count_down.extend(std::iter::repeat_n(0, pad));
-        self.sum_down = state.sum_down;
-        self.sum_down.extend(std::iter::repeat_n(0, pad));
-        self.ema_down_total = state.ema_down_total;
+        self.count_down = counts_down;
+        self.sum_down = sums_down;
+        self.down_windows = imported_down;
+        self.down_total_window = imported_down_total;
         self.count_down_total = state.count_down_total;
         self.sum_down_total = state.sum_down_total;
-        self.ema_up = state.ema_up;
-        self.count_up = state.count_up;
-        self.sum_up = state.sum_up;
+        self.count_up = counts_up;
+        self.sum_up = sums_up;
+        self.up_windows = imported_up;
+        self.up_total_window = imported_up_total;
+        self.count_up_total = state.count_up;
+        self.sum_up_total = state.sum_up;
         self.ema_residual = state.ema_residual;
         self.warm_residual = state.warm_residual;
         self.count_residual = state.count_residual;
@@ -287,7 +491,7 @@ impl SendLatencyEstimator {
 
 impl Default for SendLatencyEstimator {
     fn default() -> Self {
-        Self::new(0.2, 2_000, 6)
+        Self::new(0.2, 2_000, 15)
     }
 }
 
@@ -309,90 +513,100 @@ mod tests {
     }
 
     #[test]
-    fn test_estimator_seeding_and_lead() {
-        let mut est = SendLatencyEstimator::new(0.2, 2000, 6);
-        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 50);
-
-        // Update 5 samples of 1000 us for polyphony 1
-        for _ in 0..5 {
-            est.update(ActionKind::Down, 1000, 1);
+    fn rolling_p95_is_conservative_and_bounded() {
+        let mut samples = RollingSamples::default();
+        for value in 100..132 {
+            samples.push(value);
         }
-
-        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 1000);
-        // Fallback for unseeded polyphony 2 -> nearest seeded <= 2 is 1 -> returns 1000 us
-        assert_eq!(est.get_lead_us(ActionKind::Down, 2), 1000);
+        assert_eq!(samples.p95(), Some(130));
+        samples.push(2_000);
+        assert_eq!(samples.len, ROLLING_WINDOW);
+        assert_eq!(samples.p95(), Some(131));
     }
 
     #[test]
-    fn polyphony_buckets_are_selected_and_updated_independently() {
-        let mut est = SendLatencyEstimator::new(0.2, 2_000, 6);
-        for _ in 0..5 {
-            est.update(ActionKind::Down, 1_000, 1);
-            est.update(ActionKind::Down, 2_000, 2);
-            est.update(ActionKind::Down, 3_000, 3);
-        }
-
-        assert_eq!(est.get_lead_us(ActionKind::Down, 1), 1_000);
-        assert_eq!(est.get_lead_us(ActionKind::Down, 2), 2_000);
-        assert_eq!(est.get_lead_us(ActionKind::Down, 3), 2_000);
-        assert_eq!(est.get_lead_us(ActionKind::Down, 99), 2_000);
+    fn cold_start_is_conservative_for_large_chords() {
+        let estimator = SendLatencyEstimator::new(0.2, 2_000, 15);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), 100);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 15), 660);
+        assert!(
+            estimator.get_lead_us(ActionKind::Down, 15)
+                >= estimator.get_lead_us(ActionKind::Down, 1)
+        );
     }
 
     #[test]
-    fn test_estimator_state_round_trip_preserves_negative_residual_sum() {
-        let mut source = SendLatencyEstimator::new(0.2, 2000, 2);
+    fn both_directions_use_polyphony_buckets_and_monotonic_envelope() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 4_000, 6);
         for _ in 0..5 {
-            source.update_completion_error(ActionKind::Down, -100);
+            estimator.update(ActionKind::Down, 100, 1);
+            estimator.update(ActionKind::Down, 700, 3);
+            estimator.update(ActionKind::Up, 120, 1);
+            estimator.update(ActionKind::Up, 800, 3);
+        }
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), 100);
+        assert_eq!(estimator.get_lead_us(ActionKind::Down, 3), 700);
+        assert_eq!(estimator.get_lead_us(ActionKind::Up, 1), 120);
+        assert_eq!(estimator.get_lead_us(ActionKind::Up, 3), 800);
+    }
+
+    #[test]
+    fn v3_state_round_trip_preserves_rolling_samples() {
+        let mut source = SendLatencyEstimator::new(0.2, 2_000, 2);
+        for value in [100, 110, 120, 130, 140] {
+            source.update(ActionKind::Down, value, 2);
+            source.update(ActionKind::Up, value + 10, 2);
         }
         let json = serde_json::to_string(&source.export_state()).unwrap();
-
-        let mut restored = SendLatencyEstimator::new(0.2, 2000, 6);
+        let mut restored = SendLatencyEstimator::new(0.2, 2_000, 6);
         restored.import_state(&json).unwrap();
-
-        assert_eq!(restored.sum_residual, -500);
+        assert_eq!(restored.export_state().version, ESTIMATOR_STATE_VERSION);
+        assert_eq!(restored.get_lead_us(ActionKind::Down, 2), 140);
+        assert_eq!(restored.get_lead_us(ActionKind::Up, 2), 150);
         assert_eq!(restored.max_poly, 6);
-        assert_eq!(restored.ema_down.len(), 7);
     }
 
     #[test]
-    fn test_estimator_import_rejects_invalid_buckets_without_mutation() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 2000, 6);
+    fn v2_state_migrates_conservatively() {
+        let legacy = r#"{
+            "version": 2, "saved_at": "", "max_poly": 2,
+            "ema_down": [0.0, 100.0, 200.0],
+            "warm_down": [false, true, true],
+            "count_down": [0, 5, 5], "sum_down": [0, 500, 1000],
+            "ema_down_total": 150.0, "warm_down_total": true,
+            "count_down_total": 10, "sum_down_total": 1500,
+            "ema_up": 120.0, "warm_up": true, "count_up": 5, "sum_up": 600,
+            "ema_residual": 0.0, "warm_residual": false,
+            "count_residual": 0, "sum_residual": 0
+        }"#;
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
+        estimator.import_state(legacy).unwrap();
+        assert!(estimator.get_lead_us(ActionKind::Down, 2) >= 200);
+        assert!(estimator.get_lead_us(ActionKind::Up, 1) >= 120);
+    }
+
+    #[test]
+    fn invalid_state_does_not_mutate_estimator() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
         for _ in 0..5 {
             estimator.update(ActionKind::Down, 100, 1);
         }
         let lead_before = estimator.get_lead_us(ActionKind::Down, 1);
         let invalid = r#"{
-            "version": 2,
-            "saved_at": "",
-            "max_poly": 2,
-            "ema_down": [0.0],
-            "warm_down": [false],
-            "count_down": [0],
-            "sum_down": [0],
-            "ema_down_total": 0.0,
-            "warm_down_total": false,
-            "count_down_total": 0,
-            "sum_down_total": 0,
-            "ema_up": 0.0,
-            "warm_up": false,
-            "count_up": 0,
-            "sum_up": 0,
-            "ema_residual": 0.0,
-            "warm_residual": false,
-            "count_residual": 0,
-            "sum_residual": 0
+            "version": 3, "saved_at": "", "max_poly": 2,
+            "ema_down": [0.0], "warm_down": [false],
+            "count_down": [0], "sum_down": [0],
+            "ema_down_total": 0.0, "warm_down_total": false,
+            "count_down_total": 0, "sum_down_total": 0,
+            "ema_up": 0.0, "warm_up": false, "count_up": 0, "sum_up": 0,
+            "ema_residual": 0.0, "warm_residual": false,
+            "count_residual": 0, "sum_residual": 0,
+            "samples_down": [], "samples_up": [],
+            "samples_down_total": [], "samples_up_total": []
         }"#;
-
         assert!(estimator.import_state(invalid).is_err());
         assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), lead_before);
         assert_eq!(estimator.max_poly, 6);
-    }
-
-    #[test]
-    fn cold_polyphony_uses_a_small_conservative_prior() {
-        let estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
-        assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), 50);
-        assert_eq!(estimator.get_lead_us(ActionKind::Down, 6), 125);
     }
 
     #[test]

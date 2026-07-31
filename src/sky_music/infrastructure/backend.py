@@ -32,6 +32,14 @@ class BackendHealth:
     # Surfaced on the HUD when > 0 so partial-chord drops are visible mid-play.
     keys_dropped: int = 0
     chord_split_events: int = 0
+    sendinput_partial_events: int = 0
+    chords_rejected: int = 0
+    authored_conflict_events: int = 0
+    authored_chords_rejected: int = 0
+    authored_keys_rejected: int = 0
+    keys_inserted_before_failure: int = 0
+    keys_rolled_back: int = 0
+    rollback_residue_keys: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +472,14 @@ class WinSendInputBackend(_TrackedKeyState):
             send_while_unfocused=diag.get("send_while_unfocused", 0),
             keys_dropped=diag.get("keys_dropped", 0),
             chord_split_events=diag.get("chord_split_events", 0),
+            sendinput_partial_events=diag.get("sendinput_partial_events", 0),
+            chords_rejected=diag.get("chords_rejected", 0),
+            authored_conflict_events=diag.get("authored_conflict_events", 0),
+            authored_chords_rejected=diag.get("authored_chords_rejected", 0),
+            authored_keys_rejected=diag.get("authored_keys_rejected", 0),
+            keys_inserted_before_failure=diag.get("keys_inserted_before_failure", 0),
+            keys_rolled_back=diag.get("keys_rolled_back", 0),
+            rollback_residue_keys=diag.get("rollback_residue_keys", 0),
         )
 
     def get_send_diagnostics(self) -> dict[str, int]:
@@ -674,6 +690,14 @@ class DryRunBackend(_TrackedKeyState):
             send_while_unfocused=diag.get("send_while_unfocused", 0),
             keys_dropped=diag.get("keys_dropped", 0),
             chord_split_events=diag.get("chord_split_events", 0),
+            sendinput_partial_events=diag.get("sendinput_partial_events", 0),
+            chords_rejected=diag.get("chords_rejected", 0),
+            authored_conflict_events=diag.get("authored_conflict_events", 0),
+            authored_chords_rejected=diag.get("authored_chords_rejected", 0),
+            authored_keys_rejected=diag.get("authored_keys_rejected", 0),
+            keys_inserted_before_failure=diag.get("keys_inserted_before_failure", 0),
+            keys_rolled_back=diag.get("keys_rolled_back", 0),
+            rollback_residue_keys=diag.get("rollback_residue_keys", 0),
         )
 
     def _emit(
