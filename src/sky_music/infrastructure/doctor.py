@@ -126,7 +126,7 @@ def check_native_dispatch() -> dict[str, Any]:
         "msg": "",
     }
     try:
-        import sky_player_rs
+        import sky_player_rs  # type: ignore[import-not-found]
 
         info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
         status.update(info)

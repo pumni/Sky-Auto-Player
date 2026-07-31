@@ -111,7 +111,7 @@ def is_native_dispatch_available() -> bool:
     if _RUST_AVAILABLE is not None:
         return _RUST_AVAILABLE
     try:
-        import sky_player_rs
+        import sky_player_rs  # type: ignore[import-not-found]
 
         info = sky_player_rs.build_info()  # type: ignore[attr-defined]
         gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
@@ -183,7 +183,7 @@ class RustDispatchRuntime:
         core_warmup_budget_us: int = 200,
         dispatch_lead_us: int = 0,
     ) -> None:
-        import sky_player_rs
+        import sky_player_rs  # type: ignore[import-not-found]
 
         native_actions = [
             (

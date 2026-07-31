@@ -40,7 +40,7 @@ class RustInputAdapter(InputBackend):
     __slots__ = ("_native",)
 
     def __init__(self, mock: bool = False) -> None:
-        import sky_player_rs
+        import sky_player_rs  # type: ignore[import-not-found]
 
         self._native = sky_player_rs.RustInputBackend(mock=mock)  # type: ignore[attr-defined]
 

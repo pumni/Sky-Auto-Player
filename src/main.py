@@ -626,7 +626,7 @@ def _run_optimize_selftest() -> int:
 def _run_rust_selftest() -> int:
     """Verify the frozen native module with a mock worker that sends no input."""
     try:
-        import sky_player_rs
+        import sky_player_rs  # type: ignore[import-not-found]
 
         from sky_music.orchestration.core.ports import (
             RUST_DISPATCH_SCHEMA_VERSION,
