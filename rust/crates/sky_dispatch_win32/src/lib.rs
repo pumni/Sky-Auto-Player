@@ -4,6 +4,7 @@
 
 pub mod calibration;
 pub mod clock;
+pub mod cpu;
 pub mod event;
 pub mod focus;
 pub mod input;

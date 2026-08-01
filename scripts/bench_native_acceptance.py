@@ -191,6 +191,10 @@ def _run_dispatch(
         "sender_completion_error_us": _stats(sender_errors),
         "completion_error_us": _completion_error_report(records),
         "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
+        "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
+        "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
+        "playback_wall_time_us": int(snapshot.get("playback_wall_time_us", 0)),
+        "spin_duty_cycle_ppm": int(snapshot.get("spin_duty_cycle_ppm", 0)),
         "peak_rss_bytes": peak_rss,
         "keys_dropped": int(snapshot.get("keys_dropped", 0)),
         "failed_release_count": int(snapshot.get("failed_release_count", 0)),
@@ -423,6 +427,10 @@ def main() -> int:
                 [record for run in runs for record in run["_records"]]
             ),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
+            "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
+            "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
+            "playback_wall_time_us": _stats([run["playback_wall_time_us"] for run in runs]),
+            "spin_duty_cycle_ppm": _stats([run["spin_duty_cycle_ppm"] for run in runs]),
             "peak_rss_bytes": _stats(
                 [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
             ),

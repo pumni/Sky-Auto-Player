@@ -11,6 +11,7 @@ use sky_dispatch_win32::clock::{
     QpcTicks, qpc_frequency_checked, qpc_now_ticks, qpc_now_ticks_checked, qpc_now_us,
     qpc_ticks_to_us, qpc_us_to_ticks,
 };
+use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
@@ -106,6 +107,10 @@ pub struct EngineSnapshot {
     pub wake_error_p99_us: u64,
     pub wake_error_max_us: u64,
     pub spin_time_us: u64,
+    pub playback_wall_time_us: u64,
+    pub spin_duty_cycle_ppm: u64,
+    pub worker_cpu_time_us: u64,
+    pub process_cpu_time_us: u64,
     pub wait_strategy_acquired: String,
     pub power_throttling_disabled: bool,
     pub input_path_degraded: bool,
@@ -366,6 +371,10 @@ pub struct WorkerMetricsLocal {
     pub wake_error_p99_us: u64,
     pub wake_error_max_us: u64,
     pub spin_time_us: u64,
+    pub playback_wall_time_us: u64,
+    pub spin_duty_cycle_ppm: u64,
+    pub worker_cpu_time_us: u64,
+    pub process_cpu_time_us: u64,
     pub power_throttling_disabled: bool,
     pub input_path_degraded: bool,
     pub sendinput_path_degraded: bool,
@@ -808,6 +817,10 @@ impl NativeDispatchSession {
             wake_error_p99_us: local.wake_error_p99_us,
             wake_error_max_us: local.wake_error_max_us,
             spin_time_us: local.spin_time_us,
+            playback_wall_time_us: local.playback_wall_time_us,
+            spin_duty_cycle_ppm: local.spin_duty_cycle_ppm,
+            worker_cpu_time_us: local.worker_cpu_time_us,
+            process_cpu_time_us: local.process_cpu_time_us,
             wait_strategy_acquired: self.metrics.wait_strategy_acquired.lock().clone(),
             power_throttling_disabled: local.power_throttling_disabled,
             input_path_degraded: local.input_path_degraded,
@@ -1030,6 +1043,9 @@ fn run_worker(
     let mut clock_state = PlaybackClockState::new(QpcTicks(qpc_us_to_ticks(startup_anchor_us)), sky_dispatch_core::time::DurationTicks(0));
     let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
+    let start_wall_time_us = qpc_now_us();
+    let start_thread_cpu_us = current_thread_cpu_time_us();
+    let start_process_cpu_us = current_process_cpu_time_us();
     let mut force_full_cleanup = false;
     let mut terminal_error: Option<String> = None;
     let mut last_published_error: Option<String> = None;
@@ -1058,7 +1074,14 @@ fn run_worker(
             return;
         }
         while !coordinator.is_finished() {
-        try_publish_metrics(&local_metrics, metrics, qpc_now_us(), false);
+            let loop_start_us = qpc_now_us();
+            local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
+            local_metrics.worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+            local_metrics.process_cpu_time_us = current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+            if local_metrics.playback_wall_time_us > 0 {
+                local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000 / local_metrics.playback_wall_time_us as u128) as u64;
+            }
+            try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
             if supervisor_lease_expired(config.supervisor_lease_timeout_us, supervisor_heartbeat_us)
             {
                 force_full_cleanup = true;
@@ -2141,7 +2164,7 @@ fn run_worker(
                     let remaining_us = deadline_us - target_sample_elapsed_us;
                     if config.enable_adaptive_spin
                         && config.enable_spin_reprobe
-                        && remaining_us >= 500_000
+                        && remaining_us >= 30_000
                         && now_us.saturating_sub(last_spin_probe_us) >= 30_000_000
                     {
                         if let Some(stats) = waiter.probe_wake_error_stats(interrupt, 8) {
@@ -2254,7 +2277,15 @@ fn run_worker(
         .collect();
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
     publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+    
+    let end_us = qpc_now_us();
+    local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
+    local_metrics.worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+    local_metrics.process_cpu_time_us = current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+    if local_metrics.playback_wall_time_us > 0 {
+        local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000 / local_metrics.playback_wall_time_us as u128) as u64;
+    }
+    try_publish_metrics(&local_metrics, metrics, end_us, true);
     metrics.is_paused.store(false, Ordering::Relaxed);
     *telemetry_output.lock() = Some(telemetry.output);
     *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();

@@ -787,6 +787,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("wake_error_p99_us", snap.wake_error_p99_us)?;
         dict.set_item("wake_error_max_us", snap.wake_error_max_us)?;
         dict.set_item("spin_time_us", snap.spin_time_us)?;
+        dict.set_item("playback_wall_time_us", snap.playback_wall_time_us)?;
+        dict.set_item("spin_duty_cycle_ppm", snap.spin_duty_cycle_ppm)?;
+        dict.set_item("worker_cpu_time_us", snap.worker_cpu_time_us)?;
+        dict.set_item("process_cpu_time_us", snap.process_cpu_time_us)?;
         dict.set_item("wait_strategy_acquired", snap.wait_strategy_acquired)?;
         dict.set_item("power_throttling_disabled", snap.power_throttling_disabled)?;
         dict.set_item("input_path_degraded", snap.input_path_degraded)?;

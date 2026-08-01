@@ -830,6 +830,10 @@ class PlaybackEngine:
                 "wake_error_p99_us": snapshot.get("wake_error_p99_us", 0),
                 "wake_error_max_us": snapshot.get("wake_error_max_us", 0),
                 "spin_time_us": snapshot.get("spin_time_us", 0),
+                "worker_cpu_time_us": snapshot.get("worker_cpu_time_us", 0),
+                "process_cpu_time_us": snapshot.get("process_cpu_time_us", 0),
+                "playback_wall_time_us": snapshot.get("playback_wall_time_us", 0),
+                "spin_duty_cycle_ppm": snapshot.get("spin_duty_cycle_ppm", 0),
                 "wait_strategy_acquired": snapshot["wait_strategy_acquired"],
                 "power_throttling_disabled": snapshot[
                     "power_throttling_disabled"
