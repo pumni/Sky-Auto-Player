@@ -21,7 +21,7 @@ fn main() -> Result<(), String> {
                 }
             }
             "--help" => {
-                eprintln!("usage: native_calibration [--mode quick|full]");
+                println!("usage: native_calibration [--mode quick|full]");
                 return Ok(());
             }
             other => return Err(format!("unknown argument: {other}")),

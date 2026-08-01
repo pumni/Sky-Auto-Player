@@ -23,12 +23,16 @@ import argparse
 import json
 import math
 import os
+import platform
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from sky_music.layouts import SKY_15_SCAN_CODES
+from sky_music.orchestration.native_provenance import native_source_fingerprint
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
@@ -68,6 +72,74 @@ def _stats(values: list[int]) -> dict[str, int]:
     }
 
 
+def _required_stats(values: list[int], name: str) -> dict[str, int]:
+    if not values:
+        raise RuntimeError(f"required metric {name} has no measurements")
+    return _stats(values)
+
+
+def _git_provenance() -> dict[str, Any]:
+    try:
+        sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"could not read Git provenance: {exc}") from exc
+    sha = sha_result.stdout.strip()
+    if not sha:
+        raise RuntimeError("Git HEAD is empty")
+    dirty = bool(status_result.stdout.strip())
+    if dirty:
+        raise RuntimeError("acceptance evidence requires a clean worktree")
+    return {"git_sha": sha, "dirty_worktree": False}
+
+
+def _native_provenance() -> dict[str, Any]:
+    import sky_player_rs
+
+    info = dict(sky_player_rs.build_info())
+    required = (
+        "native_build_commit",
+        "native_source_fingerprint",
+        "rustc_version",
+        "schema_version",
+        "native_abi",
+        "qpc_frequency_hz",
+    )
+    for name in required:
+        value = info.get(name)
+        if value in (None, "", "unknown"):
+            raise RuntimeError(f"native build provenance is missing {name}")
+    expected_fingerprint = native_source_fingerprint(REPOSITORY_ROOT, str(info["native_abi"]))
+    if info["native_source_fingerprint"] != expected_fingerprint:
+        raise RuntimeError(
+            "native source fingerprint does not match the current checkout: "
+            f"native={info['native_source_fingerprint']} expected={expected_fingerprint}"
+        )
+    return info
+
+
+def _host_fingerprint(native_info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "windows_build": platform.version(),
+        "qpc_frequency_hz": int(native_info["qpc_frequency_hz"]),
+    }
+
+
 def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Return signed, absolute, early and late error distributions.
 
@@ -80,20 +152,23 @@ def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     def values_for(rows: list[dict[str, Any]]) -> list[int]:
         return [int(row["visible_lateness_us"]) for row in rows]
 
-    def report_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not records:
+        raise RuntimeError("required sender telemetry has no records")
+
+    def report_for(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
         signed = values_for(rows)
         return {
-            "signed": _stats(signed),
-            "absolute": _stats([abs(value) for value in signed]),
-            "late": _stats([max(value, 0) for value in signed]),
-            "early": _stats([max(-value, 0) for value in signed]),
+            "signed": _required_stats(signed, f"{name}.signed"),
+            "absolute": _required_stats([abs(value) for value in signed], f"{name}.absolute"),
+            "late": _required_stats([max(value, 0) for value in signed], f"{name}.late"),
+            "early": _required_stats([max(-value, 0) for value in signed], f"{name}.early"),
         }
 
     by_kind = {
-        kind: report_for([row for row in records if row.get("kind") == kind])
+        kind: report_for([row for row in records if row.get("kind") == kind], kind)
         for kind in ("down", "up")
     }
-    result = report_for(records)
+    result = report_for(records, "all")
     result["by_kind"] = by_kind
     return result
 
@@ -179,6 +254,10 @@ def _run_dispatch(
     snapshot = dict(session.snapshot())
     telemetry = json.loads(session.take_telemetry_json())
     records = telemetry.get("records", [])
+    if len(records) != len(actions):
+        raise RuntimeError(
+            f"required sender telemetry expected {len(actions)} records, got {len(records)}"
+        )
     sender_errors = [int(record["visible_lateness_us"]) for record in records]
     lead_by_polyphony = {
         str(len(record.get("scan_codes", []))): int(record.get("applied_lead_us", 0))
@@ -191,7 +270,7 @@ def _run_dispatch(
         "wall_us": wall_us,
         "_sender_error_values": sender_errors,
         "_records": records,
-        "sender_completion_error_us": _stats(sender_errors),
+        "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
         "completion_error_us": _completion_error_report(records),
         "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
         "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
@@ -417,6 +496,15 @@ def main() -> int:
     ):
         raise SystemExit("mock latency values are only valid with --backend mock")
 
+    git_info = _git_provenance()
+    native_info = _native_provenance()
+    if native_info["native_build_commit"] != git_info["git_sha"]:
+        raise RuntimeError(
+            "native build provenance does not match Git HEAD: "
+            f"native={native_info['native_build_commit']} git={git_info['git_sha']}"
+        )
+    host_info = _host_fingerprint(native_info)
+
     polyphonies = _parse_polyphony(args.polyphony)
     dispatch_runs: list[dict[str, Any]] = []
     by_polyphony: dict[str, Any] = {}
@@ -451,8 +539,9 @@ def main() -> int:
             "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
             "playback_wall_time_us": _stats([run["playback_wall_time_us"] for run in runs]),
             "spin_duty_cycle_ppm": _stats([run["spin_duty_cycle_ppm"] for run in runs]),
-            "peak_rss_bytes": _stats(
-                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
+            "peak_rss_bytes": _required_stats(
+                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None],
+                "peak_rss_bytes",
             ),
             "keys_dropped": sum(run["keys_dropped"] for run in runs),
             "failed_release_count": sum(run["failed_release_count"] for run in runs),
@@ -505,8 +594,9 @@ def main() -> int:
             [record for run in dispatch_runs for record in run["_records"]]
         ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
-        "peak_rss_bytes": _stats(
-            [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None]
+        "peak_rss_bytes": _required_stats(
+            [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None],
+            "peak_rss_bytes",
         ),
         "command_interrupt_latency_us": _stats(interrupt_runs),
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
@@ -530,6 +620,17 @@ def main() -> int:
         else None,
         "by_polyphony": by_polyphony,
         "evidence_scope": "sender_completion",
+        "git_sha": git_info["git_sha"],
+        "native_build_commit": native_info["native_build_commit"],
+        "native_source_fingerprint": native_info["native_source_fingerprint"],
+        "rustc_version": native_info["rustc_version"],
+        "schema_version": native_info["schema_version"],
+        "backend_evidence": "real_sendinput_sender_completion"
+        if args.backend == "sendinput"
+        else "deterministic_coordinator_delivery_simulation",
+        "host_fingerprint": host_info,
+        "dirty_worktree": git_info["dirty_worktree"],
+        "command_line": list(os.sys.argv),
     }
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)

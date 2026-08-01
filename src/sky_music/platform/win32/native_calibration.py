@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
 
@@ -113,6 +113,30 @@ def _validate_result(result: object) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip() or value == "unknown":
             raise NativeCalibrationError(f"native calibration has invalid {name}")
 
+    if getattr(sys, "frozen", False):
+        try:
+            from sky_music import _native_build
+        except (ImportError, AttributeError) as exc:
+            raise NativeCalibrationError(
+                "frozen release is missing native calibration provenance metadata"
+            ) from exc
+        expected_build_id = getattr(_native_build, "EXPECTED_NATIVE_BUILD_ID", "")
+        expected_fingerprint = getattr(
+            _native_build, "EXPECTED_NATIVE_SOURCE_FINGERPRINT", ""
+        )
+        if not isinstance(expected_build_id, str) or not isinstance(expected_fingerprint, str):
+            raise NativeCalibrationError(
+                "frozen release has invalid native calibration provenance metadata"
+            )
+        if data["native_build_id"] != expected_build_id:
+            raise NativeCalibrationError(
+                "native calibration build does not match the frozen release"
+            )
+        if data["native_source_fingerprint"] != expected_fingerprint:
+            raise NativeCalibrationError(
+                "native calibration source fingerprint does not match the frozen release"
+            )
+
     host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")
     frequency = host.get("qpc_frequency_hz")
     if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
@@ -183,7 +207,11 @@ def _validate_result(result: object) -> dict[str, Any]:
                     for value in (attempted, clean, rejected, clean_samples)
                 ):
                     raise NativeCalibrationError("native calibration bucket counts are invalid")
-                if clean_samples != clean or clean + rejected != attempted:
+                attempted_value = cast(int, attempted)
+                clean_value = cast(int, clean)
+                rejected_value = cast(int, rejected)
+                clean_samples_value = cast(int, clean_samples)
+                if clean_samples_value != clean_value or clean_value + rejected_value != attempted_value:
                     raise NativeCalibrationError("native calibration bucket totals are inconsistent")
     return data
 

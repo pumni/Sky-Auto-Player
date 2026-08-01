@@ -1073,8 +1073,9 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     assert "song" in record
     # Four structured native SendInput diagnostics are part of the retained
     # telemetry record: first/last Win32 error and retry counters.
-    # We added 3 new fields for Phase 5 (packet_id, head_of_line_delay_us, same_timestamp_release_before_down).
-    assert len(record) == 43
+    # Phase 5 fields plus the explicit native timing-boundary fields are part
+    # of the retained telemetry record.
+    assert len(record) == 49
 
     # Assert keys/items/values are correct
     assert "song" in record

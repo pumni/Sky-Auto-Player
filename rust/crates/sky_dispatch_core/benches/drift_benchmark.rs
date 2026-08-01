@@ -464,6 +464,9 @@ impl DriftReport {
 // ─── Scenario runner ──────────────────────────────────────────────────────────
 
 fn run_scenario(kind: ScenarioKind, n_notes: usize) -> Result<DriftReport, String> {
+    if n_notes == 0 {
+        return Err("scenario note count must be positive".to_string());
+    }
     let interval_us = match kind {
         ScenarioKind::Sparse => SPARSE_INTERVAL_US,
         _ => DENSE_INTERVAL_US,
@@ -612,4 +615,31 @@ fn main() -> Result<(), String> {
 
     println!("# Done. {} scenarios × {} notes.", scenarios.len(), n_notes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use super::{DriftReport, ScenarioKind, check_gate, run_scenario};
+
+    #[test]
+    fn empty_scenario_is_an_error() {
+        assert!(run_scenario(ScenarioKind::Dense, 0).is_err());
+    }
+
+    #[test]
+    fn gate_rejects_a_failed_drift_report() {
+        let report = DriftReport {
+            scenario: "dense",
+            n_notes: 10,
+            slope: 2.0,
+            median_early: 0.0,
+            median_late: 0.0,
+            delta: 0.0,
+            burst_max: 0,
+            max_abs: 0,
+            p95: 0,
+        };
+        assert!(check_gate(&[report]).is_err());
+    }
 }

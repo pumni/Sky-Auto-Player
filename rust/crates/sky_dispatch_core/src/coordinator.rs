@@ -2671,6 +2671,8 @@ impl RuntimeDispatchCoordinator {
         self.pending_mask = 0;
         self.release_recovery_started_ticks = None;
 
+        self.check_invariants()?;
+
         Ok(sorted_cancelled)
     }
 

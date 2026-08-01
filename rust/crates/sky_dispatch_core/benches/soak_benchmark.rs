@@ -269,6 +269,7 @@ fn run_soak_scenario(
 
     // Track whether we have a pending failed-release retry in flight.
     let mut failed_release_note_idx: Option<usize> = None;
+    let mut ui_stall_recovery_pending = false;
 
     while !coordinator.is_finished() {
         // Focus-loss: cancel mid-session.
@@ -300,6 +301,10 @@ fn run_soak_scenario(
             now_us = now_us
                 .checked_add(UI_STALL_US)
                 .ok_or_else(|| "simulation timestamp overflow".to_string())?;
+            coordinator
+                .cancel_live_generations()
+                .map_err(|error| format!("live-input suspension failed: {error}"))?;
+            ui_stall_recovery_pending = true;
             inject_ui_stall_at = None;
         }
 
@@ -377,8 +382,16 @@ fn run_soak_scenario(
             let authored_us = batch.scheduled_us;
             match batch.kind {
                 ActionKind::Down => {
+                    if ui_stall_recovery_pending {
+                        coordinator
+                            .cancel_live_generations()
+                            .map_err(|error| format!("ui stall cleanup failed: {error}"))?;
+                    }
                     // Check for expiration (e.g. after UI stall)
-                    if now_us.saturating_sub(authored_us) > 1_000_000 {
+                    let age_us = now_us.checked_sub(authored_us).ok_or_else(|| {
+                        "simulation clock moved before authored deadline".to_string()
+                    })?;
+                    if age_us > 1_000_000 {
                         coordinator
                             .drop_expired_downs(&batch.intents)
                             .map_err(|error| format!("coordinator expiry failed: {error}"))?;
@@ -478,6 +491,9 @@ struct ScenarioExpectation {
     allowed_failed_releases: u64,
     allowed_authored_conflict: u64,
     allow_cancelled_inflight: bool,
+    /// Explicit per-scenario slope policy. Recovery and UI-stall scenarios
+    /// may contain a bounded one-time offset; this is never a wildcard.
+    max_slope_us_per_note: f64,
 }
 
 impl ScenarioExpectation {
@@ -488,14 +504,16 @@ impl ScenarioExpectation {
             allowed_failed_releases: 0,
             allowed_authored_conflict: 0,
             allow_cancelled_inflight: false,
+            max_slope_us_per_note: 2.0,
         }
     }
 
     fn gate_ok(&self, counters: &SoakCounters) -> bool {
-        counters.keys_dropped <= self.allowed_keys_dropped
-            && counters.chord_split_events <= self.allowed_chord_splits
-            && counters.failed_release_count <= self.allowed_failed_releases
-            && counters.authored_conflict <= self.allowed_authored_conflict
+        counters.keys_dropped == self.allowed_keys_dropped
+            && counters.chord_split_events == self.allowed_chord_splits
+            && counters.failed_release_count == self.allowed_failed_releases
+            && counters.authored_conflict == self.allowed_authored_conflict
+            && counters.slope_us_per_note().abs() < self.max_slope_us_per_note
             && (self.allow_cancelled_inflight
                 || (counters.rollback_residue_keys == 0 && counters.nonterminal_after_end == 0))
     }
@@ -519,6 +537,30 @@ impl ScenarioResult {
     fn slope_label(&self) -> String {
         format!("{:+.4}", self.counters.slope_us_per_note())
     }
+}
+
+fn expected_ui_stall_expired_count(
+    authored: &[u64],
+    stall_at: usize,
+    polyphony: usize,
+) -> Result<u64, String> {
+    let stall_timestamp = authored
+        .get(stall_at)
+        .copied()
+        .ok_or_else(|| "ui stall index is outside authored timeline".to_string())?
+        .checked_add(UI_STALL_US)
+        .ok_or_else(|| "ui stall timestamp overflow".to_string())?;
+    let expiry_cutoff = stall_timestamp
+        .checked_sub(1_000_000)
+        .ok_or_else(|| "ui stall expiry cutoff underflow".to_string())?;
+    let expired_notes = authored
+        .iter()
+        .skip(stall_at)
+        .take_while(|&&scheduled| scheduled < expiry_cutoff)
+        .count() as u64;
+    expired_notes
+        .checked_mul(polyphony as u64)
+        .ok_or_else(|| "ui stall expired pulse count overflow".to_string())
 }
 
 // ─── Report ───────────────────────────────────────────────────────────────────
@@ -563,15 +605,12 @@ fn print_gate_summary(results: &[ScenarioResult]) {
     println!(
         "# Gate (correctness): raw counters are preserved and checked against per-scenario expectations;"
     );
-    println!("# slope < ±2 µs/note");
+    println!("# slope limits are explicit per-scenario expectations");
     let all_counters_ok = results.iter().all(ScenarioResult::gate_ok);
-    let slope_ok = results
-        .iter()
-        .all(|r| r.counters.slope_us_per_note().abs() < 2.0);
-    let pass = all_counters_ok && slope_ok;
+    let pass = all_counters_ok;
     let failed_names: Vec<&str> = results
         .iter()
-        .filter(|r| !r.gate_ok() || r.counters.slope_us_per_note().abs() >= 2.0)
+        .filter(|r| !r.gate_ok())
         .map(|r| r.name)
         .collect();
     let policy_count = results
@@ -592,10 +631,16 @@ fn print_gate_summary(results: &[ScenarioResult]) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> Result<(), String> {
-    let n_notes: usize = std::env::var("SOAK_NOTES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_NOTES);
+    let n_notes: usize = match std::env::var("SOAK_NOTES") {
+        Ok(value) => value
+            .parse()
+            .map_err(|_| "SOAK_NOTES must be a positive integer".to_string())?,
+        Err(std::env::VarError::NotPresent) => DEFAULT_NOTES,
+        Err(error) => return Err(format!("failed to read SOAK_NOTES: {error}")),
+    };
+    if n_notes == 0 {
+        return Err("SOAK_NOTES must be positive".to_string());
+    }
 
     println!("# P3.7 Coordinator soak simulation — sky_dispatch_core");
     println!(
@@ -606,7 +651,7 @@ fn main() -> Result<(), String> {
         env!("CARGO_PKG_VERSION")
     );
     println!(
-        "# Gate: raw counters remain unchanged; each scenario has an explicit expectation policy; slope<±2µs/note"
+        "# Gate: raw counters remain unchanged; each scenario has an explicit expectation policy"
     );
     println!();
 
@@ -669,6 +714,7 @@ fn main() -> Result<(), String> {
         let (actions, authored) = build_dense_timeline(n_notes, poly, DENSE_INTERVAL_US);
         let allowed: Vec<u16> = ALL_SCAN_CODES[..poly].to_vec();
         let stall_at = n_notes / 2;
+        let expected_expired = expected_ui_stall_expired_count(&authored, stall_at, poly)?;
         let t0 = Instant::now();
         match run_soak_scenario(&actions, &authored, &allowed, None, Some(stall_at), None) {
             Ok(c) => {
@@ -677,11 +723,12 @@ fn main() -> Result<(), String> {
                     name: "ui_stall",
                     counters: c,
                     expectation: ScenarioExpectation {
-                        allowed_keys_dropped: n_notes as u64,
-                        allowed_chord_splits: n_notes as u64,
+                        allowed_keys_dropped: expected_expired,
+                        allowed_chord_splits: 0,
                         allowed_failed_releases: 0,
-                        allowed_authored_conflict: n_notes as u64,
+                        allowed_authored_conflict: 0,
                         allow_cancelled_inflight: false,
+                        max_slope_us_per_note: 15.0,
                     },
                     wall_ms,
                     notes: n_notes,
@@ -716,6 +763,7 @@ fn main() -> Result<(), String> {
                         allowed_failed_releases: 1,
                         allowed_authored_conflict: 0,
                         allow_cancelled_inflight: false,
+                        max_slope_us_per_note: 15.0,
                     },
                     wall_ms,
                     notes: n_notes,
@@ -751,6 +799,7 @@ fn main() -> Result<(), String> {
                         allowed_failed_releases: 0,
                         allowed_authored_conflict: 0,
                         allow_cancelled_inflight: true,
+                        max_slope_us_per_note: 15.0,
                     },
                     wall_ms,
                     notes: stop_at,
@@ -786,4 +835,58 @@ fn main() -> Result<(), String> {
         return Err("coordinator soak simulation gate failed".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use super::{ScenarioExpectation, SoakCounters, expected_ui_stall_expired_count};
+
+    #[test]
+    fn catastrophic_drop_does_not_pass_clean_expectation() {
+        let mut counters = SoakCounters::default();
+        counters.keys_dropped = 10;
+        assert!(!ScenarioExpectation::ordinary().gate_ok(&counters));
+    }
+
+    #[test]
+    fn unexpected_split_and_conflict_fail_clean_expectation() {
+        let mut split = SoakCounters::default();
+        split.chord_split_events = 1;
+        assert!(!ScenarioExpectation::ordinary().gate_ok(&split));
+
+        let mut conflict = SoakCounters::default();
+        conflict.authored_conflict = 1;
+        assert!(!ScenarioExpectation::ordinary().gate_ok(&conflict));
+    }
+
+    #[test]
+    fn recovered_release_requires_exact_injected_failure() {
+        let mut counters = SoakCounters::default();
+        counters.failed_release_count = 1;
+        let expectation = ScenarioExpectation {
+            allowed_keys_dropped: 0,
+            allowed_chord_splits: 0,
+            allowed_failed_releases: 1,
+            allowed_authored_conflict: 0,
+            allow_cancelled_inflight: false,
+            max_slope_us_per_note: 2.0,
+        };
+        assert!(expectation.gate_ok(&counters));
+        counters.failed_release_count = 2;
+        assert!(!expectation.gate_ok(&counters));
+    }
+
+    #[test]
+    fn unexpected_drift_slope_fails_the_gate() {
+        let mut counters = SoakCounters::default();
+        counters.timing_errors = vec![0, 100];
+        assert!(!ScenarioExpectation::ordinary().gate_ok(&counters));
+    }
+
+    #[test]
+    fn ui_stall_expired_count_is_derived_from_deadline_policy() {
+        let authored = [0, 300_000, 600_000, 900_000, 1_200_000, 1_500_000];
+        assert_eq!(expected_ui_stall_expired_count(&authored, 2, 1).unwrap(), 4);
+    }
 }

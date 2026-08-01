@@ -273,6 +273,15 @@ pub struct NativeTelemetryRecord {
     pub scheduled_us: u64,
     pub actual_us: u64,
     pub dispatch_completed_us: u64,
+    /// Explicit timeline boundaries. `actual_us` remains a compatibility
+    /// alias for `wake_timeline_us`.
+    pub scheduled_timeline_us: u64,
+    pub wake_timeline_us: u64,
+    pub sender_started_us: Option<u64>,
+    pub sender_completed_us: Option<u64>,
+    pub sender_completion_error_us: Option<i64>,
+    pub sendinput_call_duration_us: Option<u64>,
+    pub bookkeeping_duration_us: Option<u64>,
     pub lateness_us: i64,
     pub visible_lateness_us: i64,
     pub send_duration_us: u64,
@@ -329,7 +338,7 @@ pub struct TimingSemantics {
 impl Default for TimingSemantics {
     fn default() -> Self {
         Self {
-            evidence_kind: "sender_and_injected_raw_input_proxy",
+            evidence_kind: "sender_completion",
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
             sender_start_boundary: "sendinput_call_entry",
@@ -1177,6 +1186,24 @@ fn mock_platform_send_result(
     }
 }
 
+fn admission_failure(
+    backend: &mut TrackedKeyState,
+    metrics: &SharedMetrics,
+    primary_error: String,
+) -> u8 {
+    let cleanup = backend.release_all_full_instrument();
+    let message = if release_state_verified(backend, &cleanup) {
+        primary_error
+    } else {
+        format!(
+            "{primary_error}; admission cleanup failed: {}",
+            describe_release_outcome(&cleanup)
+        )
+    };
+    *metrics.last_error.lock() = Some(message);
+    1
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_worker(
     config: WorkerConfig,
@@ -1289,10 +1316,11 @@ fn run_worker(
         match SendLatencyEstimator::try_new(0.2, config.max_lead_us, config.allowed_count) {
             Ok(estimator) => estimator,
             Err(error) => {
-                *metrics.last_error.lock() =
-                    Some(format!("invalid estimator configuration: {error}"));
-                let _ = backend.release_all_full_instrument();
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("invalid estimator configuration: {error}"),
+                );
             }
         };
     if let Some(raw) = &config.estimator_state_json
@@ -1304,19 +1332,22 @@ fn run_worker(
     let min_hold_ticks = match qpc_clock.duration_from_us(config.min_hold_us) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("min-hold conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("min-hold conversion failed: {error:?}"),
+            );
         }
     };
     let late_pulse_drop_threshold_ticks = match config.late_pulse_drop_threshold_us {
         Some(threshold_us) => match qpc_clock.duration_from_us(threshold_us) {
             Ok(ticks) => Some(ticks),
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() =
-                    Some(format!("late-pulse threshold conversion failed: {error:?}"));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("late-pulse threshold conversion failed: {error:?}"),
+                );
             }
         },
         None => None,
@@ -1328,59 +1359,64 @@ fn run_worker(
     ) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("retry-late threshold conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("retry-late threshold conversion failed: {error:?}"),
+            );
         }
     };
     let strict_down_completion_late_ticks =
         match qpc_clock.duration_from_us(config.strict_down_completion_late_us) {
             Ok(ticks) => ticks,
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() = Some(format!(
-                    "strict note-on threshold conversion failed: {error:?}"
-                ));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("strict note-on threshold conversion failed: {error:?}"),
+                );
             }
         };
     let strict_up_completion_late_ticks =
         match qpc_clock.duration_from_us(config.strict_up_completion_late_us) {
             Ok(ticks) => ticks,
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() = Some(format!(
-                    "strict note-off threshold conversion failed: {error:?}"
-                ));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("strict note-off threshold conversion failed: {error:?}"),
+                );
             }
         };
     let focus_restore_grace_ticks = match qpc_clock.duration_from_us(config.focus_restore_grace_us)
     {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("focus grace conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("focus grace conversion failed: {error:?}"),
+            );
         }
     };
     let paused_poll_ticks = match qpc_clock.duration_from_us(PAUSED_POLL_US) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("paused polling conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("paused polling conversion failed: {error:?}"),
+            );
         }
     };
     let cold_threshold_ticks = match qpc_clock.duration_from_us(SEND_COLD_THRESHOLD_US) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("cold threshold conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("cold threshold conversion failed: {error:?}"),
+            );
         }
     };
     let core_warmup_ticks = match qpc_clock
@@ -1388,26 +1424,31 @@ fn run_worker(
     {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("core warmup conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("core warmup conversion failed: {error:?}"),
+            );
         }
     };
     let spin_reprobe_interval_ticks = match qpc_clock.duration_from_us(30_000_000) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("spin reprobe conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("spin reprobe conversion failed: {error:?}"),
+            );
         }
     };
     let lease_timeout_ticks = match qpc_clock.duration_from_us(config.supervisor_lease_timeout_us) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("lease timeout conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("lease timeout conversion failed: {error:?}"),
+            );
         }
     };
     let retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()] =
@@ -1422,10 +1463,11 @@ fn run_worker(
             }) {
             Ok(backoff) => backoff,
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() =
-                    Some(format!("retry backoff conversion failed: {error:?}"));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("retry backoff conversion failed: {error:?}"),
+                );
             }
         };
     let delivery_margin_ticks = DurationTicks::ZERO;
@@ -1444,9 +1486,11 @@ fn run_worker(
     ) {
         Ok(coordinator) => coordinator,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("coordinator construction failed: {error}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("coordinator construction failed: {error}"),
+            );
         }
     };
     local_metrics.total_us = match coordinator.effective_total_ticks().and_then(|ticks| {
@@ -1456,9 +1500,11 @@ fn run_worker(
     }) {
         Ok(total_us) => total_us,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("total timeline conversion failed: {error}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("total timeline conversion failed: {error}"),
+            );
         }
     };
     let mut telemetry = TelemetryCollector::new(
@@ -1479,29 +1525,33 @@ fn run_worker(
     let initial_now_ticks = match qpc_clock.now() {
         Ok(now) => now,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("QPC admission failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("QPC admission failed: {error:?}"),
+            );
         }
     };
     let initial_now_us =
         match qpc_clock.duration_to_us(DurationTicks::from_raw(initial_now_ticks.as_u64())) {
             Ok(now) => now,
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() =
-                    Some(format!("QPC admission conversion failed: {error:?}"));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("QPC admission conversion failed: {error:?}"),
+                );
             }
         };
     let mut effective_spin_threshold_ticks =
         match qpc_clock.duration_from_us(effective_spin_threshold_us) {
             Ok(ticks) => ticks,
             Err(error) => {
-                let _ = backend.release_all_full_instrument();
-                *metrics.last_error.lock() =
-                    Some(format!("spin threshold conversion failed: {error:?}"));
-                return 1;
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("spin threshold conversion failed: {error:?}"),
+                );
             }
         };
     let mut last_spin_probe_ticks = initial_now_ticks;
@@ -1543,9 +1593,11 @@ fn run_worker(
     let startup_lead_ticks = match qpc_clock.duration_from_us(startup_lead_us) {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("startup lead conversion failed: {error:?}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("startup lead conversion failed: {error:?}"),
+            );
         }
     };
     let startup_guard_ticks = (|| {
@@ -1562,9 +1614,11 @@ fn run_worker(
     let startup_guard_ticks = match startup_guard_ticks {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("startup guard conversion failed: {error}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("startup guard conversion failed: {error}"),
+            );
         }
     };
     let startup_anchor_ticks = match initial_now_ticks
@@ -1573,9 +1627,11 @@ fn run_worker(
     {
         Ok(ticks) => ticks,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() = Some(format!("startup anchor arithmetic failed: {error}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("startup anchor arithmetic failed: {error}"),
+            );
         }
     };
     let mut clock_state = match PlaybackClockState::new(
@@ -1584,10 +1640,11 @@ fn run_worker(
     ) {
         Ok(clock) => clock,
         Err(error) => {
-            let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("playback clock initialization failed: {error}"));
-            return 1;
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("playback clock initialization failed: {error}"),
+            );
         }
     };
     let mut startup_gate = coordinator
@@ -1721,7 +1778,7 @@ fn run_worker(
             }
             if panic_requested.swap(false, Ordering::AcqRel) {
                 let panic_release = backend.release_all_full_instrument();
-                if !release_outcome_verified(&panic_release) {
+                if !release_state_verified(&backend, &panic_release) {
                     record_termination_error(
                         &mut terminal_error,
                         &mut secondary_errors,
@@ -2325,6 +2382,20 @@ fn run_worker(
                     scheduled_us,
                     actual_us,
                     dispatch_completed_us: completed_effective,
+                    scheduled_timeline_us: scheduled_us,
+                    wake_timeline_us: actual_us,
+                    sender_started_us: Some(actual_us),
+                    sender_completed_us: Some(completed_effective),
+                    sender_completion_error_us: Some(signed_delta(
+                        completed_effective,
+                        scheduled_us,
+                    )),
+                    sendinput_call_duration_us: Some(
+                        result.send_completed_us.saturating_sub(started_us),
+                    ),
+                    bookkeeping_duration_us: Some(
+                        bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                    ),
                     lateness_us: signed_delta(actual_us, scheduled_us),
                     visible_lateness_us: signed_delta(completed_effective, scheduled_us),
                     send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
@@ -2417,7 +2488,7 @@ fn run_worker(
                             .map_or(String::new(), |error| format!(" (Win32 error {error})"))
                     ));
                     let recovery_cleanup = backend.release_all_full_instrument();
-                    if !release_outcome_verified(&recovery_cleanup) {
+                    if !release_state_verified(&backend, &recovery_cleanup) {
                         record_termination_error(
                             &mut terminal_error,
                             &mut secondary_errors,
@@ -2599,6 +2670,13 @@ fn run_worker(
                                 scheduled_us: batch_scheduled_us,
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
+                                scheduled_timeline_us: batch_scheduled_us,
+                                wake_timeline_us: effective_now_us,
+                                sender_started_us: None,
+                                sender_completed_us: None,
+                                sender_completion_error_us: None,
+                                sendinput_call_duration_us: None,
+                                bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                                 visible_lateness_us: signed_delta(
                                     effective_now_us,
@@ -2664,6 +2742,13 @@ fn run_worker(
                                 scheduled_us: batch_scheduled_us,
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
+                                scheduled_timeline_us: batch_scheduled_us,
+                                wake_timeline_us: effective_now_us,
+                                sender_started_us: None,
+                                sender_completed_us: None,
+                                sender_completion_error_us: None,
+                                sendinput_call_duration_us: None,
+                                bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                                 visible_lateness_us: signed_delta(
                                     effective_now_us,
@@ -2742,6 +2827,13 @@ fn run_worker(
                                 scheduled_us: batch_scheduled_us,
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
+                                scheduled_timeline_us: batch_scheduled_us,
+                                wake_timeline_us: effective_now_us,
+                                sender_started_us: None,
+                                sender_completed_us: None,
+                                sender_completion_error_us: None,
+                                sendinput_call_duration_us: None,
+                                bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                                 visible_lateness_us: signed_delta(
                                     effective_now_us,
@@ -3054,6 +3146,20 @@ fn run_worker(
                                 scheduled_us: batch_scheduled_us,
                                 actual_us,
                                 dispatch_completed_us: completed_effective,
+                                scheduled_timeline_us: batch_scheduled_us,
+                                wake_timeline_us: actual_us,
+                                sender_started_us: Some(actual_us),
+                                sender_completed_us: Some(completed_effective),
+                                sender_completion_error_us: Some(signed_delta(
+                                    completed_effective,
+                                    batch_scheduled_us,
+                                )),
+                                sendinput_call_duration_us: Some(
+                                    result_completed_us.saturating_sub(started_us),
+                                ),
+                                bookkeeping_duration_us: Some(
+                                    bookkeeping_completed_us.saturating_sub(result_completed_us),
+                                ),
                                 lateness_us: signed_delta(actual_us, batch_scheduled_us),
                                 visible_lateness_us: signed_delta(
                                     completed_effective,
@@ -3240,6 +3346,13 @@ fn run_worker(
                             scheduled_us: batch_scheduled_us,
                             actual_us: effective_now_us,
                             dispatch_completed_us: effective_now_us,
+                            scheduled_timeline_us: batch_scheduled_us,
+                            wake_timeline_us: effective_now_us,
+                            sender_started_us: None,
+                            sender_completed_us: None,
+                            sender_completion_error_us: None,
+                            sendinput_call_duration_us: None,
+                            bookkeeping_duration_us: None,
                             lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                             visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                             send_duration_us: 0,
@@ -3567,7 +3680,7 @@ fn run_worker(
         } else {
             backend.release_all()
         };
-        if release_outcome_verified(&outcome) {
+        if release_state_verified(&backend, &outcome) {
             outcome
         } else {
             // A normal-path release that cannot be verified gets one bounded
@@ -3577,7 +3690,7 @@ fn run_worker(
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
-        if !release_outcome_verified(outcome) {
+        if !release_state_verified(&backend, outcome) {
             record_termination_error(
                 &mut terminal_error,
                 &mut secondary_errors,
@@ -3805,6 +3918,13 @@ fn release_outcome_verified(outcome: &ReleaseAllOutcome) -> bool {
         && !outcome.verification_inconclusive
 }
 
+fn release_state_verified(backend: &TrackedKeyState, outcome: &ReleaseAllOutcome) -> bool {
+    release_outcome_verified(outcome)
+        && backend.active_mask == 0
+        && backend.possibly_active_mask == 0
+        && backend.failed_release_mask == 0
+}
+
 fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
     format!(
         "released_successfully={}, stuck_keys={:?}, verification_inconclusive={}",
@@ -3835,11 +3955,11 @@ fn suspend_live_input(
     coordinator: &mut RuntimeDispatchCoordinator,
 ) -> Result<Vec<u64>, String> {
     let initial = backend.release_all();
-    let release = if release_outcome_verified(&initial) {
+    let release = if release_state_verified(backend, &initial) {
         initial
     } else {
         let full = backend.release_all_full_instrument();
-        if !release_outcome_verified(&full) {
+        if !release_state_verified(backend, &full) {
             return Err(format!(
                 "release verification failed (initial: {}; full: {})",
                 describe_release_outcome(&initial),
@@ -3849,7 +3969,7 @@ fn suspend_live_input(
         full
     };
 
-    debug_assert!(release_outcome_verified(&release));
+    debug_assert!(release_state_verified(backend, &release));
     let cancelled = coordinator
         .cancel_live_generations()
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
@@ -4346,7 +4466,7 @@ mod tests {
 
     #[test]
     fn failed_send_does_not_seed_estimator_or_residual() {
-        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 6);
+        let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
         update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120, false);
         let state = estimator.export_state();

@@ -33,7 +33,9 @@ _CSV_FIELDS: list[str] = [
     "packet_id",
     "kind",
     "scheduled_us",
+    "scheduled_timeline_us",
     "actual_us",
+    "wake_timeline_us",
     "dispatch_completed_us",
     "evidence_scope",
     "lateness_us",
@@ -65,6 +67,10 @@ _CSV_FIELDS: list[str] = [
     "send_started_us",
     "send_completed_us",
     "sender_completion_error_us",
+    "sender_started_us",
+    "sender_completed_us",
+    "sendinput_call_duration_us",
+    "bookkeeping_duration_us",
     "delivery_first_us",
     "delivery_last_us",
     "delivery_last_error_us",
@@ -78,7 +84,9 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "dispatch_id",
         "packet_id",
         "scheduled_us",
+        "scheduled_timeline_us",
         "actual_us",
+        "wake_timeline_us",
         "dispatch_completed_us",
         "lateness_us",
         "visible_lateness_us",
@@ -102,6 +110,10 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_started_us",
         "send_completed_us",
         "sender_completion_error_us",
+        "sender_started_us",
+        "sender_completed_us",
+        "sendinput_call_duration_us",
+        "bookkeeping_duration_us",
         "delivery_first_us",
         "delivery_last_us",
         "delivery_last_error_us",
@@ -116,6 +128,7 @@ class TelemetryRecord:
         "actual_us",
         "applied_lead_us",
         "authored_us",
+        "bookkeeping_duration_us",
         "bookkeeping_us",
         "deferred_by_us",
         "delivery_first_us",
@@ -140,19 +153,24 @@ class TelemetryRecord:
         "runtime_outcome",
         "same_timestamp_release_before_down",
         "scan_codes",
+        "scheduled_timeline_us",
         "scheduled_us",
         "send_attempts",
         "send_completed_us",
         "send_duration_pure_us",
         "send_duration_us",
         "send_started_us",
+        "sender_completed_us",
         "sender_completion_error_us",
+        "sender_started_us",
+        "sendinput_call_duration_us",
         "sent_scan_codes",
         "skipped_scan_codes",
         "song_name",
         "visible_lateness_us",
         "wait_target_us",
         "wake_error_us",
+        "wake_timeline_us",
         "wake_us",
         "zero_progress_retries",
     )
@@ -201,12 +219,21 @@ class TelemetryRecord:
         delivery_last_error_us: int | None = None,
         intra_chord_delivery_spread_us: int | None = None,
         lead_components: int | None = None,
+        scheduled_timeline_us: int | None = None,
+        wake_timeline_us: int | None = None,
+        sender_started_us: int | None = None,
+        sender_completed_us: int | None = None,
+        sendinput_call_duration_us: int | None = None,
+        bookkeeping_duration_us: int | None = None,
     ) -> None:
         self._dict = None
         self.song_name = song_name
         self.event_index = event_index
         self.kind = kind
         self.scheduled_us = scheduled_us
+        self.scheduled_timeline_us = (
+            scheduled_us if scheduled_timeline_us is None else scheduled_timeline_us
+        )
         self.actual_us = actual_us
         self.lateness_us = lateness_us
         self.send_duration_us = send_duration_us
@@ -237,9 +264,22 @@ class TelemetryRecord:
         self.wait_target_us = wait_target_us
         self.wake_us = wake_us
         self.wake_error_us = wake_error_us
+        self.wake_timeline_us = actual_us if wake_timeline_us is None else wake_timeline_us
         self.send_started_us = send_started_us
         self.send_completed_us = send_completed_us
         self.sender_completion_error_us = sender_completion_error_us
+        self.sender_started_us = send_started_us if sender_started_us is None else sender_started_us
+        self.sender_completed_us = (
+            send_completed_us if sender_completed_us is None else sender_completed_us
+        )
+        self.sendinput_call_duration_us = (
+            send_duration_pure_us
+            if sendinput_call_duration_us is None
+            else sendinput_call_duration_us
+        )
+        self.bookkeeping_duration_us = (
+            bookkeeping_us if bookkeeping_duration_us is None else bookkeeping_duration_us
+        )
         self.delivery_first_us = delivery_first_us
         self.delivery_last_us = delivery_last_us
         self.delivery_last_error_us = delivery_last_error_us
@@ -250,11 +290,14 @@ class TelemetryRecord:
         if self._dict is None:
             scan_codes_str = ";".join(str(sc) for sc in self.scan_codes)
             sent_scan_codes = self.scan_codes if self.sent_scan_codes is None else self.sent_scan_codes
-            visible_lat = (
-                self.visible_lateness_us
-                if self.visible_lateness_us is not None
-                else (self.dispatch_completed_us - self.scheduled_us if self.dispatch_completed_us is not None else (self.actual_us + self.send_duration_us - self.scheduled_us))
-            )
+            visible_lat = self.visible_lateness_us
+            if visible_lat is None:
+                completed_us = self.dispatch_completed_us
+                visible_lat = (
+                    completed_us - self.scheduled_us
+                    if completed_us is not None
+                    else self.actual_us + self.send_duration_us - self.scheduled_us
+                )
             self._dict = {
                 "song": self.song_name,
                 "event_index": self.event_index,
@@ -263,7 +306,9 @@ class TelemetryRecord:
                 "evidence_scope": "sender_completion",
                 "kind": self.kind,
                 "scheduled_us": self.scheduled_us,
+                "scheduled_timeline_us": self.scheduled_timeline_us,
                 "actual_us": self.actual_us,
+                "wake_timeline_us": self.wake_timeline_us,
                 "dispatch_completed_us": (
                     self.actual_us + self.send_duration_us
                     if self.dispatch_completed_us is None
@@ -298,6 +343,10 @@ class TelemetryRecord:
                 "send_started_us": self.send_started_us,
                 "send_completed_us": self.send_completed_us,
                 "sender_completion_error_us": self.sender_completion_error_us,
+                "sender_started_us": self.sender_started_us,
+                "sender_completed_us": self.sender_completed_us,
+                "sendinput_call_duration_us": self.sendinput_call_duration_us,
+                "bookkeeping_duration_us": self.bookkeeping_duration_us,
                 "delivery_first_us": self.delivery_first_us,
                 "delivery_last_us": self.delivery_last_us,
                 "delivery_last_error_us": self.delivery_last_error_us,
@@ -607,8 +656,8 @@ class TelemetryLogger:
                     int(row["idle_gap_us"]),
                     int(row["visible_lateness_us"]),
                     int(row["applied_lead_us"]),
-                    int(row["send_duration_pure_us"]),
-                    int(row["bookkeeping_us"]),
+                    int(row.get("send_duration_pure_us", row.get("sendinput_call_duration_us", 0))),
+                    int(row.get("bookkeeping_us", row.get("bookkeeping_duration_us", 0))),
                     int(row["dispatch_lateness_us"]),
                     _optional_int(row.get("first_win32_error")),
                     _optional_int(row.get("last_win32_error")),
@@ -617,6 +666,25 @@ class TelemetryLogger:
                     _optional_int(row.get("head_of_line_delay_us")),
                     row.get("same_timestamp_release_before_down"),
                     _optional_int(row.get("packet_id")),
+                    authored_us=_optional_int(row.get("scheduled_timeline_us")),
+                    scheduled_timeline_us=_optional_int(row.get("scheduled_timeline_us")),
+                    wake_us=_optional_int(row.get("wake_timeline_us")),
+                    wake_timeline_us=_optional_int(row.get("wake_timeline_us")),
+                    send_started_us=_optional_int(
+                        row.get("sender_started_us", row.get("send_started_us"))
+                    ),
+                    send_completed_us=_optional_int(
+                        row.get("sender_completed_us", row.get("send_completed_us"))
+                    ),
+                    sender_completion_error_us=_optional_int(
+                        row.get("sender_completion_error_us")
+                    ),
+                    sendinput_call_duration_us=_optional_int(
+                        row.get("sendinput_call_duration_us")
+                    ),
+                    bookkeeping_duration_us=_optional_int(
+                        row.get("bookkeeping_duration_us")
+                    ),
                 )
             )
             self._accepted_record_count += 1

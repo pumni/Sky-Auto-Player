@@ -973,6 +973,12 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("native_schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("pyo3_version", "0.29.0")?;
     dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
+    dict.set_item(
+        "qpc_frequency_hz",
+        sky_dispatch_win32::clock::qpc_frequency_checked().map_err(|error| {
+            PyRuntimeError::new_err(format!("QPC frequency unavailable: {error:?}"))
+        })?,
+    )?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
     dict.set_item(
         "native_source_fingerprint",
