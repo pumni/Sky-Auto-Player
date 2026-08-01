@@ -1,11 +1,14 @@
 //! Interruptible wait strategy with command-event priority.
 
-use crate::clock::{QpcTicks, qpc_now_ticks, qpc_ticks_to_us, qpc_us_to_ticks};
+use crate::clock::{
+    DurationTicks, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us, qpc_us_to_ticks,
+};
 use crate::event::OwnedEvent;
 use crate::timer::{TimerResolutionGuard, WaitableTimer};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitFailure {
+    Clock,
     TimerCreate { win32_error: u32 },
     TimerArm { win32_error: u32 },
     TimerWait { win32_error: u32 },
@@ -100,10 +103,26 @@ impl HybridWaiter {
         spin_threshold_us: u64,
         interrupt: &OwnedEvent,
     ) -> WaitResult {
-        let now_ticks = qpc_now_ticks();
-        let target_ticks = QpcTicks(now_ticks.0.saturating_add(qpc_us_to_ticks(
-            target_us.saturating_sub(qpc_ticks_to_us(now_ticks)),
-        )));
+        let now_ticks = match qpc_now_ticks_checked() {
+            Ok(ticks) => ticks,
+            Err(_) => {
+                return WaitResult {
+                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                    spin_us: 0,
+                };
+            }
+        };
+        let target_ticks = match now_ticks.checked_add_duration(DurationTicks::from_raw(
+            qpc_us_to_ticks(target_us.saturating_sub(qpc_ticks_to_us(now_ticks))),
+        )) {
+            Ok(ticks) => ticks,
+            Err(_) => {
+                return WaitResult {
+                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                    spin_us: 0,
+                };
+            }
+        };
         self.wait_until_ticks_with_metrics(target_ticks, spin_threshold_us, interrupt)
     }
 
@@ -123,7 +142,15 @@ impl HybridWaiter {
                 };
             }
 
-            let now_ticks = qpc_now_ticks();
+            let now_ticks = match qpc_now_ticks_checked() {
+                Ok(ticks) => ticks,
+                Err(_) => {
+                    return WaitResult {
+                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                        spin_us: 0,
+                    };
+                }
+            };
             if now_ticks >= target_ticks {
                 let now_us = qpc_ticks_to_us(now_ticks);
                 return WaitResult {
@@ -131,14 +158,14 @@ impl HybridWaiter {
                     spin_us: spin_started_us.map_or(0, |started| now_us.saturating_sub(started)),
                 };
             }
-            let remaining_ticks = target_ticks.0.saturating_sub(now_ticks.0);
+            let remaining_ticks = target_ticks.as_u64().saturating_sub(now_ticks.as_u64());
             if remaining_ticks <= spin_threshold_ticks {
                 spin_started_us.get_or_insert(qpc_ticks_to_us(now_ticks));
                 std::hint::spin_loop();
                 continue;
             }
 
-            let kernel_wait_us = qpc_ticks_to_us(QpcTicks(
+            let kernel_wait_us = qpc_ticks_to_us(QpcTicks::from_raw(
                 remaining_ticks.saturating_sub(spin_threshold_ticks),
             ));
             #[cfg(windows)]
@@ -219,7 +246,12 @@ impl HybridWaiter {
         }
         let mut errors = Vec::with_capacity(samples);
         for _ in 0..samples {
-            let target_ticks = QpcTicks(qpc_now_ticks().0.saturating_add(qpc_us_to_ticks(2_000)));
+            let target_ticks = match qpc_now_ticks_checked() {
+                Ok(now) => now
+                    .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(2_000)))
+                    .ok()?,
+                Err(_) => return None,
+            };
             match self
                 .wait_until_ticks_with_metrics(target_ticks, 0, interrupt)
                 .outcome
@@ -227,9 +259,12 @@ impl HybridWaiter {
                 WaitOutcome::Interrupted | WaitOutcome::Failed(_) => return None,
                 WaitOutcome::Deadline => {}
             }
-            let now_ticks = qpc_now_ticks();
-            errors.push(qpc_ticks_to_us(QpcTicks(
-                now_ticks.0.saturating_sub(target_ticks.0),
+            let now_ticks = match qpc_now_ticks_checked() {
+                Ok(ticks) => ticks,
+                Err(_) => return None,
+            };
+            errors.push(qpc_ticks_to_us(QpcTicks::from_raw(
+                now_ticks.as_u64().saturating_sub(target_ticks.as_u64()),
             )));
         }
         errors.sort_unstable();

@@ -1,101 +1,153 @@
-//! Tick-domain time primitives for the real-time scheduling path.
+//! Opaque, checked time domains used by the native dispatch path.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum TimeArithmeticError {
+    #[error("timestamp arithmetic overflow")]
+    Overflow,
+    #[error("timestamp arithmetic underflow")]
+    Underflow,
+    #[error("timestamps are not in monotonic order")]
+    NegativeOrder,
+}
 
 #[repr(transparent)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
-pub struct QpcTicks(pub u64);
+pub struct QpcTicks {
+    value: u64,
+}
+
+#[allow(non_snake_case)]
+pub const fn QpcTicks(value: u64) -> QpcTicks {
+    QpcTicks { value }
+}
 
 #[repr(transparent)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
-pub struct TimelineTicks(pub u64);
+pub struct TimelineTicks {
+    value: u64,
+}
+
+#[allow(non_snake_case)]
+pub const fn TimelineTicks(value: u64) -> TimelineTicks {
+    TimelineTicks { value }
+}
 
 #[repr(transparent)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
-pub struct DurationTicks(pub u64);
+pub struct DurationTicks {
+    value: u64,
+}
+
+#[allow(non_snake_case)]
+pub const fn DurationTicks(value: u64) -> DurationTicks {
+    DurationTicks { value }
+}
 
 impl QpcTicks {
-    pub fn saturating_add(self, rhs: DurationTicks) -> QpcTicks {
-        QpcTicks(self.0.saturating_add(rhs.0))
+    pub const ZERO: Self = Self { value: 0 };
+
+    pub const fn from_raw(value: u64) -> Self {
+        Self { value }
     }
 
-    pub fn saturating_sub(self, rhs: DurationTicks) -> QpcTicks {
-        QpcTicks(self.0.saturating_sub(rhs.0))
+    pub const fn as_u64(self) -> u64 {
+        self.value
     }
 
-    pub fn duration_since(self, earlier: QpcTicks) -> DurationTicks {
-        DurationTicks(self.0.saturating_sub(earlier.0))
+    pub fn checked_add_duration(
+        self,
+        duration: DurationTicks,
+    ) -> Result<Self, TimeArithmeticError> {
+        self.value
+            .checked_add(duration.as_u64())
+            .map(|value| Self { value })
+            .ok_or(TimeArithmeticError::Overflow)
     }
-}
 
-impl std::ops::Add<DurationTicks> for QpcTicks {
-    type Output = QpcTicks;
-    fn add(self, rhs: DurationTicks) -> QpcTicks {
-        self.saturating_add(rhs)
-    }
-}
-
-impl std::ops::Sub<DurationTicks> for QpcTicks {
-    type Output = QpcTicks;
-    fn sub(self, rhs: DurationTicks) -> QpcTicks {
-        self.saturating_sub(rhs)
+    pub fn checked_duration_since(
+        self,
+        earlier: Self,
+    ) -> Result<DurationTicks, TimeArithmeticError> {
+        self.value
+            .checked_sub(earlier.value)
+            .map(DurationTicks)
+            .ok_or(TimeArithmeticError::NegativeOrder)
     }
 }
 
 impl TimelineTicks {
-    pub fn saturating_add(self, rhs: DurationTicks) -> TimelineTicks {
-        TimelineTicks(self.0.saturating_add(rhs.0))
+    pub const ZERO: Self = Self { value: 0 };
+
+    pub const fn from_raw(value: u64) -> Self {
+        Self { value }
     }
 
-    pub fn saturating_sub(self, rhs: DurationTicks) -> TimelineTicks {
-        TimelineTicks(self.0.saturating_sub(rhs.0))
+    pub const fn as_u64(self) -> u64 {
+        self.value
     }
 
-    pub fn duration_since(self, earlier: TimelineTicks) -> DurationTicks {
-        DurationTicks(self.0.saturating_sub(earlier.0))
+    pub fn checked_add_duration(
+        self,
+        duration: DurationTicks,
+    ) -> Result<Self, TimeArithmeticError> {
+        self.value
+            .checked_add(duration.as_u64())
+            .map(|value| Self { value })
+            .ok_or(TimeArithmeticError::Overflow)
     }
-}
 
-impl std::ops::Add<DurationTicks> for TimelineTicks {
-    type Output = TimelineTicks;
-    fn add(self, rhs: DurationTicks) -> TimelineTicks {
-        self.saturating_add(rhs)
+    pub fn checked_sub_duration(
+        self,
+        duration: DurationTicks,
+    ) -> Result<Self, TimeArithmeticError> {
+        self.value
+            .checked_sub(duration.as_u64())
+            .map(|value| Self { value })
+            .ok_or(TimeArithmeticError::Underflow)
     }
-}
 
-impl std::ops::Sub<DurationTicks> for TimelineTicks {
-    type Output = TimelineTicks;
-    fn sub(self, rhs: DurationTicks) -> TimelineTicks {
-        self.saturating_sub(rhs)
+    pub fn checked_duration_since(
+        self,
+        earlier: Self,
+    ) -> Result<DurationTicks, TimeArithmeticError> {
+        self.value
+            .checked_sub(earlier.value)
+            .map(DurationTicks)
+            .ok_or(TimeArithmeticError::NegativeOrder)
     }
 }
 
 impl DurationTicks {
-    pub fn saturating_add(self, rhs: DurationTicks) -> DurationTicks {
-        DurationTicks(self.0.saturating_add(rhs.0))
+    pub const ZERO: Self = Self { value: 0 };
+
+    pub const fn from_raw(value: u64) -> Self {
+        Self { value }
     }
 
-    pub fn saturating_sub(self, rhs: DurationTicks) -> DurationTicks {
-        DurationTicks(self.0.saturating_sub(rhs.0))
+    pub const fn as_u64(self) -> u64 {
+        self.value
     }
-}
 
-impl std::ops::Add<DurationTicks> for DurationTicks {
-    type Output = DurationTicks;
-    fn add(self, rhs: DurationTicks) -> DurationTicks {
-        self.saturating_add(rhs)
+    pub fn checked_add(self, rhs: Self) -> Result<Self, TimeArithmeticError> {
+        self.value
+            .checked_add(rhs.value)
+            .map(|value| Self { value })
+            .ok_or(TimeArithmeticError::Overflow)
     }
-}
 
-impl std::ops::Sub<DurationTicks> for DurationTicks {
-    type Output = DurationTicks;
-    fn sub(self, rhs: DurationTicks) -> DurationTicks {
-        self.saturating_sub(rhs)
+    pub fn checked_sub(self, rhs: Self) -> Result<Self, TimeArithmeticError> {
+        self.value
+            .checked_sub(rhs.value)
+            .map(|value| Self { value })
+            .ok_or(TimeArithmeticError::Underflow)
     }
 }

@@ -15,7 +15,9 @@ pub struct PlaybackClockState {
 
 impl PlaybackClockState {
     pub fn new(start_perf: QpcTicks, pause_time: DurationTicks) -> Self {
-        let epoch = start_perf.saturating_add(pause_time);
+        let epoch = start_perf
+            .checked_add_duration(pause_time)
+            .expect("initial playback epoch must fit QPC domain");
         Self {
             start_perf,
             pause_time,
@@ -58,7 +60,9 @@ impl PlaybackClockState {
         let started = self
             .pause_interval_started
             .expect("pause anchor must exist when exiting last reason");
-        let duration = now.duration_since(started);
+        let duration = now
+            .checked_duration_since(started)
+            .expect("pause timestamps must be monotonic");
         let attribution = self
             .pause_open_reason
             .take()
@@ -69,22 +73,41 @@ impl PlaybackClockState {
     }
 
     pub fn update_pause_time(&mut self, duration: DurationTicks) {
-        self.pause_time = self.pause_time.saturating_add(duration);
-        self.epoch = self.start_perf.saturating_add(self.pause_time);
+        self.pause_time = self
+            .pause_time
+            .checked_add(duration)
+            .expect("pause duration must fit duration domain");
+        self.epoch = self
+            .start_perf
+            .checked_add_duration(self.pause_time)
+            .expect("playback epoch must fit QPC domain");
     }
 
     pub fn rebase_epoch(&mut self, now: QpcTicks) -> DurationTicks {
         let old_start = self.start_perf;
         self.start_perf = now;
-        self.epoch = self.start_perf.saturating_add(self.pause_time);
-        now.duration_since(old_start)
+        self.epoch = self
+            .start_perf
+            .checked_add_duration(self.pause_time)
+            .expect("playback epoch must fit QPC domain");
+        now.checked_duration_since(old_start)
+            .expect("rebase timestamps must be monotonic")
     }
 
     pub fn get_elapsed(&self, now: QpcTicks) -> TimelineTicks {
         if let Some(started) = self.pause_interval_started {
-            TimelineTicks(started.duration_since(self.epoch).0)
+            TimelineTicks::from_raw(
+                started
+                    .checked_duration_since(self.epoch)
+                    .expect("paused timestamp must be after playback epoch")
+                    .as_u64(),
+            )
         } else {
-            TimelineTicks(now.duration_since(self.epoch).0)
+            TimelineTicks::from_raw(
+                now.checked_duration_since(self.epoch)
+                    .expect("timestamp must be after playback epoch")
+                    .as_u64(),
+            )
         }
     }
 }
@@ -95,27 +118,33 @@ mod tests {
 
     #[test]
     fn test_pause_single_interval_overlap() {
-        let mut clock = PlaybackClockState::new(QpcTicks(1000), DurationTicks(0));
-        assert_eq!(clock.get_elapsed(QpcTicks(1100)), TimelineTicks(100));
+        let mut clock = PlaybackClockState::new(QpcTicks::from_raw(1000), DurationTicks::ZERO);
+        assert_eq!(
+            clock.get_elapsed(QpcTicks::from_raw(1100)),
+            TimelineTicks::from_raw(100)
+        );
 
         // Enter manual pause at 1100
-        assert!(clock.enter_pause("manual", QpcTicks(1100)));
+        assert!(clock.enter_pause("manual", QpcTicks::from_raw(1100)));
         assert!(clock.is_paused());
 
         // Focus pause enters at 1200 while manual is active -> does not open new interval
-        assert!(!clock.enter_pause("focus", QpcTicks(1200)));
+        assert!(!clock.enter_pause("focus", QpcTicks::from_raw(1200)));
 
         // Manual exits at 1300 -> interval still open by focus
-        assert_eq!(clock.exit_pause("manual", QpcTicks(1300)), None);
+        assert_eq!(clock.exit_pause("manual", QpcTicks::from_raw(1300)), None);
         assert!(clock.is_paused());
 
         // Focus exits at 1500 -> interval closes, total duration = 1500 - 1100 = 400 us, attributed to manual
-        let (duration, open_reason) = clock.exit_pause("focus", QpcTicks(1500)).unwrap();
-        assert_eq!(duration, DurationTicks(400));
+        let (duration, open_reason) = clock.exit_pause("focus", QpcTicks::from_raw(1500)).unwrap();
+        assert_eq!(duration, DurationTicks::from_raw(400));
         assert_eq!(open_reason, "manual");
         assert!(!clock.is_paused());
 
         // Elapsed at 1600 should be (1600 - (1000 + 400)) = 200 us
-        assert_eq!(clock.get_elapsed(QpcTicks(1600)), TimelineTicks(200));
+        assert_eq!(
+            clock.get_elapsed(QpcTicks::from_raw(1600)),
+            TimelineTicks::from_raw(200)
+        );
     }
 }
