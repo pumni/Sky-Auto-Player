@@ -198,15 +198,15 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1],
-                reason: "note".to_string(),
+                scan_codes: vec![1].into(),
+                reason: "note".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 1100,
-                scan_codes: vec![1],
-                reason: "note".to_string(),
+                scan_codes: vec![1].into(),
+                reason: "note".into(),
             },
         ];
 
