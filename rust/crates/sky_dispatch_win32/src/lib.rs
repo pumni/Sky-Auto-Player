@@ -32,8 +32,11 @@ mod tests {
         PlatformSendResult {
             requested: scan_codes.len() as u32,
             inserted: scan_codes.len() as u32,
+            started_ticks: clock::QpcTicks::ZERO,
+            completed_ticks: Some(clock::QpcTicks::ZERO),
             completed_us: clock::qpc_now_us(),
             win32_error: 0,
+            timing_error: None,
         }
     }
 
@@ -63,7 +66,7 @@ mod tests {
     fn test_hybrid_sleeper() {
         let now = clock::qpc_now_us();
         let target = now + 1_000; // 1 ms in future
-        let overshoot = sleeper::sleep_until_us(target, 200);
+        let overshoot = sleeper::sleep_until_us(target, 200).expect("QPC");
         let end_time = clock::qpc_now_us();
         assert!(end_time >= target);
         assert!((end_time - target).abs_diff(overshoot) <= 100);
@@ -80,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_measure_spin_overhead() {
-        let overhead = sleeper::measure_spin_overhead_us();
+        let overhead = sleeper::measure_spin_overhead_us().expect("QPC");
         assert!(overhead >= 1);
     }
 }

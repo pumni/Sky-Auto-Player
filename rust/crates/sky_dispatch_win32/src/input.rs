@@ -3,6 +3,8 @@
 use smallvec::SmallVec;
 use std::fmt;
 
+use crate::clock::QpcTicks;
+
 pub const SKY_PLAYER_SIGNATURE: usize = 0x5C1B9111;
 
 pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
@@ -47,7 +49,7 @@ fn virtual_key_for_scan_code(scan_code: u16) -> Option<i32> {
     })
 }
 
-fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
+pub(crate) fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
     let virtual_key = virtual_key_for_scan_code(scan_code)?;
     #[cfg(windows)]
     {
@@ -69,8 +71,13 @@ fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
 pub struct PlatformSendResult {
     pub requested: u32,
     pub inserted: u32,
+    /// QPC boundaries for the syscall. `completed_ticks` is absent only when
+    /// the post-call clock query failed; in that case `timing_error` is set.
+    pub started_ticks: QpcTicks,
+    pub completed_ticks: Option<QpcTicks>,
     pub completed_us: u64,
     pub win32_error: u32,
+    pub timing_error: Option<crate::clock::QpcError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +98,7 @@ pub struct InputSendResult {
     pub keys_inserted_before_failure: u8,
     pub keys_rolled_back: u8,
     pub rollback_residue_keys: u8,
+    pub timing_error: Option<crate::clock::QpcError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +151,7 @@ pub struct EmitResult {
     pub keys_inserted_before_failure: u8,
     pub keys_rolled_back: u8,
     pub rollback_residue_keys: u8,
+    pub timing_error: Option<crate::clock::QpcError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +212,21 @@ const UP_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX
 };
 
 pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
+    if scan_codes.len() > PHYSICAL_INSTRUMENT_SCAN_CODES.len()
+        || scan_codes
+            .iter()
+            .any(|&scan_code| !PHYSICAL_INSTRUMENT_SCAN_CODES.contains(&scan_code))
+    {
+        return PlatformSendResult {
+            requested: u32::try_from(scan_codes.len()).unwrap_or(u32::MAX),
+            inserted: 0,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: None,
+            completed_us: 0,
+            win32_error: 87,
+            timing_error: None,
+        };
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::SetLastError;
@@ -212,8 +236,11 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
             return PlatformSendResult {
                 requested: 0,
                 inserted: 0,
-                completed_us: crate::clock::qpc_now_us(),
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
+                completed_us: 0,
                 win32_error: 0,
+                timing_error: None,
             };
         }
 
@@ -221,18 +248,29 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         let len = scan_codes.len().min(15);
         for i in 0..len {
             let sc = scan_codes[i];
-            if (sc as usize) < MAX_SCAN_CODE {
-                packets[i] = if key_up {
-                    UP_TEMPLATES[sc as usize]
-                } else {
-                    DOWN_TEMPLATES[sc as usize]
-                };
+            packets[i] = if key_up {
+                UP_TEMPLATES[sc as usize]
             } else {
-                packets[i] = create_keyboard_input(sc, key_up);
-            }
+                DOWN_TEMPLATES[sc as usize]
+            };
         }
         let requested = len as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
+
+        let started_ticks = match crate::clock::qpc_now_ticks_checked() {
+            Ok(ticks) => ticks,
+            Err(timing_error) => {
+                return PlatformSendResult {
+                    requested,
+                    inserted: 0,
+                    started_ticks: QpcTicks::ZERO,
+                    completed_ticks: None,
+                    completed_us: 0,
+                    win32_error: 0,
+                    timing_error: Some(timing_error),
+                };
+            }
+        };
 
         // SAFETY: `packets` array holds `requested` contiguous, correctly aligned INPUT
         // values and remains alive and immobile for the duration of SendInput.
@@ -247,13 +285,20 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         } else {
             0
         };
-        let completed_us = crate::clock::qpc_now_us();
+        let (completed_ticks, completed_us, timing_error) =
+            match crate::clock::qpc_now_ticks_checked() {
+                Ok(ticks) => (Some(ticks), crate::clock::qpc_ticks_to_us(ticks), None),
+                Err(error) => (None, 0, Some(error)),
+            };
 
         PlatformSendResult {
             requested,
             inserted,
+            started_ticks,
+            completed_ticks,
             completed_us,
             win32_error,
+            timing_error,
         }
     }
     #[cfg(not(windows))]
@@ -261,8 +306,11 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         PlatformSendResult {
             requested: scan_codes.len() as u32,
             inserted: scan_codes.len() as u32,
-            completed_us: crate::clock::qpc_now_us(),
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 0,
             win32_error: 0,
+            timing_error: None,
         }
     }
 }
@@ -288,6 +336,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
+            timing_error: None,
         };
     }
     let n = scan_codes.len();
@@ -313,6 +362,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
+            timing_error: res1.timing_error,
         };
     }
 
@@ -346,6 +396,7 @@ where
             keys_inserted_before_failure: landed1 as u8,
             keys_rolled_back: rollback_inserted as u8,
             rollback_residue_keys: landed1.saturating_sub(rollback_inserted) as u8,
+            timing_error: res1.timing_error.or(rollback.timing_error),
         };
     }
 
@@ -371,6 +422,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
+            timing_error: retry.timing_error.or(res1.timing_error),
         };
     }
 
@@ -378,6 +430,7 @@ where
     let mut completed_us = retry.completed_us;
     let mut send_attempts = 2;
     let mut last_win32_error = retry_error.or(first_win32_error);
+    let mut rollback_timing_error = None;
     if retry_inserted > 0 {
         let rollback = send_fn(&scan_codes[..retry_inserted], true);
         let rollback_inserted = (rollback.inserted as usize).min(retry_inserted);
@@ -392,8 +445,13 @@ where
         last_win32_error = (rollback.win32_error != 0)
             .then_some(rollback.win32_error)
             .or(last_win32_error);
+        rollback_timing_error = rollback.timing_error;
     }
     let rollback_residue_keys = sent.len();
+    let timing_error = retry
+        .timing_error
+        .or(res1.timing_error)
+        .or(rollback_timing_error);
     EmitResult {
         sent,
         completed_us,
@@ -414,6 +472,7 @@ where
             0
         },
         rollback_residue_keys: rollback_residue_keys as u8,
+        timing_error,
     }
 }
 
@@ -448,6 +507,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
+            timing_error: None,
         };
     }
     let n = scan_codes.len();
@@ -471,6 +531,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
+            timing_error: first.timing_error,
         };
     }
 
@@ -499,6 +560,7 @@ where
         keys_inserted_before_failure: if success { 0 } else { sent_total as u8 },
         keys_rolled_back: 0,
         rollback_residue_keys: 0,
+        timing_error: first.timing_error.or(second.timing_error),
     }
 }
 
@@ -530,6 +592,7 @@ pub struct TrackedKeyState {
     pub keys_inserted_before_failure: u64,
     pub keys_rolled_back: u64,
     pub rollback_residue_keys: u64,
+    pub timing_error: Option<crate::clock::QpcError>,
     pub custom_emitter: Option<CustomEmitterFn>,
 }
 
@@ -555,6 +618,7 @@ impl fmt::Debug for TrackedKeyState {
             )
             .field("keys_rolled_back", &self.keys_rolled_back)
             .field("rollback_residue_keys", &self.rollback_residue_keys)
+            .field("timing_error", &self.timing_error)
             .field("custom_emitter", &self.custom_emitter.is_some())
             .finish()
     }
@@ -630,6 +694,7 @@ impl TrackedKeyState {
         }
 
         let emitted = self.do_emit_down(&to_send);
+        self.timing_error = emitted.timing_error;
         self.keys_dropped += emitted.keys_dropped;
         if emitted.partial_progress {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
@@ -732,6 +797,7 @@ impl TrackedKeyState {
                 keys_inserted_before_failure: 0,
                 keys_rolled_back: 0,
                 rollback_residue_keys: 0,
+                timing_error: None,
             };
         }
 
@@ -768,10 +834,12 @@ impl TrackedKeyState {
                 keys_inserted_before_failure: 0,
                 keys_rolled_back: 0,
                 rollback_residue_keys: 0,
+                timing_error: None,
             };
         }
 
         let emitted = self.do_emit_up(&to_release);
+        self.timing_error = emitted.timing_error;
 
         if emitted.partial_progress {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
@@ -833,6 +901,7 @@ impl TrackedKeyState {
             keys_inserted_before_failure: emitted.keys_inserted_before_failure,
             keys_rolled_back: emitted.keys_rolled_back,
             rollback_residue_keys: emitted.rollback_residue_keys,
+            timing_error: emitted.timing_error,
         }
     }
 
@@ -1013,8 +1082,11 @@ mod tests {
         PlatformSendResult {
             requested: requested as u32,
             inserted,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
             completed_us,
             win32_error: 0,
+            timing_error: None,
         }
     }
 
@@ -1104,8 +1176,11 @@ mod tests {
             PlatformSendResult {
                 requested: codes.len() as u32,
                 inserted: 1,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
                 completed_us: calls,
                 win32_error: if calls == 1 { 5 } else { 0 },
+                timing_error: None,
             }
         });
 
@@ -1125,8 +1200,11 @@ mod tests {
             PlatformSendResult {
                 requested: codes.len() as u32,
                 inserted: 0,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
                 completed_us: calls,
                 win32_error: if calls == 1 { 5 } else { 1460 },
+                timing_error: None,
             }
         });
 
@@ -1145,8 +1223,11 @@ mod tests {
             PlatformSendResult {
                 requested: codes.len() as u32,
                 inserted: 0,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
                 completed_us: 1,
                 win32_error: 5,
+                timing_error: None,
             }
         });
 
@@ -1182,12 +1263,28 @@ mod tests {
     }
 
     #[test]
+    fn raw_sender_rejects_unknown_scan_code_before_backend_call() {
+        let result = send_input_raw(&[0xffff], false);
+        assert_eq!(result.requested, 1);
+        assert_eq!(result.inserted, 0);
+        assert_eq!(result.win32_error, 87);
+        assert_eq!(result.timing_error, None);
+
+        let oversized = send_input_raw(&[0x15; 16], false);
+        assert_eq!(oversized.inserted, 0);
+        assert_eq!(oversized.win32_error, 87);
+    }
+
+    #[test]
     fn full_instrument_release_reports_unreleased_keys() {
         let mut state = TrackedKeyState::with_emitter(|codes, key_up| PlatformSendResult {
             requested: codes.len() as u32,
             inserted: if key_up { 0 } else { codes.len() as u32 },
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
             completed_us: 10,
             win32_error: 5,
+            timing_error: None,
         });
         let outcome = state.release_all_full_instrument();
         assert!(!outcome.released_successfully);
