@@ -3822,6 +3822,12 @@ fn supervisor_lease_expired(
     if heartbeat == 0 {
         return Ok(false);
     }
+    // The supervisor may publish a heartbeat after the worker sampled `now`.
+    // A heartbeat at or beyond that sample is fresh, not a QPC underflow or
+    // counter-corruption signal.
+    if heartbeat >= now_ticks.as_u64() {
+        return Ok(false);
+    }
     let elapsed = now_ticks
         .checked_duration_since(QpcTicks::from_raw(heartbeat))
         .map_err(|_| QpcError::CounterUnavailable)?;
@@ -4285,7 +4291,8 @@ mod tests {
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
         anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
         derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
-        record_termination_error, release_runtime_outcome, update_estimator_after_send,
+        record_termination_error, release_runtime_outcome, supervisor_lease_expired,
+        update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -4294,7 +4301,85 @@ mod tests {
         DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
     };
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[test]
+    fn supervisor_lease_treats_future_heartbeat_as_fresh() {
+        let heartbeat = AtomicU64::new(1_001);
+        assert_eq!(
+            supervisor_lease_expired(
+                QpcTicks::from_raw(1_000),
+                DurationTicks::from_raw(100),
+                &heartbeat,
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn supervisor_lease_treats_equal_heartbeat_as_fresh() {
+        let heartbeat = AtomicU64::new(1_000);
+        assert_eq!(
+            supervisor_lease_expired(
+                QpcTicks::from_raw(1_000),
+                DurationTicks::from_raw(100),
+                &heartbeat,
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn supervisor_lease_preserves_fresh_boundary_and_expiration() {
+        let heartbeat = AtomicU64::new(1_000);
+        let timeout = DurationTicks::from_raw(100);
+        assert_eq!(
+            supervisor_lease_expired(QpcTicks::from_raw(1_050), timeout, &heartbeat),
+            Ok(false)
+        );
+        assert_eq!(
+            supervisor_lease_expired(QpcTicks::from_raw(1_100), timeout, &heartbeat),
+            Ok(false)
+        );
+        assert_eq!(
+            supervisor_lease_expired(QpcTicks::from_raw(1_101), timeout, &heartbeat),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn supervisor_lease_disabled_is_never_expired() {
+        let heartbeat = AtomicU64::new(1);
+        assert_eq!(
+            supervisor_lease_expired(QpcTicks::from_raw(2), DurationTicks::ZERO, &heartbeat),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn supervisor_lease_concurrent_publication_never_reports_clock_error() {
+        let heartbeat = Arc::new(AtomicU64::new(1_000));
+        let publisher_heartbeat = Arc::clone(&heartbeat);
+        let publisher = std::thread::spawn(move || {
+            for index in 0..10_000 {
+                publisher_heartbeat.store(
+                    if index % 2 == 0 { 1_000 } else { 1_001 },
+                    Ordering::Release,
+                );
+            }
+        });
+
+        for _ in 0..10_000 {
+            let result = supervisor_lease_expired(
+                QpcTicks::from_raw(1_000),
+                DurationTicks::from_raw(100),
+                &heartbeat,
+            );
+            assert!(result.is_ok(), "concurrent heartbeat sample: {result:?}");
+        }
+        publisher.join().expect("heartbeat publisher must finish");
+    }
 
     #[test]
     fn deadline_mapper_uses_the_current_sample_without_overhead_drift() {
