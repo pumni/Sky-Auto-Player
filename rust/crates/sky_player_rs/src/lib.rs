@@ -1,7 +1,7 @@
 pub mod calibration;
 pub mod engine;
 
-use engine::{ChordConflictPolicy, MockFailureMode, NativeDispatchSession};
+use engine::{ChordConflictPolicy, FaultInjectionScript, NativeDispatchSession};
 use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -110,17 +110,18 @@ fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
         value,
         "allowed_scan_codes",
         Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
-    ).map(|v| v.into_vec())
+    )
+    .map(|v| v.into_vec())
 }
 
 fn parse_actions(
     value: &Bound<'_, PyAny>,
     allowed_scan_codes: &[u16],
 ) -> PyResult<Vec<KeyActionInput>> {
-    let iter = value.try_iter().map_err(|_| {
-        PyTypeError::new_err("actions must be an iterable")
-    })?;
-    
+    let iter = value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("actions must be an iterable"))?;
+
     let mut actions = Vec::new();
     let mut reason_interns = std::collections::HashMap::<String, Arc<str>>::new();
 
@@ -454,6 +455,7 @@ impl NativeDispatchSessionPy {
         mock_latency_base_us = StrictU64(0),
         mock_latency_per_key_us = StrictU64(0)
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -521,11 +523,13 @@ impl NativeDispatchSessionPy {
         let strict_down_completion_late_us = strict_down_completion_late_us.0;
         let strict_up_completion_late_us = strict_up_completion_late_us.0;
         let supervisor_lease_timeout_us = supervisor_lease_timeout_us.0;
-        let mock_failure_mode = match mock_failure_mode {
-            "none" => MockFailureMode::None,
-            "transient_release" if mock_backend => MockFailureMode::TransientRelease,
-            "persistent_release" if mock_backend => MockFailureMode::PersistentRelease,
-            "zero_progress_down_once" if mock_backend => MockFailureMode::ZeroProgressDownOnce,
+        let fault_script = match mock_failure_mode {
+            "none" => FaultInjectionScript::none(),
+            "transient_release" if mock_backend => FaultInjectionScript::transient_release(),
+            "persistent_release" if mock_backend => FaultInjectionScript::persistent_release(),
+            "zero_progress_down_once" if mock_backend => {
+                FaultInjectionScript::zero_progress_down_once()
+            }
             "transient_release" | "persistent_release" | "zero_progress_down_once" => {
                 return Err(PyValueError::new_err(
                     "mock_failure_mode requires mock_backend=True",
@@ -663,7 +667,7 @@ impl NativeDispatchSessionPy {
             mock_backend,
             mock_latency_base_us,
             mock_latency_per_key_us,
-            mock_failure_mode,
+            fault_script,
             require_focus,
             focus_restore_grace_us,
             spin_threshold_us,

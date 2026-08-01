@@ -3,10 +3,10 @@
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
+use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{
     QpcTicks, qpc_frequency_checked, qpc_now_ticks, qpc_now_ticks_checked, qpc_now_us,
     qpc_ticks_to_us, qpc_us_to_ticks,
@@ -42,15 +42,152 @@ const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 
-/// Test-only emitter behavior used by the native worker integration tests.
-/// It is reachable only when the PyO3 caller explicitly selects the mock
-/// backend, and never changes the real SendInput path.
+/// Outcome injected for a single mock-backend `SendInput` call (identified by
+/// call index, zero-based, counting both Down and Up calls in order).
+///
+/// This is test-only infrastructure reachable only when `mock_backend=true`.
+/// It never touches the real `SendInput` path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InjectedSendOutcome {
+    /// All keys inserted; emitter waits `latency_ticks` QPC ticks (spin).
+    Full { latency_ticks: u64 },
+    /// Zero keys inserted (complete failure); optional spin.
+    Zero {
+        latency_ticks: u64,
+        win32_error: u32,
+    },
+    /// Partial insertion: exactly `inserted` keys succeed.
+    Prefix {
+        inserted: u8,
+        latency_ticks: u64,
+        win32_error: u32,
+    },
+    /// Emitter spin-stalls for `duration_ticks` QPC ticks without sending.
+    Stall { duration_ticks: u64 },
+}
+
+/// Script that maps call-index → `InjectedSendOutcome`.
+///
+/// Entries are matched by call index in O(n) over the script length (scripts
+/// are short — a few entries at most). Calls whose index has no matching entry
+/// behave as `InjectedSendOutcome::Full { latency_ticks: 0 }` (success, no latency).
+#[derive(Clone, Debug, Default)]
+pub struct FaultInjectionScript {
+    /// `(call_index, outcome)` pairs, unsorted.
+    pub entries: Vec<(usize, InjectedSendOutcome)>,
+    /// Base latency applied to every call (on top of per-call outcome latency).
+    pub base_latency_ticks: u64,
+    /// Extra latency per key, in QPC ticks, applied to every call.
+    pub per_key_latency_ticks: u64,
+}
+
+impl FaultInjectionScript {
+    /// No failures, no latency.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Fail the first 3 Up calls (transient release failure).
+    pub fn transient_release() -> Self {
+        Self {
+            entries: vec![
+                (
+                    0,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+                (
+                    1,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+                (
+                    2,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// All Up calls fail (persistent release failure).
+    ///
+    /// Up calls are those with odd call indices in alternating Down/Up schedules;
+    /// for general use the caller should use a script with explicit indices.
+    /// This variant matches all calls whose index >= 1 (approximation for simple
+    /// single-chord schedules).
+    pub fn persistent_release() -> Self {
+        // Inject 128 Up failures — sufficient for any reasonable test schedule.
+        let entries = (0..128)
+            .filter(|i| i % 2 == 1)
+            .map(|i| {
+                (
+                    i,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            entries,
+            ..Default::default()
+        }
+    }
+
+    /// The first Down call gets zero progress (ZeroProgressDownOnce).
+    pub fn zero_progress_down_once() -> Self {
+        Self {
+            entries: vec![(
+                0,
+                InjectedSendOutcome::Zero {
+                    latency_ticks: 0,
+                    win32_error: 1460,
+                },
+            )],
+            ..Default::default()
+        }
+    }
+
+    /// Resolve the outcome for `call_index`.  Returns `None` → Full success, no latency.
+    pub fn resolve(&self, call_index: usize) -> Option<&InjectedSendOutcome> {
+        self.entries
+            .iter()
+            .find(|(idx, _)| *idx == call_index)
+            .map(|(_, o)| o)
+    }
+}
+
+/// Kept for backward-compatibility with existing call sites that imported this name.
+/// New code should use `FaultInjectionScript` directly.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MockFailureMode {
     None,
     TransientRelease,
     PersistentRelease,
     ZeroProgressDownOnce,
+}
+
+impl From<MockFailureMode> for FaultInjectionScript {
+    fn from(m: MockFailureMode) -> Self {
+        match m {
+            MockFailureMode::None => FaultInjectionScript::none(),
+            MockFailureMode::TransientRelease => FaultInjectionScript::transient_release(),
+            MockFailureMode::PersistentRelease => FaultInjectionScript::persistent_release(),
+            MockFailureMode::ZeroProgressDownOnce => {
+                FaultInjectionScript::zero_progress_down_once()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,7 +461,7 @@ impl TelemetryCollector {
                 }
             }
         }
-        
+
         self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
     }
 }
@@ -398,7 +535,12 @@ struct SharedMetrics {
     terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
 }
 
-fn try_publish_metrics(local: &WorkerMetricsLocal, shared: &SharedMetrics, now_us: u64, force: bool) {
+fn try_publish_metrics(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    now_us: u64,
+    force: bool,
+) {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
     if (force || now_us.saturating_sub(last) >= 20_000)
         && let Some(mut guard) = shared.snapshot.try_lock()
@@ -417,7 +559,7 @@ struct WorkerConfig {
     mock_backend: bool,
     mock_latency_base_us: u64,
     mock_latency_per_key_us: u64,
-    mock_failure_mode: MockFailureMode,
+    fault_script: FaultInjectionScript,
     require_focus: bool,
     focus_restore_grace_us: u64,
     spin_threshold_us: u64,
@@ -477,7 +619,7 @@ impl NativeDispatchSession {
         mock_backend: bool,
         mock_latency_base_us: u64,
         mock_latency_per_key_us: u64,
-        mock_failure_mode: MockFailureMode,
+        fault_script: FaultInjectionScript,
         require_focus: bool,
         focus_restore_grace_us: u64,
         spin_threshold_us: u64,
@@ -526,7 +668,7 @@ impl NativeDispatchSession {
                 mock_backend,
                 mock_latency_base_us,
                 mock_latency_per_key_us,
-                mock_failure_mode,
+                fault_script,
                 require_focus,
                 focus_restore_grace_us,
                 spin_threshold_us,
@@ -929,34 +1071,94 @@ fn run_worker(
     supervisor_heartbeat_us: &AtomicU64,
 ) -> u8 {
     let mut backend = if config.mock_backend {
-        let failure_mode = config.mock_failure_mode;
+        let script = Arc::new(config.fault_script);
         let latency_base_us = config.mock_latency_base_us;
         let latency_per_key_us = config.mock_latency_per_key_us;
-        let release_failures = Arc::new(AtomicU8::new(0));
-        let emitter_failures = Arc::clone(&release_failures);
-        TrackedKeyState::with_emitter(move |codes, key_up| {
-            let latency_us = latency_base_us
+        // call_index counts every emitter invocation (Down + Up, in order).
+        let call_index = Arc::new(AtomicU64::new(0));
+        let script_emitter = Arc::clone(&script);
+        let call_index_emitter = Arc::clone(&call_index);
+        TrackedKeyState::with_emitter(move |codes, _key_up| {
+            let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
+
+            // Base per-call latency (mirrors old mock_latency_base_us / per_key).
+            let base_latency_us = latency_base_us
                 .saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
-            if latency_us > 0 {
-                std::thread::sleep(Duration::from_micros(latency_us));
+            if base_latency_us > 0 {
+                // Legacy latency path: real sleep (matches old mock behaviour).
+                std::thread::sleep(Duration::from_micros(base_latency_us));
             }
-            let should_fail = match failure_mode {
-                MockFailureMode::None => false,
-                MockFailureMode::TransientRelease => {
-                    key_up && emitter_failures.fetch_add(1, Ordering::Relaxed) < 3
+
+            match script_emitter.resolve(idx) {
+                None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => {
+                    // Fast path: full success, no extra latency.
+                    PlatformSendResult {
+                        requested: codes.len() as u32,
+                        inserted: codes.len() as u32,
+                        completed_us: qpc_now_us(),
+                        win32_error: 0,
+                    }
                 }
-                MockFailureMode::PersistentRelease => key_up,
-                MockFailureMode::ZeroProgressDownOnce => {
-                    !key_up && emitter_failures.fetch_add(1, Ordering::Relaxed) == 0
+                Some(InjectedSendOutcome::Full { latency_ticks }) => {
+                    // Spin-wait for the specified QPC tick count.
+                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
+                    while qpc_now_ticks() < deadline {
+                        std::hint::spin_loop();
+                    }
+                    PlatformSendResult {
+                        requested: codes.len() as u32,
+                        inserted: codes.len() as u32,
+                        completed_us: qpc_now_us(),
+                        win32_error: 0,
+                    }
                 }
-            };
-            PlatformSendResult {
-                requested: codes.len() as u32,
-                inserted: if should_fail { 0 } else { codes.len() as u32 },
-                completed_us: qpc_now_us(),
-                // ERROR_TIMEOUT is representative of a transient native
-                // insertion failure and is surfaced as observed diagnostics.
-                win32_error: if should_fail { 1460 } else { 0 },
+                Some(InjectedSendOutcome::Zero {
+                    latency_ticks,
+                    win32_error,
+                }) => {
+                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
+                    while qpc_now_ticks() < deadline {
+                        std::hint::spin_loop();
+                    }
+                    PlatformSendResult {
+                        requested: codes.len() as u32,
+                        inserted: 0,
+                        completed_us: qpc_now_us(),
+                        win32_error: *win32_error,
+                    }
+                }
+                Some(InjectedSendOutcome::Prefix {
+                    inserted,
+                    latency_ticks,
+                    win32_error,
+                }) => {
+                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
+                    while qpc_now_ticks() < deadline {
+                        std::hint::spin_loop();
+                    }
+                    let inserted = (*inserted as u32).min(codes.len() as u32);
+                    PlatformSendResult {
+                        requested: codes.len() as u32,
+                        inserted,
+                        completed_us: qpc_now_us(),
+                        win32_error: *win32_error,
+                    }
+                }
+                Some(InjectedSendOutcome::Stall { duration_ticks }) => {
+                    // Spin-stall: hold the emitter without sending any key.
+                    // This simulates a scheduler stall or OS freeze without
+                    // actually blocking the thread (consistent with RT discipline).
+                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*duration_ticks));
+                    while qpc_now_ticks() < deadline {
+                        std::hint::spin_loop();
+                    }
+                    PlatformSendResult {
+                        requested: codes.len() as u32,
+                        inserted: 0,
+                        completed_us: qpc_now_us(),
+                        win32_error: 0,
+                    }
+                }
             }
         })
     } else {
@@ -976,7 +1178,10 @@ fn run_worker(
             .expect("estimator state was validated during prepare");
     }
     let telemetry_reason_table = config.schedule.reason_table.clone();
-    let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| TimelineTicks(qpc_us_to_ticks(us)));
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| {
+            TimelineTicks(qpc_us_to_ticks(us))
+        });
     local_metrics.total_us = coordinator.effective_total_us();
     let mut telemetry = TelemetryCollector::new(
         config.telemetry_mode,
@@ -1040,7 +1245,10 @@ fn run_worker(
     let startup_anchor_us = qpc_now_us()
         .saturating_add(startup_guard_us)
         .saturating_add(startup_lead_us);
-    let mut clock_state = PlaybackClockState::new(QpcTicks(qpc_us_to_ticks(startup_anchor_us)), sky_dispatch_core::time::DurationTicks(0));
+    let mut clock_state = PlaybackClockState::new(
+        QpcTicks(qpc_us_to_ticks(startup_anchor_us)),
+        sky_dispatch_core::time::DurationTicks(0),
+    );
     let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
     let start_wall_time_us = qpc_now_us();
@@ -1076,10 +1284,14 @@ fn run_worker(
         while !coordinator.is_finished() {
             let loop_start_us = qpc_now_us();
             local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
-            local_metrics.worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
-            local_metrics.process_cpu_time_us = current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+            local_metrics.worker_cpu_time_us =
+                current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+            local_metrics.process_cpu_time_us =
+                current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
             if local_metrics.playback_wall_time_us > 0 {
-                local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000 / local_metrics.playback_wall_time_us as u128) as u64;
+                local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
+                    / local_metrics.playback_wall_time_us as u128)
+                    as u64;
             }
             try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
             if supervisor_lease_expired(config.supervisor_lease_timeout_us, supervisor_heartbeat_us)
@@ -1096,7 +1308,12 @@ fn run_worker(
                 let _ = backend.release_all_full_instrument();
                 coordinator.cancel_all();
                 *abort_counts.entry("panic").or_insert(0) += 1;
-                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                publish_backend_metrics(
+                    &backend,
+                    &mut local_metrics,
+                    metrics,
+                    &mut last_published_error,
+                );
                 try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
             }
 
@@ -1111,8 +1328,13 @@ fn run_worker(
                     coordinator.cancel_all();
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
                     clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
-                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    publish_backend_metrics(
+                        &backend,
+                        &mut local_metrics,
+                        metrics,
+                        &mut last_published_error,
+                    );
+                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
                 let restored_at = *focus_restore_started_us.get_or_insert(now_us);
@@ -1128,8 +1350,13 @@ fn run_worker(
                     let resumed_us = qpc_now_us();
                     let _ = clock_state.exit_pause("focus", QpcTicks(qpc_us_to_ticks(resumed_us)));
                     focus_restore_started_us = None;
-                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    publish_backend_metrics(
+                        &backend,
+                        &mut local_metrics,
+                        metrics,
+                        &mut last_published_error,
+                    );
+                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
             }
 
@@ -1138,8 +1365,13 @@ fn run_worker(
                     let _ = backend.release_all();
                     coordinator.cancel_all();
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
-                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    publish_backend_metrics(
+                        &backend,
+                        &mut local_metrics,
+                        metrics,
+                        &mut last_published_error,
+                    );
+                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
                 clock_state.enter_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
@@ -1191,7 +1423,9 @@ fn run_worker(
                         interrupt,
                     );
                     local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
-                    local_metrics.spin_time_us = local_metrics.spin_time_us.saturating_add(wait_result.spin_us);
+                    local_metrics.spin_time_us = local_metrics
+                        .spin_time_us
+                        .saturating_add(wait_result.spin_us);
                     match wait_result.outcome {
                         WaitOutcome::Interrupted => continue,
                         WaitOutcome::Deadline => continue,
@@ -1211,7 +1445,8 @@ fn run_worker(
                 now_us = qpc_now_us();
             }
 
-            let effective_now_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us))).0);
+            let effective_now_ticks =
+                TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us))).0);
             let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.0));
             local_metrics.elapsed_us = effective_now_us;
             let latency_class = classify_latency_class(last_send_qpc_us, now_us);
@@ -1239,9 +1474,17 @@ fn run_worker(
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
                 let started_us = qpc_now_us();
-                let actual_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(started_us))).0));
+                let actual_us = qpc_ticks_to_us(QpcTicks(
+                    clock_state
+                        .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
+                        .0,
+                ));
                 let result = backend.key_up(&scan_codes);
-                let completed_effective_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(result.send_completed_us))).0);
+                let completed_effective_ticks = TimelineTicks(
+                    clock_state
+                        .get_elapsed(QpcTicks(qpc_us_to_ticks(result.send_completed_us)))
+                        .0,
+                );
                 let completed_effective = qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
                 last_send_qpc_us = Some(result.send_completed_us);
                 let recovery_required = coordinator.requeue_failed_releases(
@@ -1264,7 +1507,8 @@ fn run_worker(
                     && let Some(recovery_pause_us) =
                         coordinator.finish_release_recovery(completed_effective)
                 {
-                    local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
+                    local_metrics.total_us =
+                        local_metrics.total_us.saturating_add(recovery_pause_us);
                 }
                 let bookkeeping_completed_us = qpc_now_us();
                 let first = due_pending
@@ -1428,7 +1672,12 @@ fn run_worker(
                     &mut local_metrics,
                     latency_tx,
                 );
-                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                publish_backend_metrics(
+                    &backend,
+                    &mut local_metrics,
+                    metrics,
+                    &mut last_published_error,
+                );
                 try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 if recovery_required {
                     force_full_cleanup = true;
@@ -1483,7 +1732,9 @@ fn run_worker(
                 // `batch_view` borrows from `coordinator.schedule`. We must not call any
                 // `&mut coordinator` method until this scope ends. Pull every field we need
                 // into Copy / stack-owned values here.
-                let batch_view = coordinator.schedule.view_batch(batch_index, coordinator.recovery_offset_us());
+                let batch_view = coordinator
+                    .schedule
+                    .view_batch(batch_index, coordinator.recovery_offset_us());
                 let batch_kind = batch_view.kind();
                 let batch_source_action_index = batch_view.source_action_index();
                 let batch_scheduled_us = batch_view.scheduled_us;
@@ -1539,7 +1790,8 @@ fn run_worker(
                         clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
                         focus_restore_started_us = None;
                         telemetry.push(|| {
-                            let scan_codes: SmallVec<[u16; 15]> = scan_batch.as_slice().iter().copied().collect();
+                            let scan_codes: SmallVec<[u16; 15]> =
+                                scan_batch.as_slice().iter().copied().collect();
                             let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
                                 .as_ref()
                                 .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
@@ -1552,11 +1804,17 @@ fn run_worker(
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 send_duration_us: 0,
                                 send_duration_pure_us: 0,
                                 bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                dispatch_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 scan_codes,
                                 sent_scan_codes: SmallVec::new(),
                                 skipped_scan_codes: SmallVec::new(),
@@ -1574,7 +1832,12 @@ fn run_worker(
                                 zero_progress_retries: 0,
                             }
                         });
-                        publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                        publish_backend_metrics(
+                            &backend,
+                            &mut local_metrics,
+                            metrics,
+                            &mut last_published_error,
+                        );
                         try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                         continue;
                     }
@@ -1594,7 +1857,8 @@ fn run_worker(
                         );
                         coordinator.drop_expired_downs(&owned.intents);
                         telemetry.push(|| {
-                            let scan_codes: SmallVec<[u16; 15]> = scan_batch.as_slice().iter().copied().collect();
+                            let scan_codes: SmallVec<[u16; 15]> =
+                                scan_batch.as_slice().iter().copied().collect();
                             let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
                                 .as_ref()
                                 .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
@@ -1607,11 +1871,17 @@ fn run_worker(
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 send_duration_us: 0,
                                 send_duration_pure_us: 0,
                                 bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                dispatch_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 scan_codes,
                                 sent_scan_codes: SmallVec::new(),
                                 skipped_scan_codes: SmallVec::new(),
@@ -1670,8 +1940,10 @@ fn run_worker(
                         telemetry.push(|| {
                             let scan_codes: SmallVec<[u16; 15]> =
                                 conflict_scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> =
-                                conflicts_intents.iter().filter_map(|i| i.generation_id).collect();
+                            let generation_ids: SmallVec<[u64; 15]> = conflicts_intents
+                                .iter()
+                                .filter_map(|i| i.generation_id)
+                                .collect();
                             NativeTelemetryRecord {
                                 event_index: batch_source_action_index,
                                 dispatch_id: 0,
@@ -1680,11 +1952,17 @@ fn run_worker(
                                 actual_us: effective_now_us,
                                 dispatch_completed_us: effective_now_us,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 send_duration_us: 0,
                                 send_duration_pure_us: 0,
                                 bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                dispatch_lateness_us: signed_delta(
+                                    effective_now_us,
+                                    batch_scheduled_us,
+                                ),
                                 scan_codes,
                                 sent_scan_codes: SmallVec::new(),
                                 skipped_scan_codes: SmallVec::new(),
@@ -1865,11 +2143,11 @@ fn run_worker(
                         let strict_down_completion_late = config.strict_timing
                             && clean_down_sample
                             && completion_error_us
-                                > config.strict_down_completion_late_us.min(i64::MAX as u64)
-                                    as i64;
+                                > config.strict_down_completion_late_us.min(i64::MAX as u64) as i64;
                         if recovered_retry_late {
-                            local_metrics.recovered_zero_progress_but_late =
-                                local_metrics.recovered_zero_progress_but_late.saturating_add(1);
+                            local_metrics.recovered_zero_progress_but_late = local_metrics
+                                .recovered_zero_progress_but_late
+                                .saturating_add(1);
                         }
                         down_saturation_positive_streak =
                             if lead_down_saturated && completion_error_us > 0 {
@@ -1897,21 +2175,16 @@ fn run_worker(
                             // Scan codes: materialized view for telemetry includes full chord.
                             let scan_codes: SmallVec<[u16; 15]> =
                                 scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> =
-                                materialized_for_telemetry
-                                    .as_ref()
-                                    .map(|b| {
-                                        b.intents
-                                            .iter()
-                                            .filter(|i| {
-                                                conflict_mask
-                                                    & (1u16 << i.key_slot)
-                                                    == 0
-                                            })
-                                            .filter_map(|i| i.generation_id)
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
+                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
+                                .as_ref()
+                                .map(|b| {
+                                    b.intents
+                                        .iter()
+                                        .filter(|i| conflict_mask & (1u16 << i.key_slot) == 0)
+                                        .filter_map(|i| i.generation_id)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
                             NativeTelemetryRecord {
                                 event_index: batch_source_action_index,
                                 dispatch_id: 0,
@@ -1932,7 +2205,7 @@ fn run_worker(
                                     .saturating_sub(result_completed_us),
                                 dispatch_lateness_us: signed_delta(actual_us, batch_scheduled_us)
                                     .saturating_add(
-                                        result_completed_us.saturating_sub(started_us) as i64,
+                                        result_completed_us.saturating_sub(started_us) as i64
                                     ),
                                 scan_codes,
                                 sent_scan_codes: result_sent.clone(),
@@ -2085,11 +2358,11 @@ fn run_worker(
                             send_duration_us: 0,
                             send_duration_pure_us: 0,
                             bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                            scan_codes: suppressed
-                                .iter()
-                                .map(|intent| intent.scan_code)
-                                .collect(),
+                            dispatch_lateness_us: signed_delta(
+                                effective_now_us,
+                                batch_scheduled_us,
+                            ),
+                            scan_codes: suppressed.iter().map(|intent| intent.scan_code).collect(),
                             sent_scan_codes: SmallVec::new(),
                             skipped_scan_codes: SmallVec::new(),
                             generation_ids: suppressed
@@ -2158,8 +2431,13 @@ fn run_worker(
                 // sample after doing bookkeeping shifts the absolute target
                 // late by the whole A->B overhead interval.
                 let target_sample_ticks = qpc_now_ticks();
-                let target_sample_elapsed_us =
-                    qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_ticks_to_us(target_sample_ticks)))).0));
+                let target_sample_elapsed_us = qpc_ticks_to_us(QpcTicks(
+                    clock_state
+                        .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_ticks_to_us(
+                            target_sample_ticks,
+                        ))))
+                        .0,
+                ));
                 if deadline_us > target_sample_elapsed_us {
                     let remaining_us = deadline_us - target_sample_elapsed_us;
                     if config.enable_adaptive_spin
@@ -2206,14 +2484,20 @@ fn run_worker(
                         interrupt,
                     );
                     local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
-                    local_metrics.spin_time_us = local_metrics.spin_time_us.saturating_add(wait_result.spin_us);
+                    local_metrics.spin_time_us = local_metrics
+                        .spin_time_us
+                        .saturating_add(wait_result.spin_us);
                     pending_pre_send_spin_us = wait_result.spin_us;
-                    let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_now_us()))).0));
+                    let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(
+                        clock_state
+                            .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_now_us())))
+                            .0,
+                    ));
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
-                            local_metrics.wait_target_error_us = local_metrics.wait_target_error_us.max(
-                                wake_elapsed_us.saturating_sub(deadline_us)
-                            );
+                            local_metrics.wait_target_error_us = local_metrics
+                                .wait_target_error_us
+                                .max(wake_elapsed_us.saturating_sub(deadline_us));
                         }
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
@@ -2276,14 +2560,23 @@ fn run_worker(
         .map(|(reason, count)| (reason.to_string(), count))
         .collect();
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
-    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-    
+    publish_backend_metrics(
+        &backend,
+        &mut local_metrics,
+        metrics,
+        &mut last_published_error,
+    );
+
     let end_us = qpc_now_us();
     local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
-    local_metrics.worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
-    local_metrics.process_cpu_time_us = current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+    local_metrics.worker_cpu_time_us =
+        current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+    local_metrics.process_cpu_time_us =
+        current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
     if local_metrics.playback_wall_time_us > 0 {
-        local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000 / local_metrics.playback_wall_time_us as u128) as u64;
+        local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
+            / local_metrics.playback_wall_time_us as u128)
+            as u64;
     }
     try_publish_metrics(&local_metrics, metrics, end_us, true);
     metrics.is_paused.store(false, Ordering::Relaxed);
