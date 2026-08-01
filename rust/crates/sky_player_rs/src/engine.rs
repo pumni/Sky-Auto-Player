@@ -370,11 +370,11 @@ struct SharedMetrics {
 
 fn try_publish_metrics(local: &WorkerMetricsLocal, shared: &SharedMetrics, now_us: u64, force: bool) {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
-    if force || now_us.saturating_sub(last) >= 20_000 {
-        if let Some(mut guard) = shared.snapshot.try_lock() {
-            *guard = local.clone();
-            shared.last_publish_us.store(now_us, Ordering::Relaxed);
-        }
+    if (force || now_us.saturating_sub(last) >= 20_000)
+        && let Some(mut guard) = shared.snapshot.try_lock()
+    {
+        *guard = local.clone();
+        shared.last_publish_us.store(now_us, Ordering::Relaxed);
     }
 }
 

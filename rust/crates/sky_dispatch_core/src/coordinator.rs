@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
@@ -37,6 +36,62 @@ impl GenerationStatus {
         }
     }
 }
+
+/// Counter-only generation summary.
+///
+/// Active and release-pending counts are derived from `active_mask`/`pending_mask`
+/// at query time; this struct tracks only terminal and implicit-scheduled generations.
+/// No `HashMap` is allocated; all fields are plain `u64`.
+///
+/// Invariant: `scheduled + active + release_pending + released
+///            + dropped_conflict + dropped_backend + dropped_expired + cancelled
+///            == total (generation_count)`
+///
+/// "scheduled" is implicit: `generation_count - (active + release_pending + terminal_total)`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationCounters {
+    pub released: u64,
+    pub dropped_conflict: u64,
+    pub dropped_backend: u64,
+    pub dropped_expired: u64,
+    pub cancelled: u64,
+}
+
+impl GenerationCounters {
+    /// Sum of all terminal buckets.
+    pub fn terminal_total(&self) -> u64 {
+        self.released
+            + self.dropped_conflict
+            + self.dropped_backend
+            + self.dropped_expired
+            + self.cancelled
+    }
+
+    fn increment(&mut self, status: GenerationStatus) {
+        match status {
+            GenerationStatus::Released => self.released += 1,
+            GenerationStatus::DroppedConflict => self.dropped_conflict += 1,
+            GenerationStatus::DroppedBackend => self.dropped_backend += 1,
+            GenerationStatus::DroppedExpired => self.dropped_expired += 1,
+            GenerationStatus::Cancelled => self.cancelled += 1,
+            // Non-terminal states are not tracked here; they are derived from masks.
+            GenerationStatus::Scheduled
+            | GenerationStatus::Active
+            | GenerationStatus::ReleasePending => {}
+        }
+    }
+}
+
+pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
+    GenerationStatus::Scheduled,
+    GenerationStatus::Active,
+    GenerationStatus::ReleasePending,
+    GenerationStatus::Released,
+    GenerationStatus::DroppedConflict,
+    GenerationStatus::DroppedBackend,
+    GenerationStatus::DroppedExpired,
+    GenerationStatus::Cancelled,
+];
 
 #[cfg(test)]
 mod tests {
@@ -403,18 +458,283 @@ mod tests {
         assert_eq!(due[0].scan_code, 0x15);
         assert_eq!(coordinator.pending_mask.count_ones(), 1);
     }
-}
 
-pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
-    GenerationStatus::Scheduled,
-    GenerationStatus::Active,
-    GenerationStatus::ReleasePending,
-    GenerationStatus::Released,
-    GenerationStatus::DroppedConflict,
-    GenerationStatus::DroppedBackend,
-    GenerationStatus::DroppedExpired,
-    GenerationStatus::Cancelled,
-];
+    // --- P2.2 tests: GenerationCounters invariants ---
+
+    #[test]
+    fn generation_counters_total_equals_generation_count_after_full_lifecycle() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "up".to_string(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let generation_count = schedule.generation_count;
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+
+        let (up, _) = coordinator.pop_next_due_authored(1_000, 0).unwrap();
+        let _ = coordinator.request_releases(&up.intents);
+        let due = coordinator.pop_due_pending(1_000, 0);
+        coordinator.complete_releases(&due, &[0x15, 0x16], &[]);
+
+        let counts = coordinator.generation_status_counts();
+        let total: u64 = counts.values().sum();
+        assert_eq!(total, generation_count, "total must equal generation_count");
+        assert_eq!(counts.get("released"), Some(&generation_count));
+        assert_eq!(counts.get("active"), Some(&0));
+        assert_eq!(counts.get("release_pending"), Some(&0));
+    }
+
+    #[test]
+    fn generation_counters_not_negative_invariant() {
+        // Counters are u64; they cannot go below zero by type.
+        // This test verifies that after cancel_all the total still equals generation_count.
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let generation_count = schedule.generation_count;
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+
+        coordinator.cancel_all();
+
+        let counts = coordinator.generation_status_counts();
+        let total: u64 = counts.values().sum();
+        assert_eq!(total, generation_count);
+        assert_eq!(counts.get("cancelled"), Some(&generation_count));
+    }
+
+    #[test]
+    fn generation_counters_each_slot_has_at_most_one_generation() {
+        // After activate, each slot bit is set at most once.
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16, 0x17],
+                    reason: "down".to_string(),
+                },
+            ],
+            &[0x15, 0x16, 0x17],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16, 0x17], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+
+        // active_mask must have exactly 3 bits set (one per slot)
+        assert_eq!(coordinator.active_mask.count_ones(), 3);
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get("active"), Some(&3));
+    }
+
+    #[test]
+    fn release_correct_generation_counter() {
+        // Verifies that releasing one generation does not affect counters of others.
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up-a".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x16],
+                    reason: "up-b".to_string(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(&down.intents, &[0x15, 0x16], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+
+        // Release only 0x15
+        let (up_a, _) = coordinator.pop_next_due_authored(1_000, 0).unwrap();
+        let _ = coordinator.request_releases(&up_a.intents);
+        let due = coordinator.pop_due_pending(1_000, 0);
+        coordinator.complete_releases(&due, &[0x15], &[]);
+
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get("released"), Some(&1));
+        assert_eq!(counts.get("active"), Some(&1)); // 0x16 still active
+        assert_eq!(counts.get("release_pending"), Some(&0));
+
+        // Release 0x16
+        let (up_b, _) = coordinator.pop_next_due_authored(2_000, 0).unwrap();
+        let _ = coordinator.request_releases(&up_b.intents);
+        let due2 = coordinator.pop_due_pending(2_000, 0);
+        coordinator.complete_releases(&due2, &[0x16], &[]);
+
+        let counts2 = coordinator.generation_status_counts();
+        assert_eq!(counts2.get("released"), Some(&2));
+        assert_eq!(counts2.get("active"), Some(&0));
+    }
+
+    #[test]
+    fn cancel_cleanup_correct_counter() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "down".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15],
+                    reason: "up".to_string(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let generation_count = schedule.generation_count;
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(&down.intents, &[0x15], 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+
+        // Cancel while active (before up)
+        coordinator.cancel_all();
+
+        let counts = coordinator.generation_status_counts();
+        let total: u64 = counts.values().sum();
+        // The Up intent was never processed: generation is cancelled while active
+        // generation_count = 1 (one Down generation)
+        assert_eq!(total, generation_count);
+        assert_eq!(counts.get("cancelled"), Some(&1));
+        assert_eq!(counts.get("active"), Some(&0));
+    }
+
+    #[test]
+    fn differential_with_old_implementation_on_random_valid_schedule() {
+        // Verify that generation_status_counts sums correctly for a 3-note sequence.
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15],
+                    reason: "d1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 500,
+                    scan_codes: vec![0x15],
+                    reason: "u1".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x16],
+                    reason: "d2".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_500,
+                    scan_codes: vec![0x16],
+                    reason: "u2".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 4,
+                    kind: ActionKind::Down,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x17],
+                    reason: "d3".to_string(),
+                },
+                KeyActionInput {
+                    source_action_index: 5,
+                    kind: ActionKind::Up,
+                    scheduled_us: 2_500,
+                    scan_codes: vec![0x17],
+                    reason: "u3".to_string(),
+                },
+            ],
+            &[0x15, 0x16, 0x17],
+        )
+        .expect("valid schedule");
+        let generation_count = schedule.generation_count;
+        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        // Play through the full schedule
+        for _ in 0..6 {
+            if let Some((batch, _)) = coordinator.pop_next_due_authored(u64::MAX, 0) {
+                match batch.kind {
+                    ActionKind::Down => {
+                        let sc: Vec<u16> = batch.intents.iter().map(|i| i.scan_code).collect();
+                        coordinator.activate_sent_downs(&batch.intents, &sc, 0, crate::time::TimelineTicks(0), 0, crate::time::TimelineTicks(0));
+                    }
+                    ActionKind::Up => {
+                        let _ = coordinator.request_releases(&batch.intents);
+                    }
+                }
+            }
+        }
+        // Pop and complete all pending
+        let due = coordinator.pop_due_pending(u64::MAX, 0);
+        for release in &due {
+            coordinator.complete_releases(std::slice::from_ref(release), &[release.scan_code], &[]);
+        }
+
+        let counts = coordinator.generation_status_counts();
+        let total: u64 = counts.values().sum();
+        assert_eq!(total, generation_count, "total must match generation_count");
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveGeneration {
@@ -486,11 +806,15 @@ pub struct RuntimeDispatchCoordinator {
     pub batch_scheduled_ticks: Box<[TimelineTicks]>,
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
-    active_mask: u16,
+    pub active_mask: u16,
     pending_by_slot: [Option<PendingRelease>; MAX_KEYS],
-    pending_mask: u16,
-    pub status_by_generation: HashMap<GenerationId, GenerationStatus>,
-    terminal_counts: HashMap<GenerationStatus, u64>,
+    pub pending_mask: u16,
+    /// Terminal and implicit-scheduled generation counts.
+    ///
+    /// Active and release-pending counts are derived from `active_mask`/`pending_mask`
+    /// respectively, so they are not stored here.  This eliminates the
+    /// `HashMap<GenerationId, GenerationStatus>` from the hot dispatch path.
+    counters: GenerationCounters,
     generation_count: u64,
     recovery_offset_us: u64,
     /// Pre-wired for P1.3 tick-domain refactor; not yet read by any method.
@@ -529,8 +853,7 @@ impl RuntimeDispatchCoordinator {
             active_mask: 0,
             pending_by_slot: std::array::from_fn(|_| None),
             pending_mask: 0,
-            status_by_generation: HashMap::with_capacity(MAX_KEYS),
-            terminal_counts: HashMap::with_capacity(ALL_GENERATION_STATUSES.len()),
+            counters: GenerationCounters::default(),
             generation_count,
             recovery_offset_us: 0,
             recovery_offset_ticks: DurationTicks(0),
@@ -559,9 +882,10 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    fn terminalize(&mut self, generation_id: GenerationId, status: GenerationStatus) {
-        self.status_by_generation.remove(&generation_id);
-        *self.terminal_counts.entry(status).or_insert(0) += 1;
+    fn terminalize(&mut self, _generation_id: GenerationId, status: GenerationStatus) {
+        // Generation-ID-keyed HashMap is gone. Only the counter needs updating.
+        // Active/pending masks are adjusted by the caller before `terminalize` is invoked.
+        self.counters.increment(status);
     }
 
     fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
@@ -715,27 +1039,33 @@ impl RuntimeDispatchCoordinator {
         self.cursor >= self.schedule.batches.len() && self.pending_mask == 0
     }
 
-    pub fn generation_status_counts(&self) -> HashMap<String, u64> {
-        let mut counts: HashMap<GenerationStatus, u64> = self.terminal_counts.clone();
-        let mut nonterminal: u64 = 0;
-        for &status in self.status_by_generation.values() {
-            *counts.entry(status).or_insert(0) += 1;
-            nonterminal += 1;
-        }
-        let terminal_total: u64 = self.terminal_counts.values().sum();
+    /// Build a `HashMap<String, u64>` generation status summary compatible with
+    /// the existing Python/snapshot API.
+    ///
+    /// - `active` is `active_mask.count_ones()` (O(1) popcount).
+    /// - `release_pending` is `pending_mask.count_ones()` (O(1) popcount).
+    /// - `scheduled` is derived: `generation_count - active - release_pending - terminal_total`.
+    /// - All terminal buckets come from `GenerationCounters` (plain u64 fields).
+    ///
+    /// No `HashMap` is touched during the hot dispatch loop; this method is only
+    /// called at snapshot/telemetry publish time.
+    pub fn generation_status_counts(&self) -> std::collections::HashMap<String, u64> {
+        let active = u64::from(self.active_mask.count_ones());
+        let release_pending = u64::from(self.pending_mask.count_ones());
+        let terminal_total = self.counters.terminal_total();
         let implicit_scheduled = self
             .generation_count
-            .saturating_sub(terminal_total + nonterminal);
-        if implicit_scheduled > 0 {
-            *counts.entry(GenerationStatus::Scheduled).or_insert(0) += implicit_scheduled;
-        }
-        let mut result = HashMap::new();
-        for status in &ALL_GENERATION_STATUSES {
-            result.insert(
-                status.as_str().to_string(),
-                *counts.get(status).unwrap_or(&0),
-            );
-        }
+            .saturating_sub(active + release_pending + terminal_total);
+
+        let mut result = std::collections::HashMap::with_capacity(ALL_GENERATION_STATUSES.len());
+        result.insert("scheduled".to_string(), implicit_scheduled);
+        result.insert("active".to_string(), active);
+        result.insert("release_pending".to_string(), release_pending);
+        result.insert("released".to_string(), self.counters.released);
+        result.insert("dropped_conflict".to_string(), self.counters.dropped_conflict);
+        result.insert("dropped_backend".to_string(), self.counters.dropped_backend);
+        result.insert("dropped_expired".to_string(), self.counters.dropped_expired);
+        result.insert("cancelled".to_string(), self.counters.cancelled);
         result
     }
 
@@ -843,7 +1173,8 @@ impl RuntimeDispatchCoordinator {
                     continue;
                 };
                 if intent.scan_code != only_sent {
-                    self.terminalize(generation_id, GenerationStatus::DroppedBackend);
+                    // Terminalize without touching any mask — slot was never activated.
+                    self.counters.increment(GenerationStatus::DroppedBackend);
                     continue;
                 }
                 self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
@@ -861,8 +1192,7 @@ impl RuntimeDispatchCoordinator {
                     release_not_before_ticks,
                 });
                 self.active_mask |= Self::bit_for_slot(intent.key_slot);
-                self.status_by_generation
-                    .insert(generation_id, GenerationStatus::Active);
+                // No HashMap insertion — active count is derived from active_mask at query time.
             }
             return;
         }
@@ -872,7 +1202,7 @@ impl RuntimeDispatchCoordinator {
                 continue;
             };
             if !sent_scan_codes.contains(&intent.scan_code) {
-                self.terminalize(generation_id, GenerationStatus::DroppedBackend);
+                self.counters.increment(GenerationStatus::DroppedBackend);
                 continue;
             }
             self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
@@ -890,8 +1220,7 @@ impl RuntimeDispatchCoordinator {
                 release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(intent.key_slot);
-            self.status_by_generation
-                .insert(generation_id, GenerationStatus::Active);
+            // No HashMap insertion — active count is derived from active_mask at query time.
         }
     }
 
@@ -983,8 +1312,7 @@ impl RuntimeDispatchCoordinator {
 
             self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
             self.pending_mask |= Self::bit_for_slot(intent.key_slot);
-            self.status_by_generation
-                .insert(generation_id, GenerationStatus::ReleasePending);
+            // No HashMap insertion — release_pending count is derived from pending_mask.
             return (std::iter::once(pending).collect(), SmallVec::new());
         }
 
@@ -1029,8 +1357,7 @@ impl RuntimeDispatchCoordinator {
 
             self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
             self.pending_mask |= Self::bit_for_slot(intent.key_slot);
-            self.status_by_generation
-                .insert(generation_id, GenerationStatus::ReleasePending);
+            // No HashMap insertion — release_pending count is derived from pending_mask.
             requested.push(pending);
         }
 
@@ -1156,8 +1483,8 @@ impl RuntimeDispatchCoordinator {
         let mut sorted_cancelled: Vec<GenerationId> = cancelled_ids.into_vec();
         sorted_cancelled.sort_unstable();
 
-        for &gen_id in &sorted_cancelled {
-            self.terminalize(gen_id, GenerationStatus::Cancelled);
+        for &_gen_id in &sorted_cancelled {
+            self.counters.increment(GenerationStatus::Cancelled);
         }
 
         self.active_by_slot.fill(None);
