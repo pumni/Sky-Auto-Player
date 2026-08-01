@@ -474,6 +474,28 @@ pub struct CleanupOutcome {
     pub pump_thread_failed: bool,
 }
 
+// RAWKEYBOARD.ExtraInformation is a 32-bit ULONG even on x64 Windows. Keep a
+// calibration tag in the high byte and the packet sequence in the remaining
+// 24 bits; putting the sequence in the high 32 bits of dwExtraInfo is silently
+// truncated before WM_INPUT reaches the pump.
+const CALIBRATION_EXTRA_TAG_MASK: u32 = 0xFF00_0000;
+const CALIBRATION_EXTRA_TAG: u32 = (crate::input::SKY_PLAYER_SIGNATURE as u32 & 0xFF) << 24;
+const CALIBRATION_EXTRA_SEQUENCE_MASK: u32 = 0x00FF_FFFF;
+
+fn make_calibration_extra_info(sequence_id: u32) -> Option<usize> {
+    (sequence_id > 0 && sequence_id <= CALIBRATION_EXTRA_SEQUENCE_MASK)
+        .then_some((CALIBRATION_EXTRA_TAG | sequence_id) as usize)
+}
+
+fn calibration_extra_info_sequence(extra: usize) -> Option<u32> {
+    let raw = u32::try_from(extra).ok()?;
+    if raw & CALIBRATION_EXTRA_TAG_MASK != CALIBRATION_EXTRA_TAG {
+        return None;
+    }
+    let sequence_id = raw & CALIBRATION_EXTRA_SEQUENCE_MASK;
+    (sequence_id > 0).then_some(sequence_id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CalibrationBuckets {
     pub down: HashMap<u8, HashMap<String, BucketStats>>,
@@ -555,7 +577,7 @@ struct SharedCalibState {
 #[cfg(windows)]
 mod platform {
     use super::*;
-    use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE, send_input_raw};
+    use crate::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, send_input_raw};
     use crate::mmcss::{MmcssGuard, PriorityMode};
 
     use std::sync::{Arc, Condvar, Mutex};
@@ -621,23 +643,6 @@ mod platform {
 
     const WM_CALIB_EXIT: u32 = WM_USER + 1;
     const WM_CALIB_ACTIVATE: u32 = WM_USER + 2;
-
-    /// Combined extra-info tag so we can distinguish our own injections.
-    ///
-    /// High 32 bits: sequence ID (1-based).
-    /// Low 32 bits: `SKY_PLAYER_SIGNATURE`.
-    fn make_extra_info(sequence_id: u32) -> usize {
-        ((sequence_id as usize) << 32) | (SKY_PLAYER_SIGNATURE & 0xFFFF_FFFF)
-    }
-
-    fn extra_info_sequence(extra: usize) -> Option<u32> {
-        let sig = extra & 0xFFFF_FFFF;
-        if sig != (SKY_PLAYER_SIGNATURE & 0xFFFF_FFFF) {
-            return None;
-        }
-        let seq = (extra >> 32) as u32;
-        (seq > 0).then_some(seq)
-    }
 
     // ── Window procedure ──────────────────────────────────────────────────────
 
@@ -732,7 +737,7 @@ mod platform {
                 // RI_KEY_BREAK = 1 (key-up)
                 let key_up = (flags & 1) != 0;
                 let extra = keyboard.ExtraInformation as usize;
-                let Some(seq_id) = extra_info_sequence(extra) else {
+                let Some(seq_id) = calibration_extra_info_sequence(extra) else {
                     // Not one of our injected packets — ignore.
                     return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
                 };
@@ -1098,7 +1103,8 @@ mod platform {
                 .ok_or(CalibrationError::SequenceOverflow)?;
 
             // Prepare extra_info with sequence tag.
-            let extra = make_extra_info(seq);
+            let extra =
+                make_calibration_extra_info(seq).ok_or(CalibrationError::SequenceOverflow)?;
 
             // Arm the active sequence BEFORE injecting so we cannot miss any
             // receipt delivered before the mutex is acquired after SendInput.
@@ -2069,6 +2075,24 @@ mod tests {
     fn default_config_polyphonies() {
         let cfg = CalibrationConfig::default();
         assert_eq!(cfg.polyphonies, vec![1, 2, 3, 5, 8, 15]);
+    }
+
+    #[test]
+    fn calibration_extra_info_round_trips_24_bit_sequence() {
+        for sequence_id in [1, 2, 0x00FF_FFFF] {
+            let extra = make_calibration_extra_info(sequence_id).unwrap();
+            assert_eq!(calibration_extra_info_sequence(extra), Some(sequence_id));
+        }
+    }
+
+    #[test]
+    fn calibration_extra_info_rejects_zero_overflow_and_foreign_tags() {
+        assert!(make_calibration_extra_info(0).is_none());
+        assert!(make_calibration_extra_info(CALIBRATION_EXTRA_SEQUENCE_MASK + 1).is_none());
+        assert_eq!(
+            calibration_extra_info_sequence(crate::input::SKY_PLAYER_SIGNATURE),
+            None
+        );
     }
 
     #[test]
