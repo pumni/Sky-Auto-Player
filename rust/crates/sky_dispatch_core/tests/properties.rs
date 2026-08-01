@@ -4,6 +4,91 @@ use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
 proptest! {
+    /// Source action IDs are metadata and may have arbitrary gaps. They must
+    /// never be used as storage indexes for the prepared batch timeline.
+    #[test]
+    fn invariant_non_contiguous_source_ids_complete_lifecycle(
+        gaps in prop::collection::vec(1_u32..=100_000, 4),
+    ) {
+        let mut source_ids = Vec::with_capacity(4);
+        let mut source_id = 100_u32;
+        for gap in gaps {
+            source_ids.push(source_id);
+            source_id = source_id.checked_add(gap).unwrap();
+        }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: source_ids[0],
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![2],
+                reason: "gapped-down-a".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: source_ids[1],
+                kind: ActionKind::Up,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![2],
+                reason: "gapped-up-a".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: source_ids[2],
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![3],
+                reason: "gapped-down-b".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: source_ids[3],
+                kind: ActionKind::Up,
+                scheduled_us: 30_000,
+                scan_codes: smallvec::smallvec![3],
+                reason: "gapped-up-b".to_string().into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &[2, 3]).unwrap();
+        let generation_count = schedule.generation_count;
+        let mut coordinator = RuntimeDispatchCoordinator::new(
+            schedule,
+            0,
+            0,
+            sky_dispatch_core::time::TimelineTicks,
+        );
+
+        while !coordinator.is_finished() {
+            if let Some((batch, _)) = coordinator.pop_next_due_authored(u64::MAX, 0) {
+                match batch.kind {
+                    ActionKind::Down => {
+                        let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
+                        prop_assert!(conflicts.is_empty());
+                        let sent: Vec<u16> = playable.iter().map(|intent| intent.scan_code).collect();
+                        coordinator.activate_sent_downs(
+                            &playable,
+                            &sent,
+                            batch.scheduled_us,
+                            sky_dispatch_core::time::TimelineTicks(batch.scheduled_us),
+                            batch.scheduled_us,
+                            sky_dispatch_core::time::TimelineTicks(batch.scheduled_us),
+                        );
+                    }
+                    ActionKind::Up => {
+                        let (requested, suppressed) = coordinator.request_releases(&batch.intents);
+                        prop_assert!(suppressed.is_empty());
+                        let due = coordinator.pop_due_pending(u64::MAX, 0);
+                        prop_assert_eq!(due.len(), requested.len());
+                        let sent: Vec<u16> = due.iter().map(|pending| pending.scan_code).collect();
+                        coordinator.complete_releases(&due, &sent, &[]);
+                    }
+                }
+            } else {
+                prop_assert!(false, "gapped schedule stopped before terminal state");
+            }
+        }
+        let counts = coordinator.generation_status_counts();
+        prop_assert_eq!(counts.values().sum::<u64>(), generation_count);
+        prop_assert_eq!(counts.get("released"), Some(&generation_count));
+    }
+
     #[test]
     fn completion_anchor_and_generation_counts_hold_for_valid_chords(
         mut scan_codes in prop::collection::vec(2_u16..=6, 1..=5),

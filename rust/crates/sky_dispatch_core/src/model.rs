@@ -65,6 +65,10 @@ impl KeyRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeKeyIntent {
+    /// Index into `RuntimeSchedule::batches`, assigned during preparation.
+    /// This is the only storage index used by the coordinator; authored
+    /// source IDs remain identity/telemetry metadata.
+    pub compiled_batch_index: usize,
     pub source_action_index: u32,
     pub generation_id: Option<GenerationId>,
     pub kind: ActionKind,
@@ -153,6 +157,7 @@ impl RuntimeSchedule {
         let intents = self.intents[start..end]
             .iter()
             .map(|compact| RuntimeKeyIntent {
+                compiled_batch_index: index,
                 source_action_index: header.source_action_index,
                 generation_id: (compact.generation_id() != NO_GENERATION_ID)
                     .then_some(compact.generation_id()),
@@ -279,6 +284,7 @@ impl<'a> BatchView<'a> {
             .intents
             .iter()
             .map(|compact| RuntimeKeyIntent {
+                compiled_batch_index: usize::MAX,
                 source_action_index: self.header.source_action_index,
                 generation_id: (compact.generation_id() != NO_GENERATION_ID)
                     .then_some(compact.generation_id()),

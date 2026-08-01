@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use thiserror::Error;
 
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
@@ -35,6 +36,62 @@ impl GenerationStatus {
             Self::Cancelled => "cancelled",
         }
     }
+
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Released
+                | Self::DroppedConflict
+                | Self::DroppedBackend
+                | Self::DroppedExpired
+                | Self::Cancelled
+        )
+    }
+
+    fn can_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Scheduled, Self::Active)
+                | (Self::Scheduled, Self::DroppedConflict)
+                | (Self::Scheduled, Self::DroppedExpired)
+                | (Self::Scheduled, Self::DroppedBackend)
+                | (Self::Scheduled, Self::Cancelled)
+                | (Self::Active, Self::ReleasePending)
+                | (Self::Active, Self::DroppedBackend)
+                | (Self::Active, Self::Cancelled)
+                | (Self::ReleasePending, Self::Released)
+                | (Self::ReleasePending, Self::DroppedBackend)
+                | (Self::ReleasePending, Self::Cancelled)
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CoordinatorInvariantError {
+    #[error(
+        "generation {generation_id} is outside the prepared ledger of {generation_count} generations"
+    )]
+    UnknownGeneration {
+        generation_id: GenerationId,
+        generation_count: u64,
+    },
+    #[error(
+        "invalid generation transition for {generation_id}: expected {expected:?}, actual {actual:?}, next {next:?}"
+    )]
+    UnexpectedTransition {
+        generation_id: GenerationId,
+        expected: GenerationStatus,
+        actual: GenerationStatus,
+        next: GenerationStatus,
+    },
+    #[error("illegal generation transition for {generation_id}: {from:?} -> {to:?}")]
+    IllegalTransition {
+        generation_id: GenerationId,
+        from: GenerationStatus,
+        to: GenerationStatus,
+    },
+    #[error("generation accounting invariant failed: {0}")]
+    Accounting(String),
 }
 
 /// Counter-only generation summary.
@@ -831,6 +888,129 @@ mod tests {
         let total: u64 = counts.values().sum();
         assert_eq!(total, generation_count, "total must match generation_count");
     }
+
+    #[test]
+    fn non_contiguous_source_ids_do_not_index_batch_timestamps() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 100,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down-a".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 500,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up-a".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 9_000,
+                    kind: ActionKind::Down,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "down-b".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 12_000,
+                    kind: ActionKind::Up,
+                    scheduled_us: 3_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "up-b".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid non-contiguous source IDs");
+        let generation_count = schedule.generation_count;
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+
+        while let Some((batch, _)) = coordinator.pop_next_due_authored(u64::MAX, 0) {
+            match batch.kind {
+                ActionKind::Down => {
+                    let sent: Vec<u16> = batch
+                        .intents
+                        .iter()
+                        .map(|intent| intent.scan_code)
+                        .collect();
+                    coordinator.activate_sent_downs(
+                        &batch.intents,
+                        &sent,
+                        0,
+                        crate::time::TimelineTicks(0),
+                        0,
+                        crate::time::TimelineTicks(0),
+                    );
+                }
+                ActionKind::Up => {
+                    coordinator.request_releases(&batch.intents);
+                }
+            }
+            let due = coordinator.pop_due_pending(u64::MAX, 0);
+            for release in &due {
+                coordinator.complete_releases(
+                    std::slice::from_ref(release),
+                    &[release.scan_code],
+                    &[],
+                );
+            }
+        }
+
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get("released"), Some(&2));
+        assert_eq!(counts.get("active"), Some(&0));
+        assert_eq!(counts.get("release_pending"), Some(&0));
+        assert_eq!(counts.values().sum::<u64>(), generation_count);
+    }
+
+    #[test]
+    fn duplicate_release_completion_does_not_double_terminalize_generation() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 10,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 20,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks);
+        let (down, _) = coordinator.pop_next_due_authored(0, 0).unwrap();
+        coordinator.activate_sent_downs(
+            &down.intents,
+            &[0x15],
+            0,
+            crate::time::TimelineTicks(0),
+            0,
+            crate::time::TimelineTicks(0),
+        );
+        let (up, _) = coordinator.pop_next_due_authored(u64::MAX, 0).unwrap();
+        coordinator.request_releases(&up.intents);
+        let due = coordinator.pop_due_pending(u64::MAX, 0);
+        coordinator.complete_releases(&due, &[0x15], &[]);
+        coordinator.complete_releases(&due, &[0x15], &[]);
+
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get("released"), Some(&1));
+        assert_eq!(counts.values().sum::<u64>(), 1);
+        assert!(coordinator.take_invariant_error().is_some());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -904,6 +1084,10 @@ pub struct RuntimeDispatchCoordinator {
     pub cursor: usize,
     active_by_slot: [Option<ActiveGeneration>; MAX_KEYS],
     pub active_mask: u16,
+    /// Physical-key ownership mask. A release-pending key remains blocked
+    /// here until a verified Up completion, while logical accounting moves
+    /// from `active_mask` to `pending_mask`.
+    blocked_mask: u16,
     pending_by_slot: [Option<PendingRelease>; MAX_KEYS],
     pub pending_mask: u16,
     /// Terminal and implicit-scheduled generation counts.
@@ -912,7 +1096,9 @@ pub struct RuntimeDispatchCoordinator {
     /// respectively, so they are not stored here.  This eliminates the
     /// `HashMap<GenerationId, GenerationStatus>` from the hot dispatch path.
     counters: GenerationCounters,
+    generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
+    invariant_error: Option<CoordinatorInvariantError>,
     recovery_offset_us: u64,
     /// Pre-wired for P1.3 tick-domain refactor; not yet read by any method.
     #[allow(dead_code)]
@@ -934,14 +1120,21 @@ impl RuntimeDispatchCoordinator {
         F: Fn(u64) -> TimelineTicks,
     {
         let generation_count = schedule.generation_count;
+        let generation_states = vec![
+            GenerationStatus::Scheduled;
+            usize::try_from(generation_count)
+                .expect("compiled generation count fits usize")
+        ]
+        .into_boxed_slice();
         let batch_scheduled_ticks = schedule
             .batches
             .iter()
             .map(|b| us_to_ticks(b.scheduled_us))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let min_hold_ticks = DurationTicks(us_to_ticks(min_hold_us).0);
-        let delivery_margin_ticks = DurationTicks(us_to_ticks(delivery_margin_us).0);
+        let min_hold_ticks = DurationTicks::from_raw(us_to_ticks(min_hold_us).as_u64());
+        let delivery_margin_ticks =
+            DurationTicks::from_raw(us_to_ticks(delivery_margin_us).as_u64());
 
         Self {
             schedule,
@@ -953,12 +1146,15 @@ impl RuntimeDispatchCoordinator {
             cursor: 0,
             active_by_slot: std::array::from_fn(|_| None),
             active_mask: 0,
+            blocked_mask: 0,
             pending_by_slot: std::array::from_fn(|_| None),
             pending_mask: 0,
             counters: GenerationCounters::default(),
+            generation_states,
             generation_count,
+            invariant_error: None,
             recovery_offset_us: 0,
-            recovery_offset_ticks: DurationTicks(0),
+            recovery_offset_ticks: DurationTicks::ZERO,
             release_recovery_started_us: None,
             release_recovery_started_ticks: None,
         }
@@ -989,22 +1185,76 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    fn terminalize(&mut self, _generation_id: GenerationId, status: GenerationStatus) {
-        // Generation-ID-keyed HashMap is gone. Only the counter needs updating.
-        // Active/pending masks are adjusted by the caller before `terminalize` is invoked.
-        self.counters.increment(status);
+    /// Apply one checked lifecycle transition. Generation IDs are only used
+    /// to address the compiler-owned contiguous ledger, never as a batch
+    /// timestamp/index identity.
+    pub fn transition_generation(
+        &mut self,
+        generation_id: GenerationId,
+        expected: GenerationStatus,
+        next: GenerationStatus,
+    ) -> Result<(), CoordinatorInvariantError> {
+        let Some(state) = self.generation_states.get_mut(generation_id as usize) else {
+            return Err(CoordinatorInvariantError::UnknownGeneration {
+                generation_id,
+                generation_count: self.generation_count,
+            });
+        };
+        if *state != expected {
+            return Err(CoordinatorInvariantError::UnexpectedTransition {
+                generation_id,
+                expected,
+                actual: *state,
+                next,
+            });
+        }
+        if !expected.can_transition_to(next) {
+            return Err(CoordinatorInvariantError::IllegalTransition {
+                generation_id,
+                from: expected,
+                to: next,
+            });
+        }
+        *state = next;
+        if next.is_terminal() {
+            self.counters.increment(next);
+        }
+        Ok(())
+    }
+
+    fn record_transition(
+        &mut self,
+        generation_id: GenerationId,
+        expected: GenerationStatus,
+        next: GenerationStatus,
+    ) -> bool {
+        match self.transition_generation(generation_id, expected, next) {
+            Ok(()) => true,
+            Err(error) => {
+                self.invariant_error.get_or_insert(error);
+                false
+            }
+        }
+    }
+
+    pub fn take_invariant_error(&mut self) -> Option<CoordinatorInvariantError> {
+        self.invariant_error.take()
+    }
+
+    fn terminalize(&mut self, generation_id: GenerationId, status: GenerationStatus) {
+        let _ = self.record_transition(generation_id, GenerationStatus::Scheduled, status);
     }
 
     fn early_pop_blocked(&self, batch: &CompiledBatch) -> bool {
         if batch.kind != ActionKind::Down {
             return false;
         }
-        if self.active_mask == 0 && self.pending_mask == 0 {
+        if self.blocked_mask == 0 {
             return false;
         }
         self.schedule.intent_slice(batch).iter().any(|intent| {
             let bit = Self::bit_for_slot(intent.key_slot());
-            self.active_mask & bit != 0 || self.pending_mask & bit != 0
+            self.blocked_mask & bit != 0
         })
     }
 
@@ -1146,36 +1396,74 @@ impl RuntimeDispatchCoordinator {
         self.cursor >= self.schedule.batches.len() && self.pending_mask == 0
     }
 
+    /// Verify the compact masks and terminal ledger agree exactly.
+    pub fn check_invariants(&self) -> Result<(), CoordinatorInvariantError> {
+        if self.generation_states.len() as u64 != self.generation_count {
+            return Err(CoordinatorInvariantError::Accounting(format!(
+                "ledger length {} != generation count {}",
+                self.generation_states.len(),
+                self.generation_count
+            )));
+        }
+
+        let mut active = 0u64;
+        let mut release_pending = 0u64;
+        let mut terminal = 0u64;
+        for state in &self.generation_states {
+            match state {
+                GenerationStatus::Active => active += 1,
+                GenerationStatus::ReleasePending => release_pending += 1,
+                GenerationStatus::Released
+                | GenerationStatus::DroppedConflict
+                | GenerationStatus::DroppedBackend
+                | GenerationStatus::DroppedExpired
+                | GenerationStatus::Cancelled => terminal += 1,
+                GenerationStatus::Scheduled => {}
+            }
+        }
+        if active != u64::from(self.active_mask.count_ones()) {
+            return Err(CoordinatorInvariantError::Accounting(format!(
+                "active ledger count {active} != active mask count {}",
+                self.active_mask.count_ones()
+            )));
+        }
+        if release_pending != u64::from(self.pending_mask.count_ones()) {
+            return Err(CoordinatorInvariantError::Accounting(format!(
+                "pending ledger count {release_pending} != pending mask count {}",
+                self.pending_mask.count_ones()
+            )));
+        }
+        if self.active_mask & self.pending_mask != 0 {
+            return Err(CoordinatorInvariantError::Accounting(
+                "active and pending masks overlap".to_string(),
+            ));
+        }
+        if terminal != self.counters.terminal_total() {
+            return Err(CoordinatorInvariantError::Accounting(format!(
+                "terminal ledger count {terminal} != counters {}",
+                self.counters.terminal_total()
+            )));
+        }
+        Ok(())
+    }
+
     /// Build a `HashMap<String, u64>` generation status summary compatible with
-    /// the existing Python/snapshot API.
-    ///
-    /// - `active` is `active_mask.count_ones()` (O(1) popcount).
-    /// - `release_pending` is `pending_mask.count_ones()` (O(1) popcount).
-    /// - `scheduled` is derived: `generation_count - active - release_pending - terminal_total`.
-    /// - All terminal buckets come from `GenerationCounters` (plain u64 fields).
+    /// the existing Python/snapshot API. Counts come directly from the checked
+    /// generation ledger, so no subtraction or saturating arithmetic can hide
+    /// an accounting mismatch.
     ///
     /// No `HashMap` is touched during the hot dispatch loop; this method is only
     /// called at snapshot/telemetry publish time.
     pub fn generation_status_counts(&self) -> std::collections::HashMap<String, u64> {
-        let active = u64::from(self.active_mask.count_ones());
-        let release_pending = u64::from(self.pending_mask.count_ones());
-        let terminal_total = self.counters.terminal_total();
-        let implicit_scheduled = self
-            .generation_count
-            .saturating_sub(active + release_pending + terminal_total);
-
         let mut result = std::collections::HashMap::with_capacity(ALL_GENERATION_STATUSES.len());
-        result.insert("scheduled".to_string(), implicit_scheduled);
-        result.insert("active".to_string(), active);
-        result.insert("release_pending".to_string(), release_pending);
-        result.insert("released".to_string(), self.counters.released);
-        result.insert(
-            "dropped_conflict".to_string(),
-            self.counters.dropped_conflict,
-        );
-        result.insert("dropped_backend".to_string(), self.counters.dropped_backend);
-        result.insert("dropped_expired".to_string(), self.counters.dropped_expired);
-        result.insert("cancelled".to_string(), self.counters.cancelled);
+        for status in ALL_GENERATION_STATUSES {
+            result.insert(status.as_str().to_string(), 0);
+        }
+        for state in &self.generation_states {
+            *result
+                .get_mut(state.as_str())
+                .expect("all generation states have a summary bucket") += 1;
+        }
         result
     }
 
@@ -1305,13 +1593,13 @@ impl RuntimeDispatchCoordinator {
     /// it operates directly on the compact arena slice with one bitwise AND
     /// per intent and produces no allocation.
     pub fn check_down_conflicts_compact(&self, compact_intents: &[CompactIntent]) -> u16 {
-        if self.active_mask == 0 {
+        if self.blocked_mask == 0 {
             return 0;
         }
         let mut conflict_mask: u16 = 0;
         for compact in compact_intents {
             let bit = Self::bit_for_slot(compact.key_slot());
-            if self.active_mask & bit != 0 {
+            if self.blocked_mask & bit != 0 {
                 conflict_mask |= bit;
             }
         }
@@ -1336,7 +1624,7 @@ impl RuntimeDispatchCoordinator {
             if conflict_mask & Self::bit_for_slot(compact.key_slot()) != 0 {
                 // Only Down intents with a generation ID need terminalizing.
                 if compact.generation_id() != NO_GENERATION_ID {
-                    self.counters.increment(GenerationStatus::DroppedConflict);
+                    self.terminalize(compact.generation_id(), GenerationStatus::DroppedConflict);
                 }
             }
         }
@@ -1359,17 +1647,17 @@ impl RuntimeDispatchCoordinator {
         let release_not_before_us =
             dispatch_completed_us + self.min_hold_us + self.delivery_margin_us;
         let release_not_before_ticks = dispatch_completed_ticks
-            .saturating_add(self.min_hold_ticks)
-            .saturating_add(self.delivery_margin_ticks);
+            .checked_add_duration(self.min_hold_ticks)
+            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))
+            .expect("release deadline must fit timeline tick domain");
 
         let batch = self.schedule.batches.get(batch_index).unwrap();
         let source_action_index = batch.source_action_index;
         let scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
         let start = batch.intent_start as usize;
         let end = start + batch.intent_len as usize;
-        let compact_intents = &self.schedule.intents[start..end];
-
-        for compact in compact_intents {
+        for intent_index in start..end {
+            let compact = self.schedule.intents[intent_index];
             let generation_id = compact.generation_id();
             if generation_id == NO_GENERATION_ID {
                 continue;
@@ -1379,7 +1667,18 @@ impl RuntimeDispatchCoordinator {
                 continue;
             };
             if !sent_scan_codes.contains(&sc) {
-                self.counters.increment(GenerationStatus::DroppedBackend);
+                self.record_transition(
+                    generation_id,
+                    GenerationStatus::Scheduled,
+                    GenerationStatus::DroppedBackend,
+                );
+                continue;
+            }
+            if !self.record_transition(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            ) {
                 continue;
             }
             self.active_by_slot[slot as usize] = Some(ActiveGeneration {
@@ -1388,7 +1687,7 @@ impl RuntimeDispatchCoordinator {
                 key_slot: slot,
                 source_action_index,
                 scheduled_down_us: scheduled_us,
-                scheduled_down_ticks: self.batch_scheduled_ticks[source_action_index as usize],
+                scheduled_down_ticks: self.batch_scheduled_ticks[batch_index],
                 down_dispatch_started_us: dispatch_started_us,
                 down_dispatch_started_ticks: dispatch_started_ticks,
                 down_dispatch_completed_us: dispatch_completed_us,
@@ -1397,6 +1696,7 @@ impl RuntimeDispatchCoordinator {
                 release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(slot);
+            self.blocked_mask |= Self::bit_for_slot(slot);
         }
     }
 
@@ -1412,8 +1712,9 @@ impl RuntimeDispatchCoordinator {
         let release_not_before_us =
             dispatch_completed_us + self.min_hold_us + self.delivery_margin_us;
         let release_not_before_ticks = dispatch_completed_ticks
-            .saturating_add(self.min_hold_ticks)
-            .saturating_add(self.delivery_margin_ticks);
+            .checked_add_duration(self.min_hold_ticks)
+            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))
+            .expect("release deadline must fit timeline tick domain");
 
         if sent_scan_codes.len() == 1 {
             let only_sent = sent_scan_codes[0];
@@ -1423,7 +1724,18 @@ impl RuntimeDispatchCoordinator {
                 };
                 if intent.scan_code != only_sent {
                     // Terminalize without touching any mask — slot was never activated.
-                    self.counters.increment(GenerationStatus::DroppedBackend);
+                    self.record_transition(
+                        generation_id,
+                        GenerationStatus::Scheduled,
+                        GenerationStatus::DroppedBackend,
+                    );
+                    continue;
+                }
+                if !self.record_transition(
+                    generation_id,
+                    GenerationStatus::Scheduled,
+                    GenerationStatus::Active,
+                ) {
                     continue;
                 }
                 self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
@@ -1432,8 +1744,7 @@ impl RuntimeDispatchCoordinator {
                     key_slot: intent.key_slot,
                     source_action_index: intent.source_action_index,
                     scheduled_down_us: intent.scheduled_us,
-                    scheduled_down_ticks: self.batch_scheduled_ticks
-                        [intent.source_action_index as usize],
+                    scheduled_down_ticks: self.batch_scheduled_ticks[intent.compiled_batch_index],
                     down_dispatch_started_us: dispatch_started_us,
                     down_dispatch_started_ticks: dispatch_started_ticks,
                     down_dispatch_completed_us: dispatch_completed_us,
@@ -1442,6 +1753,7 @@ impl RuntimeDispatchCoordinator {
                     release_not_before_ticks,
                 });
                 self.active_mask |= Self::bit_for_slot(intent.key_slot);
+                self.blocked_mask |= Self::bit_for_slot(intent.key_slot);
                 // No HashMap insertion — active count is derived from active_mask at query time.
             }
             return;
@@ -1452,7 +1764,18 @@ impl RuntimeDispatchCoordinator {
                 continue;
             };
             if !sent_scan_codes.contains(&intent.scan_code) {
-                self.counters.increment(GenerationStatus::DroppedBackend);
+                self.record_transition(
+                    generation_id,
+                    GenerationStatus::Scheduled,
+                    GenerationStatus::DroppedBackend,
+                );
+                continue;
+            }
+            if !self.record_transition(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            ) {
                 continue;
             }
             self.active_by_slot[intent.key_slot as usize] = Some(ActiveGeneration {
@@ -1461,8 +1784,7 @@ impl RuntimeDispatchCoordinator {
                 key_slot: intent.key_slot,
                 source_action_index: intent.source_action_index,
                 scheduled_down_us: intent.scheduled_us,
-                scheduled_down_ticks: self.batch_scheduled_ticks
-                    [intent.source_action_index as usize],
+                scheduled_down_ticks: self.batch_scheduled_ticks[intent.compiled_batch_index],
                 down_dispatch_started_us: dispatch_started_us,
                 down_dispatch_started_ticks: dispatch_started_ticks,
                 down_dispatch_completed_us: dispatch_completed_us,
@@ -1471,6 +1793,7 @@ impl RuntimeDispatchCoordinator {
                 release_not_before_ticks,
             });
             self.active_mask |= Self::bit_for_slot(intent.key_slot);
+            self.blocked_mask |= Self::bit_for_slot(intent.key_slot);
             // No HashMap insertion — active count is derived from active_mask at query time.
         }
     }
@@ -1482,14 +1805,14 @@ impl RuntimeDispatchCoordinator {
         SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
         SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
     ) {
-        if self.active_mask == 0 {
+        if self.blocked_mask == 0 {
             return (intents.iter().cloned().collect(), SmallVec::new());
         }
         let mut playable = SmallVec::new();
         let mut conflicts = SmallVec::new();
 
         for intent in intents {
-            if self.active_mask & Self::bit_for_slot(intent.key_slot) != 0 {
+            if self.blocked_mask & Self::bit_for_slot(intent.key_slot) != 0 {
                 conflicts.push(intent.clone());
                 if let Some(gen_id) = intent.generation_id {
                     self.terminalize(gen_id, GenerationStatus::DroppedConflict);
@@ -1532,11 +1855,18 @@ impl RuntimeDispatchCoordinator {
             let Some(generation_id) = intent.generation_id else {
                 return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
-            let active = self.active_for_slot(intent.key_slot);
+            let active = self.active_for_slot(intent.key_slot).cloned();
             let Some(active) = active else {
                 return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             };
             if active.generation_id != generation_id {
+                return (SmallVec::new(), std::iter::once(intent.clone()).collect());
+            }
+            if !self.record_transition(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::ReleasePending,
+            ) {
                 return (SmallVec::new(), std::iter::once(intent.clone()).collect());
             }
 
@@ -1547,8 +1877,7 @@ impl RuntimeDispatchCoordinator {
                 source_action_index: intent.source_action_index,
                 packet_id: intent.packet_id,
                 scheduled_release_us: intent.scheduled_us,
-                scheduled_release_ticks: self.batch_scheduled_ticks
-                    [intent.source_action_index as usize],
+                scheduled_release_ticks: self.batch_scheduled_ticks[intent.compiled_batch_index],
                 down_dispatch_started_us: active.down_dispatch_started_us,
                 down_dispatch_started_ticks: active.down_dispatch_started_ticks,
                 release_not_before_us: active.release_not_before_us,
@@ -1556,7 +1885,7 @@ impl RuntimeDispatchCoordinator {
                 reason_id: intent.reason_id,
                 retry_count: 0,
                 next_retry_us: 0,
-                next_retry_ticks: crate::time::TimelineTicks(0),
+                next_retry_ticks: crate::time::TimelineTicks::ZERO,
                 first_failure_us: None,
                 first_failure_ticks: None,
                 last_win32_error: None,
@@ -1564,6 +1893,7 @@ impl RuntimeDispatchCoordinator {
 
             self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
             self.pending_mask |= Self::bit_for_slot(intent.key_slot);
+            self.active_mask &= !Self::bit_for_slot(intent.key_slot);
             // No HashMap insertion — release_pending count is derived from pending_mask.
             return (std::iter::once(pending).collect(), SmallVec::new());
         }
@@ -1576,12 +1906,20 @@ impl RuntimeDispatchCoordinator {
                 suppressed.push(intent.clone());
                 continue;
             };
-            let active = self.active_for_slot(intent.key_slot);
+            let active = self.active_for_slot(intent.key_slot).cloned();
             let Some(active) = active else {
                 suppressed.push(intent.clone());
                 continue;
             };
             if active.generation_id != generation_id {
+                suppressed.push(intent.clone());
+                continue;
+            }
+            if !self.record_transition(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::ReleasePending,
+            ) {
                 suppressed.push(intent.clone());
                 continue;
             }
@@ -1593,8 +1931,7 @@ impl RuntimeDispatchCoordinator {
                 source_action_index: intent.source_action_index,
                 packet_id: intent.packet_id,
                 scheduled_release_us: intent.scheduled_us,
-                scheduled_release_ticks: self.batch_scheduled_ticks
-                    [intent.source_action_index as usize],
+                scheduled_release_ticks: self.batch_scheduled_ticks[intent.compiled_batch_index],
                 down_dispatch_started_us: active.down_dispatch_started_us,
                 down_dispatch_started_ticks: active.down_dispatch_started_ticks,
                 release_not_before_us: active.release_not_before_us,
@@ -1602,7 +1939,7 @@ impl RuntimeDispatchCoordinator {
                 reason_id: intent.reason_id,
                 retry_count: 0,
                 next_retry_us: 0,
-                next_retry_ticks: crate::time::TimelineTicks(0),
+                next_retry_ticks: crate::time::TimelineTicks::ZERO,
                 first_failure_us: None,
                 first_failure_ticks: None,
                 last_win32_error: None,
@@ -1610,6 +1947,7 @@ impl RuntimeDispatchCoordinator {
 
             self.pending_by_slot[intent.key_slot as usize] = Some(pending.clone());
             self.pending_mask |= Self::bit_for_slot(intent.key_slot);
+            self.active_mask &= !Self::bit_for_slot(intent.key_slot);
             // No HashMap insertion — release_pending count is derived from pending_mask.
             requested.push(pending);
         }
@@ -1629,17 +1967,26 @@ impl RuntimeDispatchCoordinator {
             if !in_sent && !in_skipped {
                 continue;
             }
-            if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
-            {
-                self.active_by_slot[pending.key_slot as usize] = None;
-                self.active_mask &= !Self::bit_for_slot(pending.key_slot);
-            }
             let status = if in_sent {
                 GenerationStatus::Released
             } else {
                 GenerationStatus::DroppedBackend
             };
-            self.terminalize(pending.generation_id, status);
+            if !self.record_transition(
+                pending.generation_id,
+                GenerationStatus::ReleasePending,
+                status,
+            ) {
+                continue;
+            }
+            if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
+            {
+                self.active_by_slot[pending.key_slot as usize] = None;
+                self.active_mask &= !Self::bit_for_slot(pending.key_slot);
+                self.blocked_mask &= !Self::bit_for_slot(pending.key_slot);
+            }
+            self.pending_mask &= !Self::bit_for_slot(pending.key_slot);
+            self.pending_by_slot[pending.key_slot as usize] = None;
         }
     }
 
@@ -1736,13 +2083,24 @@ impl RuntimeDispatchCoordinator {
         let mut sorted_cancelled: Vec<GenerationId> = cancelled_ids.into_vec();
         sorted_cancelled.sort_unstable();
 
-        for &_gen_id in &sorted_cancelled {
-            self.counters.increment(GenerationStatus::Cancelled);
+        for index in 0..self.generation_states.len() {
+            let state = self.generation_states[index];
+            if matches!(
+                state,
+                GenerationStatus::Scheduled
+                    | GenerationStatus::Active
+                    | GenerationStatus::ReleasePending
+            ) {
+                let generation_id =
+                    u64::try_from(index).expect("generation ledger index fits GenerationId");
+                self.record_transition(generation_id, state, GenerationStatus::Cancelled);
+            }
         }
 
         self.active_by_slot.fill(None);
         self.pending_by_slot.fill(None);
         self.active_mask = 0;
+        self.blocked_mask = 0;
         self.pending_mask = 0;
         self.release_recovery_started_us = None;
 

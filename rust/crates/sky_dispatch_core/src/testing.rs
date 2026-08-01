@@ -59,8 +59,12 @@ pub fn simulate_schedule(
     send_latency_us: u64,
 ) -> Result<SimulationResult, crate::compile::CompileError> {
     let schedule = crate::compile::compile_runtime_intents(actions, allowed_scan_codes)?;
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(schedule, min_hold_us, 0, crate::time::TimelineTicks);
+    let mut coordinator = RuntimeDispatchCoordinator::new(
+        schedule,
+        min_hold_us,
+        0,
+        crate::time::TimelineTicks::from_raw,
+    );
 
     let mut events = Vec::new();
     let mut step: u32 = 0;
@@ -116,9 +120,9 @@ pub fn simulate_schedule(
                             &playable,
                             &scan_codes,
                             now_us,
-                            crate::time::TimelineTicks(now_us),
+                            crate::time::TimelineTicks::from_raw(now_us),
                             completed_us,
-                            crate::time::TimelineTicks(completed_us),
+                            crate::time::TimelineTicks::from_raw(completed_us),
                         );
 
                         events.push(TraceEvent {
