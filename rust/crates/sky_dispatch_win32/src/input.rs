@@ -154,7 +154,7 @@ pub struct ReleaseAllOutcome {
 }
 
 #[cfg(windows)]
-pub fn create_keyboard_input(
+pub const fn create_keyboard_input(
     scan_code: u16,
     key_up: bool,
 ) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
@@ -177,6 +177,31 @@ pub fn create_keyboard_input(
     }
 }
 
+#[cfg(windows)]
+const MAX_SCAN_CODE: usize = 0x36;
+
+#[cfg(windows)]
+const DOWN_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX_SCAN_CODE] = {
+    let mut arr = [create_keyboard_input(0, false); MAX_SCAN_CODE];
+    let mut i = 0;
+    while i < MAX_SCAN_CODE {
+        arr[i] = create_keyboard_input(i as u16, false);
+        i += 1;
+    }
+    arr
+};
+
+#[cfg(windows)]
+const UP_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX_SCAN_CODE] = {
+    let mut arr = [create_keyboard_input(0, true); MAX_SCAN_CODE];
+    let mut i = 0;
+    while i < MAX_SCAN_CODE {
+        arr[i] = create_keyboard_input(i as u16, true);
+        i += 1;
+    }
+    arr
+};
+
 pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     #[cfg(windows)]
     {
@@ -192,14 +217,24 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
             };
         }
 
-        let packets: SmallVec<[INPUT; 15]> = scan_codes
-            .iter()
-            .map(|&sc| create_keyboard_input(sc, key_up))
-            .collect();
-        let requested = packets.len() as u32;
+        let mut packets: [INPUT; 15] = unsafe { std::mem::zeroed() };
+        let len = scan_codes.len().min(15);
+        for i in 0..len {
+            let sc = scan_codes[i];
+            if (sc as usize) < MAX_SCAN_CODE {
+                packets[i] = if key_up {
+                    UP_TEMPLATES[sc as usize]
+                } else {
+                    DOWN_TEMPLATES[sc as usize]
+                };
+            } else {
+                packets[i] = create_keyboard_input(sc, key_up);
+            }
+        }
+        let requested = len as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
 
-        // SAFETY: `packets` owns `requested` contiguous, correctly aligned INPUT
+        // SAFETY: `packets` array holds `requested` contiguous, correctly aligned INPUT
         // values and remains alive and immobile for the duration of SendInput.
         // `requested` is bounded to 15 by the validated caller.
         // SendInput does not promise to clear last-error on every path. Reset
