@@ -703,6 +703,144 @@ mod tests {
     }
 
     #[test]
+    fn cancel_live_generations_preserves_future_scheduled_generations() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "live".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "live-up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200,
+                    scan_codes: vec![0x16].into(),
+                    reason: "future".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 300,
+                    scan_codes: vec![0x16].into(),
+                    reason: "future-up".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let (live_down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("live down is due");
+        coordinator
+            .activate_sent_downs(
+                &live_down.intents,
+                &[0x15],
+                0,
+                crate::time::TimelineTicks::from_raw(0),
+                0,
+                crate::time::TimelineTicks::from_raw(0),
+            )
+            .expect("live down activates");
+
+        let cancelled = coordinator
+            .cancel_live_generations()
+            .expect("live cancellation succeeds");
+        assert_eq!(cancelled, vec![0]);
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get(GenerationStatus::Cancelled.as_str()), Some(&1));
+        assert_eq!(counts.get(GenerationStatus::Scheduled.as_str()), Some(&1));
+        assert_eq!(counts.get(GenerationStatus::Active.as_str()), Some(&0));
+        assert!(coordinator.check_invariants().is_ok());
+        assert!(coordinator.cancel_live_generations().unwrap().is_empty());
+
+        let (stale_up, _) = coordinator
+            .pop_next_due_authored(100, 0)
+            .expect("cancelled generation's authored up remains in cursor order");
+        assert_eq!(stale_up.intents[0].scan_code, 0x15);
+        let (future_down, _) = coordinator
+            .pop_next_due_authored(200, 0)
+            .expect("future down remains schedulable");
+        assert_eq!(future_down.intents[0].scan_code, 0x16);
+    }
+
+    #[test]
+    fn cancel_live_generations_cancels_release_pending_but_not_future() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "live".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "live-up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200,
+                    scan_codes: vec![0x16].into(),
+                    reason: "future".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let (down, _) = coordinator
+            .pop_next_due_authored(0, 0)
+            .expect("down is due");
+        coordinator
+            .activate_sent_downs(
+                &down.intents,
+                &[0x15],
+                0,
+                crate::time::TimelineTicks::from_raw(0),
+                0,
+                crate::time::TimelineTicks::from_raw(0),
+            )
+            .expect("down activates");
+        let (up, _) = coordinator
+            .pop_next_due_authored(100, 0)
+            .expect("up is due");
+        coordinator
+            .request_releases(&up.intents)
+            .expect("release request succeeds");
+
+        let cancelled = coordinator
+            .cancel_live_generations()
+            .expect("pending cancellation succeeds");
+        assert_eq!(cancelled, vec![0]);
+        let counts = coordinator.generation_status_counts();
+        assert_eq!(counts.get(GenerationStatus::Cancelled.as_str()), Some(&1));
+        assert_eq!(counts.get(GenerationStatus::Scheduled.as_str()), Some(&1));
+        assert_eq!(
+            counts.get(GenerationStatus::ReleasePending.as_str()),
+            Some(&0)
+        );
+        assert!(coordinator.check_invariants().is_ok());
+    }
+
+    #[test]
     fn generation_counters_each_slot_has_at_most_one_generation() {
         // After activate, each slot bit is set at most once.
         let schedule = compile_runtime_intents(
@@ -2471,5 +2609,53 @@ impl RuntimeDispatchCoordinator {
         self.release_recovery_started_ticks = None;
 
         Ok(sorted_cancelled)
+    }
+
+    /// Cancel only generations that currently own physical input state.
+    ///
+    /// Authored generations that have not been dispatched remain Scheduled,
+    /// so a focus/manual suspension can resume the immutable authored cursor
+    /// without ever attempting `Cancelled -> Active`.
+    pub fn cancel_live_generations(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {
+        let mut cancelled_ids: SmallVec<[GenerationId; MAX_KEYS * 2]> = self
+            .generation_states
+            .iter()
+            .enumerate()
+            .filter_map(|(index, state)| {
+                matches!(
+                    state,
+                    GenerationStatus::Active | GenerationStatus::ReleasePending
+                )
+                .then_some(index)
+            })
+            .map(|index| {
+                GenerationId::try_from(index).map_err(|_| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "generation ledger index does not fit GenerationId".to_string(),
+                    ))
+                })
+            })
+            .collect::<Result<SmallVec<_>, _>>()?;
+        cancelled_ids.sort_unstable();
+
+        for generation_id in cancelled_ids.iter().copied() {
+            let state = *self.generation_states.get(generation_id as usize).ok_or(
+                CoordinatorError::Invariant(CoordinatorInvariantError::UnknownGeneration {
+                    generation_id,
+                    generation_count: self.generation_count,
+                }),
+            )?;
+            self.transition_generation(generation_id, state, GenerationStatus::Cancelled)?;
+        }
+
+        self.active_by_slot.fill(None);
+        self.pending_by_slot.fill(None);
+        self.active_mask = 0;
+        self.blocked_mask = 0;
+        self.pending_mask = 0;
+        self.release_recovery_started_ticks = None;
+        self.check_invariants()?;
+
+        Ok(cancelled_ids.into_vec())
     }
 }

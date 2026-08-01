@@ -193,6 +193,98 @@ def test_native_dispatch_focus_gate_uses_interruptible_pause() -> None:
     assert session.join() is True
 
 
+def test_native_dispatch_focus_cycles_preserve_future_generations() -> None:
+    session = sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
+        [
+            (0, "down", 1_000, [0x15], "first"),
+            (1, "up", 100_000, [0x15], "first-release"),
+            (2, "down", 200_000, [0x16], "future"),
+            (3, "up", 300_000, [0x16], "future-release"),
+        ],
+        [0x15, 0x16],
+        mock_backend=True,
+        require_focus=True,
+        focus_restore_grace_us=1_000,
+    )
+    session.start()
+    time.sleep(0.01)
+
+    foreground_raw = inputs.user32.GetForegroundWindow()
+    if not foreground_raw:
+        session.quit()
+        assert session.join() is True
+        pytest.skip("Windows has no foreground window for the focus-cycle test")
+    foreground_hwnd = int(foreground_raw)
+
+    session.update_focus(True, hwnd=foreground_hwnd)
+    deadline = time.perf_counter() + 0.2
+    snap = cast(dict[str, Any], session.snapshot())
+    while time.perf_counter() < deadline and snap["active_count"] != 1:
+        time.sleep(0.002)
+        snap = cast(dict[str, Any], session.snapshot())
+    assert snap["active_count"] == 1
+
+    for _ in range(2):
+        session.update_focus(False)
+        deadline = time.perf_counter() + 0.2
+        while time.perf_counter() < deadline:
+            snap = cast(dict[str, Any], session.snapshot())
+            if snap["is_paused"] and snap["active_count"] == 0:
+                break
+            time.sleep(0.002)
+        assert snap["is_paused"] is True
+        assert snap["active_count"] == 0
+
+        session.update_focus(True, hwnd=foreground_hwnd)
+        deadline = time.perf_counter() + 0.2
+        while time.perf_counter() < deadline:
+            snap = cast(dict[str, Any], session.snapshot())
+            if not snap["is_paused"]:
+                break
+            time.sleep(0.002)
+        assert snap["is_paused"] is False
+
+    assert session.join(timeout_ms=1_000) is True
+    final = cast(dict[str, Any], session.snapshot())
+    assert final["status"] == "finished"
+    assert final["terminal_error"] is None
+    assert final["generation_status_counts"]["cancelled"] == 1
+    assert final["generation_status_counts"]["released"] == 1
+
+
+def test_native_dispatch_manual_pause_cancels_live_but_keeps_future_same_key() -> None:
+    session = sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
+        [
+            (0, "down", 1_000, [0x15], "first"),
+            (1, "up", 100_000, [0x15], "first-release"),
+            (2, "down", 200_000, [0x15], "future"),
+            (3, "up", 300_000, [0x15], "future-release"),
+        ],
+        [0x15],
+        mock_backend=True,
+    )
+    session.start()
+    time.sleep(0.01)
+    assert cast(dict[str, Any], session.snapshot())["active_count"] == 1
+
+    session.pause()
+    deadline = time.perf_counter() + 0.2
+    snap = cast(dict[str, Any], session.snapshot())
+    while time.perf_counter() < deadline and not snap["is_paused"]:
+        time.sleep(0.002)
+        snap = cast(dict[str, Any], session.snapshot())
+    assert snap["is_paused"] is True
+    assert snap["active_count"] == 0
+
+    session.resume()
+    assert session.join(timeout_ms=1_000) is True
+    final = cast(dict[str, Any], session.snapshot())
+    assert final["status"] == "finished"
+    assert final["terminal_error"] is None
+    assert final["generation_status_counts"]["cancelled"] == 1
+    assert final["generation_status_counts"]["released"] == 1
+
+
 def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
     session = sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
         [

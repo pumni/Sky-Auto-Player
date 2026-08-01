@@ -1525,19 +1525,6 @@ fn run_worker(
         }};
     }
 
-    macro_rules! qpc_ticks_from_us_or_terminal {
-        ($value:expr) => {{
-            match qpc_clock.timeline_from_us($value) {
-                Ok(ticks) => QpcTicks::from_raw(ticks.as_u64()),
-                Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC conversion failure: {error:?}"));
-                    break;
-                }
-            }
-        }};
-    }
-
     macro_rules! qpc_ticks_or_terminal {
         () => {{
             match qpc_clock.now() {
@@ -1641,16 +1628,13 @@ fn run_worker(
             if !focus_ok {
                 focus_restore_started_us = None;
                 if !clock_state.has_pause_reason("focus") {
-                    let _ = backend.release_all();
-                    cancel_coordinator_or_terminal(
-                        &mut coordinator,
-                        &mut force_full_cleanup,
-                        &mut terminal_error,
-                    );
+                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("focus suspension failed: {error}"));
+                        break;
+                    }
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    if let Err(error) =
-                        clock_state.enter_pause("focus", qpc_ticks_from_us_or_terminal!(now_us))
-                    {
+                    if let Err(error) = clock_state.enter_pause("focus", now_ticks) {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
@@ -1668,20 +1652,17 @@ fn run_worker(
                 if now_us.saturating_sub(restored_at) >= config.focus_restore_grace_us {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
-                    let _ = backend.release_all();
-                    cancel_coordinator_or_terminal(
-                        &mut coordinator,
-                        &mut force_full_cleanup,
-                        &mut terminal_error,
-                    );
+                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("focus restoration failed: {error}"));
+                        break;
+                    }
                     // Cleanup can include bounded backend retries. Re-sample
                     // QPC after it completes so that the cleanup interval is
                     // included in the focus pause rather than lost from the
                     // playback clock.
-                    let resumed_us = qpc_us_or_terminal!();
-                    if let Err(error) =
-                        clock_state.exit_pause("focus", qpc_ticks_from_us_or_terminal!(resumed_us))
-                    {
+                    let resumed_ticks = qpc_ticks_or_terminal!();
+                    if let Err(error) = clock_state.exit_pause("focus", resumed_ticks) {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
@@ -1699,11 +1680,11 @@ fn run_worker(
 
             if manual_pause && !clock_state.has_pause_reason("manual") {
                 if !clock_state.is_paused() {
-                    let _ = backend.release_all();
-                    // Manual pause preserves the coordinator ledger so a
-                    // subsequent resume can continue the authored schedule.
-                    // Physical keys are still released before entering the
-                    // pause; the typed timeline remains frozen by the clock.
+                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("manual pause suspension failed: {error}"));
+                        break;
+                    }
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(
                         &backend,
@@ -1713,17 +1694,14 @@ fn run_worker(
                     );
                     try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
-                if let Err(error) =
-                    clock_state.enter_pause("manual", qpc_ticks_from_us_or_terminal!(now_us))
-                {
+                if let Err(error) = clock_state.enter_pause("manual", now_ticks) {
                     force_full_cleanup = true;
                     terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
             } else if !manual_pause
                 && clock_state.has_pause_reason("manual")
-                && let Err(error) =
-                    clock_state.exit_pause("manual", qpc_ticks_from_us_or_terminal!(now_us))
+                && let Err(error) = clock_state.exit_pause("manual", now_ticks)
             {
                 force_full_cleanup = true;
                 terminal_error = Some(format!("playback clock failure: {error}"));
@@ -2435,15 +2413,12 @@ fn run_worker(
                                 break;
                             }
                         }
-                        let _ = backend.release_all();
-                        cancel_coordinator_or_terminal(
-                            &mut coordinator,
-                            &mut force_full_cleanup,
-                            &mut terminal_error,
-                        );
-                        if let Err(error) =
-                            clock_state.enter_pause("focus", qpc_ticks_from_us_or_terminal!(now_us))
-                        {
+                        if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("focus suspension failed: {error}"));
+                            break;
+                        }
+                        if let Err(error) = clock_state.enter_pause("focus", now_ticks) {
                             force_full_cleanup = true;
                             terminal_error = Some(format!("playback clock failure: {error}"));
                             break;
@@ -3568,6 +3543,54 @@ fn cancel_coordinator_or_terminal(
             *terminal_error = Some(format!("coordinator cancellation failure: {error}"));
         }
     }
+}
+
+fn release_outcome_verified(outcome: &ReleaseAllOutcome) -> bool {
+    outcome.released_successfully
+        && outcome.stuck_keys.is_empty()
+        && !outcome.verification_inconclusive
+}
+
+fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
+    format!(
+        "released_successfully={}, stuck_keys={:?}, verification_inconclusive={}",
+        outcome.released_successfully, outcome.stuck_keys, outcome.verification_inconclusive
+    )
+}
+
+/// Release physical input before cancelling only generations that still own it.
+///
+/// A suspend is resumable: authored generations that have not reached the
+/// backend remain Scheduled. The backend result is checked before coordinator
+/// state is changed, so an inconclusive release cannot be mistaken for a clean
+/// pause.
+fn suspend_live_input(
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+) -> Result<Vec<u64>, String> {
+    let initial = backend.release_all();
+    let release = if release_outcome_verified(&initial) {
+        initial
+    } else {
+        let full = backend.release_all_full_instrument();
+        if !release_outcome_verified(&full) {
+            return Err(format!(
+                "release verification failed (initial: {}; full: {})",
+                describe_release_outcome(&initial),
+                describe_release_outcome(&full),
+            ));
+        }
+        full
+    };
+
+    debug_assert!(release_outcome_verified(&release));
+    let cancelled = coordinator
+        .cancel_live_generations()
+        .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
+    coordinator
+        .check_invariants()
+        .map_err(|error| format!("coordinator invariant failure after suspension: {error}"))?;
+    Ok(cancelled)
 }
 
 fn release_runtime_outcome(
