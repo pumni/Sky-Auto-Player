@@ -161,7 +161,17 @@ floor/cap, and the existing kill switch remain unchanged.
 `injected_raw_input_delivery_proxy`: the app injects through Windows `SendInput` into an app-owned
 window and observes its `WM_INPUT` delivery. It does not measure Sky process polling, render-frame
 timing, or audio onset. `sampled_at` is UTC metadata and `evidence_kind` identifies this boundary;
-no freshness TTL is applied by the loader.
+no freshness TTL is applied by the loader. Warm-up injections are excluded from both measured
+classes; Hot samples use a short gap and Cold samples use an explicit idle gap. Partial insertion
+is retained as anomalous evidence while receipts for inserted packets are still collected. The
+calibration session snapshots and restores process Raw Input registrations and performs bounded
+full-instrument KeyUp cleanup; uncertain cleanup is an error, not a successful calibration.
+
+**Clock failure policy.** QPC is the sole real-time clock domain after native preparation. A failed
+runtime QPC query, including a query immediately after a successful `SendInput`, is terminal: the
+worker records the timing-integrity error, stops authored dispatch, performs bounded full-instrument
+cleanup, and publishes an error outcome. It must not substitute timestamp zero or continue with a
+microsecond round-trip.
 
 ## 4. Wait strategy
 

@@ -52,7 +52,10 @@ The optional Windows calibration cache is evidence of kind
 through `SendInput`, and the harness correlates its `WM_INPUT` receipt with the native-call
 completion timestamp. This is a host delivery proxy only; it does not observe Sky polling, render
 frames, or audio onset. Its UTC `sampled_at` and evidence label are diagnostic metadata, and the
-loader applies no freshness TTL until repeated measurements establish a conservative policy.
+loader applies no freshness TTL until repeated measurements establish a conservative policy. Warm-up
+injections are excluded from both measured classes; Hot uses a short gap and Cold uses an explicit
+idle gap. Down/Up and polyphony channels remain independent. Partial injection and uncertain
+cleanup invalidate a run rather than becoming zero-latency evidence.
 
 ### FPS Assumption vs Real Game FPS
 The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
