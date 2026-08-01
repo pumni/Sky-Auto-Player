@@ -71,7 +71,7 @@ fn strict_scan_codes(
     value: &Bound<'_, PyAny>,
     field: &str,
     allowed: Option<&[u16]>,
-) -> PyResult<Vec<u16>> {
+) -> PyResult<smallvec::SmallVec<[u16; 4]>> {
     let items = strict_sequence(value, field)?;
     if items.is_empty() || items.len() > sky_dispatch_core::model::MAX_KEYS {
         return Err(PyValueError::new_err(format!(
@@ -80,8 +80,8 @@ fn strict_scan_codes(
         )));
     }
 
-    let mut result = Vec::with_capacity(items.len());
-    let mut seen: Vec<u16> = Vec::with_capacity(items.len());
+    let mut result = smallvec::SmallVec::with_capacity(items.len());
+    let mut seen = smallvec::SmallVec::<[u16; 15]>::new();
     for (index, item) in items.iter().enumerate() {
         let item_field = format!("{field}[{index}]");
         let integer = strict_integer(item, &item_field)?;
@@ -110,23 +110,28 @@ fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
         value,
         "allowed_scan_codes",
         Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
-    )
+    ).map(|v| v.into_vec())
 }
 
 fn parse_actions(
     value: &Bound<'_, PyAny>,
     allowed_scan_codes: &[u16],
 ) -> PyResult<Vec<KeyActionInput>> {
-    let items = strict_sequence(value, "actions")?;
-    if items.len() > sky_dispatch_core::compile::MAX_ACTIONS {
-        return Err(PyValueError::new_err(format!(
-            "actions exceeds the configured cap of {}",
-            sky_dispatch_core::compile::MAX_ACTIONS
-        )));
-    }
-    let mut actions = Vec::with_capacity(items.len());
+    let iter = value.try_iter().map_err(|_| {
+        PyTypeError::new_err("actions must be an iterable")
+    })?;
+    
+    let mut actions = Vec::new();
+    let mut reason_interns = std::collections::HashMap::<String, Arc<str>>::new();
 
-    for (position, item) in items.iter().enumerate() {
+    for (position, item_res) in iter.enumerate() {
+        if position >= sky_dispatch_core::compile::MAX_ACTIONS {
+            return Err(PyValueError::new_err(format!(
+                "actions exceeds the configured cap of {}",
+                sky_dispatch_core::compile::MAX_ACTIONS
+            )));
+        }
+        let item = item_res?;
         let tuple = item.cast::<PyTuple>().map_err(|_| {
             PyTypeError::new_err(format!(
                 "actions[{position}] must be a 5-item tuple \
@@ -173,12 +178,17 @@ fn parse_actions(
             )));
         }
 
+        let interned_reason = reason_interns
+            .entry(reason.clone())
+            .or_insert_with(|| Arc::from(reason))
+            .clone();
+
         actions.push(KeyActionInput {
             source_action_index,
             kind,
             scheduled_us,
             scan_codes,
-            reason,
+            reason: interned_reason,
         });
     }
     Ok(actions)
@@ -411,8 +421,39 @@ struct NativeDispatchSessionPy {
 #[pymethods]
 impl NativeDispatchSessionPy {
     #[new]
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_mode = None, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), supervisor_lease_timeout_us = StrictU64(0), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
+    #[pyo3(signature = (
+        py_actions,
+        allowed_scan_codes,
+        min_hold_us = StrictU64(50000),
+        max_lead_us = StrictU64(2000),
+        dispatch_lead_us = StrictU64(0),
+        mock_backend = true,
+        require_focus = false,
+        focus_restore_grace_us = StrictU64(100000),
+        spin_threshold_us = StrictU64(150),
+        core_warmup_budget_us = StrictU64(200),
+        late_pulse_drop_threshold_us = None,
+        same_key_conflict_policy = "drop_chord",
+        telemetry_enabled = false,
+        telemetry_mode = None,
+        telemetry_capacity = StrictU64(200000),
+        rt_priority_mode = "auto",
+        enable_waitable_timer = true,
+        enable_event_wait = true,
+        enable_adaptive_spin = false,
+        enable_spin_reprobe = false,
+        spin_floor_us = StrictU64(700),
+        estimator_state_json = None,
+        enable_adaptive_lead = false,
+        input_path_warn_us = StrictU64(300),
+        strict_timing = false,
+        strict_down_completion_late_us = StrictU64(2000),
+        strict_up_completion_late_us = StrictU64(2000),
+        supervisor_lease_timeout_us = StrictU64(0),
+        mock_failure_mode = "none",
+        mock_latency_base_us = StrictU64(0),
+        mock_latency_per_key_us = StrictU64(0)
+    ))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,

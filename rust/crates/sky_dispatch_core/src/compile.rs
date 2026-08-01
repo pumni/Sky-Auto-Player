@@ -93,8 +93,8 @@ pub fn compile_runtime_intents(
         } else {
             let id =
                 ReasonId::try_from(reason_table.len()).map_err(|_| CompileError::TooManyReasons)?;
-            reason_table.push(reason.to_string());
-            reason_map.insert(reason.to_string(), id);
+            reason_table.push(reason.into());
+            reason_map.insert(reason.into(), id);
             Ok(id)
         }
     };
@@ -249,22 +249,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1, 2],
-                reason: "chord".to_string(),
+                scan_codes: smallvec::smallvec![1, 2],
+                reason: "chord".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 2000,
-                scan_codes: vec![1],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
                 scheduled_us: 2100,
-                scan_codes: vec![2],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![2],
+                reason: "release".into(),
             },
         ];
 
@@ -292,8 +292,8 @@ mod tests {
             source_action_index: 0,
             kind: ActionKind::Up,
             scheduled_us: 1000,
-            scan_codes: vec![1],
-            reason: "stale".to_string(),
+            scan_codes: smallvec::smallvec![1],
+            reason: "stale".into(),
         }];
 
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
@@ -308,22 +308,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 100,
-                scan_codes: vec![1],
-                reason: "left".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "left".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 100,
-                scan_codes: vec![1],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 100,
-                scan_codes: vec![2],
-                reason: "right".to_string(),
+                scan_codes: smallvec::smallvec![2],
+                reason: "right".into(),
             },
         ];
         assert!(matches!(
@@ -340,15 +340,15 @@ mod tests {
                 source_action_index: 1,
                 kind: ActionKind::Down,
                 scheduled_us: 2,
-                scan_codes: vec![1],
-                reason: "first".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "first".into(),
             },
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Up,
                 scheduled_us: 1,
-                scan_codes: vec![1],
-                reason: "second".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "second".into(),
             },
         ];
         assert!(matches!(
@@ -360,8 +360,8 @@ mod tests {
             source_action_index: 0,
             kind: ActionKind::Down,
             scheduled_us: 0,
-            scan_codes: vec![2],
-            reason: "invalid".to_string(),
+            scan_codes: smallvec::smallvec![2],
+            reason: "invalid".into(),
         }];
         assert!(matches!(
             compile_runtime_intents(&outside_allowlist, &allowed),
@@ -377,15 +377,15 @@ mod tests {
                     source_action_index: 0,
                     kind: ActionKind::Down,
                     scheduled_us: 10,
-                    scan_codes: vec![1],
-                    reason: "single".to_string(),
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "single".into(),
                 },
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Down,
                     scheduled_us: 20,
-                    scan_codes: vec![2, 3],
-                    reason: "chord".to_string(),
+                    scan_codes: smallvec::smallvec![2, 3],
+                    reason: "chord".into(),
                 },
             ],
             &[1, 2, 3],
@@ -406,15 +406,15 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1],
-                reason: "first down".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "first down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Down,
                 scheduled_us: 2000,
-                scan_codes: vec![1],
-                reason: "overlapping down".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "overlapping down".into(),
             },
         ];
         let err = compile_runtime_intents(&actions, &allowed).unwrap_err();
@@ -437,15 +437,15 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1],
-                reason: "down 1".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "down 1".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Down,
                 scheduled_us: 2000,
-                scan_codes: vec![2],
-                reason: "down 2".to_string(),
+                scan_codes: smallvec::smallvec![2],
+                reason: "down 2".into(),
             },
         ];
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
@@ -460,22 +460,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1, 2],
-                reason: "chord 1".to_string(),
+                scan_codes: smallvec::smallvec![1, 2],
+                reason: "chord 1".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 1500,
-                scan_codes: vec![1],
-                reason: "release 1".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release 1".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 2000,
-                scan_codes: vec![2, 3],
-                reason: "chord 2".to_string(),
+                scan_codes: smallvec::smallvec![2, 3],
+                reason: "chord 2".into(),
             },
         ];
         let err = compile_runtime_intents(&actions, &allowed).unwrap_err();
@@ -493,22 +493,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1],
-                reason: "first down".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "first down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 1500,
-                scan_codes: vec![1],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 2000,
-                scan_codes: vec![1],
-                reason: "second down".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "second down".into(),
             },
         ];
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();

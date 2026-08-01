@@ -423,7 +423,6 @@ class RustDispatchRuntime:
     """Supervisor-side adapter; never participates in the real-time hot path."""
 
     __slots__ = (
-        "_actions",
         "_controls",
         "_focus_guard",
         "_has_played",
@@ -477,7 +476,7 @@ class RustDispatchRuntime:
             )
         import sky_player_rs  # type: ignore[import-not-found]
 
-        native_actions = [
+        native_actions = (
             (
                 index,
                 str(action.kind),
@@ -486,7 +485,7 @@ class RustDispatchRuntime:
                 action.reason,
             )
             for index, action in enumerate(actions)
-        ]
+        )
         self._session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             native_actions,
             list(SKY_15_SCAN_CODES),
@@ -516,7 +515,6 @@ class RustDispatchRuntime:
             strict_up_completion_late_us=strict_up_completion_late_us,
             supervisor_lease_timeout_us=SUPERVISOR_LEASE_TIMEOUT_US,
         )
-        self._actions = actions
         self._song_name = song_name
         self._min_hold_us = min_hold_us
         self._require_focus = require_focus

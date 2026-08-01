@@ -354,11 +354,13 @@ impl ScanCodeBatch {
     }
 }
 
+use std::sync::Arc;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyActionInput {
     pub source_action_index: u32,
     pub kind: ActionKind,
     pub scheduled_us: u64,
-    pub scan_codes: Vec<u16>,
-    pub reason: String,
+    pub scan_codes: SmallVec<[u16; 4]>,
+    pub reason: Arc<str>,
 }
