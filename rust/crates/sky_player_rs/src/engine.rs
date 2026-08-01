@@ -310,56 +310,72 @@ enum WorkerCommand {
     PanicRelease,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct WorkerMetricsLocal {
+    pub elapsed_us: u64,
+    pub total_us: u64,
+    pub lateness_us: u64,
+    pub max_lateness_us: u64,
+    pub late_2ms: u64,
+    pub late_5ms: u64,
+    pub late_10ms: u64,
+    pub release_max_us: u64,
+    pub release_late_2ms: u64,
+    pub active_count: u64,
+    pub possibly_active_count: u64,
+    pub failed_release_count: u64,
+    pub keys_dropped: u64,
+    pub chord_split_events: u64,
+    pub sendinput_partial_events: u64,
+    pub sendinput_zero_progress_failures: u64,
+    pub chords_rejected: u64,
+    pub authored_conflict_events: u64,
+    pub authored_chords_rejected: u64,
+    pub authored_keys_rejected: u64,
+    pub keys_inserted_before_failure: u64,
+    pub keys_rolled_back: u64,
+    pub rollback_residue_keys: u64,
+    pub lead_saturation_count_down: [u64; 16],
+    pub lead_saturation_count_up: [u64; 16],
+    pub positive_residual_at_cap: u64,
+    pub recovered_zero_progress_but_late: u64,
+    pub effective_spin_threshold_us: u64,
+    pub wake_error_p50_us: u64,
+    pub wake_error_p95_us: u64,
+    pub wake_error_p99_us: u64,
+    pub wake_error_max_us: u64,
+    pub spin_time_us: u64,
+    pub power_throttling_disabled: bool,
+    pub input_path_degraded: bool,
+    pub sendinput_path_degraded: bool,
+    pub bookkeeping_degraded: bool,
+    pub wait_path_degraded: bool,
+    pub wait_target_error_us: u64,
+    pub idle_wake_count: u64,
+}
+
 #[derive(Default)]
 struct SharedMetrics {
-    elapsed_us: AtomicU64,
-    total_us: AtomicU64,
-    lateness_us: AtomicU64,
-    max_lateness_us: AtomicU64,
-    late_2ms: AtomicU64,
-    late_5ms: AtomicU64,
-    late_10ms: AtomicU64,
-    release_max_us: AtomicU64,
-    release_late_2ms: AtomicU64,
-    active_count: AtomicU64,
-    possibly_active_count: AtomicU64,
-    failed_release_count: AtomicU64,
-    last_error: Mutex<Option<String>>,
-    keys_dropped: AtomicU64,
-    chord_split_events: AtomicU64,
-    sendinput_partial_events: AtomicU64,
-    sendinput_zero_progress_failures: AtomicU64,
-    chords_rejected: AtomicU64,
-    authored_conflict_events: AtomicU64,
-    authored_chords_rejected: AtomicU64,
-    authored_keys_rejected: AtomicU64,
-    keys_inserted_before_failure: AtomicU64,
-    keys_rolled_back: AtomicU64,
-    rollback_residue_keys: AtomicU64,
-    lead_saturation_count_down: [AtomicU64; 16],
-    lead_saturation_count_up: [AtomicU64; 16],
-    positive_residual_at_cap: AtomicU64,
-    recovered_zero_progress_but_late: AtomicU64,
+    snapshot: parking_lot::Mutex<WorkerMetricsLocal>,
+    last_publish_us: AtomicU64,
     is_paused: AtomicBool,
     panicked: AtomicBool,
-    effective_spin_threshold_us: AtomicU64,
-    wake_error_p50_us: AtomicU64,
-    wake_error_p95_us: AtomicU64,
-    wake_error_p99_us: AtomicU64,
-    wake_error_max_us: AtomicU64,
-    spin_time_us: AtomicU64,
+    last_error: Mutex<Option<String>>,
     wait_strategy_acquired: Mutex<String>,
-    power_throttling_disabled: AtomicBool,
-    input_path_degraded: AtomicBool,
-    sendinput_path_degraded: AtomicBool,
-    bookkeeping_degraded: AtomicBool,
-    wait_path_degraded: AtomicBool,
-    wait_target_error_us: AtomicU64,
-    idle_wake_count: AtomicU64,
     terminal_error: Mutex<Option<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
     abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
+}
+
+fn try_publish_metrics(local: &WorkerMetricsLocal, shared: &SharedMetrics, now_us: u64, force: bool) {
+    let last = shared.last_publish_us.load(Ordering::Relaxed);
+    if force || now_us.saturating_sub(last) >= 20_000 {
+        if let Some(mut guard) = shared.snapshot.try_lock() {
+            *guard = local.clone();
+            shared.last_publish_us.store(now_us, Ordering::Relaxed);
+        }
+    }
 }
 
 struct WorkerConfig {
@@ -469,7 +485,7 @@ impl NativeDispatchSession {
             validator.import_state(raw)?;
         }
         let metrics = Arc::new(SharedMetrics::default());
-        metrics.total_us.store(total_us, Ordering::Relaxed);
+        metrics.snapshot.lock().total_us = total_us;
         Ok(Self {
             config: Mutex::new(Some(WorkerConfig {
                 schedule,
@@ -728,95 +744,57 @@ impl NativeDispatchSession {
             LIFECYCLE_POISONED => "poisoned",
             _ => "invalid",
         };
+        let local = self.metrics.snapshot.lock().clone();
         EngineSnapshot {
-            elapsed_us: self.metrics.elapsed_us.load(Ordering::Relaxed),
-            total_us: self.metrics.total_us.load(Ordering::Relaxed),
-            lateness_us: self.metrics.lateness_us.load(Ordering::Relaxed),
-            max_lateness_us: self.metrics.max_lateness_us.load(Ordering::Relaxed),
-            late_2ms: self.metrics.late_2ms.load(Ordering::Relaxed),
-            late_5ms: self.metrics.late_5ms.load(Ordering::Relaxed),
-            late_10ms: self.metrics.late_10ms.load(Ordering::Relaxed),
-            release_max_us: self.metrics.release_max_us.load(Ordering::Relaxed),
-            release_late_2ms: self.metrics.release_late_2ms.load(Ordering::Relaxed),
+            elapsed_us: local.elapsed_us,
+            total_us: local.total_us,
+            lateness_us: local.lateness_us,
+            max_lateness_us: local.max_lateness_us,
+            late_2ms: local.late_2ms,
+            late_5ms: local.late_5ms,
+            late_10ms: local.late_10ms,
+            release_max_us: local.release_max_us,
+            release_late_2ms: local.release_late_2ms,
             recent_latencies_us: self.latency_rx.try_iter().collect(),
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
             status: status.to_string(),
-            active_count: self.metrics.active_count.load(Ordering::Relaxed) as usize,
-            possibly_active_count: self.metrics.possibly_active_count.load(Ordering::Relaxed)
-                as usize,
-            failed_release_count: self.metrics.failed_release_count.load(Ordering::Relaxed)
-                as usize,
+            active_count: local.active_count as usize,
+            possibly_active_count: local.possibly_active_count as usize,
+            failed_release_count: local.failed_release_count as usize,
             last_error: self.metrics.last_error.lock().clone(),
-            keys_dropped: self.metrics.keys_dropped.load(Ordering::Relaxed),
-            chord_split_events: self.metrics.chord_split_events.load(Ordering::Relaxed),
-            sendinput_partial_events: self
-                .metrics
-                .sendinput_partial_events
-                .load(Ordering::Relaxed),
-            sendinput_zero_progress_failures: self
-                .metrics
-                .sendinput_zero_progress_failures
-                .load(Ordering::Relaxed),
-            chords_rejected: self.metrics.chords_rejected.load(Ordering::Relaxed),
-            authored_conflict_events: self
-                .metrics
-                .authored_conflict_events
-                .load(Ordering::Relaxed),
-            authored_chords_rejected: self
-                .metrics
-                .authored_chords_rejected
-                .load(Ordering::Relaxed),
-            authored_keys_rejected: self.metrics.authored_keys_rejected.load(Ordering::Relaxed),
-            keys_inserted_before_failure: self
-                .metrics
-                .keys_inserted_before_failure
-                .load(Ordering::Relaxed),
-            keys_rolled_back: self.metrics.keys_rolled_back.load(Ordering::Relaxed),
-            rollback_residue_keys: self.metrics.rollback_residue_keys.load(Ordering::Relaxed),
-            lead_saturation_count_down: self
-                .metrics
-                .lead_saturation_count_down
-                .iter()
-                .map(|value| value.load(Ordering::Relaxed))
-                .collect(),
-            lead_saturation_count_up: self
-                .metrics
-                .lead_saturation_count_up
-                .iter()
-                .map(|value| value.load(Ordering::Relaxed))
-                .collect(),
-            positive_residual_at_cap: self
-                .metrics
-                .positive_residual_at_cap
-                .load(Ordering::Relaxed),
-            recovered_zero_progress_but_late: self
-                .metrics
-                .recovered_zero_progress_but_late
-                .load(Ordering::Relaxed),
+            keys_dropped: local.keys_dropped,
+            chord_split_events: local.chord_split_events,
+            sendinput_partial_events: local.sendinput_partial_events,
+            sendinput_zero_progress_failures: local.sendinput_zero_progress_failures,
+            chords_rejected: local.chords_rejected,
+            authored_conflict_events: local.authored_conflict_events,
+            authored_chords_rejected: local.authored_chords_rejected,
+            authored_keys_rejected: local.authored_keys_rejected,
+            keys_inserted_before_failure: local.keys_inserted_before_failure,
+            keys_rolled_back: local.keys_rolled_back,
+            rollback_residue_keys: local.rollback_residue_keys,
+            lead_saturation_count_down: local.lead_saturation_count_down.to_vec(),
+            lead_saturation_count_up: local.lead_saturation_count_up.to_vec(),
+            positive_residual_at_cap: local.positive_residual_at_cap,
+            recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
             outcome: self.terminal_outcome().map(str::to_string),
             rt_priority_acquired: self.priority_acquired.lock().clone(),
-            effective_spin_threshold_us: self
-                .metrics
-                .effective_spin_threshold_us
-                .load(Ordering::Relaxed),
-            wake_error_p50_us: self.metrics.wake_error_p50_us.load(Ordering::Relaxed),
-            wake_error_p95_us: self.metrics.wake_error_p95_us.load(Ordering::Relaxed),
-            wake_error_p99_us: self.metrics.wake_error_p99_us.load(Ordering::Relaxed),
-            wake_error_max_us: self.metrics.wake_error_max_us.load(Ordering::Relaxed),
-            spin_time_us: self.metrics.spin_time_us.load(Ordering::Relaxed),
+            effective_spin_threshold_us: local.effective_spin_threshold_us,
+            wake_error_p50_us: local.wake_error_p50_us,
+            wake_error_p95_us: local.wake_error_p95_us,
+            wake_error_p99_us: local.wake_error_p99_us,
+            wake_error_max_us: local.wake_error_max_us,
+            spin_time_us: local.spin_time_us,
             wait_strategy_acquired: self.metrics.wait_strategy_acquired.lock().clone(),
-            power_throttling_disabled: self
-                .metrics
-                .power_throttling_disabled
-                .load(Ordering::Relaxed),
-            input_path_degraded: self.metrics.input_path_degraded.load(Ordering::Acquire),
-            sendinput_path_degraded: self.metrics.sendinput_path_degraded.load(Ordering::Acquire),
-            bookkeeping_degraded: self.metrics.bookkeeping_degraded.load(Ordering::Acquire),
-            wait_path_degraded: self.metrics.wait_path_degraded.load(Ordering::Acquire),
-            wait_target_error_us: self.metrics.wait_target_error_us.load(Ordering::Relaxed),
-            idle_wake_count: self.metrics.idle_wake_count.load(Ordering::Relaxed),
+            power_throttling_disabled: local.power_throttling_disabled,
+            input_path_degraded: local.input_path_degraded,
+            sendinput_path_degraded: local.sendinput_path_degraded,
+            bookkeeping_degraded: local.bookkeeping_degraded,
+            wait_path_degraded: local.wait_path_degraded,
+            wait_target_error_us: local.wait_target_error_us,
+            idle_wake_count: local.idle_wake_count,
             terminal_error: self.metrics.terminal_error.lock().clone(),
             generation_count: self.generation_count,
             generation_status_counts: self.metrics.generation_status_counts.lock().clone(),
@@ -950,10 +928,9 @@ fn run_worker(
     } else {
         TrackedKeyState::new()
     };
+    let mut local_metrics = WorkerMetricsLocal::default();
     let power_guard = PowerThrottlingGuard::disable_current_thread();
-    metrics
-        .power_throttling_disabled
-        .store(power_guard.is_active(), Ordering::Relaxed);
+    local_metrics.power_throttling_disabled = power_guard.is_active();
     let priority_guard = MmcssGuard::acquire(config.priority_mode);
     *priority_acquired.lock() = priority_guard.acquired().to_string();
     let waiter = HybridWaiter::with_options(config.enable_waitable_timer, config.enable_event_wait);
@@ -966,9 +943,7 @@ fn run_worker(
     }
     let telemetry_reason_table = config.schedule.reason_table.clone();
     let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| TimelineTicks(qpc_us_to_ticks(us)));
-    metrics
-        .total_us
-        .store(coordinator.effective_total_us(), Ordering::Relaxed);
+    local_metrics.total_us = coordinator.effective_total_us();
     let mut telemetry = TelemetryCollector::new(
         config.telemetry_enabled,
         config.telemetry_capacity,
@@ -980,12 +955,10 @@ fn run_worker(
     if config.enable_adaptive_spin
         && let Some(stats) = waiter.probe_wake_error_stats(interrupt, 30)
     {
-        publish_wake_error_stats(stats, metrics);
+        publish_wake_error_stats(stats, &mut local_metrics);
         effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
     }
-    metrics
-        .effective_spin_threshold_us
-        .store(effective_spin_threshold_us, Ordering::Relaxed);
+    local_metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     let mut last_spin_probe_us = qpc_now_us();
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
@@ -1064,6 +1037,7 @@ fn run_worker(
             return;
         }
         while !coordinator.is_finished() {
+        try_publish_metrics(&local_metrics, metrics, qpc_now_us(), false);
             if supervisor_lease_expired(config.supervisor_lease_timeout_us, supervisor_heartbeat_us)
             {
                 force_full_cleanup = true;
@@ -1078,7 +1052,8 @@ fn run_worker(
                 let _ = backend.release_all_full_instrument();
                 coordinator.cancel_all();
                 *abort_counts.entry("panic").or_insert(0) += 1;
-                publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
             }
 
             let mut now_us = qpc_now_us();
@@ -1092,7 +1067,8 @@ fn run_worker(
                     coordinator.cancel_all();
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
                     clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
-                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
                 let restored_at = *focus_restore_started_us.get_or_insert(now_us);
@@ -1108,7 +1084,8 @@ fn run_worker(
                     let resumed_us = qpc_now_us();
                     let _ = clock_state.exit_pause("focus", QpcTicks(qpc_us_to_ticks(resumed_us)));
                     focus_restore_started_us = None;
-                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
             }
 
@@ -1117,7 +1094,8 @@ fn run_worker(
                     let _ = backend.release_all();
                     coordinator.cancel_all();
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
-                    publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 }
                 clock_state.enter_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
@@ -1135,7 +1113,7 @@ fn run_worker(
                 if let WaitOutcome::Failed(failure) =
                     waiter.wait_until_us(pause_target_us, 0, interrupt)
                 {
-                    metrics.wait_path_degraded.store(true, Ordering::Release);
+                    local_metrics.wait_path_degraded = true;
                     if config.strict_timing {
                         force_full_cleanup = true;
                         terminal_error = Some(wait_failure_message(failure));
@@ -1168,15 +1146,13 @@ fn run_worker(
                         effective_spin_threshold_us,
                         interrupt,
                     );
-                    metrics.idle_wake_count.fetch_add(1, Ordering::Relaxed);
-                    metrics
-                        .spin_time_us
-                        .fetch_add(wait_result.spin_us, Ordering::Relaxed);
+                    local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
+                    local_metrics.spin_time_us = local_metrics.spin_time_us.saturating_add(wait_result.spin_us);
                     match wait_result.outcome {
                         WaitOutcome::Interrupted => continue,
                         WaitOutcome::Deadline => continue,
                         WaitOutcome::Failed(failure) => {
-                            metrics.wait_path_degraded.store(true, Ordering::Release);
+                            local_metrics.wait_path_degraded = true;
                             if config.strict_timing {
                                 force_full_cleanup = true;
                                 terminal_error = Some(wait_failure_message(failure));
@@ -1193,9 +1169,7 @@ fn run_worker(
 
             let effective_now_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us))).0);
             let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.0));
-            metrics
-                .elapsed_us
-                .store(effective_now_us, Ordering::Relaxed);
+            local_metrics.elapsed_us = effective_now_us;
             let latency_class = classify_latency_class(last_send_qpc_us, now_us);
 
             let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
@@ -1246,9 +1220,7 @@ fn run_worker(
                     && let Some(recovery_pause_us) =
                         coordinator.finish_release_recovery(completed_effective)
                 {
-                    metrics
-                        .total_us
-                        .fetch_add(recovery_pause_us, Ordering::Relaxed);
+                    local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
                 }
                 let bookkeeping_completed_us = qpc_now_us();
                 let first = due_pending
@@ -1370,8 +1342,8 @@ fn run_worker(
                         .is_some_and(|plan| plan.lead_saturated)
                 {
                     record_lead_saturation(
-                        &metrics.lead_saturation_count_up,
-                        &metrics.positive_residual_at_cap,
+                        &mut local_metrics.lead_saturation_count_up,
+                        &mut local_metrics.positive_residual_at_cap,
                         scan_codes.len(),
                         signed_delta(completed_effective, scheduled_us),
                     );
@@ -1384,7 +1356,7 @@ fn run_worker(
                     &mut send_duration_window,
                     &mut send_over_warn_count,
                     &mut input_path_warn_started_us,
-                    &metrics.input_path_degraded,
+                    &mut local_metrics.input_path_degraded,
                 );
                 record_input_path_health(
                     result.send_completed_us.saturating_sub(started_us),
@@ -1393,7 +1365,7 @@ fn run_worker(
                     &mut send_pure_window,
                     &mut send_pure_over_warn_count,
                     &mut send_pure_warn_started_us,
-                    &metrics.sendinput_path_degraded,
+                    &mut local_metrics.sendinput_path_degraded,
                 );
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(result.send_completed_us),
@@ -1402,17 +1374,18 @@ fn run_worker(
                     &mut bookkeeping_window,
                     &mut bookkeeping_over_warn_count,
                     &mut bookkeeping_warn_started_us,
-                    &metrics.bookkeeping_degraded,
+                    &mut local_metrics.bookkeeping_degraded,
                 );
                 let deferred_release = deferred_by_us > 0;
                 record_lateness(
                     signed_delta(completed_effective, scheduled_us),
                     true,
                     deferred_release,
-                    metrics,
+                    &mut local_metrics,
                     latency_tx,
                 );
-                publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 if recovery_required {
                     force_full_cleanup = true;
                     terminal_error = Some(format!(
@@ -1513,7 +1486,8 @@ fn run_worker(
                             send_attempts: 0,
                             zero_progress_retries: 0,
                         });
-                        publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                        publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                         continue;
                     }
                     if config
@@ -1570,10 +1544,8 @@ fn run_worker(
                     }
                     let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
                     if !conflicts.is_empty() {
-                        metrics
-                            .authored_conflict_events
-                            .fetch_add(1, Ordering::Relaxed);
-                        metrics.authored_keys_rejected.fetch_add(
+                        local_metrics.authored_conflict_events = local_metrics.authored_conflict_events.saturating_add(1);
+                        local_metrics.authored_keys_rejected = local_metrics.authored_keys_rejected.saturating_add(
                             if matches!(
                                 config.chord_conflict_policy,
                                 ChordConflictPolicy::DropWholeChord
@@ -1582,8 +1554,7 @@ fn run_worker(
                                 batch.intents.len() as u64
                             } else {
                                 conflicts.len() as u64
-                            },
-                            Ordering::Relaxed,
+                            }
                         );
                         telemetry.push(|| NativeTelemetryRecord {
                             event_index: batch.source_action_index,
@@ -1627,9 +1598,7 @@ fn run_worker(
                             ChordConflictPolicy::DropConflictingKeys
                         );
                     if !conflicts.is_empty() && !send_playable {
-                        metrics
-                            .authored_chords_rejected
-                            .fetch_add(1, Ordering::Relaxed);
+                        local_metrics.authored_chords_rejected = local_metrics.authored_chords_rejected.saturating_add(1);
                         coordinator.drop_conflicted_downs(&playable);
                         if matches!(
                             config.chord_conflict_policy,
@@ -1640,7 +1609,8 @@ fn run_worker(
                                 "same-key conflict rejected authored chord at action {}",
                                 batch.source_action_index
                             ));
-                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                     }
@@ -1712,9 +1682,7 @@ fn run_worker(
                             && completion_error_us
                                 > config.strict_down_completion_late_us.min(i64::MAX as u64) as i64;
                         if recovered_retry_late {
-                            metrics
-                                .recovered_zero_progress_but_late
-                                .fetch_add(1, Ordering::Relaxed);
+                            local_metrics.recovered_zero_progress_but_late = local_metrics.recovered_zero_progress_but_late.saturating_add(1);
                         }
                         down_saturation_positive_streak =
                             if lead_down_saturated && completion_error_us > 0 {
@@ -1790,8 +1758,8 @@ fn run_worker(
                         });
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
-                                &metrics.lead_saturation_count_down,
-                                &metrics.positive_residual_at_cap,
+                                &mut local_metrics.lead_saturation_count_down,
+                                &mut local_metrics.positive_residual_at_cap,
                                 batch.intents.len(),
                                 signed_delta(completed_effective, batch.scheduled_us),
                             );
@@ -1804,7 +1772,7 @@ fn run_worker(
                             &mut send_duration_window,
                             &mut send_over_warn_count,
                             &mut input_path_warn_started_us,
-                            &metrics.input_path_degraded,
+                            &mut local_metrics.input_path_degraded,
                         );
                         record_input_path_health(
                             result_completed_us.saturating_sub(started_us),
@@ -1813,7 +1781,7 @@ fn run_worker(
                             &mut send_pure_window,
                             &mut send_pure_over_warn_count,
                             &mut send_pure_warn_started_us,
-                            &metrics.sendinput_path_degraded,
+                            &mut local_metrics.sendinput_path_degraded,
                         );
                         record_input_path_health(
                             bookkeeping_completed_us.saturating_sub(result_completed_us),
@@ -1822,13 +1790,13 @@ fn run_worker(
                             &mut bookkeeping_window,
                             &mut bookkeeping_over_warn_count,
                             &mut bookkeeping_warn_started_us,
-                            &metrics.bookkeeping_degraded,
+                            &mut local_metrics.bookkeeping_degraded,
                         );
                         record_lateness(
                             signed_delta(completed_effective, batch.scheduled_us),
                             false,
                             false,
-                            metrics,
+                            &mut local_metrics,
                             latency_tx,
                         );
                         if result_chord_integrity_lost {
@@ -1837,7 +1805,8 @@ fn run_worker(
                                 "SendInput split authored chord at action {}",
                                 batch.source_action_index
                             ));
-                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if retry_late_abort {
@@ -1846,7 +1815,8 @@ fn run_worker(
                                 "strict timing rejected zero-progress retry at action {}: completion was {}us late",
                                 batch.source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if strict_down_completion_late {
@@ -1855,7 +1825,8 @@ fn run_worker(
                                 "strict timing completion SLO exceeded for note-on at action {}: completion was {}us late",
                                 batch.source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if saturation_abort {
@@ -1864,7 +1835,8 @@ fn run_worker(
                                 "strict timing SLO exceeded: note-on lead saturated with positive residual for {} consecutive dispatches",
                                 STRICT_SATURATION_ABORT_STREAK
                             ));
-                            publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                     }
@@ -1908,7 +1880,8 @@ fn run_worker(
                         });
                     }
                 }
-                publish_backend_metrics(&backend, metrics, &mut last_published_error);
+                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 continue;
             }
 
@@ -1960,16 +1933,14 @@ fn run_worker(
                         && now_us.saturating_sub(last_spin_probe_us) >= 30_000_000
                     {
                         if let Some(stats) = waiter.probe_wake_error_stats(interrupt, 8) {
-                            publish_wake_error_stats(stats, metrics);
+                            publish_wake_error_stats(stats, &mut local_metrics);
                             let candidate =
                                 derive_spin_threshold_us(stats.robust_us, config.spin_floor_us);
                             let adjusted =
                                 adjust_spin_threshold(effective_spin_threshold_us, candidate);
                             if adjusted != effective_spin_threshold_us {
                                 effective_spin_threshold_us = adjusted;
-                                metrics
-                                    .effective_spin_threshold_us
-                                    .store(adjusted, Ordering::Relaxed);
+                                local_metrics.effective_spin_threshold_us = adjusted;
                             }
                             last_spin_probe_us = qpc_now_us();
                         }
@@ -1999,21 +1970,18 @@ fn run_worker(
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
                     );
-                    metrics.idle_wake_count.fetch_add(1, Ordering::Relaxed);
-                    metrics
-                        .spin_time_us
-                        .fetch_add(wait_result.spin_us, Ordering::Relaxed);
+                    local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
+                    local_metrics.spin_time_us = local_metrics.spin_time_us.saturating_add(wait_result.spin_us);
                     pending_pre_send_spin_us = wait_result.spin_us;
                     let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_now_us()))).0));
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
-                            metrics.wait_target_error_us.fetch_max(
-                                wake_elapsed_us.saturating_sub(deadline_us),
-                                Ordering::Relaxed,
+                            local_metrics.wait_target_error_us = local_metrics.wait_target_error_us.max(
+                                wake_elapsed_us.saturating_sub(deadline_us)
                             );
                         }
                         WaitOutcome::Failed(failure) => {
-                            metrics.wait_path_degraded.store(true, Ordering::Release);
+                            local_metrics.wait_path_degraded = true;
                             if config.strict_timing {
                                 force_full_cleanup = true;
                                 terminal_error = Some(wait_failure_message(failure));
@@ -2028,7 +1996,7 @@ fn run_worker(
                     if config.input_path_warn_us > 0
                         && wake_elapsed_us > deadline_us.saturating_add(config.input_path_warn_us)
                     {
-                        metrics.wait_path_degraded.store(true, Ordering::Release);
+                        local_metrics.wait_path_degraded = true;
                     }
                     if wait_result.outcome == WaitOutcome::Interrupted {
                         pending_pre_send_spin_us = 0;
@@ -2073,7 +2041,8 @@ fn run_worker(
         .map(|(reason, count)| (reason.to_string(), count))
         .collect();
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
-    publish_backend_metrics(&backend, metrics, &mut last_published_error);
+    publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
     metrics.is_paused.store(false, Ordering::Relaxed);
     *telemetry_output.lock() = Some(telemetry.output);
     *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();
@@ -2173,32 +2142,30 @@ fn record_lateness(
     lateness_us: i64,
     is_release: bool,
     deferred_release: bool,
-    metrics: &SharedMetrics,
+    local_metrics: &mut WorkerMetricsLocal,
     latency_tx: &Sender<i64>,
 ) {
     if deferred_release {
         return;
     }
     let clamped = lateness_us.max(0) as u64;
-    metrics.lateness_us.store(clamped, Ordering::Relaxed);
+    local_metrics.lateness_us = clamped;
     if is_release {
-        metrics.release_max_us.fetch_max(clamped, Ordering::Relaxed);
+        local_metrics.release_max_us = local_metrics.release_max_us.max(clamped);
         if clamped > 2_000 {
-            metrics.release_late_2ms.fetch_add(1, Ordering::Relaxed);
+            local_metrics.release_late_2ms = local_metrics.release_late_2ms.saturating_add(1);
         }
         return;
     }
-    metrics
-        .max_lateness_us
-        .fetch_max(clamped, Ordering::Relaxed);
+    local_metrics.max_lateness_us = local_metrics.max_lateness_us.max(clamped);
     if clamped > 10_000 {
-        metrics.late_10ms.fetch_add(1, Ordering::Relaxed);
+        local_metrics.late_10ms = local_metrics.late_10ms.saturating_add(1);
     }
     if clamped > 5_000 {
-        metrics.late_5ms.fetch_add(1, Ordering::Relaxed);
+        local_metrics.late_5ms = local_metrics.late_5ms.saturating_add(1);
     }
     if clamped > 2_000 {
-        metrics.late_2ms.fetch_add(1, Ordering::Relaxed);
+        local_metrics.late_2ms = local_metrics.late_2ms.saturating_add(1);
     }
     let _ = latency_tx.try_send(lateness_us);
 }
@@ -2267,15 +2234,15 @@ fn update_estimator_after_send_class(
 }
 
 fn record_lead_saturation(
-    counters: &[AtomicU64; 16],
-    positive_residual_at_cap: &AtomicU64,
+    counters: &mut [u64; 16],
+    positive_residual_at_cap: &mut u64,
     polyphony: usize,
     completion_error_us: i64,
 ) {
     let bucket = polyphony.clamp(1, 15);
-    counters[bucket].fetch_add(1, Ordering::Relaxed);
+    counters[bucket] = counters[bucket].saturating_add(1);
     if completion_error_us > 0 {
-        positive_residual_at_cap.fetch_add(1, Ordering::Relaxed);
+        *positive_residual_at_cap = positive_residual_at_cap.saturating_add(1);
     }
 }
 
@@ -2344,19 +2311,11 @@ fn deadline_target_ticks(now_ticks: QpcTicks, logical_now_us: u64, deadline_us: 
     )
 }
 
-fn publish_wake_error_stats(stats: WakeErrorStats, metrics: &SharedMetrics) {
-    metrics
-        .wake_error_p50_us
-        .store(stats.p50_us, Ordering::Relaxed);
-    metrics
-        .wake_error_p95_us
-        .store(stats.p95_us, Ordering::Relaxed);
-    metrics
-        .wake_error_p99_us
-        .store(stats.p99_us, Ordering::Relaxed);
-    metrics
-        .wake_error_max_us
-        .store(stats.max_us, Ordering::Relaxed);
+fn publish_wake_error_stats(stats: WakeErrorStats, local_metrics: &mut WorkerMetricsLocal) {
+    local_metrics.wake_error_p50_us = stats.p50_us;
+    local_metrics.wake_error_p95_us = stats.p95_us;
+    local_metrics.wake_error_p99_us = stats.p99_us;
+    local_metrics.wake_error_max_us = stats.max_us;
 }
 
 fn wait_failure_message(failure: WaitFailure) -> String {
@@ -2397,7 +2356,7 @@ fn record_input_path_health(
     window: &mut VecDeque<u64>,
     over_warn_count: &mut usize,
     warn_started_us: &mut Option<u64>,
-    degraded: &AtomicBool,
+    degraded: &mut bool,
 ) {
     if warn_us == 0 {
         return;
@@ -2430,7 +2389,7 @@ fn record_input_path_health(
         return;
     }
     if elapsed_us.saturating_sub(warn_started_us.unwrap_or(elapsed_us)) >= 1_000_000 {
-        degraded.store(true, Ordering::Release);
+        *degraded = true;
     }
 }
 
@@ -2449,52 +2408,29 @@ fn focus_gate_matches(
 
 fn publish_backend_metrics(
     backend: &TrackedKeyState,
-    metrics: &SharedMetrics,
+    local_metrics: &mut WorkerMetricsLocal,
+    shared_metrics: &SharedMetrics,
     last_published_error: &mut Option<String>,
 ) {
-    metrics
-        .active_count
-        .store(backend.active_mask.count_ones() as u64, Ordering::Relaxed);
-    metrics
-        .keys_dropped
-        .store(backend.keys_dropped, Ordering::Relaxed);
-    metrics.possibly_active_count.store(
-        backend.possibly_active_mask.count_ones() as u64,
-        Ordering::Relaxed,
-    );
-    metrics.failed_release_count.store(
-        backend.failed_release_mask.count_ones() as u64,
-        Ordering::Relaxed,
-    );
+    local_metrics.active_count = backend.active_mask.count_ones() as u64;
+    local_metrics.keys_dropped = backend.keys_dropped;
+    local_metrics.possibly_active_count = backend.possibly_active_mask.count_ones() as u64;
+    local_metrics.failed_release_count = backend.failed_release_mask.count_ones() as u64;
     // The healthy dispatch path never takes this lock. Error text is
     // published only when the backend error state changes, including the
     // transition back to None after a successful recovery.
     if last_published_error.as_ref() != backend.last_error.as_ref() {
-        let mut published = metrics.last_error.lock();
+        let mut published = shared_metrics.last_error.lock();
         *published = backend.last_error.clone();
         *last_published_error = backend.last_error.clone();
     }
-    metrics
-        .chord_split_events
-        .store(backend.chord_split_events, Ordering::Relaxed);
-    metrics
-        .sendinput_partial_events
-        .store(backend.sendinput_partial_events, Ordering::Relaxed);
-    metrics
-        .sendinput_zero_progress_failures
-        .store(backend.sendinput_zero_progress_failures, Ordering::Relaxed);
-    metrics
-        .chords_rejected
-        .store(backend.chords_rejected, Ordering::Relaxed);
-    metrics
-        .keys_inserted_before_failure
-        .store(backend.keys_inserted_before_failure, Ordering::Relaxed);
-    metrics
-        .keys_rolled_back
-        .store(backend.keys_rolled_back, Ordering::Relaxed);
-    metrics
-        .rollback_residue_keys
-        .store(backend.rollback_residue_keys, Ordering::Relaxed);
+    local_metrics.chord_split_events = backend.chord_split_events;
+    local_metrics.sendinput_partial_events = backend.sendinput_partial_events;
+    local_metrics.sendinput_zero_progress_failures = backend.sendinput_zero_progress_failures;
+    local_metrics.chords_rejected = backend.chords_rejected;
+    local_metrics.keys_inserted_before_failure = backend.keys_inserted_before_failure;
+    local_metrics.keys_rolled_back = backend.keys_rolled_back;
+    local_metrics.rollback_residue_keys = backend.rollback_residue_keys;
 }
 
 #[cfg(test)]
@@ -2583,7 +2519,7 @@ mod tests {
         let mut window = VecDeque::with_capacity(64);
         let mut over_warn = 0;
         let mut started = None;
-        let degraded = AtomicBool::new(false);
+        let mut degraded = false;
 
         for elapsed_us in (0..=1_010_000).step_by(1_000) {
             record_input_path_health(
@@ -2593,11 +2529,11 @@ mod tests {
                 &mut window,
                 &mut over_warn,
                 &mut started,
-                &degraded,
+                &mut degraded,
             );
         }
 
-        assert!(degraded.load(Ordering::Acquire));
+        assert!(degraded);
     }
 
     #[test]
@@ -2606,7 +2542,7 @@ mod tests {
         let initial_capacity = window.capacity();
         let mut over_warn = 0;
         let mut started = None;
-        let degraded = AtomicBool::new(false);
+        let mut degraded = false;
 
         for _ in 0..10_000 {
             record_input_path_health(
@@ -2616,7 +2552,7 @@ mod tests {
                 &mut window,
                 &mut over_warn,
                 &mut started,
-                &degraded,
+                &mut degraded,
             );
         }
 
@@ -2632,7 +2568,7 @@ mod tests {
                 &mut window,
                 &mut over_warn,
                 &mut started,
-                &degraded,
+                &mut degraded,
             );
         }
 
