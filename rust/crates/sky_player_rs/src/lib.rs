@@ -829,6 +829,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("native_build_version", env!("CARGO_PKG_VERSION"))?;
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
         dict.set_item(
+            "dirty_worktree",
+            env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
+        )?;
+        dict.set_item(
             "native_source_fingerprint",
             env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
         )?;
@@ -980,6 +984,10 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         })?,
     )?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
+    dict.set_item(
+        "dirty_worktree",
+        env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
+    )?;
     dict.set_item(
         "native_source_fingerprint",
         env!("SKY_NATIVE_SOURCE_FINGERPRINT"),

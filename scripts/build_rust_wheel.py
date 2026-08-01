@@ -142,6 +142,7 @@ def main() -> int:
     build_env["GITHUB_SHA"] = expected_commit
     build_env["SKY_NATIVE_BUILD_COMMIT"] = expected_commit
     build_env["SKY_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
+    build_env["SKY_NATIVE_DIRTY_WORKTREE"] = str(expected_commit.endswith("-dirty")).lower()
     res = subprocess.run(cmd, cwd=str(repo_root), env=build_env, check=False)
     if res.returncode != 0:
         print(f"[build_rust_wheel] ERROR: maturin build failed with code {res.returncode}", file=sys.stderr)
@@ -199,6 +200,7 @@ def main() -> int:
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
             "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
             "assert info.get('native_source_fingerprint') == os.environ['SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT'], info; "
+            "assert info.get('dirty_worktree') is (os.environ['SKY_EXPECTED_DIRTY_WORKTREE'] == 'true'), info; "
             "gil_after = sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else True; "
             "print('gil_after_import:', gil_after); "
             "assert not gil_after, 'GIL was re-enabled by sky_player_rs import!'"
@@ -208,6 +210,7 @@ def main() -> int:
         clean_env.pop("VIRTUAL_ENV", None)
         clean_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
         clean_env["SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
+        clean_env["SKY_EXPECTED_DIRTY_WORKTREE"] = str(expected_commit.endswith("-dirty")).lower()
         print("[build_rust_wheel] Verifying exact wheel import, ABI, commit and GIL...")
         test_res = subprocess.run(
             [str(clean_python), "-c", test_code],
@@ -247,6 +250,7 @@ def main() -> int:
     active_env = os.environ.copy()
     active_env["SKY_EXPECTED_BUILD_COMMIT"] = expected_commit
     active_env["SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT"] = source_fingerprint
+    active_env["SKY_EXPECTED_DIRTY_WORKTREE"] = str(expected_commit.endswith("-dirty")).lower()
     active_env.pop("PYTHONPATH", None)
     print("[build_rust_wheel] Verifying the active environment wheel...")
     active_test = subprocess.run(
@@ -257,7 +261,8 @@ def main() -> int:
             "print('active_build_info:', info); "
             "assert info.get('native_abi') == 'cp314t-win_amd64', info; "
             "assert info.get('native_build_commit') == os.environ['SKY_EXPECTED_BUILD_COMMIT'], info; "
-            "assert info.get('native_source_fingerprint') == os.environ['SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT'], info",
+            "assert info.get('native_source_fingerprint') == os.environ['SKY_EXPECTED_NATIVE_SOURCE_FINGERPRINT'], info; "
+            "assert info.get('dirty_worktree') is (os.environ['SKY_EXPECTED_DIRTY_WORKTREE'] == 'true'), info",
         ],
         cwd=str(repo_root),
         env=active_env,
