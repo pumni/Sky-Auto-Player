@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -205,6 +206,32 @@ def run_smoke_test(exe_path: Path) -> bool:
     return True
 
 
+def run_native_calibration_smoke_test(binary_path: Path) -> bool:
+    """Verify the isolated calibration process starts without registering input."""
+    binary_path = binary_path.resolve()
+    if not binary_path.is_file():
+        print(f"[!] Missing native calibration binary: {binary_path}")
+        return False
+    try:
+        result = subprocess.run(
+            [str(binary_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[!] Native calibration --help smoke test failed: {exc}")
+        return False
+    if result.returncode != 0 or not result.stdout.strip():
+        print(
+            "[!] Native calibration --help smoke test returned "
+            f"{result.returncode}: {result.stderr.strip()}"
+        )
+        return False
+    return True
+
+
 def _hash_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -349,6 +376,12 @@ def main() -> None:
         )
         calibration_manifest = rust_dir / "crates" / "sky_dispatch_win32" / "Cargo.toml"
         print("[+] Building the process-isolated native calibration binary...")
+        native_build_commit = get_git_head()
+        native_fingerprint = native_source_fingerprint(PROJECT_ROOT, "cp314t-win_amd64")
+        native_build_env = os.environ.copy()
+        native_build_env["GITHUB_SHA"] = native_build_commit
+        native_build_env["SKY_NATIVE_BUILD_COMMIT"] = native_build_commit
+        native_build_env["SKY_NATIVE_SOURCE_FINGERPRINT"] = native_fingerprint
         subprocess.run(
             [
                 "cargo",
@@ -361,6 +394,7 @@ def main() -> None:
             ],
             check=True,
             cwd=str(PROJECT_ROOT),
+            env=native_build_env,
         )
 
     print("[+] Starting PyInstaller...")
@@ -385,6 +419,8 @@ def main() -> None:
     if not calibration_binary.is_file():
         raise RuntimeError(f"Native calibration binary is missing: {calibration_binary}")
     copy_asset(calibration_binary, release_dir / NATIVE_CALIBRATION_BINARY)
+    if not run_native_calibration_smoke_test(release_dir / NATIVE_CALIBRATION_BINARY):
+        raise RuntimeError("Native calibration binary smoke test failed")
 
     print("[+] Copying assets...")
     for asset in REQUIRED_ASSETS:

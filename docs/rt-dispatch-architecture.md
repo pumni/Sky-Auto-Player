@@ -83,6 +83,22 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 
 ## 3. Timing semantics
 
+**Native control-path clock contract.** `QpcTicks`, `TimelineTicks`, and `DurationTicks` are the
+source of truth for production scheduling. Deadline mapping, minimum hold, pause/rebase,
+focus recovery, retry/recovery offsets, supervisor leases, cold classification, and wait/spin
+targets stay in checked tick arithmetic. Microseconds are accepted or emitted only at the
+Python/configuration, estimator, JSON, and human-readable telemetry boundaries; the worker does
+not round-trip ticks through microseconds during a control-path decision. SendInput outcomes
+retain their exact start/completion QPC ticks until telemetry serialization.
+
+**Resumable suspension.** Focus loss and manual pause release and verify physical keys, then use
+`cancel_live_generations()`: `Active` and `ReleasePending` become cancelled while future
+`Scheduled` generations remain intact. Authored Up events belonging to cancelled generations are
+suppressed as stale. Terminal `cancel_all()` is used only when the session cannot resume, such as
+quit, skip, panic, supervisor lease expiry, timing/input-integrity error, or final termination.
+Both paths validate coordinator invariants and cleanup state; cleanup cannot turn a pre-existing
+ledger/mask mismatch into a successful result.
+
 - **Onset = dispatch completion.** The adaptive lead uses a bounded rolling p95 of
   `send_duration_us` for each Down/Up polyphony bucket, with a monotonic envelope across chord
   sizes. Five samples warm a bucket; cold buckets use a conservative static prior plus the last
@@ -157,7 +173,8 @@ its execution context before creating the playback anchor. A probe failure prese
 threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
 floor/cap, and the existing kill switch remain unchanged.
 
-**Calibration evidence boundary.** The latency calibration cache is an
+**Calibration evidence boundary.** The latency calibration cache is schema version 5,
+measurement protocol 2, and is an
 `injected_raw_input_delivery_proxy`: a dedicated native calibration process injects through
 Windows `SendInput` into an app-owned window and observes its `WM_INPUT` delivery. The player
 process never changes its own Raw Input registration for calibration. It does not measure Sky
@@ -167,7 +184,10 @@ injections are tracked separately and excluded from measured classes. Only compl
 anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
 receipts remain diagnostic counters. The calibration process snapshots/restores its registration
 and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
-an error, not successful calibration.
+an error, not successful calibration. The JSON artifact is attributable to an exact Git SHA,
+native build/source fingerprint, toolchain, Windows build, and QPC frequency; a dirty or
+SHA-mismatched native artifact is not release evidence. The sender telemetry stream instead uses
+`evidence_kind = "sender_completion"` and never claims Raw Input or game-observed delivery.
 
 **Clock failure policy.** QPC is the sole real-time clock domain after native preparation. A failed
 runtime QPC query, including a query immediately after a successful `SendInput`, is terminal: the
