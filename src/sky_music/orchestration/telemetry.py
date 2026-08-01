@@ -17,6 +17,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 200_000
+NATIVE_TELEMETRY_SCHEMA_VERSION = 2
 
 
 def _optional_int(value: Any) -> int | None:
@@ -67,6 +68,7 @@ _CSV_FIELDS: list[str] = [
     "send_started_us",
     "send_completed_us",
     "sender_completion_error_us",
+    "send_operation_duration_us",
     "sender_started_us",
     "sender_completed_us",
     "sendinput_call_duration_us",
@@ -110,6 +112,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_started_us",
         "send_completed_us",
         "sender_completion_error_us",
+        "send_operation_duration_us",
         "sender_started_us",
         "sender_completed_us",
         "sendinput_call_duration_us",
@@ -159,6 +162,7 @@ class TelemetryRecord:
         "send_completed_us",
         "send_duration_pure_us",
         "send_duration_us",
+        "send_operation_duration_us",
         "send_started_us",
         "sender_completed_us",
         "sender_completion_error_us",
@@ -225,6 +229,7 @@ class TelemetryRecord:
         sender_completed_us: int | None = None,
         sendinput_call_duration_us: int | None = None,
         bookkeeping_duration_us: int | None = None,
+        send_operation_duration_us: int | None = None,
     ) -> None:
         self._dict = None
         self.song_name = song_name
@@ -272,7 +277,7 @@ class TelemetryRecord:
         self.sender_completed_us = (
             send_completed_us if sender_completed_us is None else sender_completed_us
         )
-        self.sendinput_call_duration_us = (
+        self.sendinput_call_duration_us: int | None = (
             send_duration_pure_us
             if sendinput_call_duration_us is None
             else sendinput_call_duration_us
@@ -280,6 +285,7 @@ class TelemetryRecord:
         self.bookkeeping_duration_us = (
             bookkeeping_us if bookkeeping_duration_us is None else bookkeeping_duration_us
         )
+        self.send_operation_duration_us = send_operation_duration_us
         self.delivery_first_us = delivery_first_us
         self.delivery_last_us = delivery_last_us
         self.delivery_last_error_us = delivery_last_error_us
@@ -343,6 +349,7 @@ class TelemetryRecord:
                 "send_started_us": self.send_started_us,
                 "send_completed_us": self.send_completed_us,
                 "sender_completion_error_us": self.sender_completion_error_us,
+                "send_operation_duration_us": self.send_operation_duration_us,
                 "sender_started_us": self.sender_started_us,
                 "sender_completed_us": self.sender_completed_us,
                 "sendinput_call_duration_us": self.sendinput_call_duration_us,
@@ -493,6 +500,7 @@ class TelemetryLogger:
         send_started_us: int | None = None,
         send_completed_us: int | None = None,
         sender_completion_error_us: int | None = None,
+        send_operation_duration_us: int | None = None,
         delivery_first_us: int | None = None,
         delivery_last_us: int | None = None,
         delivery_last_error_us: int | None = None,
@@ -536,6 +544,7 @@ class TelemetryLogger:
             send_started_us = getattr(result, "send_started_us", None)
             send_completed_us = getattr(result, "send_completed_us", None)
             sender_completion_error_us = getattr(result, "sender_completion_error_us", None)
+            send_operation_duration_us = getattr(result, "send_operation_duration_us", None)
             delivery_first_us = getattr(result, "delivery_first_us", None)
             delivery_last_us = getattr(result, "delivery_last_us", None)
             delivery_last_error_us = getattr(result, "delivery_last_error_us", None)
@@ -603,6 +612,7 @@ class TelemetryLogger:
                 delivery_last_error_us,
                 intra_chord_delivery_spread_us,
                 lead_components,
+                send_operation_duration_us=send_operation_duration_us,
             )
         )
         self._accepted_record_count += 1
@@ -611,6 +621,8 @@ class TelemetryLogger:
         """Ingest a terminal retain-first buffer produced by the Rust worker."""
         if not self.enabled:
             return
+        if output.get("schema_version") != NATIVE_TELEMETRY_SCHEMA_VERSION:
+            raise ValueError("unsupported native telemetry schema version")
         records = output.get("records")
         attempted = output.get("attempted")
         dropped = output.get("dropped")
@@ -634,6 +646,7 @@ class TelemetryLogger:
                 self._dropped_count += 1
                 self._truncated = True
                 continue
+            native_call_duration = _optional_int(row.get("sendinput_call_duration_us"))
             self.records.append(
                 TelemetryRecord(
                     self.song_name,
@@ -679,14 +692,19 @@ class TelemetryLogger:
                     sender_completion_error_us=_optional_int(
                         row.get("sender_completion_error_us")
                     ),
-                    sendinput_call_duration_us=_optional_int(
-                        row.get("sendinput_call_duration_us")
+                    send_operation_duration_us=_optional_int(
+                        row.get("send_operation_duration_us")
                     ),
+                    sendinput_call_duration_us=native_call_duration,
                     bookkeeping_duration_us=_optional_int(
                         row.get("bookkeeping_duration_us")
                     ),
                 )
             )
+            # The Python compatibility constructor defaults a missing legacy
+            # field to send_duration_pure_us. Native JSON explicitly carries
+            # nullable single-syscall semantics, so preserve an explicit null.
+            self.records[-1].sendinput_call_duration_us = native_call_duration
             self._accepted_record_count += 1
         self._truncated = self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
 

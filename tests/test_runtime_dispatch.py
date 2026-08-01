@@ -1074,8 +1074,8 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     # Four structured native SendInput diagnostics are part of the retained
     # telemetry record: first/last Win32 error and retry counters.
     # Phase 5 fields plus the explicit native timing-boundary fields are part
-    # of the retained telemetry record.
-    assert len(record) == 49
+    # of the retained telemetry record, including logical operation duration.
+    assert len(record) == 50
 
     # Assert keys/items/values are correct
     assert "song" in record

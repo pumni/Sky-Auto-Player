@@ -111,6 +111,7 @@ def _native_provenance() -> dict[str, Any]:
     info = dict(sky_player_rs.build_info())
     required = (
         "native_build_commit",
+        "dirty_worktree",
         "native_source_fingerprint",
         "rustc_version",
         "schema_version",
@@ -121,6 +122,8 @@ def _native_provenance() -> dict[str, Any]:
         value = info.get(name)
         if value in (None, "", "unknown"):
             raise RuntimeError(f"native build provenance is missing {name}")
+    if info["dirty_worktree"] is not False:
+        raise RuntimeError("native build provenance is dirty")
     expected_fingerprint = native_source_fingerprint(REPOSITORY_ROOT, str(info["native_abi"]))
     if info["native_source_fingerprint"] != expected_fingerprint:
         raise RuntimeError(
@@ -150,7 +153,15 @@ def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     """
 
     def values_for(rows: list[dict[str, Any]]) -> list[int]:
-        return [int(row["visible_lateness_us"]) for row in rows]
+        values: list[int] = []
+        for row in rows:
+            value = row.get("sender_completion_error_us")
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise RuntimeError(
+                    "sender telemetry is missing exact sender_completion_error_us"
+                )
+            values.append(value)
+        return values
 
     if not records:
         raise RuntimeError("required sender telemetry has no records")
@@ -258,7 +269,16 @@ def _run_dispatch(
         raise RuntimeError(
             f"required sender telemetry expected {len(actions)} records, got {len(records)}"
         )
-    sender_errors = [int(record["visible_lateness_us"]) for record in records]
+    sender_errors = [
+        value
+        for value in (
+            record.get("sender_completion_error_us")
+            for record in records
+        )
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    if len(sender_errors) != len(records):
+        raise RuntimeError("required sender telemetry has missing exact completion errors")
     lead_by_polyphony = {
         str(len(record.get("scan_codes", []))): int(record.get("applied_lead_us", 0))
         for record in records

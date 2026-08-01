@@ -7,6 +7,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     logger = TelemetryLogger("test", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
+            "schema_version": 2,
             "attempted": 1,
             "accepted": 1,
             "dropped": 0,
@@ -24,7 +25,8 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
                     "sender_started_us": 1_011,
                     "sender_completed_us": 1_018,
                     "sender_completion_error_us": 18,
-                    "sendinput_call_duration_us": 7,
+                    "sendinput_call_duration_us": None,
+                    "send_operation_duration_us": 9,
                     "bookkeeping_duration_us": 2,
                     "lateness_us": 10,
                     "visible_lateness_us": 20,
@@ -61,7 +63,9 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["sender_started_us"] == 1_011
     assert row["sender_completed_us"] == 1_018
     assert row["sender_completion_error_us"] == 18
-    assert row["sendinput_call_duration_us"] == 7
+    assert row["send_operation_duration_us"] == 9
+    assert row["sendinput_call_duration_us"] is None
+    assert row["send_operation_duration_us"] == 9
     assert row["bookkeeping_duration_us"] == 2
     assert row["generation_ids"] == "1"
     assert row["first_win32_error"] == 5

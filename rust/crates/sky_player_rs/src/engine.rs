@@ -280,6 +280,10 @@ pub struct NativeTelemetryRecord {
     pub sender_started_us: Option<u64>,
     pub sender_completed_us: Option<u64>,
     pub sender_completion_error_us: Option<i64>,
+    /// Duration from the first actual SendInput call entry to the final call
+    /// return for the logical operation. `None` means no exact call boundary
+    /// was available.
+    pub send_operation_duration_us: Option<u64>,
     pub sendinput_call_duration_us: Option<u64>,
     pub bookkeeping_duration_us: Option<u64>,
     pub lateness_us: i64,
@@ -389,6 +393,7 @@ impl NativeTelemetrySummary {
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct NativeTelemetryOutput {
+    pub schema_version: u32,
     pub records: VecDeque<NativeTelemetryRecord>,
     pub summary: NativeTelemetrySummary,
     pub attempted: u64,
@@ -406,6 +411,7 @@ const MIXED_RELEASE_REASON_ID: u16 = u16::MAX;
 impl NativeTelemetryOutput {
     fn new(mode: TelemetryMode, capacity: usize, reason_table: Vec<String>) -> Self {
         Self {
+            schema_version: 2,
             records: if matches!(mode, TelemetryMode::Ring | TelemetryMode::FullTrace) {
                 // Reserve the complete bounded buffer before the worker
                 // epoch. Telemetry is an opt-in diagnostic mode; once it is
@@ -2145,6 +2151,40 @@ fn run_worker(
                     }
                 };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
+                let (send_operation_duration_us, sendinput_call_duration_us) =
+                    match exact_sender_durations(
+                        qpc_clock,
+                        result.send_started_ticks,
+                        result.send_completed_ticks,
+                        result.send_attempts,
+                        false,
+                    ) {
+                        Ok(durations) => durations,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("note-off exact sender boundary failure: {error:?}"));
+                            break;
+                        }
+                    };
+                let sender_started_us = if result.send_attempts == 0 {
+                    None
+                } else {
+                    let started = result.send_started_ticks.expect("validated sender start");
+                    let started_elapsed_ticks = match clock_state
+                        .get_elapsed_allow_pre_epoch(started, allow_pre_epoch_startup_dispatch)
+                    {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "note-off sender-start playback clock failure: {error}"
+                            ));
+                            break;
+                        }
+                    };
+                    Some(qpc_ticks_to_us_or_terminal!(started_elapsed_ticks))
+                };
                 last_send_qpc_ticks = Some(completed_qpc_ticks);
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
@@ -2384,22 +2424,19 @@ fn run_worker(
                     dispatch_completed_us: completed_effective,
                     scheduled_timeline_us: scheduled_us,
                     wake_timeline_us: actual_us,
-                    sender_started_us: Some(actual_us),
-                    sender_completed_us: Some(completed_effective),
-                    sender_completion_error_us: Some(signed_delta(
-                        completed_effective,
-                        scheduled_us,
-                    )),
-                    sendinput_call_duration_us: Some(
-                        result.send_completed_us.saturating_sub(started_us),
-                    ),
+                    sender_started_us,
+                    sender_completed_us: send_operation_duration_us.map(|_| completed_effective),
+                    sender_completion_error_us: send_operation_duration_us
+                        .map(|_| signed_delta(completed_effective, scheduled_us)),
+                    send_operation_duration_us,
+                    sendinput_call_duration_us,
                     bookkeeping_duration_us: Some(
                         bookkeeping_completed_us.saturating_sub(result.send_completed_us),
                     ),
                     lateness_us: signed_delta(actual_us, scheduled_us),
                     visible_lateness_us: signed_delta(completed_effective, scheduled_us),
                     send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
-                    send_duration_pure_us: result.send_completed_us.saturating_sub(started_us),
+                    send_duration_pure_us: send_operation_duration_us.unwrap_or(0),
                     bookkeeping_us: bookkeeping_completed_us
                         .saturating_sub(result.send_completed_us),
                     dispatch_lateness_us: signed_delta(actual_us, scheduled_us)
@@ -2675,6 +2712,7 @@ fn run_worker(
                                 sender_started_us: None,
                                 sender_completed_us: None,
                                 sender_completion_error_us: None,
+                                send_operation_duration_us: None,
                                 sendinput_call_duration_us: None,
                                 bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
@@ -2747,6 +2785,7 @@ fn run_worker(
                                 sender_started_us: None,
                                 sender_completed_us: None,
                                 sender_completion_error_us: None,
+                                send_operation_duration_us: None,
                                 sendinput_call_duration_us: None,
                                 bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
@@ -2832,6 +2871,7 @@ fn run_worker(
                                 sender_started_us: None,
                                 sender_completed_us: None,
                                 sender_completion_error_us: None,
+                                send_operation_duration_us: None,
                                 sendinput_call_duration_us: None,
                                 bookkeeping_duration_us: None,
                                 lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
@@ -2945,6 +2985,7 @@ fn run_worker(
                         }
 
                         let (
+                            result_started_ticks,
                             result_completed_us,
                             result_completed_ticks,
                             result_sent,
@@ -2958,6 +2999,7 @@ fn run_worker(
                             result_success,
                         ) = match &result {
                             sky_dispatch_win32::input::DownSendOutcome::Complete {
+                                started_ticks,
                                 completed_us,
                                 completed_ticks,
                                 sent,
@@ -2967,6 +3009,7 @@ fn run_worker(
                                 retried_after_zero_progress,
                                 ..
                             } => (
+                                *started_ticks,
                                 *completed_us,
                                 *completed_ticks,
                                 sent.clone(),
@@ -2980,6 +3023,7 @@ fn run_worker(
                                 true,
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
+                                started_ticks,
                                 completed_us,
                                 completed_ticks,
                                 skipped_duplicates,
@@ -2989,6 +3033,7 @@ fn run_worker(
                                 last_error,
                                 ..
                             } => (
+                                *started_ticks,
                                 *completed_us,
                                 *completed_ticks,
                                 smallvec::SmallVec::<[u16; 15]>::new(),
@@ -3002,6 +3047,7 @@ fn run_worker(
                                 false,
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
+                                started_ticks,
                                 completed_us,
                                 completed_ticks,
                                 sent,
@@ -3012,6 +3058,7 @@ fn run_worker(
                                 last_error,
                                 ..
                             } => (
+                                *started_ticks,
                                 *completed_us,
                                 *completed_ticks,
                                 sent.clone(),
@@ -3051,6 +3098,43 @@ fn run_worker(
                         };
                         let completed_effective =
                             qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
+                        let (send_operation_duration_us, sendinput_call_duration_us) =
+                            match exact_sender_durations(
+                                qpc_clock,
+                                result_started_ticks,
+                                result_completed_ticks,
+                                result_send_attempts,
+                                result_chord_integrity_lost,
+                            ) {
+                                Ok(durations) => durations,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error = Some(format!(
+                                        "note-on exact sender boundary failure: {error:?}"
+                                    ));
+                                    break;
+                                }
+                            };
+                        let sender_started_us = if result_send_attempts == 0 {
+                            None
+                        } else {
+                            let started = result_started_ticks.expect("validated sender start");
+                            let started_elapsed_ticks = match clock_state
+                                .get_elapsed_allow_pre_epoch(
+                                    started,
+                                    allow_pre_epoch_startup_dispatch,
+                                ) {
+                                Ok(ticks) => ticks,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error = Some(format!(
+                                        "note-on sender-start playback clock failure: {error}"
+                                    ));
+                                    break;
+                                }
+                            };
+                            Some(qpc_ticks_to_us_or_terminal!(started_elapsed_ticks))
+                        };
                         last_send_qpc_ticks = Some(completed_qpc_ticks);
                         // Activate sent downs via the compact path.
                         if let Err(error) = coordinator.activate_sent_downs_compact_ticks(
@@ -3148,15 +3232,13 @@ fn run_worker(
                                 dispatch_completed_us: completed_effective,
                                 scheduled_timeline_us: batch_scheduled_us,
                                 wake_timeline_us: actual_us,
-                                sender_started_us: Some(actual_us),
-                                sender_completed_us: Some(completed_effective),
-                                sender_completion_error_us: Some(signed_delta(
-                                    completed_effective,
-                                    batch_scheduled_us,
-                                )),
-                                sendinput_call_duration_us: Some(
-                                    result_completed_us.saturating_sub(started_us),
-                                ),
+                                sender_started_us,
+                                sender_completed_us: send_operation_duration_us
+                                    .map(|_| completed_effective),
+                                sender_completion_error_us: send_operation_duration_us
+                                    .map(|_| signed_delta(completed_effective, batch_scheduled_us)),
+                                send_operation_duration_us,
+                                sendinput_call_duration_us,
                                 bookkeeping_duration_us: Some(
                                     bookkeeping_completed_us.saturating_sub(result_completed_us),
                                 ),
@@ -3167,8 +3249,7 @@ fn run_worker(
                                 ),
                                 send_duration_us: bookkeeping_completed_us
                                     .saturating_sub(started_us),
-                                send_duration_pure_us: result_completed_us
-                                    .saturating_sub(started_us),
+                                send_duration_pure_us: send_operation_duration_us.unwrap_or(0),
                                 bookkeeping_us: bookkeeping_completed_us
                                     .saturating_sub(result_completed_us),
                                 dispatch_lateness_us: signed_delta(actual_us, batch_scheduled_us)
@@ -3351,6 +3432,7 @@ fn run_worker(
                             sender_started_us: None,
                             sender_completed_us: None,
                             sender_completion_error_us: None,
+                            send_operation_duration_us: None,
                             sendinput_call_duration_us: None,
                             bookkeeping_duration_us: None,
                             lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
@@ -4086,6 +4168,34 @@ fn signed_timeline_delta_us(
     Ok(if negative { -magnitude } else { magnitude })
 }
 
+/// Preserve the distinction between a logical operation and one SendInput
+/// syscall. The operation spans the first call entry through the final call
+/// return; a single-call duration is only valid for exactly one non-rollback
+/// call.
+fn exact_sender_durations(
+    qpc_clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: Option<QpcTicks>,
+    send_attempts: u8,
+    rollback_call: bool,
+) -> Result<(Option<u64>, Option<u64>), QpcError> {
+    if send_attempts == 0 {
+        return Ok((None, None));
+    }
+    let started = started_ticks.ok_or(QpcError::CounterUnavailable)?;
+    let completed = completed_ticks.ok_or(QpcError::CounterUnavailable)?;
+    let duration = completed
+        .checked_duration_since(started)
+        .map_err(|_| QpcError::CounterUnavailable)
+        .and_then(|ticks| {
+            qpc_clock
+                .duration_to_us(ticks)
+                .map_err(|_| QpcError::ConversionOverflow)
+        })?;
+    let single_call = (send_attempts == 1 && !rollback_call).then_some(duration);
+    Ok((Some(duration), single_call))
+}
+
 fn classify_latency_class(
     last_send_qpc_ticks: Option<QpcTicks>,
     now_qpc_ticks: QpcTicks,
@@ -4290,9 +4400,9 @@ mod tests {
     use super::{
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
         anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
-        derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
-        record_termination_error, release_runtime_outcome, supervisor_lease_expired,
-        update_estimator_after_send,
+        derive_spin_threshold_us, drain_commands, exact_sender_durations, focus_gate_matches,
+        record_input_path_health, record_termination_error, release_runtime_outcome,
+        supervisor_lease_expired, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -4379,6 +4489,30 @@ mod tests {
             assert!(result.is_ok(), "concurrent heartbeat sample: {result:?}");
         }
         publisher.join().expect("heartbeat publisher must finish");
+    }
+
+    #[test]
+    fn exact_sender_duration_distinguishes_single_call_from_operation() {
+        let clock =
+            QpcClock::from_frequency_hz(std::num::NonZeroU64::new(qpc_frequency()).unwrap());
+        let started = QpcTicks::from_raw(1_000);
+        let completed = started
+            .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(20).unwrap()))
+            .unwrap();
+
+        assert_eq!(
+            exact_sender_durations(clock, Some(started), Some(completed), 1, false).unwrap(),
+            (Some(20), Some(20))
+        );
+        assert_eq!(
+            exact_sender_durations(clock, Some(started), Some(completed), 2, false).unwrap(),
+            (Some(20), None)
+        );
+        assert_eq!(
+            exact_sender_durations(clock, Some(started), Some(completed), 2, true).unwrap(),
+            (Some(20), None)
+        );
+        assert!(exact_sender_durations(clock, None, Some(completed), 1, false).is_err());
     }
 
     #[test]
