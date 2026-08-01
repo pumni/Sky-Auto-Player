@@ -1,4 +1,4 @@
-//! P3.4 — Sender-side benchmark for `sky_dispatch_core`.
+//! P3.4 — Coordinator microbenchmark for `sky_dispatch_core`.
 //!
 //! Measures coordinator dispatch latency broken down by:
 //!   kind (Down / Up)  ×  polyphony (1, 3, 6, 10, 15)
@@ -217,10 +217,10 @@ fn run_cell(
     latency_class: LatencyClass,
     load_mode: LoadMode,
     iters: usize,
-) -> SenderStats {
+) -> Result<SenderStats, String> {
     // Spin up background stressor if needed.
     let stop = Arc::new(AtomicBool::new(false));
-    let stressor_handle = if load_mode == LoadMode::Load {
+    let mut stressor_handle = if load_mode == LoadMode::Load {
         let stop_clone = Arc::clone(&stop);
         Some(std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
@@ -235,7 +235,11 @@ fn run_cell(
 
     for _ in 0..iters {
         if let Err(e) = run_iteration(kind, polyphony, latency_class, &mut stats) {
-            eprintln!("WARN: iteration error: {e}");
+            stop.store(true, Ordering::Relaxed);
+            if let Some(handle) = stressor_handle.take() {
+                let _ = handle.join();
+            }
+            return Err(format!("iteration failed: {e}"));
         }
     }
 
@@ -245,18 +249,19 @@ fn run_cell(
         h.join().ok();
     }
 
-    stats
+    Ok(stats)
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-fn main() {
+fn main() -> Result<(), String> {
     let iters: usize = std::env::var("BENCH_ITERS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_ITERS);
 
-    println!("# P3.4 Sender-side benchmark — sky_dispatch_core");
+    println!("# P3.4 Coordinator microbenchmark — sky_dispatch_core");
+    println!("# Evidence scope: deterministic core simulation; no SendInput or Raw Input delivery");
     println!("# iterations={iters}  built={}", env!("CARGO_PKG_VERSION"));
     println!(
         "# Columns: signed_err/abs_err/late/early in µs (mean); p50/p95/p99/p999/max abs µs; send_us/book_us/wake_us (mean µs)"
@@ -273,7 +278,7 @@ fn main() {
         for &poly in POLYPHONY_LEVELS {
             for (class, class_str) in &classes {
                 for &load in &loads {
-                    let stats = run_cell(*kind, poly, *class, load, iters);
+                    let stats = run_cell(*kind, poly, *class, load, iters)?;
                     print_row(kind_str, poly, class_str, load.as_str(), &stats);
                 }
             }
@@ -288,4 +293,5 @@ fn main() {
         kinds.len() * POLYPHONY_LEVELS.len() * classes.len() * loads.len() * iters,
     );
     println!("# p99.9 requires BENCH_ITERS>=1000; shown as N/A when n<1000.");
+    Ok(())
 }

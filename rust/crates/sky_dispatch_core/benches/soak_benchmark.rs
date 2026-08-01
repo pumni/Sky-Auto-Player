@@ -1,4 +1,4 @@
-//! P3.7 — Soak test for `sky_dispatch_core`.
+//! P3.7 — Coordinator soak simulation for `sky_dispatch_core`.
 //!
 //! Verifies that the coordinator remains correct over a long synthetic session,
 //! exercising all scenarios listed in the plan:
@@ -135,20 +135,69 @@ fn linear_regression_slope(errors: &[i64]) -> f64 {
 // ─── RSS helper ───────────────────────────────────────────────────────────────
 
 /// Read the current process working set / RSS in bytes.
-/// Falls back to 0 on platforms where this is unavailable.
-fn rss_bytes() -> u64 {
-    // Use Windows-specific APIs via a simple proc-self approach.
-    // We read from /proc/self/status on Linux or use GetProcessMemoryInfo on
-    // Windows. In a benchmark binary we can use a simple fallback.
+///
+/// This benchmark must not manufacture a zero when the platform measurement is
+/// unavailable: an absent measurement is an execution error.
+fn rss_bytes() -> Result<u64, String> {
     #[cfg(windows)]
     {
-        use std::mem::MaybeUninit;
-        let _ = MaybeUninit::<[u8; 1]>::uninit(); // prevent dead_code lint
-        0u64 // acceptable for a controlled simulation — no real OS memory pressure
+        #[repr(C)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> isize;
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn K32GetProcessMemoryInfo(
+                process: isize,
+                counters: *mut ProcessMemoryCounters,
+                size: u32,
+            ) -> i32;
+        }
+        let mut counters = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            page_fault_count: 0,
+            peak_working_set_size: 0,
+            working_set_size: 0,
+            quota_peak_paged_pool_usage: 0,
+            quota_paged_pool_usage: 0,
+            quota_peak_non_paged_pool_usage: 0,
+            quota_non_paged_pool_usage: 0,
+            pagefile_usage: 0,
+            peak_pagefile_usage: 0,
+        };
+        // SAFETY: the process handle is pseudo-handle owned by this process;
+        // the counters buffer has the documented size and lifetime.
+        let ok =
+            unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+        if ok == 0 {
+            return Err("K32GetProcessMemoryInfo failed".to_string());
+        }
+        Ok(counters.working_set_size as u64)
     }
     #[cfg(not(windows))]
     {
-        0u64
+        let statm = std::fs::read_to_string("/proc/self/statm")
+            .map_err(|error| format!("read /proc/self/statm: {error}"))?;
+        let pages = statm
+            .split_whitespace()
+            .nth(1)
+            .ok_or_else(|| "missing resident page count".to_string())?
+            .parse::<u64>()
+            .map_err(|error| format!("parse resident page count: {error}"))?;
+        Ok(pages.saturating_mul(4096))
     }
 }
 
@@ -225,13 +274,13 @@ fn run_soak_scenario(
 
     while !coordinator.is_finished() {
         // Focus-loss: cancel mid-session.
-        if let Some(stop) = stop_after_notes {
-            if note_idx >= stop {
-                let residue = coordinator.cancel_all();
-                counters.rollback_residue_keys += residue.len();
-                // After cancel_all the coordinator must report is_finished.
-                break;
-            }
+        if let Some(stop) = stop_after_notes
+            && note_idx >= stop
+        {
+            let residue = coordinator.cancel_all();
+            counters.rollback_residue_keys += residue.len();
+            // After cancel_all the coordinator must report is_finished.
+            break;
         }
 
         // Advance to next coordinator deadline.
@@ -251,32 +300,27 @@ fn run_soak_scenario(
         let due = coordinator.pop_due_pending(now_us, 0);
         if !due.is_empty() {
             // Simulate a failed release for a specific note.
-            if let Some(fail_note) = inject_failed_release_at {
-                if failed_release_note_idx.is_none() && note_idx > 0 && (note_idx - 1) == fail_note
-                {
-                    // Requeue first pending as failed; complete the rest normally.
-                    let (to_fail, to_complete) = due.split_at(1);
-                    let completed_codes: Vec<u16> =
-                        to_complete.iter().map(|p| p.scan_code).collect();
-                    coordinator.complete_releases(to_complete, &completed_codes, &[]);
-                    let _requeued = coordinator.requeue_failed_releases(
-                        to_fail,
-                        &[],
-                        &[],
-                        now_us,
-                        now_us,
-                        Some(5),
-                    );
-                    counters.failed_release_count += 1;
-                    // Save for retry.
-                    failed_release_note_idx = Some(fail_note);
-                    now_us += SEND_LATENCY_US;
-                    continue;
-                }
+            if let Some(fail_note) = inject_failed_release_at
+                && failed_release_note_idx.is_none()
+                && note_idx > 0
+                && (note_idx - 1) == fail_note
+            {
+                // Requeue first pending as failed; complete the rest normally.
+                let (to_fail, to_complete) = due.split_at(1);
+                let completed_codes: Vec<u16> = to_complete.iter().map(|p| p.scan_code).collect();
+                coordinator.complete_releases(to_complete, &completed_codes, &[]);
+                let _requeued =
+                    coordinator.requeue_failed_releases(to_fail, &[], &[], now_us, now_us, Some(5));
+                counters.failed_release_count += 1;
+                // Save for retry.
+                failed_release_note_idx = Some(fail_note);
+                now_us += SEND_LATENCY_US;
+                continue;
             }
             let codes: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             coordinator.complete_releases(&due, &codes, &[]);
             counters.releases_completed += due.len();
+            let _ = coordinator.finish_release_recovery(now_us);
             now_us += SEND_LATENCY_US;
             continue;
         }
@@ -297,7 +341,14 @@ fn run_soak_scenario(
                     let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
                     if !conflicts.is_empty() {
                         counters.chord_split_events += 1;
-                        println!("DEBUG: Chord split at note_idx={} authored_us={} now_us={}. Playable={}, Conflicts={}", note_idx, authored_us, now_us, playable.len(), conflicts.len());
+                        println!(
+                            "DEBUG: Chord split at note_idx={} authored_us={} now_us={}. Playable={}, Conflicts={}",
+                            note_idx,
+                            authored_us,
+                            now_us,
+                            playable.len(),
+                            conflicts.len()
+                        );
                         // Drop conflicted slots.
                         coordinator.drop_conflicted_downs(&conflicts);
                     }
@@ -312,10 +363,10 @@ fn run_soak_scenario(
                             TimelineTicks(now_us + SEND_LATENCY_US),
                         );
                     }
-                    
+
                     let error = now_us as i64 - authored_us as i64;
                     counters.timing_errors.push(error);
-                    
+
                     counters.notes_dispatched += 1;
                     note_idx += 1;
                     now_us += SEND_LATENCY_US;
@@ -415,7 +466,10 @@ fn print_row(r: &ScenarioResult) {
 
 fn print_gate_summary(results: &[ScenarioResult]) {
     println!();
-    println!("# Gate (correctness): all counters = 0, slope < ±2 µs/note");
+    println!("# Gate (correctness): strict counters = 0 for ordinary scenarios; ");
+    println!(
+        "# UI-stall, failed-release, and focus-loss scenarios use documented waivers; slope < ±2 µs/note"
+    );
     let all_counters_ok = results.iter().all(|r| r.counters.gate_ok());
     let slope_ok = results
         .iter()
@@ -426,8 +480,16 @@ fn print_gate_summary(results: &[ScenarioResult]) {
         .filter(|r| !r.gate_ok() || r.counters.slope_us_per_note().abs() >= 2.0)
         .map(|r| r.name)
         .collect();
+    let waived_count = results
+        .iter()
+        .filter(|r| matches!(r.name, "ui_stall" | "failed_release" | "focus_loss"))
+        .count();
     if pass {
-        println!("  → PASS (all {} scenarios)", results.len());
+        println!(
+            "  → PASS ({} ordinary scenarios; {} documented-waiver scenarios)",
+            results.len().saturating_sub(waived_count),
+            waived_count
+        );
     } else {
         println!("  → FAIL: {:?}", failed_names);
     }
@@ -435,26 +497,29 @@ fn print_gate_summary(results: &[ScenarioResult]) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-fn main() {
+fn main() -> Result<(), String> {
     let n_notes: usize = std::env::var("SOAK_NOTES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_NOTES);
 
-    println!("# P3.7 Soak benchmark — sky_dispatch_core");
+    println!("# P3.7 Coordinator soak simulation — sky_dispatch_core");
+    println!(
+        "# Evidence scope: deterministic coordinator simulation; no SendInput or game observation"
+    );
     println!(
         "# notes={n_notes}  poly_levels={POLY_LEVELS:?}  built={}",
         env!("CARGO_PKG_VERSION")
     );
     println!(
-        "# Gate: dropped=0, chord_splits=0, failed_releases=0, residue=0, nonterminal=0, slope<±2µs/note"
+        "# Gate: ordinary scenarios require dropped=0, chord_splits=0, failed_releases=0, residue=0, nonterminal=0; documented fault scenarios are reported raw and checked with explicit waivers; slope<±2µs/note"
     );
     println!();
 
     print_header();
 
     let mut results: Vec<ScenarioResult> = Vec::new();
-    let rss_before = rss_bytes();
+    let rss_before = rss_bytes()?;
 
     // ── Scenario 1: Dense chords, polyphony sweep ──────────────────────────────
     for &poly in POLY_LEVELS {
@@ -474,7 +539,7 @@ fn main() {
                 print_row(&r);
                 results.push(r);
             }
-            Err(e) => eprintln!("WARN[dense/poly={poly}]: {e}"),
+            Err(e) => return Err(format!("dense/poly={poly}: {e}")),
         }
     }
 
@@ -498,7 +563,7 @@ fn main() {
                 print_row(&r);
                 results.push(r);
             }
-            Err(e) => eprintln!("WARN[sparse]: {e}"),
+            Err(e) => return Err(format!("sparse: {e}")),
         }
     }
 
@@ -554,7 +619,7 @@ fn main() {
                 waived.counters.authored_conflict = 0;
                 results.push(waived);
             }
-            Err(e) => eprintln!("WARN[ui_stall]: {e}"),
+            Err(e) => return Err(format!("ui_stall: {e}")),
         }
     }
 
@@ -608,7 +673,7 @@ fn main() {
                 waived.counters.failed_release_count = 0;
                 results.push(waived);
             }
-            Err(e) => eprintln!("WARN[failed_release]: {e}"),
+            Err(e) => return Err(format!("failed_release: {e}")),
         }
     }
 
@@ -661,12 +726,12 @@ fn main() {
                 waived.counters.nonterminal_after_end = 0; // not applicable post-cancel
                 results.push(waived);
             }
-            Err(e) => eprintln!("WARN[focus_loss]: {e}"),
+            Err(e) => return Err(format!("focus_loss: {e}")),
         }
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
-    let rss_after = rss_bytes();
+    let rss_after = rss_bytes()?;
 
     print_gate_summary(&results);
 
@@ -684,4 +749,8 @@ fn main() {
         (rss_after as i64) - (rss_before as i64),
     );
     println!("# * = gate waiver documented in bench source (recovery/focus-loss are intentional)");
+    if results.is_empty() || results.iter().any(|result| !result.gate_ok()) {
+        return Err("coordinator soak simulation gate failed".to_string());
+    }
+    Ok(())
 }

@@ -1,7 +1,8 @@
-//! P3.6 — Delivery-proxy benchmark for `sky_dispatch_core`.
+//! P3.6 — Delivery-proxy simulation for `sky_dispatch_core`.
 //!
-//! Verifies correctness of the coordinator's send-receipt tracking across chord
-//! sizes, simulating the calibration-window role of the delivery proxy.
+//! Verifies coordinator lifecycle accounting across chord sizes. This is a
+//! deterministic simulation; it does not call SendInput and does not receive
+//! real WM_INPUT receipts.
 //!
 //! ## Metrics (per chord size)
 //!
@@ -258,21 +259,29 @@ fn analyse(
         .filter(|r| matches!(r.kind, ActionKind::Down))
         .collect();
 
-    // missing: authored chords that produced no Down receipt.
-    if down_receipts.len() < authored.len() {
-        stats.missing += authored.len() - down_receipts.len();
-    }
-
-    // duplicate: any chord index appears more than once in Down receipts.
+    // Count by authored identity rather than by total receipt length. This
+    // catches a missing receipt paired with an out-of-range or duplicate one.
     let mut seen = std::collections::HashMap::<usize, usize>::new();
     for r in &down_receipts {
         *seen.entry(r.chord_index).or_insert(0) += 1;
     }
-    stats.duplicate = seen.values().filter(|&&c| c > 1).count();
+    for chord_index in 0..authored.len() {
+        match seen.get(&chord_index).copied().unwrap_or(0) {
+            0 => stats.missing += 1,
+            count if count > 1 => stats.duplicate += count - 1,
+            _ => {}
+        }
+    }
+    if seen
+        .keys()
+        .any(|&chord_index| chord_index >= authored.len())
+    {
+        stats.reorder += 1;
+    }
 
     // Per-chord analysis.
     for (i, (authored_us, authored_codes)) in authored.iter().enumerate() {
-        let receipt = down_receipts.iter().find(|r| r.chord_index == i + 1);
+        let receipt = down_receipts.iter().find(|r| r.chord_index == i);
         let Some(receipt) = receipt else { continue };
 
         // first/last receipt error — for polyphony > 1 we model all keys as
@@ -355,8 +364,9 @@ fn print_gate_summary(all_stats: &[DeliveryStats]) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-fn main() {
-    println!("# P3.6 Delivery-proxy benchmark — sky_dispatch_core");
+fn main() -> Result<(), String> {
+    println!("# P3.6 Delivery-proxy simulation — sky_dispatch_core");
+    println!("# Evidence scope: deterministic simulation; not a real Raw Input delivery proxy");
     println!(
         "# chord_sizes={CHORD_SIZES:?}  reps_per_size={REPS_PER_SIZE}  built={}",
         env!("CARGO_PKG_VERSION")
@@ -376,9 +386,7 @@ fn main() {
                 print_row(&s);
                 all_stats.push(s);
             }
-            Err(e) => {
-                eprintln!("WARN[chord={chord_size}]: {e}");
-            }
+            Err(e) => return Err(format!("chord={chord_size}: {e}")),
         }
     }
 
@@ -390,4 +398,8 @@ fn main() {
         REPS_PER_SIZE,
         CHORD_SIZES.len() * REPS_PER_SIZE,
     );
+    if all_stats.iter().any(|stats| !stats.gate_ok()) {
+        return Err("delivery-proxy simulation gate failed".to_string());
+    }
+    Ok(())
 }
