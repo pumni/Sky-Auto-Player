@@ -117,7 +117,9 @@ dedicated `native_calibration.exe` process creates the app-owned Win32 calibrati
 strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with native-call
 completion. The player process does not modify its own Raw Input registration. Only complete,
 anomaly-free samples contribute to quantiles; cleanup or process failures are unsuccessful
-calibration. The current output is schema version 5 / measurement protocol 2. Validated evidence
+calibration. The current output is schema version 6 / measurement protocol 3. Measured bucket
+admission is based on the actual QPC idle gap between the previous exact SendInput completion and
+the current exact SendInput entry; requested sleep duration is not evidence. Validated evidence
 is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_proxy` label and
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.

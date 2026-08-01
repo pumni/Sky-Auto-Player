@@ -9,37 +9,60 @@ from sky_music.platform.win32 import native_calibration
 
 
 def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str, object]:
-    bucket = {
-        "attempted": clean,
-        "clean_sample_count": clean,
-        "clean": clean,
-        "rejected": 0,
-        "first_receipt_us": {"p50": 10, "p90": 20, "p95": 30, "p99": 40},
-    }
+    def bucket() -> dict[str, object]:
+        return {
+            "attempted": clean,
+            "clean_sample_count": clean,
+            "clean": clean,
+            "rejected": 0,
+            "sample_count": clean,
+            "partial_send": 0,
+            "error_count": 0,
+            "timeout_count": 0,
+            "anomaly_count": 0,
+            "class_mismatch_count": 0,
+            "first_receipt_us": {"p50": 10, "p90": 20, "p95": 30, "p99": 40},
+        }
+
+    measured = clean * 4
+    setup_attempted = 20
+    warmup_attempted = 10
     return {
-        "version": 5,
-        "measurement_protocol_version": 2,
+        "version": 6,
+        "measurement_protocol_version": 3,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
-        "native_build_id": "test-build",
+        "native_build_id": "test-sha",
+        "dirty_worktree": False,
         "native_source_fingerprint": "test-fingerprint",
         "rustc_version": "rustc 1.97.1",
         "host_fingerprint": {"qpc_frequency_hz": 10_000_000},
-        "warmup_attempted": 10,
-        "measured_attempted": 100,
-        "setup_attempted": 20,
-        "measured_anomalous": 2,
+        "configuration": {
+            "polyphonies": [1],
+            "samples_per_hot_bucket": clean,
+            "samples_per_cold_bucket": clean,
+            "warmup_samples": warmup_attempted,
+            "receipt_timeout_ms": 200,
+            "hot_gap_target_us": 5_000,
+            "cold_idle_gap_us": 100_000,
+            "cold_threshold_us": 20_000,
+        },
+        "warmup_attempted": warmup_attempted,
+        "measured_attempted": measured,
+        "setup_attempted": setup_attempted,
+        "measured_anomalous": 0,
         "warmup_anomalous": 1,
         "setup_anomalous": 0,
-        "total_anomalous": 3,
+        "measured_class_mismatch": 0,
+        "total_anomalous": 1,
         "warmup_timed_out": 0,
         "measured_timed_out": 0,
         "setup_timed_out": 0,
-        "total_attempted": 130,
+        "total_attempted": warmup_attempted + measured + setup_attempted,
         "total_timed_out": 0,
         "buckets": {
-            "down": {"1": {"hot": bucket}},
-            "up": {"1": {"hot": bucket}},
+            "down": {"1": {"hot": bucket(), "cold": bucket()}},
+            "up": {"1": {"hot": bucket(), "cold": bucket()}},
         },
         "cleanup": {
             "cleanup_success": cleanup_success,
@@ -153,3 +176,44 @@ def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
         native_calibration.run_native_calibration(cache_path=cache)
 
     assert cache.read_text(encoding="utf-8") == "sentinel\n"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result["buckets"]["down"]["1"].pop("cold"),
+        lambda result: result["buckets"]["up"].pop("1"),
+        lambda result: result["buckets"]["down"]["1"].update({"warm": {}}),
+        lambda result: result.__setitem__("measured_attempted", 999),
+        lambda result: result.__setitem__("measured_timed_out", 1),
+        lambda result: result.__setitem__("measured_class_mismatch", 1),
+        lambda result: result["buckets"]["down"]["1"]["hot"].__setitem__(
+            "sample_count", 0
+        ),
+        lambda result: result.__setitem__("dirty_worktree", True),
+        lambda result: result.__setitem__("native_build_id", "other-sha"),
+    ],
+    ids=[
+        "missing-cold",
+        "missing-polyphony",
+        "extra-class",
+        "attempt-total-mismatch",
+        "timeout-total-mismatch",
+        "class-mismatch-total-mismatch",
+        "sample-count-mismatch",
+        "dirty-artifact",
+        "source-build-sha-mismatch",
+    ],
+)
+def test_native_calibration_rejects_incomplete_or_untrusted_evidence(
+    mutate,
+) -> None:
+    result = _native_result()
+    mutate(result)
+    with pytest.raises(native_calibration.NativeCalibrationError):
+        native_calibration._validate_result(result)
+
+
+def test_native_calibration_accepts_complete_matrix() -> None:
+    result = _native_result()
+    assert native_calibration._validate_result(result) == result

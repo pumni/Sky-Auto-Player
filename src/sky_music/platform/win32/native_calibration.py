@@ -15,12 +15,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 5
-SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 2
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 6
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
 
 
@@ -95,6 +95,90 @@ def _clean_quantile(bucket: dict[str, Any], kind: str) -> dict[str, int]:
     return values
 
 
+def _nonnegative_int(value: object, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise NativeCalibrationError(f"native calibration has invalid {name}")
+    return value
+
+
+def _positive_int(value: object, name: str) -> int:
+    result = _nonnegative_int(value, name)
+    if result == 0:
+        raise NativeCalibrationError(f"native calibration has invalid {name}")
+    return result
+
+
+def _validate_configuration(result: dict[str, Any]) -> tuple[tuple[int, ...], int, int]:
+    configuration = _require_mapping(result.get("configuration"), "configuration")
+    raw_polyphonies = configuration.get("polyphonies")
+    if not isinstance(raw_polyphonies, list) or not raw_polyphonies:
+        raise NativeCalibrationError("calibration configuration polyphonies must not be empty")
+    polyphonies: list[int] = []
+    for value in raw_polyphonies:
+        polyphony = _positive_int(value, "configuration.polyphonies")
+        if polyphony > 15:
+            raise NativeCalibrationError("calibration configuration polyphony is out of range")
+        if polyphony in polyphonies:
+            raise NativeCalibrationError("calibration configuration has duplicate polyphony")
+        polyphonies.append(polyphony)
+
+    hot_target = _nonnegative_int(
+        configuration.get("hot_gap_target_us"), "configuration.hot_gap_target_us"
+    )
+    cold_threshold = _positive_int(
+        configuration.get("cold_threshold_us"), "configuration.cold_threshold_us"
+    )
+    cold_idle = _nonnegative_int(
+        configuration.get("cold_idle_gap_us"), "configuration.cold_idle_gap_us"
+    )
+    if hot_target >= cold_threshold:
+        raise NativeCalibrationError("hot gap target must be shorter than cold threshold")
+    if cold_idle < cold_threshold:
+        raise NativeCalibrationError("cold idle gap is shorter than cold threshold")
+    hot_samples = _positive_int(
+        configuration.get("samples_per_hot_bucket"),
+        "configuration.samples_per_hot_bucket",
+    )
+    cold_samples = _positive_int(
+        configuration.get("samples_per_cold_bucket"),
+        "configuration.samples_per_cold_bucket",
+    )
+    return tuple(polyphonies), hot_samples, cold_samples
+
+
+def _validate_bucket(
+    bucket_value: object,
+    name: str,
+    expected_attempts: int,
+) -> dict[str, Any]:
+    bucket = _require_mapping(bucket_value, name)
+    fields = (
+        "attempted",
+        "clean",
+        "rejected",
+        "clean_sample_count",
+        "sample_count",
+        "timeout_count",
+        "anomaly_count",
+        "class_mismatch_count",
+        "partial_send",
+        "error_count",
+    )
+    counts = {field: _nonnegative_int(bucket.get(field), f"{name}.{field}") for field in fields}
+    if counts["attempted"] != expected_attempts:
+        raise NativeCalibrationError(f"{name} has an unexpected attempt count")
+    if counts["clean_sample_count"] != counts["clean"]:
+        raise NativeCalibrationError(f"{name} clean sample count is inconsistent")
+    if counts["clean"] + counts["rejected"] != counts["attempted"]:
+        raise NativeCalibrationError(f"{name} clean/rejected totals are inconsistent")
+    if counts["sample_count"] != counts["attempted"]:
+        raise NativeCalibrationError(f"{name} sample count is inconsistent")
+    for field in ("timeout_count", "anomaly_count", "class_mismatch_count", "partial_send", "error_count"):
+        if counts[field] > counts["rejected"]:
+            raise NativeCalibrationError(f"{name}.{field} exceeds rejected count")
+    return bucket
+
+
 def _validate_result(result: object) -> dict[str, Any]:
     data = _require_mapping(result, "root")
     if data.get("version") != SUPPORTED_NATIVE_CALIBRATION_VERSION:
@@ -112,6 +196,14 @@ def _validate_result(result: object) -> dict[str, Any]:
         value = data.get(name)
         if not isinstance(value, str) or not value.strip() or value == "unknown":
             raise NativeCalibrationError(f"native calibration has invalid {name}")
+        if value.endswith("-dirty"):
+            raise NativeCalibrationError("native calibration provenance is dirty")
+    if data.get("dirty_worktree") is not False:
+        raise NativeCalibrationError("native calibration worktree is not clean")
+    if data["source_git_sha"] != data["native_build_id"]:
+        raise NativeCalibrationError("native calibration source/build SHA mismatch")
+
+    polyphonies, hot_attempts, cold_attempts = _validate_configuration(data)
 
     if getattr(sys, "frozen", False):
         try:
@@ -167,6 +259,7 @@ def _validate_result(result: object) -> dict[str, Any]:
         "total_attempted",
         "total_anomalous",
         "total_timed_out",
+        "measured_class_mismatch",
     )
     counts: dict[str, int] = {}
     for name in count_names:
@@ -190,29 +283,41 @@ def _validate_result(result: object) -> dict[str, Any]:
         raise NativeCalibrationError("native calibration timeout totals are inconsistent")
 
     buckets = _require_mapping(data.get("buckets"), "buckets")
+    if set(buckets) != {"down", "up"}:
+        raise NativeCalibrationError("native calibration bucket kinds are incomplete or unknown")
+    bucket_totals = {
+        "attempted": 0,
+        "timeout_count": 0,
+        "anomaly_count": 0,
+        "class_mismatch_count": 0,
+    }
     for kind in ("down", "up"):
         by_polyphony = _require_mapping(buckets.get(kind), f"buckets.{kind}")
-        for polyphony, classes in by_polyphony.items():
-            _require_mapping(classes, f"buckets.{kind}.{polyphony}")
-            for class_name, bucket_value in classes.items():
-                bucket = _require_mapping(
-                    bucket_value, f"buckets.{kind}.{polyphony}.{class_name}"
+        expected_polys = {str(polyphony) for polyphony in polyphonies}
+        if set(by_polyphony) != expected_polys:
+            raise NativeCalibrationError(f"native calibration {kind} bucket matrix is incomplete")
+        for polyphony in polyphonies:
+            classes = _require_mapping(by_polyphony.get(str(polyphony)), f"buckets.{kind}.{polyphony}")
+            if set(classes) != {"hot", "cold"}:
+                raise NativeCalibrationError(
+                    f"native calibration {kind}.{polyphony} class matrix is incomplete"
                 )
-                attempted = bucket.get("attempted")
-                clean = bucket.get("clean")
-                rejected = bucket.get("rejected")
-                clean_samples = bucket.get("clean_sample_count")
-                if not all(
-                    isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                    for value in (attempted, clean, rejected, clean_samples)
-                ):
-                    raise NativeCalibrationError("native calibration bucket counts are invalid")
-                attempted_value = cast(int, attempted)
-                clean_value = cast(int, clean)
-                rejected_value = cast(int, rejected)
-                clean_samples_value = cast(int, clean_samples)
-                if clean_samples_value != clean_value or clean_value + rejected_value != attempted_value:
-                    raise NativeCalibrationError("native calibration bucket totals are inconsistent")
+            expected = {"hot": hot_attempts, "cold": cold_attempts}
+            for class_name in ("hot", "cold"):
+                name = f"buckets.{kind}.{polyphony}.{class_name}"
+                bucket = _validate_bucket(classes.get(class_name), name, expected[class_name])
+                for field in bucket_totals:
+                    bucket_totals[field] += int(bucket[field])
+
+    if bucket_totals["attempted"] != counts["measured_attempted"]:
+        raise NativeCalibrationError("bucket attempts do not equal measured_attempted")
+    for field, top_level in (
+        ("timeout_count", "measured_timed_out"),
+        ("anomaly_count", "measured_anomalous"),
+        ("class_mismatch_count", "measured_class_mismatch"),
+    ):
+        if bucket_totals[field] != counts[top_level]:
+            raise NativeCalibrationError(f"bucket {field} total does not match {top_level}")
     return data
 
 
@@ -235,6 +340,7 @@ def _legacy_cache(result: dict[str, Any]) -> dict[str, Any]:
         "measurement_protocol_version": result["measurement_protocol_version"],
         "source_git_sha": result.get("source_git_sha"),
         "native_build_id": result.get("native_build_id"),
+        "dirty_worktree": result.get("dirty_worktree"),
         "host_fingerprint": result.get("host_fingerprint"),
         "anomaly_counts": {
             "warmup": result.get("warmup_anomalous"),

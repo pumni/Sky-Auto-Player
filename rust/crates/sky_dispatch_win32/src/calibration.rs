@@ -87,6 +87,14 @@ pub enum CalibrationError {
         threshold_us: u64,
     },
 
+    #[error(
+        "hot gap target {configured_us}us must be shorter than the shared threshold {threshold_us}us"
+    )]
+    HotGapTargetTooLong {
+        configured_us: u64,
+        threshold_us: u64,
+    },
+
     #[error("calibration state lock was poisoned")]
     StateLockFailed,
 
@@ -123,6 +131,11 @@ pub struct CalibrationSample {
     pub last_receipt_ticks: Option<QpcTicks>,
     pub receipt_count: u8,
     pub expected_receipt_count: u8,
+    /// Physical idle gap from the immediately previous SendInput completion
+    /// to this packet's exact SendInput entry, when measured evidence exists.
+    pub actual_idle_gap_ticks: Option<sky_dispatch_core::time::DurationTicks>,
+    /// Class derived from `actual_idle_gap_ticks`, never from requested sleep.
+    pub observed_class: Option<SampleClass>,
     /// Anomalies detected for this packet.
     pub anomalies: SampleAnomalies,
 }
@@ -193,6 +206,24 @@ fn signed_delta_us(later: QpcTicks, earlier: QpcTicks) -> Result<i64, Calibratio
     }
 }
 
+/// Classify a measured packet from the physical QPC idle interval immediately
+/// preceding its exact SendInput entry.
+pub fn classify_idle_gap(
+    previous_completion: QpcTicks,
+    current_start: QpcTicks,
+    cold_threshold: sky_dispatch_core::time::DurationTicks,
+) -> Result<(SampleClass, sky_dispatch_core::time::DurationTicks), CalibrationError> {
+    let gap = current_start
+        .checked_duration_since(previous_completion)
+        .map_err(|_| CalibrationError::ClockFailure)?;
+    let observed = if gap >= cold_threshold {
+        SampleClass::Cold
+    } else {
+        SampleClass::Hot
+    };
+    Ok((observed, gap))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SampleAnomalies {
     pub duplicate_receipt: bool,
@@ -200,6 +231,7 @@ pub struct SampleAnomalies {
     pub unexpected_scan_code: bool,
     pub timeout: bool,
     pub partial_send: bool,
+    pub class_mismatch: bool,
 }
 
 impl SampleAnomalies {
@@ -209,6 +241,7 @@ impl SampleAnomalies {
             || self.unexpected_scan_code
             || self.timeout
             || self.partial_send
+            || self.class_mismatch
     }
 }
 
@@ -230,6 +263,7 @@ pub struct BucketStats {
     pub error_count: u64,
     pub timeout_count: u64,
     pub anomaly_count: u64,
+    pub class_mismatch_count: u64,
     pub call_duration_us: QuantileStats,
     /// Latency from `call_completed` to first Raw Input receipt.
     pub first_receipt_us: Option<SignedQuantileStats>,
@@ -279,7 +313,7 @@ pub enum PacketKind {
     Up,
 }
 
-pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 2;
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CalibrationStep {
@@ -323,7 +357,7 @@ fn exact_sendinput_boundaries(
 }
 
 /// Parameters for a single calibration run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationConfig {
     /// Polyphonies to measure (1–15). Must not be empty.
     pub polyphonies: Vec<u8>,
@@ -336,11 +370,14 @@ pub struct CalibrationConfig {
     /// Milliseconds to wait for Raw Input receipts before marking a packet as
     /// timed out. Recommended: 200 ms.
     pub receipt_timeout_ms: u32,
-    /// Microseconds of inter-sample gap to avoid back-to-back congestion.
-    pub inter_sample_gap_us: u64,
+    /// Requested microseconds between hot samples. Actual QPC time is still
+    /// required to admit a sample to the hot bucket.
+    pub hot_gap_target_us: u64,
     /// Idle interval before a cold sample. This must be at least the
     /// production cold-class threshold.
     pub cold_idle_gap_us: u64,
+    /// Shared physical threshold used to classify measured packets.
+    pub cold_threshold_us: u64,
 }
 
 impl Default for CalibrationConfig {
@@ -351,8 +388,9 @@ impl Default for CalibrationConfig {
             samples_per_cold_bucket: 500,
             warmup_samples: 20,
             receipt_timeout_ms: 200,
-            inter_sample_gap_us: 5_000,
+            hot_gap_target_us: 5_000,
             cold_idle_gap_us: 100_000,
+            cold_threshold_us: SEND_COLD_THRESHOLD_US,
         }
     }
 }
@@ -390,10 +428,12 @@ pub struct CalibrationOutput {
     pub measurement_protocol_version: u32,
     pub source_git_sha: &'static str,
     pub native_build_id: &'static str,
+    pub dirty_worktree: bool,
     pub native_source_fingerprint: &'static str,
     pub rustc_version: &'static str,
     pub evidence_kind: &'static str,
     pub host_fingerprint: HostFingerprint,
+    pub configuration: CalibrationConfig,
     /// Buckets keyed by (kind, polyphony, class).
     /// Serialised as nested maps: `down.1.hot`, `up.3.cold`, …
     pub buckets: CalibrationBuckets,
@@ -413,6 +453,7 @@ pub struct CalibrationOutput {
     pub total_anomalous: u64,
     pub warmup_timed_out: u64,
     pub measured_timed_out: u64,
+    pub measured_class_mismatch: u64,
     /// Total samples that timed out completely.
     pub total_timed_out: u64,
     pub cleanup: CleanupOutcome,
@@ -444,6 +485,39 @@ pub struct HostFingerprint {
     pub qpc_frequency_hz: u64,
     pub win32_build: Option<String>,
     pub sampled_at_us: u64,
+}
+
+fn validate_calibration_config(config: &CalibrationConfig) -> Result<(), CalibrationError> {
+    if config.polyphonies.is_empty()
+        || config.samples_per_hot_bucket == 0
+        || config.samples_per_cold_bucket == 0
+    {
+        return Err(CalibrationError::ZeroSamples);
+    }
+    if config.cold_threshold_us == 0 {
+        return Err(CalibrationError::ColdIdleGapTooShort {
+            configured_us: config.cold_threshold_us,
+            threshold_us: SEND_COLD_THRESHOLD_US,
+        });
+    }
+    if config.hot_gap_target_us >= config.cold_threshold_us {
+        return Err(CalibrationError::HotGapTargetTooLong {
+            configured_us: config.hot_gap_target_us,
+            threshold_us: config.cold_threshold_us,
+        });
+    }
+    if config.cold_idle_gap_us < config.cold_threshold_us {
+        return Err(CalibrationError::ColdIdleGapTooShort {
+            configured_us: config.cold_idle_gap_us,
+            threshold_us: config.cold_threshold_us,
+        });
+    }
+    for &p in &config.polyphonies {
+        if p == 0 || p as usize > crate::input::PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
+            return Err(CalibrationError::PolyphonyTooLarge(p as usize));
+        }
+    }
+    Ok(())
 }
 
 // ─── Internal raw-input receipt state (shared between pump and collector) ─────
@@ -882,6 +956,7 @@ mod platform {
         qpc_clock: QpcClock,
         next_sequence: u32,
         possibly_active_mask: u16,
+        last_send_completed_ticks: Option<QpcTicks>,
     }
 
     fn stop_pump_on_startup_failure(
@@ -957,6 +1032,7 @@ mod platform {
                 qpc_clock,
                 next_sequence: 1,
                 possibly_active_mask: 0,
+                last_send_completed_ticks: None,
             })
         }
 
@@ -1047,6 +1123,7 @@ mod platform {
                     return Err(error);
                 }
             };
+            self.last_send_completed_ticks = Some(call_completed);
             let expected = scan_codes.len() as u8;
             let partial_send = psr.inserted < expected as u32;
             if !key_up {
@@ -1111,11 +1188,39 @@ mod platform {
                 last_receipt_ticks: last,
                 receipt_count: count,
                 expected_receipt_count: expected,
+                actual_idle_gap_ticks: None,
+                observed_class: None,
                 anomalies: SampleAnomalies {
                     partial_send,
                     ..anomalies
                 },
             })
+        }
+
+        /// Measure one packet and classify it from the immediately previous
+        /// exact SendInput completion. A mismatch is retained in the
+        /// requested bucket only as rejected evidence.
+        pub fn measure_classified_packet(
+            &mut self,
+            scan_codes: &[u16],
+            key_up: bool,
+            expected_class: SampleClass,
+            cold_threshold: sky_dispatch_core::time::DurationTicks,
+            receipt_timeout: Duration,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let previous_completion = self
+                .last_send_completed_ticks
+                .ok_or(CalibrationError::ClockFailure)?;
+            let mut sample = self.measure_packet(scan_codes, key_up, receipt_timeout)?;
+            let (observed_class, actual_idle_gap_ticks) = classify_idle_gap(
+                previous_completion,
+                sample.call_started_ticks,
+                cold_threshold,
+            )?;
+            sample.observed_class = Some(observed_class);
+            sample.actual_idle_gap_ticks = Some(actual_idle_gap_ticks);
+            sample.anomalies.class_mismatch = observed_class != expected_class;
+            Ok(sample)
         }
 
         fn require_clean_packet(
@@ -1471,29 +1576,17 @@ mod platform {
     pub fn run_calibration(
         config: &CalibrationConfig,
     ) -> Result<CalibrationOutput, CalibrationError> {
-        if config.polyphonies.is_empty()
-            || config.samples_per_hot_bucket == 0
-            || config.samples_per_cold_bucket == 0
-        {
-            return Err(CalibrationError::ZeroSamples);
-        }
-        if config.cold_idle_gap_us < SEND_COLD_THRESHOLD_US {
-            return Err(CalibrationError::ColdIdleGapTooShort {
-                configured_us: config.cold_idle_gap_us,
-                threshold_us: SEND_COLD_THRESHOLD_US,
-            });
-        }
-        for &p in &config.polyphonies {
-            if p == 0 || p as usize > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
-                return Err(CalibrationError::PolyphonyTooLarge(p as usize));
-            }
-        }
+        super::validate_calibration_config(config)?;
 
         let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
         let mut session = CalibrationSession::open()?;
 
         let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
-        let inter_sample_sleep = Duration::from_micros(config.inter_sample_gap_us);
+        let hot_gap_sleep = Duration::from_micros(config.hot_gap_target_us);
+        let cold_threshold_ticks = session
+            .qpc_clock
+            .duration_from_us(config.cold_threshold_us)
+            .map_err(|_| CalibrationError::ClockFailure)?;
 
         // We use the first N scan codes from the canonical instrument list for
         // each polyphony level.  This is deterministic and canonical per the
@@ -1512,6 +1605,7 @@ mod platform {
         let mut warmup_timed_out: u64 = 0;
         let mut measured_timed_out: u64 = 0;
         let mut total_timed_out: u64 = 0;
+        let mut measured_class_mismatch: u64 = 0;
 
         let mut record_attempt = |sample: &CalibrationSample, warmup: bool, setup: bool| {
             let attempted = if setup {
@@ -1545,6 +1639,9 @@ mod platform {
                 checked_increment(timed_out)?;
                 checked_increment(&mut total_timed_out)?;
             }
+            if sample.anomalies.class_mismatch && !warmup && !setup {
+                checked_increment(&mut measured_class_mismatch)?;
+            }
             Ok::<(), CalibrationError>(())
         };
 
@@ -1568,8 +1665,8 @@ mod platform {
                         }
                     };
                     record_attempt(&sample, true, false)?;
-                    if !inter_sample_sleep.is_zero() {
-                        std::thread::sleep(inter_sample_sleep);
+                    if !hot_gap_sleep.is_zero() {
+                        std::thread::sleep(hot_gap_sleep);
                     }
                 }
 
@@ -1577,7 +1674,7 @@ mod platform {
                     (
                         SampleClass::Hot,
                         config.samples_per_hot_bucket,
-                        inter_sample_sleep,
+                        hot_gap_sleep,
                     ),
                     (
                         SampleClass::Cold,
@@ -1596,8 +1693,13 @@ mod platform {
                         }
                         let sample = match kind {
                             PacketKind::Down => {
-                                let s =
-                                    session.measure_packet(scan_codes, false, receipt_timeout)?;
+                                let s = session.measure_classified_packet(
+                                    scan_codes,
+                                    false,
+                                    class,
+                                    cold_threshold_ticks,
+                                    receipt_timeout,
+                                )?;
                                 session.cleanup_keys_up(scan_codes, receipt_timeout)?;
                                 s
                             }
@@ -1605,17 +1707,19 @@ mod platform {
                                 let setup =
                                     session.prepare_keys_down(scan_codes, receipt_timeout)?;
                                 record_attempt(&setup, false, true)?;
-                                if protocol.contains(&CalibrationStep::HotGap) {
-                                    if !inter_sample_sleep.is_zero() {
-                                        std::thread::sleep(inter_sample_sleep);
-                                    }
-                                } else {
+                                if !protocol.contains(&CalibrationStep::HotGap) {
                                     session.wait_cold_gap_after(
                                         setup.call_completed_ticks,
                                         config.cold_idle_gap_us,
                                     )?;
                                 }
-                                session.measure_packet(scan_codes, true, receipt_timeout)?
+                                session.measure_classified_packet(
+                                    scan_codes,
+                                    true,
+                                    class,
+                                    cold_threshold_ticks,
+                                    receipt_timeout,
+                                )?
                             }
                         };
 
@@ -1660,14 +1764,16 @@ mod platform {
         }
 
         Ok(CalibrationOutput {
-            version: 5,
+            version: 6,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
+            dirty_worktree: env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
             native_source_fingerprint: env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
             rustc_version: env!("SKY_RUSTC_VERSION"),
             evidence_kind: "injected_raw_input_delivery_proxy",
             host_fingerprint: build_host_fingerprint()?,
+            configuration: config.clone(),
             buckets,
             warmup_attempted,
             measured_attempted,
@@ -1680,6 +1786,7 @@ mod platform {
             total_anomalous,
             warmup_timed_out,
             measured_timed_out,
+            measured_class_mismatch,
             total_timed_out,
             cleanup,
         })
@@ -1732,6 +1839,10 @@ fn aggregate_samples(samples: &[CalibrationSample]) -> Result<BucketStats, Calib
         .count() as u64;
     let timeout_count = samples.iter().filter(|s| s.anomalies.timeout).count() as u64;
     let anomaly_count = samples.iter().filter(|s| s.anomalies.any()).count() as u64;
+    let class_mismatch_count = samples
+        .iter()
+        .filter(|s| s.anomalies.class_mismatch)
+        .count() as u64;
 
     let clean_samples: Vec<&CalibrationSample> = samples
         .iter()
@@ -1792,6 +1903,7 @@ fn aggregate_samples(samples: &[CalibrationSample]) -> Result<BucketStats, Calib
         error_count,
         timeout_count,
         anomaly_count,
+        class_mismatch_count,
         call_duration_us,
         first_receipt_us,
         last_receipt_us,
@@ -1901,6 +2013,7 @@ pub use platform::build_host_fingerprint;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sky_dispatch_core::time::DurationTicks;
 
     #[test]
     fn quantile_stats_single_value() {
@@ -1959,6 +2072,32 @@ mod tests {
     }
 
     #[test]
+    fn actual_idle_gap_classification_uses_hot_and_cold_boundaries() {
+        let threshold = DurationTicks::from_raw(20);
+        assert_eq!(
+            classify_idle_gap(QpcTicks::from_raw(100), QpcTicks::from_raw(119), threshold).unwrap(),
+            (SampleClass::Hot, DurationTicks::from_raw(19))
+        );
+        assert_eq!(
+            classify_idle_gap(QpcTicks::from_raw(100), QpcTicks::from_raw(120), threshold).unwrap(),
+            (SampleClass::Cold, DurationTicks::from_raw(20))
+        );
+        assert!(
+            classify_idle_gap(QpcTicks::from_raw(100), QpcTicks::from_raw(99), threshold).is_err()
+        );
+    }
+
+    #[test]
+    fn hot_gap_target_must_be_shorter_than_cold_threshold() {
+        let mut config = CalibrationConfig::default();
+        config.hot_gap_target_us = config.cold_threshold_us;
+        assert!(matches!(
+            validate_calibration_config(&config),
+            Err(CalibrationError::HotGapTargetTooLong { .. })
+        ));
+    }
+
+    #[test]
     fn quick_config_fewer_samples() {
         let quick = CalibrationConfig::quick();
         let full = CalibrationConfig::full();
@@ -1975,6 +2114,8 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(300)),
             receipt_count: 3,
             expected_receipt_count: 3,
+            actual_idle_gap_ticks: None,
+            observed_class: None,
             anomalies: SampleAnomalies::default(),
         };
         assert!(sample.is_complete());
@@ -1993,6 +2134,8 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(250)), // same tick → spread = 0 us
             receipt_count: 1,
             expected_receipt_count: 1,
+            actual_idle_gap_ticks: None,
+            observed_class: None,
             anomalies: SampleAnomalies::default(),
         };
         // For polyphony-1 first == last, so spread = 0 (not None).
@@ -2009,6 +2152,8 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(1_000_000_100)),
             receipt_count: 1,
             expected_receipt_count: 1,
+            actual_idle_gap_ticks: None,
+            observed_class: None,
             anomalies: SampleAnomalies::default(),
         };
         let rejected = CalibrationSample {
@@ -2019,8 +2164,11 @@ mod tests {
             last_receipt_ticks: None,
             receipt_count: 0,
             expected_receipt_count: 1,
+            actual_idle_gap_ticks: None,
+            observed_class: None,
             anomalies: SampleAnomalies {
                 timeout: true,
+                class_mismatch: true,
                 ..SampleAnomalies::default()
             },
         };
@@ -2028,6 +2176,7 @@ mod tests {
         let stats = aggregate_samples(&[clean, rejected]).unwrap();
         assert_eq!(stats.attempted, 2);
         assert_eq!(stats.clean_sample_count, 1);
+        assert_eq!(stats.class_mismatch_count, 1);
         assert_eq!(stats.rejected, 1);
         assert_eq!(
             stats.call_duration_us.max,

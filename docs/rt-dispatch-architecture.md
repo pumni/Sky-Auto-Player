@@ -173,8 +173,10 @@ its execution context before creating the playback anchor. A probe failure prese
 threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
 floor/cap, and the existing kill switch remain unchanged.
 
-**Calibration evidence boundary.** The latency calibration cache is schema version 5,
-measurement protocol 2, and is an
+**Calibration evidence boundary.** The latency calibration cache is schema version 6,
+measurement protocol 3. Measured bucket admission uses the actual QPC idle gap from the
+immediately previous exact SendInput completion to the current exact SendInput entry; a
+requested sleep overshoot is a class mismatch and is rejected from timing quantiles. It is an
 `injected_raw_input_delivery_proxy`: a dedicated native calibration process injects through
 Windows `SendInput` into an app-owned window and observes its `WM_INPUT` delivery. The player
 process never changes its own Raw Input registration for calibration. It does not measure Sky

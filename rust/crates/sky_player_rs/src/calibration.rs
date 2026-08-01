@@ -33,7 +33,8 @@ use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_c
 /// receipt_timeout_ms : int
 ///     Milliseconds to wait for Raw Input receipts per packet. Default: 200.
 /// inter_sample_gap_us : int
-///     Microseconds to sleep between samples. Default: 5000.
+///     Requested hot-gap microseconds between samples. Actual QPC time still
+///     decides whether a sample is admitted to the hot bucket. Default: 5000.
 /// cold_idle_gap_us : int
 ///     Idle interval before each cold sample. Default: 100000.
 /// mode : str
@@ -119,7 +120,7 @@ pub fn run_calibration_rs(
         config.receipt_timeout_ms = t;
     }
     if let Some(g) = inter_sample_gap_us {
-        config.inter_sample_gap_us = g;
+        config.hot_gap_target_us = g;
     }
     if let Some(g) = cold_idle_gap_us {
         config.cold_idle_gap_us = g;
