@@ -24,15 +24,18 @@ use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_c
 /// polyphonies : list[int]
 ///     Chord sizes to probe. Each value must be between 1 and 15.
 ///     Default: [1, 2, 3, 5, 8, 15].
-/// samples_per_bucket : int
-///     Number of counted samples per (kind × polyphony × class) bucket.
-///     Default: 500 (quick), 5000 (full).
+/// samples_per_hot_bucket : int
+///     Number of measured hot samples per (kind × polyphony) bucket.
+/// samples_per_cold_bucket : int
+///     Number of measured cold samples per (kind × polyphony) bucket.
 /// warmup_samples : int
 ///     Warm-up injections before counting begins (marked Cold). Default: 20.
 /// receipt_timeout_ms : int
 ///     Milliseconds to wait for Raw Input receipts per packet. Default: 200.
 /// inter_sample_gap_us : int
 ///     Microseconds to sleep between samples. Default: 5000.
+/// cold_idle_gap_us : int
+///     Idle interval before each cold sample. Default: 100000.
 /// mode : str
 ///     "quick" (200 samples), "full" (5000 samples), or "custom" (use the
 ///     explicit parameters above). Default: "quick".
@@ -42,23 +45,30 @@ use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_c
 /// RuntimeError
 ///     On platform error, window creation failure, or JSON serialisation error.
 #[pyfunction]
+// The keyword arguments are the stable Python API; grouping them would change
+// the public call signature and make validation less explicit at the boundary.
+#[allow(clippy::too_many_arguments)]
 #[pyo3(
     signature = (
         polyphonies = None,
-        samples_per_bucket = None,
+        samples_per_hot_bucket = None,
+        samples_per_cold_bucket = None,
         warmup_samples = None,
         receipt_timeout_ms = None,
         inter_sample_gap_us = None,
+        cold_idle_gap_us = None,
         mode = None,
     )
 )]
 pub fn run_calibration_rs(
     py: Python<'_>,
     polyphonies: Option<Vec<u8>>,
-    samples_per_bucket: Option<u32>,
+    samples_per_hot_bucket: Option<u32>,
+    samples_per_cold_bucket: Option<u32>,
     warmup_samples: Option<u32>,
     receipt_timeout_ms: Option<u32>,
     inter_sample_gap_us: Option<u64>,
+    cold_idle_gap_us: Option<u64>,
     mode: Option<&str>,
 ) -> PyResult<String> {
     // Build base config from mode.
@@ -81,13 +91,21 @@ pub fn run_calibration_rs(
         }
         config.polyphonies = polys;
     }
-    if let Some(s) = samples_per_bucket {
+    if let Some(s) = samples_per_hot_bucket {
         if s == 0 {
             return Err(PyRuntimeError::new_err(
-                "samples_per_bucket must be at least 1",
+                "samples_per_hot_bucket must be at least 1",
             ));
         }
-        config.samples_per_bucket = s;
+        config.samples_per_hot_bucket = s;
+    }
+    if let Some(s) = samples_per_cold_bucket {
+        if s == 0 {
+            return Err(PyRuntimeError::new_err(
+                "samples_per_cold_bucket must be at least 1",
+            ));
+        }
+        config.samples_per_cold_bucket = s;
     }
     if let Some(w) = warmup_samples {
         config.warmup_samples = w;
@@ -102,6 +120,9 @@ pub fn run_calibration_rs(
     }
     if let Some(g) = inter_sample_gap_us {
         config.inter_sample_gap_us = g;
+    }
+    if let Some(g) = cold_idle_gap_us {
+        config.cold_idle_gap_us = g;
     }
 
     // Run the calibration on the calling thread. The Python GIL is released
