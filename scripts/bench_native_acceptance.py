@@ -388,8 +388,18 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="required with --backend sendinput; keys may reach the foreground window",
     )
-    parser.add_argument("--mock-base-latency-us", type=int, default=80)
-    parser.add_argument("--mock-per-key-latency-us", type=int, default=40)
+    parser.add_argument(
+        "--mock-base-latency-us",
+        type=int,
+        default=None,
+        help="mock backend base latency in microseconds (default: 80; mock only)",
+    )
+    parser.add_argument(
+        "--mock-per-key-latency-us",
+        type=int,
+        default=None,
+        help="mock backend per-key latency in microseconds (default: 40; mock only)",
+    )
     parser.add_argument(
         "--no-adaptive-spin",
         action="store_true",
@@ -419,6 +429,30 @@ def _parse_polyphony(raw: str) -> list[int]:
     if any(value < 1 or value > len(SKY_15_SCAN_CODES) for value in values):
         raise SystemExit(f"--polyphony values must be in 1..{len(SKY_15_SCAN_CODES)}")
     return values
+
+
+def _resolve_mock_latency_values(
+    *,
+    backend: str,
+    mock_base_latency_us: int | None,
+    mock_per_key_latency_us: int | None,
+) -> tuple[int, int]:
+    if backend == "sendinput" and (
+        mock_base_latency_us is not None or mock_per_key_latency_us is not None
+    ):
+        raise SystemExit("mock latency values are only valid with --backend mock")
+
+    base_latency_us = (
+        80 if mock_base_latency_us is None else mock_base_latency_us
+    )
+    per_key_latency_us = (
+        40 if mock_per_key_latency_us is None else mock_per_key_latency_us
+    )
+    if base_latency_us < 0 or per_key_latency_us < 0:
+        raise SystemExit("mock latency values must be non-negative")
+    if backend == "sendinput":
+        return 0, 0
+    return base_latency_us, per_key_latency_us
 
 
 def _assert_correctness(run: dict[str, Any]) -> None:
@@ -509,12 +543,11 @@ def main() -> int:
         raise SystemExit("--actions and --repeats must be positive")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
-    if args.mock_base_latency_us < 0 or args.mock_per_key_latency_us < 0:
-        raise SystemExit("mock latency values must be non-negative")
-    if args.backend == "sendinput" and (
-        args.mock_base_latency_us or args.mock_per_key_latency_us
-    ):
-        raise SystemExit("mock latency values are only valid with --backend mock")
+    mock_base_latency_us, mock_per_key_latency_us = _resolve_mock_latency_values(
+        backend=args.backend,
+        mock_base_latency_us=args.mock_base_latency_us,
+        mock_per_key_latency_us=args.mock_per_key_latency_us,
+    )
 
     git_info = _git_provenance()
     native_info = _native_provenance()
@@ -535,8 +568,8 @@ def main() -> int:
                 actions,
                 polyphony,
                 backend=args.backend,
-                mock_base_latency_us=args.mock_base_latency_us,
-                mock_per_key_latency_us=args.mock_per_key_latency_us,
+                mock_base_latency_us=mock_base_latency_us,
+                mock_per_key_latency_us=mock_per_key_latency_us,
                 adaptive_spin=not args.no_adaptive_spin,
                 rt_priority_mode=args.rt_priority_mode,
             )
@@ -588,8 +621,8 @@ def main() -> int:
     interrupt_runs = [
         _measure_command_interrupt(
             backend=args.backend,
-            mock_base_latency_us=args.mock_base_latency_us,
-            mock_per_key_latency_us=args.mock_per_key_latency_us,
+            mock_base_latency_us=mock_base_latency_us,
+            mock_per_key_latency_us=mock_per_key_latency_us,
             adaptive_spin=not args.no_adaptive_spin,
             rt_priority_mode=args.rt_priority_mode,
         )
@@ -633,8 +666,8 @@ def main() -> int:
         ),
         "outcomes": sorted({run["outcome"] for run in dispatch_runs}),
         "mock_latency_model": {
-            "base_us": args.mock_base_latency_us,
-            "per_key_us": args.mock_per_key_latency_us,
+            "base_us": mock_base_latency_us,
+            "per_key_us": mock_per_key_latency_us,
         }
         if args.backend == "mock"
         else None,
