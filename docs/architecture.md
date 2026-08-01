@@ -123,3 +123,10 @@ the current exact SendInput entry; requested sleep duration is not evidence. Val
 is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_proxy` label and
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.
+Calibration execution is always bounded: quick mode defaults to a 1,800-second subprocess
+timeout and full mode to 14,400 seconds. Full mode retains 5,000 hot and 5,000 cold samples for
+each configured packet kind and polyphony; its cold-wait lower bound is 6,000 seconds before
+warm-up, hot samples, receipts, setup, and cleanup, leaving 8,400 seconds for those remaining
+operations. A timeout kills and reaps the native process
+and writes neither raw evidence nor the trusted legacy cache. `--timeout-seconds` is an explicit,
+finite positive override for controlled runs; it does not change the full-mode sample contract.

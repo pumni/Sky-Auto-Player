@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 
 from sky_music.platform.win32.native_calibration import (
+    FULL_CALIBRATION_TIMEOUT_SECONDS,
+    QUICK_CALIBRATION_TIMEOUT_SECONDS,
     NativeCalibrationError,
     run_native_calibration,
 )
@@ -16,6 +18,16 @@ from sky_music.platform.win32.native_calibration import (
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("quick", "full"), default="quick")
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help=(
+            "native subprocess timeout in seconds; defaults to "
+            f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s for quick and "
+            f"{FULL_CALIBRATION_TIMEOUT_SECONDS:g}s for full"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=Path(".cache/calibration-native.json"))
     parser.add_argument(
         "--cache",
@@ -30,6 +42,7 @@ def main() -> int:
             mode=args.mode,
             output_path=args.output,
             cache_path=args.cache,
+            timeout_seconds=args.timeout_seconds,
         )
     except NativeCalibrationError as exc:
         print(f"native calibration failed: {exc}", file=sys.stderr)

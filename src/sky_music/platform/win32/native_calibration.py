@@ -23,6 +23,8 @@ from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_C
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 6
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
+QUICK_CALIBRATION_TIMEOUT_SECONDS = 1_800.0
+FULL_CALIBRATION_TIMEOUT_SECONDS = 14_400.0
 
 
 class NativeCalibrationError(RuntimeError):
@@ -234,6 +236,12 @@ def _validate_result(result: object) -> dict[str, Any]:
     frequency = host.get("qpc_frequency_hz")
     if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
         raise NativeCalibrationError("native calibration has invalid QPC frequency")
+    win32_build = host.get("win32_build")
+    if not isinstance(win32_build, str) or not win32_build.strip() or win32_build == "unknown":
+        raise NativeCalibrationError("native calibration has incomplete Windows host fingerprint")
+    sampled_at_us = host.get("sampled_at_us")
+    if not isinstance(sampled_at_us, int) or isinstance(sampled_at_us, bool) or sampled_at_us <= 0:
+        raise NativeCalibrationError("native calibration has invalid host sample timestamp")
 
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
     if cleanup.get("cleanup_success") is not True:
@@ -282,6 +290,17 @@ def _validate_result(result: object) -> dict[str, Any]:
         counts[name] for name in ("warmup_timed_out", "measured_timed_out", "setup_timed_out")
     ):
         raise NativeCalibrationError("native calibration timeout totals are inconsistent")
+    for scope in ("warmup", "measured", "setup"):
+        attempted = counts[f"{scope}_attempted"]
+        for metric in ("anomalous", "timed_out"):
+            if counts[f"{scope}_{metric}"] > attempted:
+                raise NativeCalibrationError(
+                    f"native calibration {scope}_{metric} exceeds {scope}_attempted"
+                )
+    if counts["measured_class_mismatch"] > counts["measured_attempted"]:
+        raise NativeCalibrationError(
+            "native calibration measured_class_mismatch exceeds measured_attempted"
+        )
 
     buckets = _require_mapping(data.get("buckets"), "buckets")
     if set(buckets) != {"down", "up"}:
@@ -367,12 +386,18 @@ def run_native_calibration(
     mode: str = "quick",
     output_path: Path | str | None = None,
     cache_path: Path | str = ".cache/input_latency.json",
-    timeout_seconds: float = 1800.0,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run the dedicated calibration process and return validated raw JSON."""
 
     if mode not in {"quick", "full"}:
         raise NativeCalibrationError("mode must be quick or full")
+    if timeout_seconds is None:
+        timeout_seconds = (
+            FULL_CALIBRATION_TIMEOUT_SECONDS
+            if mode == "full"
+            else QUICK_CALIBRATION_TIMEOUT_SECONDS
+        )
     if (
         not isinstance(timeout_seconds, (int, float))
         or isinstance(timeout_seconds, bool)
