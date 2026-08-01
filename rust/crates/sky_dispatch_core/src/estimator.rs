@@ -29,8 +29,8 @@
 //!
 //! ## State version
 //!
-//! Version 5 introduces the histogram state and the full component breakdown.
-//! Versions 2–4 are accepted and migrated conservatively.
+//! Version 6 adds independent delivery-proxy channels for Down/Up × Hot/Cold.
+//! Versions 2–5 are accepted and migrated conservatively.
 
 use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
@@ -50,9 +50,11 @@ const BUCKET_COUNT: usize = 256;
 /// Maximum value covered by the main histogram (non-overflow).
 const HIST_MAX_US: u64 = BUCKET_WIDTH_US * (BUCKET_COUNT as u64 - 1);
 
-/// Slow tail reserve decay half-life (exponential decay coefficient).
-/// At 0.95 per sample the reserve halves roughly every 14 updates.
-const TAIL_RESERVE_DECAY: f64 = 0.95;
+/// Slow tail reserve decay coefficient for a 256-clean-sample half-life.
+///
+/// `0.5.powf(1.0 / 256.0)` is written as a literal so the hot update path
+/// remains a single multiply without recomputing the coefficient.
+const TAIL_RESERVE_DECAY: f64 = 0.99729605608547;
 /// Hard lower bound on the slow tail reserve once it has been seeded with an
 /// outlier.  Prevents the reserve from decaying to zero even with no new data.
 const TAIL_RESERVE_FLOOR_US: u64 = 25;
@@ -75,7 +77,8 @@ const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const WAKE_RESERVE_US: u64 = 50;
 
 /// Current on-disk state format version.
-pub const ESTIMATOR_STATE_VERSION: u32 = 5;
+pub const ESTIMATOR_STATE_VERSION: u32 = 6;
+const HISTOGRAM_STATE_VERSION: u32 = 5;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -229,11 +232,20 @@ impl Histogram {
             if idx >= BUCKET_COUNT as u64 {
                 return Err(format!("histogram bucket index {idx} out of range"));
             }
+            if count == 0 {
+                return Err("histogram bucket count must be non-zero".to_string());
+            }
             if count > u32::MAX as u64 {
                 return Err(format!("histogram bucket count {count} overflows u32"));
             }
+            if hist.buckets[idx as usize] != 0 {
+                return Err(format!("duplicate histogram bucket index {idx}"));
+            }
             hist.buckets[idx as usize] = count as u32;
-            hist.total = hist.total.saturating_add(count);
+            hist.total = hist
+                .total
+                .checked_add(count)
+                .ok_or_else(|| "histogram total overflows u64".to_string())?;
             let upper = (idx + 1) * BUCKET_WIDTH_US;
             if upper > hist.max_seen_us {
                 hist.max_seen_us = upper;
@@ -243,6 +255,24 @@ impl Histogram {
             }
         }
         Ok(hist)
+    }
+
+    fn merge_counts_from(&mut self, other: &Self) -> Result<(), String> {
+        for (index, &count) in other.buckets.iter().enumerate() {
+            self.buckets[index] = self.buckets[index]
+                .checked_add(count)
+                .ok_or_else(|| format!("histogram bucket {index} count overflows u32"))?;
+        }
+        self.total = self
+            .total
+            .checked_add(other.total)
+            .ok_or_else(|| "histogram total overflows u64".to_string())?;
+        self.overflow_count = self
+            .overflow_count
+            .checked_add(other.overflow_count)
+            .ok_or_else(|| "histogram overflow count overflows u32".to_string())?;
+        self.max_seen_us = self.max_seen_us.max(other.max_seen_us);
+        Ok(())
     }
 
     /// Build a conservative histogram from a legacy rolling-window sample vec.
@@ -347,6 +377,9 @@ pub fn round_half_to_even(x: f64) -> i64 {
 struct DirectionBuckets {
     hot: Vec<Histogram>,
     cold: Vec<Histogram>,
+    /// Shared per-direction/polyphony slow-tail envelope. It is deliberately
+    /// conservative across classes; the fast distributions and residuals are
+    /// class-isolated, so a cold outlier cannot rewrite the hot histogram.
     tail_reserve: Vec<SlowTailReserve>,
 }
 
@@ -368,9 +401,9 @@ impl DirectionBuckets {
     }
 
     fn push(&mut self, n: usize, value_us: u64, class: LatencyClass) {
-        self.hot[n].push(value_us);
-        if class == LatencyClass::Cold {
-            self.cold[n].push(value_us);
+        match class {
+            LatencyClass::Hot => self.hot[n].push(value_us),
+            LatencyClass::Cold => self.cold[n].push(value_us),
         }
         self.tail_reserve[n].update(value_us);
     }
@@ -387,27 +420,27 @@ impl DirectionBuckets {
         class: LatencyClass,
         strict_upper_tail: bool,
     ) -> Option<u64> {
-        let local = if strict_upper_tail {
-            self.hot[n].max()
-        } else {
-            self.hot[n].p95()
-        };
-
-        // Include the cold-class p95 when the caller is in a cold context.
-        let cold_local = (class == LatencyClass::Cold)
-            .then(|| {
+        let local = match class {
+            LatencyClass::Hot => {
+                if strict_upper_tail {
+                    self.hot[n].max()
+                } else {
+                    self.hot[n].p95()
+                }
+            }
+            LatencyClass::Cold => {
                 if strict_upper_tail {
                     self.cold[n].max()
                 } else {
                     self.cold[n].p95()
                 }
-            })
-            .flatten();
+            }
+        };
 
         // Slow tail reserve is always included (it decays toward observed).
         let tail = (self.tail_reserve[n].get() > 0).then(|| self.tail_reserve[n].get());
 
-        [local, cold_local, tail].into_iter().flatten().max()
+        [local, tail].into_iter().flatten().max()
     }
 }
 
@@ -511,6 +544,9 @@ pub struct EstimatorStateJson {
     /// Calibrated delivery proxy prior (µs) per polyphony bucket; 0 = uncalibrated.
     #[serde(default)]
     pub delivery_proxy_us: Vec<u64>,
+    /// Delivery proxy channels ordered as Down/Hot, Down/Cold, Up/Hot, Up/Cold.
+    #[serde(default)]
+    pub delivery_proxy_channels: Vec<[u64; 4]>,
 }
 
 // ─── Main estimator ───────────────────────────────────────────────────────────
@@ -537,8 +573,9 @@ pub struct SendLatencyEstimator {
     /// Order: [down_hot, down_cold, up_hot, up_cold].
     residuals: [ResidualEma; 4],
 
-    /// Calibrated delivery proxy prior per polyphony bucket (0 = uncalibrated).
-    delivery_proxy_us: Vec<u64>,
+    /// Calibrated delivery proxy prior by kind/class and polyphony.
+    /// Order: down_hot, down_cold, up_hot, up_cold.
+    delivery_proxy_us: [Vec<u64>; 4],
 
     // ── Legacy scalar counts kept for export backward compat ──
     count_down: Vec<u64>,
@@ -572,7 +609,7 @@ impl SendLatencyEstimator {
             down_total: Histogram::default(),
             up_total: Histogram::default(),
             residuals: Default::default(),
-            delivery_proxy_us: vec![0u64; size],
+            delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
             count_down: vec![0; size],
             sum_down: vec![0; size],
             count_down_total: 0,
@@ -644,8 +681,18 @@ impl SendLatencyEstimator {
     /// Should be called from the calibration harness output processor, not
     /// from the real-time dispatch path.
     pub fn set_delivery_proxy_us(&mut self, n_keys: usize, value_us: u64) {
+        self.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, n_keys, value_us);
+    }
+
+    pub fn set_delivery_proxy_us_for(
+        &mut self,
+        kind: ActionKind,
+        class: LatencyClass,
+        n_keys: usize,
+        value_us: u64,
+    ) {
         let n = 1.max(self.max_poly.min(n_keys));
-        self.delivery_proxy_us[n] = value_us;
+        self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
     }
 
     // ── Query API ─────────────────────────────────────────────────────────────
@@ -703,9 +750,8 @@ impl SendLatencyEstimator {
         global_guard
             .into_iter()
             .chain(lower_bucket)
-            .chain(std::iter::once(Self::cold_prior_us(n)))
             .max()
-            .unwrap_or_else(|| Self::cold_prior_us(n))
+            .unwrap_or(0)
     }
 
     fn build_components(
@@ -722,18 +768,19 @@ impl SendLatencyEstimator {
 
         let syscall_us = self.syscall_estimate_us(dir, total, n, class, strict_upper_tail);
 
-        let delivery_proxy_us = self.delivery_proxy_us[n];
+        let channel = residual_index(kind, class);
+        let delivery_proxy_us = self.delivery_proxy_us[channel][n];
 
         let wake_reserve_us = WAKE_RESERVE_US;
 
-        let cold_reserve_us = if class == LatencyClass::Cold {
-            Self::cold_prior_us(n)
-        } else {
-            0
-        };
+        let cold_reserve_us =
+            if class == LatencyClass::Cold && dir.cold[n].total < SEED_SAMPLES as u64 {
+                Self::cold_prior_us(n)
+            } else {
+                0
+            };
 
-        let residual_bias_us =
-            self.residuals[residual_index(kind, LatencyClass::Hot)].adjustment_us();
+        let residual_bias_us = self.residuals[channel].adjustment_us();
 
         let components = LeadComponents {
             syscall_us,
@@ -744,7 +791,10 @@ impl SendLatencyEstimator {
         };
 
         // Determine confidence from the local hot histogram.
-        let local_total = dir.hot[n].total;
+        let local_total = match class {
+            LatencyClass::Hot => dir.hot[n].total,
+            LatencyClass::Cold => dir.cold[n].total,
+        };
         let confidence = if local_total == 0 {
             LeadConfidence::PriorOnly
         } else if local_total < SEED_SAMPLES as u64 {
@@ -858,6 +908,11 @@ impl SendLatencyEstimator {
                 warm: r.warm,
             })
             .collect();
+        let delivery_proxy_channels: Vec<[u64; 4]> = (0..=self.max_poly)
+            .map(|polyphony| {
+                std::array::from_fn(|channel| self.delivery_proxy_us[channel][polyphony])
+            })
+            .collect();
 
         // Legacy fields kept for cross-version tools.
         let ema_down: Vec<f64> = self
@@ -948,7 +1003,8 @@ impl SendLatencyEstimator {
             hist_down,
             hist_up,
             residuals,
-            delivery_proxy_us: self.delivery_proxy_us.clone(),
+            delivery_proxy_us: self.delivery_proxy_us[0].clone(),
+            delivery_proxy_channels,
         }
     }
 
@@ -956,7 +1012,10 @@ impl SendLatencyEstimator {
         let state: EstimatorStateJson =
             serde_json::from_str(json_str).map_err(|e| format!("invalid estimator json: {e}"))?;
 
-        if !matches!(state.version, 2 | 3 | 4 | ESTIMATOR_STATE_VERSION) {
+        if !matches!(
+            state.version,
+            2 | 3 | 4 | HISTOGRAM_STATE_VERSION | ESTIMATOR_STATE_VERSION
+        ) {
             return Err(format!("unsupported estimator version: {}", state.version));
         }
         if !(1..=32).contains(&state.max_poly) {
@@ -973,7 +1032,7 @@ impl SendLatencyEstimator {
         let mut new_down_total = Histogram::default();
         let mut new_up_total = Histogram::default();
 
-        if state.version >= ESTIMATOR_STATE_VERSION {
+        if state.version >= HISTOGRAM_STATE_VERSION {
             // Version 5: import from histogram pairs directly.
             if state.hist_down.len() != expected_len || state.hist_up.len() != expected_len {
                 return Err("hist_down/hist_up length does not match max_poly".to_string());
@@ -988,20 +1047,14 @@ impl SendLatencyEstimator {
                 new_up.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
                 new_up.tail_reserve[i].value_us = bucket.tail_reserve_us;
             }
-            // Rebuild global total from per-bucket samples.
+            // Rebuild global totals by direct bucket merge. Do not reconstruct
+            // synthetic samples or cap a bucket at an arbitrary sample count:
+            // persisted counts are part of the estimator's evidence.
             for h in &new_down.hot {
-                for (i, &c) in h.buckets.iter().enumerate() {
-                    for _ in 0..c.min(128) {
-                        new_down_total.push((i as u64 + 1) * BUCKET_WIDTH_US);
-                    }
-                }
+                new_down_total.merge_counts_from(h)?;
             }
             for h in &new_up.hot {
-                for (i, &c) in h.buckets.iter().enumerate() {
-                    for _ in 0..c.min(128) {
-                        new_up_total.push((i as u64 + 1) * BUCKET_WIDTH_US);
-                    }
-                }
+                new_up_total.merge_counts_from(h)?;
             }
         } else {
             // Versions 2–4: migrate from rolling-window samples conservatively.
@@ -1092,7 +1145,7 @@ impl SendLatencyEstimator {
         // ── Build residuals ───────────────────────────────────────────────────
         let mut new_residuals: [ResidualEma; 4] = Default::default();
 
-        if state.version >= ESTIMATOR_STATE_VERSION && state.residuals.len() == 4 {
+        if state.version >= HISTOGRAM_STATE_VERSION && state.residuals.len() == 4 {
             for (i, ch) in state.residuals.iter().enumerate() {
                 // Validate bounds.
                 if !ch.ema.is_finite()
@@ -1131,13 +1184,30 @@ impl SendLatencyEstimator {
         }
 
         // ── Delivery proxy ────────────────────────────────────────────────────
-        let mut new_delivery_proxy = vec![0u64; target_len];
-        if state.version >= ESTIMATOR_STATE_VERSION && !state.delivery_proxy_us.is_empty() {
+        let mut new_delivery_proxy: [Vec<u64>; 4] = std::array::from_fn(|_| vec![0u64; target_len]);
+        if state.version >= ESTIMATOR_STATE_VERSION && !state.delivery_proxy_channels.is_empty() {
+            if state.delivery_proxy_channels.len() != expected_len {
+                return Err("delivery_proxy_channels length does not match max_poly".to_string());
+            }
+            for (polyphony, channels) in state.delivery_proxy_channels.iter().enumerate() {
+                for (channel, &value) in channels.iter().enumerate() {
+                    if value > MAX_SAMPLE_US {
+                        return Err(format!(
+                            "delivery proxy channel {channel} at polyphony {polyphony} exceeds sample cap"
+                        ));
+                    }
+                    new_delivery_proxy[channel][polyphony] = value;
+                }
+            }
+        } else if !state.delivery_proxy_us.is_empty() {
             if state.delivery_proxy_us.len() != expected_len {
                 return Err("delivery_proxy_us length does not match max_poly".to_string());
             }
-            for (i, &v) in state.delivery_proxy_us.iter().enumerate() {
-                new_delivery_proxy[i] = v;
+            for (i, &value) in state.delivery_proxy_us.iter().enumerate() {
+                if value > MAX_SAMPLE_US {
+                    return Err("delivery proxy exceeds sample cap".to_string());
+                }
+                new_delivery_proxy[0][i] = value;
             }
         }
 
@@ -1348,11 +1418,78 @@ mod tests {
     }
 
     #[test]
+    fn hot_and_cold_histograms_are_class_isolated() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 3);
+        for _ in 0..SEED_SAMPLES {
+            estimator.update_with_class(ActionKind::Down, 400, 1, LatencyClass::Cold);
+        }
+        assert_eq!(estimator.down.hot[1].total, 0);
+        assert_eq!(estimator.down.cold[1].total, SEED_SAMPLES as u64);
+
+        for _ in 0..SEED_SAMPLES {
+            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
+        }
+        assert_eq!(estimator.down.hot[1].total, SEED_SAMPLES as u64);
+        assert_eq!(estimator.down.cold[1].total, SEED_SAMPLES as u64);
+    }
+
+    #[test]
+    fn delivery_proxy_is_independent_by_direction_and_class() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
+        estimator.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, 1, 100);
+        estimator.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Cold, 1, 200);
+        estimator.set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Hot, 1, 300);
+        estimator.set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Cold, 1, 400);
+
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Hot)
+                .components
+                .delivery_proxy_us,
+            100
+        );
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Cold)
+                .components
+                .delivery_proxy_us,
+            200
+        );
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(ActionKind::Up, 1, LatencyClass::Hot)
+                .components
+                .delivery_proxy_us,
+            300
+        );
+        assert_eq!(
+            estimator
+                .estimate_lead_with_class(ActionKind::Up, 1, LatencyClass::Cold)
+                .components
+                .delivery_proxy_us,
+            400
+        );
+    }
+
+    #[test]
+    fn cold_prior_is_added_once_when_bucket_is_unwarmed() {
+        let estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
+        let estimate = estimator.estimate_lead_with_class(ActionKind::Down, 1, LatencyClass::Cold);
+        assert_eq!(estimate.components.syscall_us, 0);
+        assert_eq!(estimate.components.cold_reserve_us, BASE_COLD_PRIOR_US);
+        assert_eq!(
+            estimate.components.total_uncapped(),
+            BASE_COLD_PRIOR_US + WAKE_RESERVE_US
+        );
+    }
+
+    #[test]
     fn slow_tail_reserve_decays_but_stays_above_floor() {
         let mut reserve = SlowTailReserve::default();
         reserve.update(5_000);
-        // After many small updates the reserve should decay but not hit zero.
-        for _ in 0..200 {
+        // After one half-life of clean updates the outlier remains material,
+        // but the reserve still decays and never reaches zero.
+        for _ in 0..256 {
             reserve.update(100);
         }
         let value = reserve.get();
@@ -1360,6 +1497,10 @@ mod tests {
         assert!(
             value < 5_000,
             "slow tail reserve should decay below the initial outlier"
+        );
+        assert!(
+            value >= 2_000,
+            "a 256-sample half-life must retain the outlier tail: {value}"
         );
     }
 
@@ -1446,6 +1587,39 @@ mod tests {
         assert!(
             diff <= BUCKET_WIDTH_US * 2,
             "round-trip lead should be within 2 bucket widths: src={src_lead} rst={rst_lead}"
+        );
+    }
+
+    #[test]
+    fn persisted_histogram_merge_keeps_counts_above_legacy_reconstruction_cap() {
+        let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
+        for _ in 0..300 {
+            source.update(ActionKind::Down, 300, 2);
+        }
+        let json = serde_json::to_string(&source.export_state()).unwrap();
+        let mut restored = SendLatencyEstimator::new(0.2, 5_000, 2);
+        restored.import_state(&json).unwrap();
+
+        let exported = restored.export_state();
+        assert_eq!(exported.hist_down[2].hot_pairs, vec![[12, 300]]);
+    }
+
+    #[test]
+    fn persisted_histogram_rejects_duplicate_bucket_without_mutation() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        estimator.update(ActionKind::Down, 100, 1);
+        let before = estimator.export_state();
+        let mut state = before.clone();
+        state.hist_down[1].hot_pairs = vec![[4, 1], [4, 2]];
+
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&state).unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_string(&estimator.export_state().hist_down).unwrap(),
+            serde_json::to_string(&before.hist_down).unwrap()
         );
     }
 
