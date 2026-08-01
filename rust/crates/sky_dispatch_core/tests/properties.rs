@@ -561,7 +561,7 @@ proptest! {
         raw in ".*",
     ) {
         use sky_dispatch_core::estimator::SendLatencyEstimator;
-        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 15);
+        let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).unwrap();
         let _ = estimator.import_state(&raw);
     }
 

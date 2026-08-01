@@ -30,7 +30,7 @@
 //! ## State version
 //!
 //! Version 6 adds independent delivery-proxy channels for Down/Up × Hot/Cold.
-//! Versions 2–5 are accepted and migrated conservatively.
+//! Versions 2–7 are accepted and migrated conservatively.
 
 use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
@@ -78,8 +78,9 @@ const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const WAKE_RESERVE_US: u64 = 50;
 
 /// Current on-disk state format version.
-pub const ESTIMATOR_STATE_VERSION: u32 = 6;
+pub const ESTIMATOR_STATE_VERSION: u32 = 7;
 const HISTOGRAM_STATE_VERSION: u32 = 5;
+const DELIVERY_PROXY_CHANNEL_STATE_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum EstimatorConfigError {
@@ -449,10 +450,10 @@ pub fn round_half_to_even(x: f64) -> i64 {
 struct DirectionBuckets {
     hot: Vec<Histogram>,
     cold: Vec<Histogram>,
-    /// Shared per-direction/polyphony slow-tail envelope. It is deliberately
-    /// conservative across classes; the fast distributions and residuals are
-    /// class-isolated, so a cold outlier cannot rewrite the hot histogram.
-    tail_reserve: Vec<SlowTailReserve>,
+    /// Slow-tail envelopes remain class-specific. A cold outlier must not
+    /// raise the strict hot estimate, including through the tail guard.
+    tail_hot: Vec<SlowTailReserve>,
+    tail_cold: Vec<SlowTailReserve>,
 }
 
 impl DirectionBuckets {
@@ -460,7 +461,8 @@ impl DirectionBuckets {
         Self {
             hot: vec![Histogram::default(); size],
             cold: vec![Histogram::default(); size],
-            tail_reserve: vec![SlowTailReserve::default(); size],
+            tail_hot: vec![SlowTailReserve::default(); size],
+            tail_cold: vec![SlowTailReserve::default(); size],
         }
     }
 
@@ -468,8 +470,8 @@ impl DirectionBuckets {
     fn resize(&mut self, new_size: usize) {
         self.hot.resize(new_size, Histogram::default());
         self.cold.resize(new_size, Histogram::default());
-        self.tail_reserve
-            .resize(new_size, SlowTailReserve::default());
+        self.tail_hot.resize(new_size, SlowTailReserve::default());
+        self.tail_cold.resize(new_size, SlowTailReserve::default());
     }
 
     fn push(
@@ -479,10 +481,15 @@ impl DirectionBuckets {
         class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
         match class {
-            LatencyClass::Hot => self.hot[n].push(value_us)?,
-            LatencyClass::Cold => self.cold[n].push(value_us)?,
-        };
-        self.tail_reserve[n].update(value_us);
+            LatencyClass::Hot => {
+                self.hot[n].push(value_us)?;
+                self.tail_hot[n].update(value_us);
+            }
+            LatencyClass::Cold => {
+                self.cold[n].push(value_us)?;
+                self.tail_cold[n].update(value_us);
+            }
+        }
         Ok(())
     }
 
@@ -527,16 +534,51 @@ impl DirectionBuckets {
             }
         };
 
-        // Slow tail reserve is always included (it decays toward observed).
-        let tail = (self.tail_reserve[n].get() > 0).then(|| self.tail_reserve[n].get());
+        // Slow tail reserve is class-specific for the same reason as the
+        // local histogram: cold evidence cannot rewrite a hot estimate.
+        let tail_value = match class {
+            LatencyClass::Hot => self.tail_hot[n].get(),
+            LatencyClass::Cold => self.tail_cold[n].get(),
+        };
+        let tail = (tail_value > 0).then_some(tail_value);
 
         [local, tail].into_iter().flatten().max()
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct DirectionTotals {
+    hot: Histogram,
+    cold: Histogram,
+}
+
+impl DirectionTotals {
+    fn for_class(&self, class: LatencyClass) -> &Histogram {
+        match class {
+            LatencyClass::Hot => &self.hot,
+            LatencyClass::Cold => &self.cold,
+        }
+    }
+
+    fn for_class_mut(&mut self, class: LatencyClass) -> &mut Histogram {
+        match class {
+            LatencyClass::Hot => &mut self.hot,
+            LatencyClass::Cold => &mut self.cold,
+        }
+    }
+
+    fn ensure_push(&self, value_us: u64, class: LatencyClass) -> Result<(), EstimatorStateError> {
+        self.for_class(class).ensure_push(value_us)
+    }
+
+    fn push(&mut self, value_us: u64, class: LatencyClass) -> Result<(), EstimatorStateError> {
+        self.for_class_mut(class).push(value_us)
+    }
+}
+
 // ─── On-disk format ──────────────────────────────────────────────────────────
 
-/// Version-5 serialisable per-direction histogram bucket.
+/// Serialisable per-direction histogram bucket with class-specific tails.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HistBucketJson {
     /// Non-zero (bucket_index, count) pairs for the hot histogram.
@@ -545,7 +587,13 @@ pub struct HistBucketJson {
     /// Non-zero (bucket_index, count) pairs for the cold histogram.
     #[serde(default)]
     pub cold_pairs: Vec<[u64; 2]>,
-    /// Slow tail reserve value.
+    /// Hot-class slow tail reserve value.
+    #[serde(default)]
+    pub hot_tail_reserve_us: u64,
+    /// Cold-class slow tail reserve value.
+    #[serde(default)]
+    pub cold_tail_reserve_us: u64,
+    /// Version 5/6 shared tail reserve, retained for migration only.
     #[serde(default)]
     pub tail_reserve_us: u64,
 }
@@ -563,7 +611,7 @@ pub struct ResidualChannelJson {
     pub warm: bool,
 }
 
-/// Unified on-disk format accepting versions 2–5.
+/// Unified on-disk format accepting versions 2–7.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EstimatorStateJson {
     pub version: u32,
@@ -655,9 +703,9 @@ pub struct SendLatencyEstimator {
     down: DirectionBuckets,
     up: DirectionBuckets,
 
-    /// Global (all-polyphony) histogram for cross-bucket guard.
-    down_total: Histogram,
-    up_total: Histogram,
+    /// Global cross-bucket guards, kept independent for Hot and Cold.
+    down_totals: DirectionTotals,
+    up_totals: DirectionTotals,
 
     /// Residual channels indexed by `residual_index(kind, class)`.
     /// Order: [down_hot, down_cold, up_hot, up_cold].
@@ -713,8 +761,8 @@ impl SendLatencyEstimator {
             max_lead_us,
             down: DirectionBuckets::new(size),
             up: DirectionBuckets::new(size),
-            down_total: Histogram::default(),
-            up_total: Histogram::default(),
+            down_totals: DirectionTotals::default(),
+            up_totals: DirectionTotals::default(),
             residuals: Default::default(),
             delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
             count_down: vec![0; size],
@@ -728,7 +776,8 @@ impl SendLatencyEstimator {
         }
     }
 
-    pub fn new(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
+    #[cfg(test)]
+    fn new(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
         Self::try_new(alpha, max_lead_us, max_poly)
             .expect("internal estimator defaults must be valid")
     }
@@ -756,7 +805,7 @@ impl SendLatencyEstimator {
         match kind {
             ActionKind::Down => {
                 self.down.ensure_push(n, duration_us, latency_class)?;
-                self.down_total.ensure_push(duration_us)?;
+                self.down_totals.ensure_push(duration_us, latency_class)?;
                 self.count_down[n]
                     .checked_add(1)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
@@ -770,7 +819,7 @@ impl SendLatencyEstimator {
                     .checked_add(duration_us)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("down total sum"))?;
                 self.down.push(n, duration_us, latency_class)?;
-                self.down_total.push(duration_us)?;
+                self.down_totals.push(duration_us, latency_class)?;
                 self.count_down[n] = self.count_down[n]
                     .checked_add(1)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
@@ -788,7 +837,7 @@ impl SendLatencyEstimator {
             }
             ActionKind::Up => {
                 self.up.ensure_push(n, duration_us, latency_class)?;
-                self.up_total.ensure_push(duration_us)?;
+                self.up_totals.ensure_push(duration_us, latency_class)?;
                 self.count_up[n]
                     .checked_add(1)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
@@ -802,7 +851,7 @@ impl SendLatencyEstimator {
                     .checked_add(duration_us)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("up total sum"))?;
                 self.up.push(n, duration_us, latency_class)?;
-                self.up_total.push(duration_us)?;
+                self.up_totals.push(duration_us, latency_class)?;
                 self.count_up[n] = self.count_up[n]
                     .checked_add(1)
                     .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
@@ -953,8 +1002,8 @@ impl SendLatencyEstimator {
         strict_upper_tail: bool,
     ) -> (LeadComponents, LeadConfidence) {
         let (dir, total) = match kind {
-            ActionKind::Down => (&self.down, &self.down_total),
-            ActionKind::Up => (&self.up, &self.up_total),
+            ActionKind::Down => (&self.down, self.down_totals.for_class(class)),
+            ActionKind::Up => (&self.up, self.up_totals.for_class(class)),
         };
 
         let syscall_us = self.syscall_estimate_us(dir, total, n, class, strict_upper_tail);
@@ -1068,11 +1117,14 @@ impl SendLatencyEstimator {
             .hot
             .iter()
             .zip(&self.down.cold)
-            .zip(&self.down.tail_reserve)
-            .map(|((hot, cold), tail)| HistBucketJson {
+            .zip(&self.down.tail_hot)
+            .zip(&self.down.tail_cold)
+            .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
                 hot_pairs: hot.to_export_pairs(),
                 cold_pairs: cold.to_export_pairs(),
-                tail_reserve_us: tail.get(),
+                hot_tail_reserve_us: hot_tail.get(),
+                cold_tail_reserve_us: cold_tail.get(),
+                tail_reserve_us: hot_tail.get().max(cold_tail.get()),
             })
             .collect();
 
@@ -1081,11 +1133,14 @@ impl SendLatencyEstimator {
             .hot
             .iter()
             .zip(&self.up.cold)
-            .zip(&self.up.tail_reserve)
-            .map(|((hot, cold), tail)| HistBucketJson {
+            .zip(&self.up.tail_hot)
+            .zip(&self.up.tail_cold)
+            .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
                 hot_pairs: hot.to_export_pairs(),
                 cold_pairs: cold.to_export_pairs(),
-                tail_reserve_us: tail.get(),
+                hot_tail_reserve_us: hot_tail.get(),
+                cold_tail_reserve_us: cold_tail.get(),
+                tail_reserve_us: hot_tail.get().max(cold_tail.get()),
             })
             .collect();
 
@@ -1122,12 +1177,12 @@ impl SendLatencyEstimator {
             warm_down,
             count_down: self.count_down.clone(),
             sum_down: self.sum_down.clone(),
-            ema_down_total: self.down_total.p95().unwrap_or(0) as f64,
-            warm_down_total: self.down_total.is_warm(),
+            ema_down_total: self.down_totals.hot.p95().unwrap_or(0) as f64,
+            warm_down_total: self.down_totals.hot.is_warm(),
             count_down_total: self.count_down_total,
             sum_down_total: self.sum_down_total,
-            ema_up: self.up_total.p95().unwrap_or(0) as f64,
-            warm_up: self.up_total.is_warm(),
+            ema_up: self.up_totals.hot.p95().unwrap_or(0) as f64,
+            warm_up: self.up_totals.hot.is_warm(),
             count_up: self.count_up_total,
             sum_up: self.sum_up_total,
             ema_residual: self.residuals[0].ema,
@@ -1166,7 +1221,8 @@ impl SendLatencyEstimator {
                 })
                 .collect(),
             samples_down_total: {
-                self.down_total
+                self.down_totals
+                    .hot
                     .buckets
                     .iter()
                     .enumerate()
@@ -1177,7 +1233,8 @@ impl SendLatencyEstimator {
                     .collect()
             },
             samples_up_total: {
-                self.up_total
+                self.up_totals
+                    .hot
                     .buckets
                     .iter()
                     .enumerate()
@@ -1205,7 +1262,11 @@ impl SendLatencyEstimator {
 
         if !matches!(
             state.version,
-            2 | 3 | 4 | HISTOGRAM_STATE_VERSION | ESTIMATOR_STATE_VERSION
+            2 | 3
+                | 4
+                | HISTOGRAM_STATE_VERSION
+                | DELIVERY_PROXY_CHANNEL_STATE_VERSION
+                | ESTIMATOR_STATE_VERSION
         ) {
             return Err(format!("unsupported estimator version: {}", state.version));
         }
@@ -1272,8 +1333,8 @@ impl SendLatencyEstimator {
         // ── Build histogram buckets ───────────────────────────────────────────
         let mut new_down = DirectionBuckets::new(target_len);
         let mut new_up = DirectionBuckets::new(target_len);
-        let mut new_down_total = Histogram::default();
-        let mut new_up_total = Histogram::default();
+        let mut new_down_totals = DirectionTotals::default();
+        let mut new_up_totals = DirectionTotals::default();
 
         if state.version >= HISTOGRAM_STATE_VERSION {
             // Version 5: import from histogram pairs directly.
@@ -1283,27 +1344,51 @@ impl SendLatencyEstimator {
             for (i, bucket) in state.hist_down.iter().enumerate() {
                 new_down.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
                 new_down.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
-                if bucket.tail_reserve_us > MAX_SAMPLE_US {
+                let (hot_tail, cold_tail) = if state.version >= ESTIMATOR_STATE_VERSION {
+                    (bucket.hot_tail_reserve_us, bucket.cold_tail_reserve_us)
+                } else {
+                    (bucket.tail_reserve_us, bucket.tail_reserve_us)
+                };
+                if bucket.tail_reserve_us > MAX_SAMPLE_US
+                    || hot_tail > MAX_SAMPLE_US
+                    || cold_tail > MAX_SAMPLE_US
+                {
                     return Err(format!("down tail reserve at {i} exceeds sample cap"));
                 }
-                new_down.tail_reserve[i].value_us = bucket.tail_reserve_us;
+                new_down.tail_hot[i].value_us = hot_tail;
+                new_down.tail_cold[i].value_us = cold_tail;
             }
             for (i, bucket) in state.hist_up.iter().enumerate() {
                 new_up.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
                 new_up.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
-                if bucket.tail_reserve_us > MAX_SAMPLE_US {
+                let (hot_tail, cold_tail) = if state.version >= ESTIMATOR_STATE_VERSION {
+                    (bucket.hot_tail_reserve_us, bucket.cold_tail_reserve_us)
+                } else {
+                    (bucket.tail_reserve_us, bucket.tail_reserve_us)
+                };
+                if bucket.tail_reserve_us > MAX_SAMPLE_US
+                    || hot_tail > MAX_SAMPLE_US
+                    || cold_tail > MAX_SAMPLE_US
+                {
                     return Err(format!("up tail reserve at {i} exceeds sample cap"));
                 }
-                new_up.tail_reserve[i].value_us = bucket.tail_reserve_us;
+                new_up.tail_hot[i].value_us = hot_tail;
+                new_up.tail_cold[i].value_us = cold_tail;
             }
             // Rebuild global totals by direct bucket merge. Do not reconstruct
             // synthetic samples or cap a bucket at an arbitrary sample count:
             // persisted counts are part of the estimator's evidence.
             for h in &new_down.hot {
-                new_down_total.merge_counts_from(h)?;
+                new_down_totals.hot.merge_counts_from(h)?;
+            }
+            for h in &new_down.cold {
+                new_down_totals.cold.merge_counts_from(h)?;
             }
             for h in &new_up.hot {
-                new_up_total.merge_counts_from(h)?;
+                new_up_totals.hot.merge_counts_from(h)?;
+            }
+            for h in &new_up.cold {
+                new_up_totals.cold.merge_counts_from(h)?;
             }
         } else {
             // Versions 2–4: migrate from rolling-window samples conservatively.
@@ -1348,17 +1433,17 @@ impl SendLatencyEstimator {
                     new_down.hot[i] = Histogram::from_legacy_samples(samples)?;
                     // Rebuild tail reserve from max observed.
                     if let Some(max) = new_down.hot[i].max() {
-                        new_down.tail_reserve[i].update(max);
+                        new_down.tail_hot[i].update(max);
                     }
                 }
                 for (i, samples) in state.samples_up.iter().enumerate() {
                     new_up.hot[i] = Histogram::from_legacy_samples(samples)?;
                     if let Some(max) = new_up.hot[i].max() {
-                        new_up.tail_reserve[i].update(max);
+                        new_up.tail_hot[i].update(max);
                     }
                 }
-                new_down_total = Histogram::from_legacy_samples(&state.samples_down_total)?;
-                new_up_total = Histogram::from_legacy_samples(&state.samples_up_total)?;
+                new_down_totals.hot = Histogram::from_legacy_samples(&state.samples_down_total)?;
+                new_up_totals.hot = Histogram::from_legacy_samples(&state.samples_up_total)?;
             } else {
                 // V2: synthesise from EMA scalars.
                 for i in 0..expected_len {
@@ -1367,7 +1452,7 @@ impl SendLatencyEstimator {
                         for _ in 0..ROLLING_WINDOW.min(state.count_down[i] as usize) {
                             new_down.hot[i].push(v).map_err(|error| error.to_string())?;
                         }
-                        new_down.tail_reserve[i].update(v);
+                        new_down.tail_hot[i].update(v);
                     }
                 }
                 if state.warm_up && state.count_up >= SEED_SAMPLES as u64 {
@@ -1376,18 +1461,43 @@ impl SendLatencyEstimator {
                         for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
                             new_up.hot[i].push(v).map_err(|error| error.to_string())?;
                         }
-                        new_up.tail_reserve[i].update(v);
+                        new_up.tail_hot[i].update(v);
                     }
                     for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
-                        new_up_total.push(v).map_err(|error| error.to_string())?;
+                        new_up_totals
+                            .hot
+                            .push(v)
+                            .map_err(|error| error.to_string())?;
                     }
                 }
                 if state.warm_down_total && state.count_down_total >= SEED_SAMPLES as u64 {
                     let v = round_half_to_even(state.ema_down_total).max(0) as u64;
                     for _ in 0..ROLLING_WINDOW.min(state.count_down_total as usize) {
-                        new_down_total.push(v).map_err(|error| error.to_string())?;
+                        new_down_totals
+                            .hot
+                            .push(v)
+                            .map_err(|error| error.to_string())?;
                     }
                 }
+            }
+        }
+
+        if state.version >= ESTIMATOR_STATE_VERSION {
+            let derived_down_count = new_down_totals
+                .hot
+                .total
+                .checked_add(new_down_totals.cold.total)
+                .ok_or_else(|| "down class totals overflow".to_string())?;
+            if derived_down_count != state.count_down_total {
+                return Err("down total count is inconsistent with class histograms".to_string());
+            }
+            let derived_up_count = new_up_totals
+                .hot
+                .total
+                .checked_add(new_up_totals.cold.total)
+                .ok_or_else(|| "up class totals overflow".to_string())?;
+            if derived_up_count != state.count_up {
+                return Err("up total count is inconsistent with class histograms".to_string());
             }
         }
 
@@ -1449,7 +1559,7 @@ impl SendLatencyEstimator {
 
         // ── Delivery proxy ────────────────────────────────────────────────────
         let mut new_delivery_proxy: [Vec<u64>; 4] = std::array::from_fn(|_| vec![0u64; target_len]);
-        if state.version >= ESTIMATOR_STATE_VERSION {
+        if state.version >= DELIVERY_PROXY_CHANNEL_STATE_VERSION {
             if state.delivery_proxy_channels.len() != expected_len {
                 return Err("delivery_proxy_channels length does not match max_poly".to_string());
             }
@@ -1480,15 +1590,17 @@ impl SendLatencyEstimator {
         counts_down.resize(target_len, 0);
         let mut sums_down = state.sum_down;
         sums_down.resize(target_len, 0);
-        let counts_up = vec![0u64; target_len];
-        let sums_up = vec![0u64; target_len];
+        let mut counts_up = self.count_up.clone();
+        counts_up.resize(target_len, 0);
+        let mut sums_up = self.sum_up.clone();
+        sums_up.resize(target_len, 0);
 
         // ── Atomically apply all validated state ──────────────────────────────
         self.max_poly = target_poly;
         self.down = new_down;
         self.up = new_up;
-        self.down_total = new_down_total;
-        self.up_total = new_up_total;
+        self.down_totals = new_down_totals;
+        self.up_totals = new_up_totals;
         self.residuals = new_residuals;
         self.delivery_proxy_us = new_delivery_proxy;
         self.count_down = counts_down;
@@ -1505,7 +1617,7 @@ impl SendLatencyEstimator {
 
 impl Default for SendLatencyEstimator {
     fn default() -> Self {
-        Self::new(0.2, 2_000, 15)
+        Self::new_unchecked(0.2, 2_000, 15)
     }
 }
 
@@ -1604,7 +1716,7 @@ mod tests {
         assert!(strict >= normal, "strict={strict} normal={normal}");
         // The outlier must be reflected in the slow tail reserve.
         assert!(
-            estimator.down.tail_reserve[1].get() >= 3_000,
+            estimator.down.tail_hot[1].get() >= 3_000,
             "tail reserve must have captured the outlier"
         );
     }
@@ -1625,6 +1737,30 @@ mod tests {
         assert!(
             strict_1 >= 1_500,
             "strict 1-key lead={strict_1} should see global 1500µs tail"
+        );
+    }
+
+    #[test]
+    fn cold_outlier_does_not_raise_hot_global_guard() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
+        for _ in 0..8 {
+            estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
+        }
+        let hot_before = estimator
+            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .applied_us;
+        for _ in 0..8 {
+            estimator.update_with_class(ActionKind::Down, 3_000, 2, LatencyClass::Cold);
+        }
+        let hot_after = estimator
+            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+            .applied_us;
+        assert_eq!(hot_after, hot_before);
+        assert!(
+            estimator
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
+                .applied_us
+                >= 3_000
         );
     }
 
@@ -1861,6 +1997,56 @@ mod tests {
             diff <= BUCKET_WIDTH_US * 2,
             "round-trip lead should be within 2 bucket widths: src={src_lead} rst={rst_lead}"
         );
+    }
+
+    #[test]
+    fn mixed_hot_cold_state_round_trip_preserves_class_specific_leads() {
+        let mut source = SendLatencyEstimator::new(0.2, 10_000, 3);
+        for _ in 0..8 {
+            source.update_with_class(ActionKind::Down, 120, 1, LatencyClass::Hot);
+            source.update_with_class(ActionKind::Down, 2_400, 2, LatencyClass::Cold);
+            source.update_with_class(ActionKind::Up, 180, 1, LatencyClass::Hot);
+            source.update_with_class(ActionKind::Up, 2_800, 2, LatencyClass::Cold);
+        }
+        let before = [
+            source
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+                .applied_us,
+            source
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
+                .applied_us,
+            source
+                .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, true)
+                .applied_us,
+            source
+                .estimate_lead_with_class_and_policy(ActionKind::Up, 2, LatencyClass::Cold, true)
+                .applied_us,
+        ];
+        let json = serde_json::to_string(&source.export_state()).unwrap();
+        let mut restored = SendLatencyEstimator::new(0.2, 10_000, 3);
+        restored.import_state(&json).unwrap();
+        let after = [
+            restored
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, true)
+                .applied_us,
+            restored
+                .estimate_lead_with_class_and_policy(ActionKind::Down, 2, LatencyClass::Cold, true)
+                .applied_us,
+            restored
+                .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, true)
+                .applied_us,
+            restored
+                .estimate_lead_with_class_and_policy(ActionKind::Up, 2, LatencyClass::Cold, true)
+                .applied_us,
+        ];
+        // Histogram persistence stores bucket upper bounds, so reload may
+        // widen a strict estimate by at most one bucket per class.
+        for (restored, original) in after.into_iter().zip(before) {
+            assert!(
+                restored.abs_diff(original) <= BUCKET_WIDTH_US,
+                "class-specific lead changed beyond histogram tolerance: restored={restored} original={original}"
+            );
+        }
     }
 
     #[test]
