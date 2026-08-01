@@ -1,7 +1,7 @@
 //! Single-interval pause model for playback timing.
 
+use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
 use std::collections::HashSet;
-use crate::time::{QpcTicks, TimelineTicks, DurationTicks};
 
 #[derive(Debug, Clone)]
 pub struct PlaybackClockState {

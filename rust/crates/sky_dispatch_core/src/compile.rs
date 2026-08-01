@@ -204,7 +204,8 @@ pub fn compile_runtime_intents(
                     Some(gen_id)
                 }
                 ActionKind::Up => {
-                    let gen_id = open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
+                    let gen_id =
+                        open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
                     open_generation_by_slot[key_slot as usize] = None;
                     gen_id
                 }

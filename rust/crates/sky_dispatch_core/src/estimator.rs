@@ -277,7 +277,9 @@ impl SlowTailReserve {
         } else {
             // Exponential decay toward the observed value.
             let decayed = (self.value_us as f64 * TAIL_RESERVE_DECAY) as u64;
-            self.value_us = decayed.max(observed_us).max(TAIL_RESERVE_FLOOR_US.min(self.value_us));
+            self.value_us = decayed
+                .max(observed_us)
+                .max(TAIL_RESERVE_FLOOR_US.min(self.value_us));
         }
     }
 
@@ -361,9 +363,9 @@ impl DirectionBuckets {
     fn resize(&mut self, new_size: usize) {
         self.hot.resize(new_size, Histogram::default());
         self.cold.resize(new_size, Histogram::default());
-        self.tail_reserve.resize(new_size, SlowTailReserve::default());
+        self.tail_reserve
+            .resize(new_size, SlowTailReserve::default());
     }
-
 
     fn push(&mut self, n: usize, value_us: u64, class: LatencyClass) {
         self.hot[n].push(value_us);
@@ -627,7 +629,12 @@ impl SendLatencyEstimator {
     /// Callers must NOT update residual from: retries, partial insertions,
     /// deferred releases, mixed-source releases, focus transitions, wait
     /// failures, cleanup, or telemetry-mode-perturbed dispatches.
-    pub fn update_completion_error_with_class(&mut self, kind: ActionKind, error_us: i64, class: LatencyClass) {
+    pub fn update_completion_error_with_class(
+        &mut self,
+        kind: ActionKind,
+        error_us: i64,
+        class: LatencyClass,
+    ) {
         let alpha = self.alpha;
         self.residuals[residual_index(kind, class)].update(alpha, error_us);
     }
@@ -672,16 +679,14 @@ impl SendLatencyEstimator {
         let local = dir.raw_estimate_us(n, class, strict_upper_tail);
 
         // Lower-polyphony fallback with per-key extrapolation.
-        let lower_bucket = (1..n)
-            .rev()
-            .find_map(|bucket| {
-                dir.raw_estimate_us(bucket, class, strict_upper_tail).map(|est| {
+        let lower_bucket = (1..n).rev().find_map(|bucket| {
+            dir.raw_estimate_us(bucket, class, strict_upper_tail)
+                .map(|est| {
                     est.saturating_add(
-                        PER_KEY_COLD_PRIOR_US
-                            .saturating_mul(n.saturating_sub(bucket) as u64),
+                        PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
                     )
                 })
-            });
+        });
 
         // Global guard: in strict mode the global tail is always kept visible.
         let global = if strict_upper_tail {
@@ -780,7 +785,8 @@ impl SendLatencyEstimator {
         let mut best_confidence = LeadConfidence::PriorOnly;
 
         for bucket in 1..=n {
-            let (comps, conf) = self.build_components(kind, bucket, latency_class, strict_upper_tail);
+            let (comps, conf) =
+                self.build_components(kind, bucket, latency_class, strict_upper_tail);
             let uncapped = comps.total_uncapped();
             if uncapped >= best_uncapped {
                 best_uncapped = uncapped;
@@ -892,10 +898,7 @@ impl SendLatencyEstimator {
                         .iter()
                         .enumerate()
                         .flat_map(|(i, &c)| {
-                            std::iter::repeat_n(
-                                (i as u64 + 1) * BUCKET_WIDTH_US,
-                                c as usize,
-                            )
+                            std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
                         })
                         .take(ROLLING_WINDOW)
                         .collect()
@@ -910,10 +913,7 @@ impl SendLatencyEstimator {
                         .iter()
                         .enumerate()
                         .flat_map(|(i, &c)| {
-                            std::iter::repeat_n(
-                                (i as u64 + 1) * BUCKET_WIDTH_US,
-                                c as usize,
-                            )
+                            std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
                         })
                         .take(ROLLING_WINDOW)
                         .collect()
@@ -1005,8 +1005,7 @@ impl SendLatencyEstimator {
             }
         } else {
             // Versions 2–4: migrate from rolling-window samples conservatively.
-            let valid_legacy =
-                |v: f64| v.is_finite() && v >= 0.0 && v <= MAX_SAMPLE_US as f64;
+            let valid_legacy = |v: f64| v.is_finite() && v >= 0.0 && v <= MAX_SAMPLE_US as f64;
 
             // Basic array size check for legacy fields.
             if state.version >= 2 {
@@ -1030,13 +1029,17 @@ impl SendLatencyEstimator {
                     || state.ema_residual_up < -(MAX_RESIDUAL_US as f64)
                     || state.ema_residual_up > (MAX_RESIDUAL_US * 2) as f64
                 {
-                    return Err("estimator residual value is outside the accepted range".to_string());
+                    return Err(
+                        "estimator residual value is outside the accepted range".to_string()
+                    );
                 }
             }
 
             if state.version >= 3 {
                 // V3/V4: rolling sample vecs available.
-                if state.samples_down.len() != expected_len || state.samples_up.len() != expected_len {
+                if state.samples_down.len() != expected_len
+                    || state.samples_up.len() != expected_len
+                {
                     return Err("estimator rolling bucket arrays do not match max_poly".to_string());
                 }
                 for (i, samples) in state.samples_down.iter().enumerate() {
@@ -1201,7 +1204,10 @@ mod tests {
         let p95 = hist.p95().expect("should be warm");
         let p50 = hist.p_quantile(0.5).unwrap();
         assert!(p95 > p50, "p95={p95} should exceed p50={p50}");
-        assert!(p95 <= 3100 + BUCKET_WIDTH_US, "p95 should not exceed max+bucket");
+        assert!(
+            p95 <= 3100 + BUCKET_WIDTH_US,
+            "p95 should not exceed max+bucket"
+        );
     }
 
     #[test]
@@ -1210,7 +1216,10 @@ mod tests {
         let lead_1 = estimator.get_lead_us(ActionKind::Down, 1);
         let lead_15 = estimator.get_lead_us(ActionKind::Down, 15);
         // With no samples the cold-start prior + WAKE_RESERVE must apply.
-        assert!(lead_15 >= lead_1, "larger chord must have at least as much lead");
+        assert!(
+            lead_15 >= lead_1,
+            "larger chord must have at least as much lead"
+        );
         assert!(lead_1 > 0, "cold-start lead must be positive");
     }
 
@@ -1231,8 +1240,10 @@ mod tests {
         assert!(down_3 >= down_1, "down: 3-key must be >= 1-key");
         assert!(up_3 >= up_1, "up: 3-key must be >= 1-key");
         // Data-driven estimate should exceed the cold prior.
-        assert!(down_3 > cold_prior_us_helper(3) + WAKE_RESERVE_US - 50,
-            "down_3={down_3} should be data-driven above cold prior");
+        assert!(
+            down_3 > cold_prior_us_helper(3) + WAKE_RESERVE_US - 50,
+            "down_3={down_3} should be data-driven above cold prior"
+        );
     }
 
     /// Thin wrapper so tests can call `cold_prior_us` without going through an impl block.
@@ -1289,9 +1300,15 @@ mod tests {
             estimator.update(ActionKind::Down, 500, 2);
         }
         let est = estimator.estimate_lead(ActionKind::Down, 2);
-        assert!(est.components.syscall_us > 0, "syscall component must be nonzero");
+        assert!(
+            est.components.syscall_us > 0,
+            "syscall component must be nonzero"
+        );
         assert_eq!(est.components.wake_reserve_us, WAKE_RESERVE_US);
-        assert_eq!(est.components.delivery_proxy_us, 0, "uncalibrated proxy should be 0");
+        assert_eq!(
+            est.components.delivery_proxy_us, 0,
+            "uncalibrated proxy should be 0"
+        );
         assert_eq!(est.confidence, LeadConfidence::Learned);
     }
 
@@ -1305,7 +1322,11 @@ mod tests {
         for i in 0..SEED_SAMPLES - 1 {
             estimator.update(ActionKind::Down, 100, 1);
             let conf = estimator.estimate_lead(ActionKind::Down, 1).confidence;
-            assert_eq!(conf, LeadConfidence::Warming, "at sample {i} expected Warming");
+            assert_eq!(
+                conf,
+                LeadConfidence::Warming,
+                "at sample {i} expected Warming"
+            );
         }
         estimator.update(ActionKind::Down, 100, 1);
         assert_eq!(
@@ -1336,7 +1357,10 @@ mod tests {
         }
         let value = reserve.get();
         assert!(value > 0, "slow tail reserve must not decay to zero");
-        assert!(value < 5_000, "slow tail reserve should decay below the initial outlier");
+        assert!(
+            value < 5_000,
+            "slow tail reserve should decay below the initial outlier"
+        );
     }
 
     #[test]
@@ -1358,23 +1382,26 @@ mod tests {
             // Warm up the hot channel with positive error
             estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Hot);
             estimator.update_completion_error_with_class(ActionKind::Down, 300, LatencyClass::Hot);
-            
+
             // Warm up the cold channel with negative error
             estimator.update_with_class(ActionKind::Down, 100, 1, LatencyClass::Cold);
-            estimator.update_completion_error_with_class(ActionKind::Down, -300, LatencyClass::Cold);
+            estimator.update_completion_error_with_class(
+                ActionKind::Down,
+                -300,
+                LatencyClass::Cold,
+            );
         }
-        
+
         // The accessor `residual_adjustment_us_for` assumes LatencyClass::Hot.
         let adj_hot = estimator.residual_adjustment_us_for(ActionKind::Down);
-        
+
         // We can inspect the cold channel directly from the private fields for the test.
         let cold_idx = residual_index(ActionKind::Down, LatencyClass::Cold);
         let adj_cold = estimator.residuals[cold_idx].adjustment_us();
-        
+
         assert!(adj_hot > 0, "hot residual must be positive learned");
         assert!(adj_cold < 0, "cold residual must be negative learned");
     }
-
 
     #[test]
     fn early_residual_reduces_lead_more_slowly_than_late_residual_increases_it() {
@@ -1386,13 +1413,19 @@ mod tests {
         let adj = estimator.residual_adjustment_us();
         // Negative early correction should be dampened.
         assert!(adj < 0, "early residual should be negative");
-        assert!(adj > -400, "dampened early residual must be less than raw -400");
+        assert!(
+            adj > -400,
+            "dampened early residual must be less than raw -400"
+        );
 
         for _ in 0..SEED_SAMPLES {
             estimator.update_completion_error(ActionKind::Down, 400);
         }
         let adj2 = estimator.residual_adjustment_us();
-        assert!(adj2 > adj, "late samples must push residual back toward positive");
+        assert!(
+            adj2 > adj,
+            "late samples must push residual back toward positive"
+        );
     }
 
     #[test]

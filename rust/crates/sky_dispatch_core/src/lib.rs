@@ -8,8 +8,8 @@ pub mod compile;
 pub mod coordinator;
 pub mod estimator;
 pub mod model;
-pub mod time;
 pub mod testing;
+pub mod time;
 
 pub const SCHEMA_VERSION: u32 = 2;
 

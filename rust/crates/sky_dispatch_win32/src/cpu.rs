@@ -65,22 +65,25 @@ pub fn current_process_cpu_time_us() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_thread_cpu_time_increases() {
         let start = current_thread_cpu_time_us();
-        
+
         // spin a bit to burn CPU
         let mut sum: u64 = 0;
         for i in 0..1_000_000 {
             sum = sum.wrapping_add(i);
         }
         std::hint::black_box(sum);
-        
+
         let end = current_thread_cpu_time_us();
         assert!(end >= start, "CPU time should be monotonically increasing");
-        
+
         let process_start = current_process_cpu_time_us();
-        assert!(process_start >= end, "Process time should be >= thread time");
+        assert!(
+            process_start >= end,
+            "Process time should be >= thread time"
+        );
     }
 }

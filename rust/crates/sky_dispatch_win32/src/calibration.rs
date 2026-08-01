@@ -124,9 +124,7 @@ impl CalibrationSample {
     pub fn intra_chord_spread_us(&self) -> Option<u64> {
         let first = self.first_receipt_ticks?;
         let last = self.last_receipt_ticks?;
-        Some(qpc_ticks_to_us(QpcTicks(
-            last.0.saturating_sub(first.0),
-        )))
+        Some(qpc_ticks_to_us(QpcTicks(last.0.saturating_sub(first.0))))
     }
 
     pub fn is_complete(&self) -> bool {
@@ -337,19 +335,18 @@ mod platform {
     use std::sync::{Arc, Condvar, Mutex};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Input::{
-        HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
-        RIDEV_INPUTSINK, RegisterRawInputDevices, GetRawInputData,
+        GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+        RIDEV_INPUTSINK, RegisterRawInputDevices,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        PostMessageW, RegisterClassExW, SetWindowPos, TranslateMessage, HWND_MESSAGE,
-        MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_INPUT,
-        WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+        HWND_MESSAGE, MSG, PostMessageW, RegisterClassExW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_INPUT, WM_USER, WNDCLASSEXW,
+        WS_OVERLAPPEDWINDOW,
     };
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
     const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
-
 
     const WM_CALIB_EXIT: u32 = WM_USER + 1;
     const WM_CALIB_ACTIVATE: u32 = WM_USER + 2;
@@ -576,11 +573,7 @@ mod platform {
         };
         // SAFETY: rid is a valid RAWINPUTDEVICE and remains alive for the call.
         let ok = unsafe {
-            RegisterRawInputDevices(
-                &rid,
-                1,
-                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
-            )
+            RegisterRawInputDevices(&rid, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
         };
         if ok == 0 {
             let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
@@ -644,11 +637,7 @@ mod platform {
         };
         // SAFETY: unregister is a valid RAWINPUTDEVICE.
         unsafe {
-            RegisterRawInputDevices(
-                &unregister,
-                1,
-                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
-            )
+            RegisterRawInputDevices(&unregister, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
         };
         // SAFETY: hwnd is a live window owned by this thread.
         unsafe { DestroyWindow(hwnd) };
@@ -807,14 +796,7 @@ mod platform {
             // Signal the pump thread to exit.
             if self.hwnd != 0 {
                 // SAFETY: hwnd is a live message-only window on the pump thread.
-                unsafe {
-                    PostMessageW(
-                        self.hwnd as HWND,
-                        WM_CALIB_EXIT,
-                        0,
-                        0,
-                    )
-                };
+                unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
                 self.hwnd = 0;
             }
             if let Some(h) = self.pump_thread.take() {
@@ -838,12 +820,16 @@ mod platform {
 
     /// Variant of `send_input_raw` that injects a custom `dwExtraInfo` so we
     /// can correlate Raw Input receipts with the correct sequence.
-    fn send_input_raw_tagged(scan_codes: &[u16], key_up: bool, extra: usize) -> crate::input::PlatformSendResult {
+    fn send_input_raw_tagged(
+        scan_codes: &[u16],
+        key_up: bool,
+        extra: usize,
+    ) -> crate::input::PlatformSendResult {
+        use smallvec::SmallVec;
         use windows_sys::Win32::Foundation::SetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
             INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput,
         };
-        use smallvec::SmallVec;
 
         if scan_codes.is_empty() {
             return crate::input::PlatformSendResult {
@@ -966,9 +952,7 @@ mod platform {
     }
 
     fn windows_build_string() -> Option<String> {
-        use windows_sys::Win32::System::SystemInformation::{
-            GetVersionExW, OSVERSIONINFOW,
-        };
+        use windows_sys::Win32::System::SystemInformation::{GetVersionExW, OSVERSIONINFOW};
         let mut info = OSVERSIONINFOW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             dwMajorVersion: 0,
@@ -1006,8 +990,7 @@ mod platform {
         let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
         let mut session = CalibrationSession::open()?;
 
-        let receipt_timeout =
-            Duration::from_millis(config.receipt_timeout_ms as u64);
+        let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
         let inter_sample_sleep = Duration::from_micros(config.inter_sample_gap_us);
 
         // We use the first N scan codes from the canonical instrument list for
@@ -1061,10 +1044,7 @@ mod platform {
                     }
 
                     if !is_warmup {
-                        all_raw
-                            .entry((kind, poly, class))
-                            .or_default()
-                            .push(sample);
+                        all_raw.entry((kind, poly, class)).or_default().push(sample);
                     }
 
                     if !inter_sample_sleep.is_zero() {
@@ -1120,7 +1100,9 @@ mod platform {
 mod platform {
     use super::*;
 
-    pub fn run_calibration(_config: &CalibrationConfig) -> Result<CalibrationOutput, CalibrationError> {
+    pub fn run_calibration(
+        _config: &CalibrationConfig,
+    ) -> Result<CalibrationOutput, CalibrationError> {
         Err(CalibrationError::PlatformUnsupported)
     }
 

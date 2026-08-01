@@ -13,9 +13,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use sky_dispatch_win32::calibration::{
-    CalibrationConfig, CalibrationError, run_calibration_json,
-};
+use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_calibration_json};
 
 /// Run the native chord-aware calibration harness.
 ///
@@ -72,9 +70,7 @@ pub fn run_calibration_rs(
 
     if let Some(polys) = polyphonies {
         if polys.is_empty() {
-            return Err(PyRuntimeError::new_err(
-                "polyphonies must not be empty",
-            ));
+            return Err(PyRuntimeError::new_err("polyphonies must not be empty"));
         }
         for &p in &polys {
             if p == 0 || p > 15 {
@@ -110,10 +106,11 @@ pub fn run_calibration_rs(
 
     // Run the calibration on the calling thread. The Python GIL is released
     // for the entire blocking duration so other Python threads can progress.
-    py.detach(|| run_calibration_json(&config)).map_err(|e| match e {
-        CalibrationError::PlatformUnsupported => {
-            PyRuntimeError::new_err("calibration is not supported on this platform")
-        }
-        other => PyRuntimeError::new_err(other.to_string()),
-    })
+    py.detach(|| run_calibration_json(&config))
+        .map_err(|e| match e {
+            CalibrationError::PlatformUnsupported => {
+                PyRuntimeError::new_err("calibration is not supported on this platform")
+            }
+            other => PyRuntimeError::new_err(other.to_string()),
+        })
 }
