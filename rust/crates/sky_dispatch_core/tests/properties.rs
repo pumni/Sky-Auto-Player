@@ -21,15 +21,15 @@ proptest! {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: down_scheduled_us,
-                scan_codes: scan_codes.clone(),
-                reason: "property-down".to_string(),
+                scan_codes: scan_codes.clone().into(),
+                reason: "property-down".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: up_scheduled_us,
-                scan_codes: scan_codes.clone(),
-                reason: "property-up".to_string(),
+                scan_codes: scan_codes.clone().into(),
+                reason: "property-up".to_string().into(),
             },
         ];
         let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
@@ -79,5 +79,336 @@ proptest! {
         prop_assert_eq!(count_total, generation_count);
         prop_assert_eq!(counts.get("released"), Some(&generation_count));
         prop_assert!(coordinator.is_finished());
+    }
+}
+
+// ==========================================================================
+// P3.2 Priority 1 — Fatal invariants
+// ==========================================================================
+
+proptest! {
+    /// Invariant 1: No key active after terminal cleanup.
+    /// Invariant 10: Sum of generation_status_counts == generation_count.
+    #[test]
+    fn invariant_no_active_keys_after_cleanup_and_count_sum(
+        mut scan_codes in prop::collection::vec(2_u16..=6, 1..=4),
+        min_hold_us in 0_u64..5_000,
+        send_latency_us in 0_u64..1_000,
+    ) {
+        scan_codes.sort_unstable();
+        scan_codes.dedup();
+        if scan_codes.is_empty() {
+            scan_codes.push(2);
+        }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: scan_codes.clone().into(),
+                reason: "d".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 10_000,
+                scan_codes: scan_codes.clone().into(),
+                reason: "u".to_string().into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
+        let generation_count = schedule.generation_count;
+        let mut coord = RuntimeDispatchCoordinator::new(
+            schedule,
+            min_hold_us,
+            0,
+            sky_dispatch_core::time::TimelineTicks,
+        );
+
+        let (down, _) = coord.pop_next_due_authored(1_000, 0).unwrap();
+        let (playable, _) = coord.split_down_intents(&down.intents);
+        let completed = 1_000 + send_latency_us;
+        coord.activate_sent_downs(
+            &playable,
+            &scan_codes,
+            1_000,
+            sky_dispatch_core::time::TimelineTicks(1_000),
+            completed,
+            sky_dispatch_core::time::TimelineTicks(completed),
+        );
+
+        let (up, _) = coord.pop_next_due_authored(10_000, 0).unwrap();
+        let (requested, _) = coord.request_releases(&up.intents);
+        let due_us = coord.next_pending_release_us(0).unwrap_or(10_000);
+        let due = coord.pop_due_pending(due_us, 0);
+        coord.complete_releases(&due, &scan_codes, &[]);
+
+        // Invariant 1: is_finished implies all terminal.
+        prop_assert!(coord.is_finished());
+
+        // Invariant 10: sum of counts == generation_count.
+        let counts = coord.generation_status_counts();
+        let total: u64 = counts.values().sum();
+        prop_assert_eq!(total, generation_count);
+        let _ = requested;
+    }
+}
+
+proptest! {
+    /// Invariant 8 (positive): compile succeeds for non-overlapping schedule.
+    #[test]
+    fn invariant_compile_success_implies_no_same_key_overlap(
+        mut codes in prop::collection::vec(2_u16..=8, 1..=3),
+        gap_us in 1_u64..10_000,
+    ) {
+        codes.sort_unstable();
+        codes.dedup();
+        if codes.is_empty() {
+            codes.push(2);
+        }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: codes.clone().into(),
+                reason: "d1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: gap_us,
+                scan_codes: codes.clone().into(),
+                reason: "u1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: gap_us + 1,
+                scan_codes: codes.clone().into(),
+                reason: "d2".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: gap_us * 2 + 1,
+                scan_codes: codes.clone().into(),
+                reason: "u2".to_string().into(),
+            },
+        ];
+        let result = compile_runtime_intents(&actions, &codes);
+        prop_assert!(result.is_ok(), "non-overlapping schedule should compile: {:?}", result);
+        let schedule = result.unwrap();
+        prop_assert!(schedule.generation_count > 0);
+    }
+
+    /// Invariant 8 (negative): compiler rejects same-key overlap.
+    #[test]
+    fn invariant_compiler_rejects_same_key_overlap(
+        code in 2_u16..=6,
+    ) {
+        use sky_dispatch_core::compile::CompileError;
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![code],
+                reason: "d1".to_string().into(),
+            },
+            // Same key Down before Up — overlap:
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![code],
+                reason: "d2-overlap".to_string().into(),
+            },
+        ];
+        let result = compile_runtime_intents(&actions, &[code]);
+        prop_assert!(
+            matches!(result, Err(CompileError::OverlappingSameKeyDown { .. })),
+            "expected OverlappingSameKeyDown, got {:?}", result
+        );
+    }
+}
+
+// ==========================================================================
+// P3.2 Priority 2 — Timing invariants
+// ==========================================================================
+
+proptest! {
+    /// Invariant 4: Release must not be scheduled before min-hold expires.
+    #[test]
+    fn invariant_release_not_before_min_hold(
+        mut codes in prop::collection::vec(2_u16..=6, 1..=3),
+        hold_us in 1_u64..50_000,
+        min_hold_us in 1_u64..50_000,
+        send_latency_us in 0_u64..5_000,
+    ) {
+        codes.sort_unstable();
+        codes.dedup();
+        if codes.is_empty() { codes.push(2); }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: codes.clone().into(),
+                reason: "d".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000 + hold_us,
+                scan_codes: codes.clone().into(),
+                reason: "u".to_string().into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &codes).unwrap();
+        let mut coord = RuntimeDispatchCoordinator::new(
+            schedule,
+            min_hold_us,
+            0,
+            sky_dispatch_core::time::TimelineTicks,
+        );
+
+        let (down, _) = coord.pop_next_due_authored(1_000, 0).unwrap();
+        let (playable, _) = coord.split_down_intents(&down.intents);
+        let completed_us = 1_000 + send_latency_us;
+        coord.activate_sent_downs(
+            &playable,
+            &codes,
+            1_000,
+            sky_dispatch_core::time::TimelineTicks(1_000),
+            completed_us,
+            sky_dispatch_core::time::TimelineTicks(completed_us),
+        );
+
+        let (up, _) = coord.pop_next_due_authored(1_000 + hold_us, 0).unwrap();
+        let _ = coord.request_releases(&up.intents);
+
+        let min_allowed = completed_us + min_hold_us;
+        if let Some(due) = coord.next_pending_release_us(0) {
+            prop_assert!(
+                due >= min_allowed,
+                "release due={due} < min_allowed={min_allowed}"
+            );
+        }
+    }
+
+    /// Invariant 9: Canonical chord order is stable and sorted.
+    #[test]
+    fn invariant_canonical_chord_order_stable(
+        mut codes in prop::collection::vec(2_u16..=15, 2..=5),
+    ) {
+        codes.sort_unstable();
+        codes.dedup();
+        if codes.len() < 2 { return Ok(()); }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: codes.clone().into(),
+                reason: "d".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: codes.clone().into(),
+                reason: "u".to_string().into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &codes).unwrap();
+        let mut coord = RuntimeDispatchCoordinator::new(
+            schedule,
+            0,
+            0,
+            sky_dispatch_core::time::TimelineTicks,
+        );
+
+        let (down, _) = coord.pop_next_due_authored(0, 0).unwrap();
+        let (playable, _) = coord.split_down_intents(&down.intents);
+        let order: Vec<u16> = playable.iter().map(|i| i.scan_code).collect();
+
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        prop_assert_eq!(order, sorted, "chord scan_code order is not canonical");
+    }
+}
+
+// ==========================================================================
+// P3.2 Priority 3 — Structural invariants
+// ==========================================================================
+
+proptest! {
+    /// Invariant 12: Corrupt estimator cache JSON must not panic.
+    #[test]
+    fn invariant_corrupt_estimator_does_not_panic(
+        raw in ".*",
+    ) {
+        use sky_dispatch_core::estimator::SendLatencyEstimator;
+        let mut estimator = SendLatencyEstimator::new(0.2, 2_000, 15);
+        let _ = estimator.import_state(&raw);
+    }
+
+    /// Invariant 11: pop_due_pending never returns more entries than pending_count_due_at.
+    #[test]
+    fn invariant_pop_due_pending_bounded_by_pending_count(
+        mut codes in prop::collection::vec(2_u16..=6, 1..=3),
+        min_hold_us in 0_u64..5_000,
+        send_latency_us in 0_u64..1_000,
+    ) {
+        codes.sort_unstable();
+        codes.dedup();
+        if codes.is_empty() { codes.push(2); }
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: codes.clone().into(),
+                reason: "d".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 5_000,
+                scan_codes: codes.clone().into(),
+                reason: "u".to_string().into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &codes).unwrap();
+        let mut coord = RuntimeDispatchCoordinator::new(
+            schedule,
+            min_hold_us,
+            0,
+            sky_dispatch_core::time::TimelineTicks,
+        );
+
+        let (down, _) = coord.pop_next_due_authored(0, 0).unwrap();
+        let (playable, _) = coord.split_down_intents(&down.intents);
+        let completed = send_latency_us;
+        coord.activate_sent_downs(
+            &playable,
+            &codes,
+            0,
+            sky_dispatch_core::time::TimelineTicks(0),
+            completed,
+            sky_dispatch_core::time::TimelineTicks(completed),
+        );
+        let (up, _) = coord.pop_next_due_authored(5_000, 0).unwrap();
+        let _ = coord.request_releases(&up.intents);
+
+        let due_us = coord.next_pending_release_us(0).unwrap_or(u64::MAX);
+        let count_before = coord.pending_count_due_at(due_us, 0);
+        let popped = coord.pop_due_pending(due_us, 0);
+
+        prop_assert!(
+            popped.len() <= count_before,
+            "pop returned {} but count_before was {}", popped.len(), count_before
+        );
     }
 }
