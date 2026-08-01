@@ -8,6 +8,7 @@ clean-sample gates have passed.
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import os
@@ -207,14 +208,14 @@ def _validate_result(result: object) -> dict[str, Any]:
 
     if getattr(sys, "frozen", False):
         try:
-            from sky_music import _native_build
+            native_build = importlib.import_module("sky_music._native_build")
         except (ImportError, AttributeError) as exc:
             raise NativeCalibrationError(
                 "frozen release is missing native calibration provenance metadata"
             ) from exc
-        expected_build_id = getattr(_native_build, "EXPECTED_NATIVE_BUILD_ID", "")
+        expected_build_id = getattr(native_build, "EXPECTED_NATIVE_BUILD_ID", "")
         expected_fingerprint = getattr(
-            _native_build, "EXPECTED_NATIVE_SOURCE_FINGERPRINT", ""
+            native_build, "EXPECTED_NATIVE_SOURCE_FINGERPRINT", ""
         )
         if not isinstance(expected_build_id, str) or not isinstance(expected_fingerprint, str):
             raise NativeCalibrationError(
