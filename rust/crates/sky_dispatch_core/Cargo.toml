@@ -14,7 +14,7 @@ serde_json = "1"
 proptest = "1"
 
 [[bench]]
-name = "sender_benchmark"
+name = "coordinator_benchmark"
 harness = false
 
 [[bench]]

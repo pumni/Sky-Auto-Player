@@ -206,15 +206,55 @@ impl RustInputBackend {
     #[pyo3(signature = (mock = false))]
     fn new(mock: bool) -> Self {
         let state = if mock {
-            sky_dispatch_win32::input::TrackedKeyState::with_emitter(|scan_codes, _key_up| {
-                sky_dispatch_win32::input::PlatformSendResult {
-                    requested: scan_codes.len() as u32,
-                    inserted: scan_codes.len() as u32,
-                    started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
-                    completed_ticks: Some(sky_dispatch_win32::clock::QpcTicks::ZERO),
-                    completed_us: 0,
-                    win32_error: 0,
-                    timing_error: None,
+            let clock = sky_dispatch_win32::clock::QpcClock::initialize().ok();
+            sky_dispatch_win32::input::TrackedKeyState::with_emitter(move |scan_codes, _key_up| {
+                let Some(clock) = clock else {
+                    return sky_dispatch_win32::input::PlatformSendResult {
+                        requested: scan_codes.len() as u32,
+                        inserted: 0,
+                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+                        completed_ticks: None,
+                        completed_us: 0,
+                        win32_error: 0,
+                        timing_error: Some(
+                            sky_dispatch_win32::clock::QpcError::FrequencyUnavailable,
+                        ),
+                    };
+                };
+                match clock.now() {
+                    Ok(ticks) => match clock.duration_to_us(
+                        sky_dispatch_win32::clock::DurationTicks::from_raw(ticks.as_u64()),
+                    ) {
+                        Ok(completed_us) => sky_dispatch_win32::input::PlatformSendResult {
+                            requested: scan_codes.len() as u32,
+                            inserted: scan_codes.len() as u32,
+                            started_ticks: ticks,
+                            completed_ticks: Some(ticks),
+                            completed_us,
+                            win32_error: 0,
+                            timing_error: None,
+                        },
+                        Err(_) => sky_dispatch_win32::input::PlatformSendResult {
+                            requested: scan_codes.len() as u32,
+                            inserted: 0,
+                            started_ticks: ticks,
+                            completed_ticks: None,
+                            completed_us: 0,
+                            win32_error: 0,
+                            timing_error: Some(
+                                sky_dispatch_win32::clock::QpcError::ConversionOverflow,
+                            ),
+                        },
+                    },
+                    Err(error) => sky_dispatch_win32::input::PlatformSendResult {
+                        requested: scan_codes.len() as u32,
+                        inserted: 0,
+                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+                        completed_ticks: None,
+                        completed_us: 0,
+                        win32_error: 0,
+                        timing_error: Some(error),
+                    },
                 }
             })
         } else {
@@ -245,6 +285,7 @@ impl RustInputBackend {
                 send_attempts,
                 zero_progress_retries,
                 retried_after_zero_progress,
+                ..
             } => {
                 dict.set_item("sent", sent.to_vec())?;
                 dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
@@ -271,6 +312,7 @@ impl RustInputBackend {
                 zero_progress_retries,
                 first_error,
                 last_error,
+                ..
             } => {
                 dict.set_item("sent", Vec::<u16>::new())?;
                 dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
@@ -300,6 +342,7 @@ impl RustInputBackend {
                 skipped_duplicates,
                 send_attempts,
                 zero_progress_retries,
+                ..
             } => {
                 dict.set_item("sent", sent.to_vec())?;
                 dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
@@ -654,13 +697,27 @@ impl NativeDispatchSessionPy {
         let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
         if let Some(raw) = estimator_state_json {
             let mut validator =
-                SendLatencyEstimator::new(0.2, max_lead_us, allowed_scan_codes.len());
+                SendLatencyEstimator::try_new(0.2, max_lead_us, allowed_scan_codes.len())
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
             validator.import_state(raw).map_err(PyValueError::new_err)?;
         }
         let actions = parse_actions(py_actions, &allowed_scan_codes)?;
         let schedule =
             sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let schedule_end_us = schedule
+            .batches
+            .last()
+            .map_or(0, |batch| batch.scheduled_us);
+        schedule_end_us
+            .checked_add(min_hold_us)
+            .and_then(|value| value.checked_add(max_lead_us))
+            .and_then(|value| value.checked_add(dispatch_lead_us))
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "schedule and timing configuration exceed supported timestamp range",
+                )
+            })?;
         let session = NativeDispatchSession::new(
             schedule,
             min_hold_us,

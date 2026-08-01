@@ -1,8 +1,9 @@
 import argparse
+import json
 import subprocess
 import sys
-import json
 from pathlib import Path
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sweep through MMCSS policy modes and benchmark them.")

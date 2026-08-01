@@ -1,13 +1,13 @@
-//! Lightweight statistics collector for the P3.4 sender-side benchmark.
+//! Lightweight statistics collector for the P3.4 coordinator benchmark.
 //!
 //! No external dependencies — uses only `std`.  All computations are done
 //! eagerly on the collected sample vectors at report time.
 
-// ─── SenderStats ─────────────────────────────────────────────────────────────
+// ─── CoordinatorStats ────────────────────────────────────────────────────────
 
 /// Accumulated samples for one (kind × polyphony × class × load) cell.
 #[derive(Debug, Default)]
-pub struct SenderStats {
+pub struct CoordinatorStats {
     /// Signed dispatch-error samples in microseconds.
     /// `actual_us - scheduled_us` — positive means late.
     pub signed_errors: Vec<i64>,
@@ -19,7 +19,7 @@ pub struct SenderStats {
     pub wake_errors: Vec<u64>,
 }
 
-impl SenderStats {
+impl CoordinatorStats {
     pub fn push(&mut self, signed_err: i64, send_dur_us: u64, book_us: u64, wake_err_us: u64) {
         self.signed_errors.push(signed_err);
         self.send_durations.push(send_dur_us);
@@ -133,7 +133,7 @@ fn mean_f64(it: impl Iterator<Item = f64>) -> f64 {
 
 /// Format a percentile value, substituting "N/A" when `n < min_samples`.
 #[allow(dead_code)]
-pub fn fmt_pct(stats: &SenderStats, p: f64, min_samples: usize, label: &str) -> String {
+pub fn fmt_pct(stats: &CoordinatorStats, p: f64, min_samples: usize, label: &str) -> String {
     if stats.n() < min_samples {
         format!("{label}=N/A")
     } else {
@@ -166,7 +166,7 @@ pub fn print_header() {
 }
 
 /// Print one TSV row for the given cell.
-pub fn print_row(kind: &str, poly: usize, class: &str, load: &str, stats: &SenderStats) {
+pub fn print_row(kind: &str, poly: usize, class: &str, load: &str, stats: &CoordinatorStats) {
     let n = stats.n();
     let p999 = if n >= 1000 {
         format!("{}", stats.percentile_abs_error_us(0.999))

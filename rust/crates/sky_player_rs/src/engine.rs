@@ -3,13 +3,14 @@
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+#[cfg(test)]
+use sky_dispatch_win32::clock::qpc_us_to_ticks;
 use sky_dispatch_win32::clock::{
-    QpcError, QpcTicks, qpc_frequency_checked, qpc_now_ticks_checked, qpc_now_us_checked,
-    qpc_ticks_to_us, qpc_us_to_ticks,
+    QpcClock, QpcError, QpcTicks, qpc_frequency_checked, qpc_now_us_checked,
 };
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
@@ -41,6 +42,7 @@ const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
+const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
 
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
@@ -691,7 +693,8 @@ impl NativeDispatchSession {
         let (latency_tx, latency_rx) = bounded(512);
         if let Some(raw) = &estimator_state_json {
             let mut validator =
-                SendLatencyEstimator::new(0.2, max_lead_us, allowed_scan_codes.len());
+                SendLatencyEstimator::try_new(0.2, max_lead_us, allowed_scan_codes.len())
+                    .map_err(|error| error.to_string())?;
             validator.import_state(raw)?;
         }
         let metrics = Arc::new(SharedMetrics::default());
@@ -1102,12 +1105,13 @@ impl NativeDispatchSession {
 }
 
 fn mock_platform_send_result(
+    qpc_clock: QpcClock,
     requested: u32,
     inserted: u32,
     win32_error: u32,
     latency_ticks: u64,
 ) -> PlatformSendResult {
-    let started_ticks = match qpc_now_ticks_checked() {
+    let started_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
             return PlatformSendResult {
@@ -1137,16 +1141,21 @@ fn mock_platform_send_result(
         }
     };
     loop {
-        match qpc_now_ticks_checked() {
+        match qpc_clock.now() {
             Ok(now) if now >= deadline => {
+                let (completed_us, timing_error) =
+                    match qpc_clock.duration_to_us(DurationTicks::from_raw(now.as_u64())) {
+                        Ok(micros) => (micros, None),
+                        Err(_) => (0, Some(QpcError::ConversionOverflow)),
+                    };
                 return PlatformSendResult {
                     requested,
                     inserted,
                     started_ticks,
                     completed_ticks: Some(now),
-                    completed_us: qpc_ticks_to_us(now),
+                    completed_us,
                     win32_error,
-                    timing_error: None,
+                    timing_error,
                 };
             }
             Ok(_) => std::hint::spin_loop(),
@@ -1183,6 +1192,13 @@ fn run_worker(
     latency_tx: &Sender<i64>,
     supervisor_heartbeat_us: &AtomicU64,
 ) -> u8 {
+    let qpc_clock = match QpcClock::initialize() {
+        Ok(clock) => clock,
+        Err(error) => {
+            *metrics.last_error.lock() = Some(format!("QPC admission failed: {error:?}"));
+            return 1;
+        }
+    };
     let mut backend = if config.mock_backend {
         let script = Arc::new(config.fault_script);
         let latency_base_us = config.mock_latency_base_us;
@@ -1205,9 +1221,16 @@ fn run_worker(
             match script_emitter.resolve(idx) {
                 None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => {
                     // Fast path: full success, no extra latency.
-                    mock_platform_send_result(codes.len() as u32, codes.len() as u32, 0, 0)
+                    mock_platform_send_result(
+                        qpc_clock,
+                        codes.len() as u32,
+                        codes.len() as u32,
+                        0,
+                        0,
+                    )
                 }
                 Some(InjectedSendOutcome::Full { latency_ticks }) => mock_platform_send_result(
+                    qpc_clock,
                     codes.len() as u32,
                     codes.len() as u32,
                     0,
@@ -1216,9 +1239,13 @@ fn run_worker(
                 Some(InjectedSendOutcome::Zero {
                     latency_ticks,
                     win32_error,
-                }) => {
-                    mock_platform_send_result(codes.len() as u32, 0, *win32_error, *latency_ticks)
-                }
+                }) => mock_platform_send_result(
+                    qpc_clock,
+                    codes.len() as u32,
+                    0,
+                    *win32_error,
+                    *latency_ticks,
+                ),
                 Some(InjectedSendOutcome::Prefix {
                     inserted,
                     latency_ticks,
@@ -1226,6 +1253,7 @@ fn run_worker(
                 }) => {
                     let inserted = (*inserted as u32).min(codes.len() as u32);
                     mock_platform_send_result(
+                        qpc_clock,
                         codes.len() as u32,
                         inserted,
                         *win32_error,
@@ -1236,32 +1264,127 @@ fn run_worker(
                     // Spin-stall: hold the emitter without sending any key.
                     // This simulates a scheduler stall or OS freeze without
                     // actually blocking the thread (consistent with RT discipline).
-                    mock_platform_send_result(codes.len() as u32, 0, 0, *duration_ticks)
+                    mock_platform_send_result(qpc_clock, codes.len() as u32, 0, 0, *duration_ticks)
                 }
             }
         })
     } else {
-        TrackedKeyState::new()
+        TrackedKeyState::with_qpc_clock(qpc_clock)
     };
     let mut local_metrics = WorkerMetricsLocal::default();
+    let mut force_full_cleanup = false;
+    let mut terminal_error: Option<String> = None;
+    let mut last_published_error: Option<String> = None;
     let power_guard = PowerThrottlingGuard::disable_current_thread();
     local_metrics.power_throttling_disabled = power_guard.is_active();
     let priority_guard = MmcssGuard::acquire(config.priority_mode);
     *priority_acquired.lock() = priority_guard.acquired().to_string();
     let waiter = HybridWaiter::with_options(config.enable_waitable_timer, config.enable_event_wait);
     *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
-    let mut estimator = SendLatencyEstimator::new(0.2, config.max_lead_us, config.allowed_count);
-    if let Some(raw) = &config.estimator_state_json {
-        estimator
-            .import_state(raw)
-            .expect("estimator state was validated during prepare");
+    let mut estimator =
+        match SendLatencyEstimator::try_new(0.2, config.max_lead_us, config.allowed_count) {
+            Ok(estimator) => estimator,
+            Err(error) => {
+                *metrics.last_error.lock() =
+                    Some(format!("invalid estimator configuration: {error}"));
+                let _ = backend.release_all_full_instrument();
+                return 1;
+            }
+        };
+    if let Some(raw) = &config.estimator_state_json
+        && let Err(error) = estimator.import_state(raw)
+    {
+        force_full_cleanup = true;
+        terminal_error = Some(format!("invalid estimator state: {error}"));
     }
+    let min_hold_ticks = match qpc_clock.duration_from_us(config.min_hold_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("min-hold conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let late_pulse_drop_threshold_ticks = match config.late_pulse_drop_threshold_us {
+        Some(threshold_us) => match qpc_clock.duration_from_us(threshold_us) {
+            Ok(ticks) => Some(ticks),
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() =
+                    Some(format!("late-pulse threshold conversion failed: {error:?}"));
+                return 1;
+            }
+        },
+        None => None,
+    };
+    let retry_late_threshold_ticks = match qpc_clock.duration_from_us(
+        config
+            .late_pulse_drop_threshold_us
+            .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US),
+    ) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("retry-late threshold conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let strict_down_completion_late_ticks =
+        match qpc_clock.duration_from_us(config.strict_down_completion_late_us) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() = Some(format!(
+                    "strict note-on threshold conversion failed: {error:?}"
+                ));
+                return 1;
+            }
+        };
+    let strict_up_completion_late_ticks =
+        match qpc_clock.duration_from_us(config.strict_up_completion_late_us) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() = Some(format!(
+                    "strict note-off threshold conversion failed: {error:?}"
+                ));
+                return 1;
+            }
+        };
+    let delivery_margin_ticks = DurationTicks::ZERO;
     let telemetry_reason_table = config.schedule.reason_table.clone();
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| {
-            TimelineTicks(qpc_us_to_ticks(us))
-        });
-    local_metrics.total_us = coordinator.effective_total_us();
+    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+        config.schedule,
+        config.min_hold_us,
+        min_hold_ticks,
+        0,
+        delivery_margin_ticks,
+        |us| {
+            qpc_clock
+                .timeline_from_us(us)
+                .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+        },
+    ) {
+        Ok(coordinator) => coordinator,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("coordinator construction failed: {error}"));
+            return 1;
+        }
+    };
+    local_metrics.total_us = match coordinator.effective_total_ticks().and_then(|ticks| {
+        qpc_clock
+            .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+            .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+    }) {
+        Ok(total_us) => total_us,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("total timeline conversion failed: {error}"));
+            return 1;
+        }
+    };
     let mut telemetry = TelemetryCollector::new(
         config.telemetry_mode,
         config.telemetry_capacity,
@@ -1277,9 +1400,18 @@ fn run_worker(
         effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
     }
     local_metrics.effective_spin_threshold_us = effective_spin_threshold_us;
-    let initial_now_us = qpc_now_us_checked();
-    let initial_qpc_error = initial_now_us.as_ref().err().copied();
-    let initial_now_us = initial_now_us.unwrap_or(0);
+    let initial_now_us = match qpc_clock.now().and_then(|ticks| {
+        qpc_clock
+            .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+            .map_err(|_| QpcError::ConversionOverflow)
+    }) {
+        Ok(now) => now,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("QPC admission failed: {error:?}"));
+            return 1;
+        }
+    };
     let mut last_spin_probe_us = initial_now_us;
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
@@ -1327,28 +1459,41 @@ fn run_worker(
     let startup_anchor_us = initial_now_us
         .saturating_add(startup_guard_us)
         .saturating_add(startup_lead_us);
-    let mut clock_state = PlaybackClockState::new(
-        QpcTicks(qpc_us_to_ticks(startup_anchor_us)),
-        sky_dispatch_core::time::DurationTicks(0),
-    );
+    let startup_anchor_ticks = match qpc_clock.timeline_from_us(startup_anchor_us) {
+        Ok(ticks) => QpcTicks::from_raw(ticks.as_u64()),
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("startup anchor conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let mut clock_state = match PlaybackClockState::new(
+        startup_anchor_ticks,
+        sky_dispatch_core::time::DurationTicks::from_raw(0),
+    ) {
+        Ok(clock) => clock,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("playback clock initialization failed: {error}"));
+            return 1;
+        }
+    };
     let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
-    let mut force_full_cleanup = false;
-    let mut terminal_error: Option<String> = None;
-    let mut last_published_error: Option<String> = None;
-
     let qpc_admission_error = qpc_frequency_checked()
         .err()
         .map(|error| format!("QPC frequency unavailable: {error:?}"))
         .or_else(|| {
-            qpc_now_ticks_checked()
+            qpc_clock
+                .now()
                 .err()
                 .map(|error| format!("QPC counter unavailable: {error:?}"))
         })
-        .or_else(|| initial_qpc_error.map(|error| format!("QPC counter unavailable: {error:?}")))
         .or_else(|| {
             config
                 .strict_timing
@@ -1365,7 +1510,11 @@ fn run_worker(
     // it must never become timestamp zero or a best-effort continuation.
     macro_rules! qpc_us_or_terminal {
         () => {{
-            match qpc_now_us_checked() {
+            match qpc_clock.now().and_then(|ticks| {
+                qpc_clock
+                    .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+                    .map_err(|_| QpcError::ConversionOverflow)
+            }) {
                 Ok(value) => value,
                 Err(error) => {
                     force_full_cleanup = true;
@@ -1376,10 +1525,64 @@ fn run_worker(
         }};
     }
 
+    macro_rules! qpc_ticks_from_us_or_terminal {
+        ($value:expr) => {{
+            match qpc_clock.timeline_from_us($value) {
+                Ok(ticks) => QpcTicks::from_raw(ticks.as_u64()),
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC conversion failure: {error:?}"));
+                    break;
+                }
+            }
+        }};
+    }
+
+    macro_rules! qpc_ticks_or_terminal {
+        () => {{
+            match qpc_clock.now() {
+                Ok(value) => value,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                    break;
+                }
+            }
+        }};
+    }
+
+    macro_rules! qpc_ticks_to_us_or_terminal {
+        ($ticks:expr) => {{
+            match qpc_clock.duration_to_us(DurationTicks::from_raw($ticks.as_u64())) {
+                Ok(value) => value,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC conversion failure: {error:?}"));
+                    break;
+                }
+            }
+        }};
+    }
+
+    macro_rules! authored_batch_or_terminal {
+        ($index:expr) => {{
+            match coordinator.schedule.try_materialize_batch_authored($index) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error =
+                        Some(format!("runtime schedule materialization failure: {error}"));
+                    break;
+                }
+            }
+        }};
+    }
+
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         if terminal_error.is_some() {
             return;
         }
+        let mut allow_pre_epoch_startup_dispatch = false;
         while !coordinator.is_finished() {
             let loop_start_us = qpc_us_or_terminal!();
             local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
@@ -1415,7 +1618,11 @@ fn run_worker(
             }
             if panic_requested.swap(false, Ordering::AcqRel) {
                 let _ = backend.release_all_full_instrument();
-                coordinator.cancel_all();
+                cancel_coordinator_or_terminal(
+                    &mut coordinator,
+                    &mut force_full_cleanup,
+                    &mut terminal_error,
+                );
                 *abort_counts.entry("panic").or_insert(0) += 1;
                 publish_backend_metrics(
                     &backend,
@@ -1426,7 +1633,8 @@ fn run_worker(
                 try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
             }
 
-            let mut now_us = qpc_us_or_terminal!();
+            let mut now_ticks = qpc_ticks_or_terminal!();
+            let mut now_us = qpc_ticks_to_us_or_terminal!(now_ticks);
             let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
 
@@ -1434,9 +1642,19 @@ fn run_worker(
                 focus_restore_started_us = None;
                 if !clock_state.has_pause_reason("focus") {
                     let _ = backend.release_all();
-                    coordinator.cancel_all();
+                    cancel_coordinator_or_terminal(
+                        &mut coordinator,
+                        &mut force_full_cleanup,
+                        &mut terminal_error,
+                    );
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
+                    if let Err(error) =
+                        clock_state.enter_pause("focus", qpc_ticks_from_us_or_terminal!(now_us))
+                    {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
                     publish_backend_metrics(
                         &backend,
                         &mut local_metrics,
@@ -1451,13 +1669,23 @@ fn run_worker(
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
                     let _ = backend.release_all();
-                    coordinator.cancel_all();
+                    cancel_coordinator_or_terminal(
+                        &mut coordinator,
+                        &mut force_full_cleanup,
+                        &mut terminal_error,
+                    );
                     // Cleanup can include bounded backend retries. Re-sample
                     // QPC after it completes so that the cleanup interval is
                     // included in the focus pause rather than lost from the
                     // playback clock.
                     let resumed_us = qpc_us_or_terminal!();
-                    let _ = clock_state.exit_pause("focus", QpcTicks(qpc_us_to_ticks(resumed_us)));
+                    if let Err(error) =
+                        clock_state.exit_pause("focus", qpc_ticks_from_us_or_terminal!(resumed_us))
+                    {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
                     focus_restore_started_us = None;
                     publish_backend_metrics(
                         &backend,
@@ -1472,7 +1700,10 @@ fn run_worker(
             if manual_pause && !clock_state.has_pause_reason("manual") {
                 if !clock_state.is_paused() {
                     let _ = backend.release_all();
-                    coordinator.cancel_all();
+                    // Manual pause preserves the coordinator ledger so a
+                    // subsequent resume can continue the authored schedule.
+                    // Physical keys are still released before entering the
+                    // pause; the typed timeline remains frozen by the clock.
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(
                         &backend,
@@ -1482,9 +1713,21 @@ fn run_worker(
                     );
                     try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
-                clock_state.enter_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
-            } else if !manual_pause && clock_state.has_pause_reason("manual") {
-                let _ = clock_state.exit_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
+                if let Err(error) =
+                    clock_state.enter_pause("manual", qpc_ticks_from_us_or_terminal!(now_us))
+                {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("playback clock failure: {error}"));
+                    break;
+                }
+            } else if !manual_pause
+                && clock_state.has_pause_reason("manual")
+                && let Err(error) =
+                    clock_state.exit_pause("manual", qpc_ticks_from_us_or_terminal!(now_us))
+            {
+                force_full_cleanup = true;
+                terminal_error = Some(format!("playback clock failure: {error}"));
+                break;
             }
 
             let paused = clock_state.is_paused();
@@ -1510,7 +1753,7 @@ fn run_worker(
             }
 
             if let Some((startup_scheduled_us, startup_lead_us)) = startup_gate {
-                let target_sample_ticks = match qpc_now_ticks_checked() {
+                let target_sample_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
                         force_full_cleanup = true;
@@ -1519,21 +1762,36 @@ fn run_worker(
                         break;
                     }
                 };
-                let target_sample_qpc_us = qpc_ticks_to_us(target_sample_ticks);
-                let target_qpc = anchored_dispatch_target_ticks(
+                let target_sample_qpc_us = qpc_ticks_to_us_or_terminal!(target_sample_ticks);
+                let target_qpc = match anchored_dispatch_target_ticks(
+                    qpc_clock,
                     target_sample_ticks,
                     target_sample_qpc_us,
-                    qpc_ticks_to_us(clock_state.epoch),
+                    qpc_ticks_to_us_or_terminal!(clock_state.epoch),
                     startup_scheduled_us,
                     startup_lead_us,
-                );
+                ) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("startup deadline failure: {error:?}"));
+                        break;
+                    }
+                };
                 if target_sample_ticks < target_qpc {
-                    let bounded_target_qpc = lease_bounded_ticks(
+                    let bounded_target_qpc = match lease_bounded_ticks(
+                        qpc_clock,
                         target_qpc,
-                        target_sample_ticks,
                         config.supervisor_lease_timeout_us,
                         supervisor_heartbeat_us,
-                    );
+                    ) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("lease deadline failure: {error:?}"));
+                            break;
+                        }
+                    };
                     let wait_result = waiter.wait_until_ticks_with_metrics(
                         bounded_target_qpc,
                         effective_spin_threshold_us,
@@ -1559,16 +1817,37 @@ fn run_worker(
                     }
                 }
                 startup_gate = None;
-                now_us = qpc_us_or_terminal!();
+                // A first note at authored t=0 may be dispatched before the
+                // future physical epoch by its lead. The typed timeline has
+                // no negative value, so this one startup sample is defined as
+                // logical zero; later underflow remains terminal.
+                allow_pre_epoch_startup_dispatch = true;
+                now_ticks = qpc_ticks_or_terminal!();
+                now_us = qpc_ticks_to_us_or_terminal!(now_ticks);
             }
 
-            let effective_now_ticks = clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us)));
-            let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.as_u64()));
+            let effective_now_ticks =
+                if allow_pre_epoch_startup_dispatch && now_ticks < clock_state.epoch {
+                    TimelineTicks::ZERO
+                } else {
+                    allow_pre_epoch_startup_dispatch = false;
+                    match clock_state
+                        .get_elapsed_allow_pre_epoch(now_ticks, allow_pre_epoch_startup_dispatch)
+                    {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("playback clock failure: {error}"));
+                            break;
+                        }
+                    }
+                };
+            let effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
             local_metrics.elapsed_us = effective_now_us;
             let latency_class = classify_latency_class(last_send_qpc_us, now_us);
 
-            let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
-                if config.dispatch_lead_us > 0 {
+            let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
+                let (lead_us, saturated) = if config.dispatch_lead_us > 0 {
                     (config.dispatch_lead_us, false)
                 } else if config.enable_adaptive_lead {
                     let estimate = estimator.estimate_lead_with_class_and_policy(
@@ -1580,89 +1859,284 @@ fn run_worker(
                     (estimate.applied_us, estimate.saturated)
                 } else {
                     (0, false)
+                };
+                qpc_clock
+                    .duration_from_us(lead_us)
+                    .map(|ticks| (ticks, saturated))
+                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+            }) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("coordinator planning failure: {error}"));
+                    break;
                 }
-            });
-            let lead_up = pending_plan.as_ref().map_or(0, |plan| plan.lead_us);
-            let due_pending = pending_plan.as_ref().map_or_else(SmallVec::new, |plan| {
-                coordinator.pop_due_pending_with_plan(effective_now_us, plan)
-            });
+            };
+            let lead_up_ticks = match pending_plan.as_ref() {
+                Some(plan) => plan.lead_ticks,
+                None => DurationTicks::ZERO,
+            };
+            let lead_up = match qpc_clock.duration_to_us(lead_up_ticks) {
+                Ok(lead) => lead,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("lead telemetry conversion failure: {error:?}"));
+                    break;
+                }
+            };
+            let due_pending = match pending_plan.as_ref() {
+                Some(plan) => match coordinator.pop_due_pending_ticks(effective_now_ticks, plan) {
+                    Ok(due) => due,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("coordinator pending-pop failure: {error}"));
+                        break;
+                    }
+                },
+                None => SmallVec::new(),
+            };
             if !due_pending.is_empty() {
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
-                let started_us = qpc_us_or_terminal!();
-                let actual_us = qpc_ticks_to_us(QpcTicks(
-                    clock_state
-                        .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
-                        .as_u64(),
-                ));
+                let started_ticks = match qpc_clock.now() {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("QPC failure before note-off: {error:?}"));
+                        break;
+                    }
+                };
+                let started_us = qpc_ticks_to_us_or_terminal!(started_ticks);
+                let actual_ticks = match clock_state
+                    .get_elapsed_allow_pre_epoch(started_ticks, allow_pre_epoch_startup_dispatch)
+                {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
+                };
+                let actual_us = qpc_ticks_to_us_or_terminal!(actual_ticks);
                 let result = backend.key_up(&scan_codes);
                 if let Some(error) = backend.timing_error.take() {
                     force_full_cleanup = true;
                     terminal_error = Some(format!("QPC failure after note-off: {error:?}"));
                     break;
                 }
-                let completed_effective_ticks = TimelineTicks(
-                    clock_state
-                        .get_elapsed(QpcTicks(qpc_us_to_ticks(result.send_completed_us)))
-                        .as_u64(),
-                );
-                let completed_effective =
-                    qpc_ticks_to_us(QpcTicks(completed_effective_ticks.as_u64()));
+                let completed_qpc_ticks = match result.send_completed_ticks {
+                    Some(ticks) => ticks,
+                    None => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(
+                            "SendInput note-off completed without a QPC completion boundary"
+                                .to_string(),
+                        );
+                        break;
+                    }
+                };
+                let completed_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+                    completed_qpc_ticks,
+                    allow_pre_epoch_startup_dispatch,
+                ) {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
+                };
+                let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
                 last_send_qpc_us = Some(result.send_completed_us);
-                let recovery_required = coordinator.requeue_failed_releases(
+                let retry_backoff_ticks = match RELEASE_RETRY_BACKOFF_US
+                    .map(|delay| qpc_clock.duration_from_us(delay))
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(backoff) => backoff,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("retry backoff conversion failure: {error:?}"));
+                        break;
+                    }
+                };
+                let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
                     &result.sent,
                     &result.skipped_duplicates,
-                    actual_us,
-                    completed_effective,
+                    actual_ticks,
+                    completed_effective_ticks,
+                    &retry_backoff_ticks,
                     result.last_win32_error,
-                );
-                coordinator.complete_releases(
+                ) {
+                    Ok(required) => required,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("coordinator recovery failure: {error}"));
+                        break;
+                    }
+                };
+                if let Err(error) = coordinator.complete_releases(
                     &due_pending,
                     &result.sent,
                     &result.skipped_duplicates,
-                );
+                ) {
+                    force_full_cleanup = true;
+                    terminal_error =
+                        Some(format!("coordinator release completion failure: {error}"));
+                    break;
+                }
                 // A successful retry closes the recovery pause. The
                 // coordinator advances one immutable timeline offset, so
                 // overdue work cannot burst immediately after recovery.
-                if !recovery_required
-                    && let Some(recovery_pause_us) =
-                        coordinator.finish_release_recovery(completed_effective)
-                {
-                    local_metrics.total_us =
-                        local_metrics.total_us.saturating_add(recovery_pause_us);
+                if !recovery_required {
+                    match coordinator.finish_release_recovery_ticks(completed_effective_ticks) {
+                        Ok(Some(recovery_pause_ticks)) => {
+                            let recovery_pause_us =
+                                match qpc_clock.duration_to_us(recovery_pause_ticks) {
+                                    Ok(value) => value,
+                                    Err(error) => {
+                                        force_full_cleanup = true;
+                                        terminal_error = Some(format!(
+                                            "recovery telemetry conversion failure: {error:?}"
+                                        ));
+                                        break;
+                                    }
+                                };
+                            local_metrics.total_us =
+                                local_metrics.total_us.saturating_add(recovery_pause_us);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("coordinator recovery completion failure: {error}"));
+                            break;
+                        }
+                    }
                 }
                 let bookkeeping_completed_us = qpc_us_or_terminal!();
-                let first = due_pending
+                let mut first_index: Option<usize> = None;
+                let mut first_deadline: Option<TimelineTicks> = None;
+                for (index, pending) in due_pending.iter().enumerate() {
+                    let deadline = match pending.get_effective_release_ticks(lead_up_ticks) {
+                        Ok(deadline) => deadline,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("pending release deadline failure: {error}"));
+                            break;
+                        }
+                    };
+                    let is_better = match first_index {
+                        None => true,
+                        Some(best_index) => match first_deadline {
+                            Some(best) => {
+                                (deadline, pending.source_action_index, pending.scan_code)
+                                    < (
+                                        best,
+                                        due_pending[best_index].source_action_index,
+                                        due_pending[best_index].scan_code,
+                                    )
+                            }
+                            None => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(
+                                    "pending release first-deadline state is inconsistent"
+                                        .to_string(),
+                                );
+                                false
+                            }
+                        },
+                    };
+                    if is_better {
+                        first_index = Some(index);
+                        first_deadline = Some(deadline);
+                    }
+                }
+                if terminal_error.is_some() {
+                    break;
+                }
+                let Some(first_index) = first_index else {
+                    force_full_cleanup = true;
+                    terminal_error =
+                        Some("coordinator returned an empty pending release batch".to_string());
+                    break;
+                };
+                let first = &due_pending[first_index];
+                let Some(scheduled_ticks) = due_pending
                     .iter()
-                    .min_by_key(|pending| {
-                        (
-                            pending.get_effective_release_us(lead_up),
-                            pending.source_action_index,
-                            pending.scan_code,
-                        )
-                    })
-                    .expect("non-empty pending release batch");
-                let scheduled_us = due_pending
-                    .iter()
-                    .map(|pending| pending.scheduled_release_us)
+                    .map(|pending| pending.scheduled_release_ticks)
                     .min()
-                    .unwrap_or(first.scheduled_release_us);
-                let deferred_by_us = due_pending
-                    .iter()
-                    .map(|pending| {
-                        pending
-                            .release_not_before_us
-                            .max(pending.next_retry_us)
-                            .saturating_sub(pending.scheduled_release_us)
-                    })
-                    .max()
-                    .unwrap_or(0);
+                else {
+                    force_full_cleanup = true;
+                    terminal_error =
+                        Some("pending release batch has no scheduled timestamp".to_string());
+                    break;
+                };
+                let scheduled_us = match qpc_clock.timeline_to_us(scheduled_ticks) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "pending release telemetry conversion failure: {error:?}"
+                        ));
+                        break;
+                    }
+                };
+                let mut deferred_by_us = 0u64;
+                for pending in &due_pending {
+                    let ready_ticks = pending
+                        .release_not_before_ticks
+                        .max(pending.next_retry_ticks);
+                    let deferred_ticks =
+                        match ready_ticks.checked_duration_since(pending.scheduled_release_ticks) {
+                            Ok(value) => value,
+                            Err(sky_dispatch_core::time::TimeArithmeticError::NegativeOrder) => {
+                                DurationTicks::ZERO
+                            }
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("pending deferral arithmetic failure: {error}"));
+                                break;
+                            }
+                        };
+                    let deferred_us = match qpc_clock.duration_to_us(deferred_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("pending deferral conversion failure: {error:?}"));
+                            break;
+                        }
+                    };
+                    deferred_by_us = deferred_by_us.max(deferred_us);
+                }
+                if terminal_error.is_some() {
+                    break;
+                }
                 let mixed_source = due_pending.iter().any(|pending| {
                     pending.source_action_index != first.source_action_index
                         || pending.reason_id != first.reason_id
                 });
-                let up_completion_error_us = signed_delta(completed_effective, scheduled_us);
+                let up_completion_lateness_ticks = completed_effective_ticks
+                    .checked_duration_since(scheduled_ticks)
+                    .ok();
+                let up_completion_error_us = match signed_timeline_delta_us(
+                    qpc_clock,
+                    completed_effective_ticks,
+                    scheduled_ticks,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("note-off timing conversion failure: {error}"));
+                        break;
+                    }
+                };
                 let clean_up_sample = result.success
                     && result.sent.len() == scan_codes.len()
                     && result.skipped_duplicates.is_empty()
@@ -1671,12 +2145,12 @@ fn run_worker(
                     && !mixed_source;
                 let strict_up_completion_late = config.strict_timing
                     && clean_up_sample
-                    && up_completion_error_us
-                        > config.strict_up_completion_late_us.min(i64::MAX as u64) as i64;
+                    && up_completion_lateness_ticks
+                        .is_some_and(|late| late > strict_up_completion_late_ticks);
                 let up_saturated_positive = pending_plan
                     .as_ref()
                     .is_some_and(|plan| plan.lead_saturated)
-                    && up_completion_error_us > 0;
+                    && up_completion_lateness_ticks.is_some();
                 up_saturation_positive_streak = if up_saturated_positive {
                     up_saturation_positive_streak.saturating_add(1)
                 } else {
@@ -1684,8 +2158,8 @@ fn run_worker(
                 };
                 let saturation_abort = config.strict_timing
                     && up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-                if config.enable_adaptive_lead {
-                    update_estimator_after_send_class(
+                if config.enable_adaptive_lead
+                    && let Err(error) = update_estimator_after_send_class(
                         &mut estimator,
                         ActionKind::Up,
                         result.send_completed_us.saturating_sub(started_us),
@@ -1695,7 +2169,11 @@ fn run_worker(
                         up_completion_error_us,
                         clean_up_sample,
                         latency_class,
-                    );
+                    )
+                {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("estimator update failure: {error}"));
+                    break;
                 }
                 let reason_id = if mixed_source {
                     telemetry.mixed_release_reason_id
@@ -1811,7 +2289,11 @@ fn run_worker(
                             .map_or(String::new(), |error| format!(" (Win32 error {error})"))
                     ));
                     let _ = backend.release_all_full_instrument();
-                    coordinator.cancel_all();
+                    cancel_coordinator_or_terminal(
+                        &mut coordinator,
+                        &mut force_full_cleanup,
+                        &mut terminal_error,
+                    );
                     break;
                 }
                 if strict_up_completion_late {
@@ -1847,19 +2329,61 @@ fn run_worker(
             } else {
                 (0, false)
             };
-            if let Some((batch_index, _lead)) =
-                coordinator.pop_next_due_authored_index(effective_now_us, lead_down)
+            let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
+                Ok(ticks) => ticks,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("down lead conversion failure: {error:?}"));
+                    break;
+                }
+            };
+            let next_batch_index = match coordinator
+                .pop_next_due_authored_ticks(effective_now_ticks, lead_down_ticks)
             {
+                Ok(value) => value.map(|(index, _)| index),
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("coordinator authored-pop failure: {error}"));
+                    break;
+                }
+            };
+            if let Some(batch_index) = next_batch_index {
                 // --- Borrow scope: extract all scalar and stack data before any &mut call ---
                 // `batch_view` borrows from `coordinator.schedule`. We must not call any
                 // `&mut coordinator` method until this scope ends. Pull every field we need
                 // into Copy / stack-owned values here.
-                let batch_view = coordinator
+                let batch_scheduled_ticks =
+                    match coordinator.effective_batch_scheduled_ticks(batch_index) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("coordinator schedule lookup failure: {error}"));
+                            break;
+                        }
+                    };
+                let batch_view = match coordinator
                     .schedule
-                    .view_batch(batch_index, coordinator.recovery_offset_us());
+                    .view_batch_ticks(batch_index, batch_scheduled_ticks)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("runtime schedule view failure: {error}"));
+                        break;
+                    }
+                };
                 let batch_kind = batch_view.kind();
                 let batch_source_action_index = batch_view.source_action_index();
-                let batch_scheduled_us = batch_view.scheduled_us;
+                let batch_scheduled_us = match qpc_clock.timeline_to_us(batch_scheduled_ticks) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("schedule telemetry conversion failure: {error:?}"));
+                        break;
+                    }
+                };
                 let batch_reason_id = batch_view.reason_id();
                 let batch_intent_count = batch_view.intents.len();
                 // Conflict check: O(N) bitwise, no allocation.
@@ -1895,21 +2419,35 @@ fn run_worker(
                         if !has_conflicts {
                             // Non-conflicting slots: terminate as expired.
                             // Fallback to the owned path for the cleanup branch — not hot.
-                            let owned = coordinator.schedule.materialize_batch(
-                                coordinator.cursor - 1,
-                                coordinator.recovery_offset_us(),
-                            );
-                            coordinator.drop_expired_downs(&owned.intents);
+                            let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
+                            if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("coordinator expiry failure: {error}"));
+                                break;
+                            }
                         } else {
-                            let owned = coordinator.schedule.materialize_batch(
-                                coordinator.cursor - 1,
-                                coordinator.recovery_offset_us(),
-                            );
-                            coordinator.drop_expired_downs(&owned.intents);
+                            let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
+                            if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("coordinator expiry failure: {error}"));
+                                break;
+                            }
                         }
                         let _ = backend.release_all();
-                        coordinator.cancel_all();
-                        clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
+                        cancel_coordinator_or_terminal(
+                            &mut coordinator,
+                            &mut force_full_cleanup,
+                            &mut terminal_error,
+                        );
+                        if let Err(error) =
+                            clock_state.enter_pause("focus", qpc_ticks_from_us_or_terminal!(now_us))
+                        {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("playback clock failure: {error}"));
+                            break;
+                        }
                         focus_restore_started_us = None;
                         telemetry.push(|| {
                             let scan_codes: SmallVec<[u16; 15]> =
@@ -1963,21 +2501,19 @@ fn run_worker(
                         try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
-                    if config
-                        .late_pulse_drop_threshold_us
-                        .is_some_and(|threshold| {
-                            threshold == 0
-                                || (effective_now_us >= batch_scheduled_us
-                                    && effective_now_us.saturating_sub(batch_scheduled_us)
-                                        > threshold)
-                        })
-                    {
+                    if late_pulse_drop_threshold_ticks.is_some_and(|threshold| {
+                        threshold == DurationTicks::ZERO
+                            || effective_now_ticks
+                                .checked_duration_since(batch_scheduled_ticks)
+                                .is_ok_and(|late| late > threshold)
+                    }) {
                         // Expired drop — materialize only for the coordinator call.
-                        let owned = coordinator.schedule.materialize_batch(
-                            coordinator.cursor - 1,
-                            coordinator.recovery_offset_us(),
-                        );
-                        coordinator.drop_expired_downs(&owned.intents);
+                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
+                        if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("coordinator expiry failure: {error}"));
+                            break;
+                        }
                         telemetry.push(|| {
                             let scan_codes: SmallVec<[u16; 15]> =
                                 scan_batch.as_slice().iter().copied().collect();
@@ -2044,10 +2580,7 @@ fn run_worker(
                                 },
                             );
                         // Terminalize conflicted slots (counter update only, no mask change).
-                        let owned = coordinator.schedule.materialize_batch(
-                            coordinator.cursor - 1,
-                            coordinator.recovery_offset_us(),
-                        );
+                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
                         // Use the existing API which operates on RuntimeKeyIntent.
                         let conflicts_intents: SmallVec<[_; 15]> = owned
                             .intents
@@ -2112,10 +2645,7 @@ fn run_worker(
                         local_metrics.authored_chords_rejected =
                             local_metrics.authored_chords_rejected.saturating_add(1);
                         // Terminalize playable (non-conflict) intents too since whole chord drops.
-                        let owned = coordinator.schedule.materialize_batch(
-                            coordinator.cursor - 1,
-                            coordinator.recovery_offset_us(),
-                        );
+                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
                         let playable_intents: SmallVec<[_; 15]> = owned
                             .intents
                             .iter()
@@ -2126,7 +2656,11 @@ fn run_worker(
                             })
                             .cloned()
                             .collect();
-                        coordinator.drop_conflicted_downs(&playable_intents);
+                        if let Err(error) = coordinator.drop_conflicted_downs(&playable_intents) {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("coordinator conflict failure: {error}"));
+                            break;
+                        }
                         if matches!(
                             config.chord_conflict_policy,
                             ChordConflictPolicy::AbortPlayback
@@ -2152,12 +2686,28 @@ fn run_worker(
                         }
                     }
                     if send_playable && !scan_batch.is_empty() {
-                        let started_us = qpc_us_or_terminal!();
-                        let actual_us = qpc_ticks_to_us(QpcTicks(
-                            clock_state
-                                .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
-                                .as_u64(),
-                        ));
+                        let started_ticks = match qpc_clock.now() {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("QPC failure before note-on: {error:?}"));
+                                break;
+                            }
+                        };
+                        let started_us = qpc_ticks_to_us_or_terminal!(started_ticks);
+                        let actual_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+                            started_ticks,
+                            allow_pre_epoch_startup_dispatch,
+                        ) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!("playback clock failure: {error}"));
+                                break;
+                            }
+                        };
+                        let actual_us = qpc_ticks_to_us_or_terminal!(actual_ticks);
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
                         if let Some(error) = backend.timing_error.take() {
@@ -2168,6 +2718,7 @@ fn run_worker(
 
                         let (
                             result_completed_us,
+                            result_completed_ticks,
                             result_sent,
                             result_skipped_duplicates,
                             result_send_attempts,
@@ -2180,13 +2731,16 @@ fn run_worker(
                         ) = match &result {
                             sky_dispatch_win32::input::DownSendOutcome::Complete {
                                 completed_us,
+                                completed_ticks,
                                 sent,
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
                                 retried_after_zero_progress,
+                                ..
                             } => (
                                 *completed_us,
+                                *completed_ticks,
                                 sent.clone(),
                                 skipped_duplicates.clone(),
                                 *send_attempts,
@@ -2199,6 +2753,7 @@ fn run_worker(
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
                                 completed_us,
+                                completed_ticks,
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
@@ -2207,6 +2762,7 @@ fn run_worker(
                                 ..
                             } => (
                                 *completed_us,
+                                *completed_ticks,
                                 smallvec::SmallVec::<[u16; 15]>::new(),
                                 skipped_duplicates.clone(),
                                 *send_attempts,
@@ -2219,6 +2775,7 @@ fn run_worker(
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
                                 completed_us,
+                                completed_ticks,
                                 sent,
                                 skipped_duplicates,
                                 send_attempts,
@@ -2228,6 +2785,7 @@ fn run_worker(
                                 ..
                             } => (
                                 *completed_us,
+                                *completed_ticks,
                                 sent.clone(),
                                 skipped_duplicates.clone(),
                                 *send_attempts,
@@ -2240,57 +2798,89 @@ fn run_worker(
                             ),
                         };
 
-                        let completed_effective_ticks = TimelineTicks(
-                            clock_state
-                                .get_elapsed(QpcTicks(qpc_us_to_ticks(result_completed_us)))
-                                .as_u64(),
-                        );
+                        let completed_qpc_ticks = match result_completed_ticks {
+                            Some(ticks) => ticks,
+                            None => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(
+                                    "SendInput note-on completed without a QPC completion boundary"
+                                        .to_string(),
+                                );
+                                break;
+                            }
+                        };
+                        let completed_effective_ticks = match clock_state
+                            .get_elapsed_allow_pre_epoch(
+                                completed_qpc_ticks,
+                                allow_pre_epoch_startup_dispatch,
+                            ) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!("playback clock failure: {error}"));
+                                break;
+                            }
+                        };
                         let completed_effective =
-                            qpc_ticks_to_us(QpcTicks(completed_effective_ticks.as_u64()));
+                            qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
                         last_send_qpc_us = Some(result_completed_us);
                         // Activate sent downs via the compact path.
-                        coordinator.activate_sent_downs_compact(
+                        if let Err(error) = coordinator.activate_sent_downs_compact_ticks(
                             coordinator.cursor - 1,
                             &result_sent,
-                            actual_us,
                             effective_now_ticks,
-                            completed_effective,
                             completed_effective_ticks,
-                        );
-                        let completion_error_us =
-                            signed_delta(completed_effective, batch_scheduled_us);
-                        let retry_late_threshold_us = config
-                            .late_pulse_drop_threshold_us
-                            .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US)
-                            .min(i64::MAX as u64)
-                            as i64;
+                            conflict_mask,
+                        ) {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("coordinator activation failure: {error}"));
+                            break;
+                        }
+                        let completion_lateness_ticks = completed_effective_ticks
+                            .checked_duration_since(batch_scheduled_ticks)
+                            .ok();
+                        let completion_error_us = match signed_timeline_delta_us(
+                            qpc_clock,
+                            completed_effective_ticks,
+                            batch_scheduled_ticks,
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("note-on timing conversion failure: {error}"));
+                                break;
+                            }
+                        };
                         let clean_down_sample = result_success
                             && result_sent.len() == playable_count
                             && result_skipped_duplicates.is_empty()
                             && result_send_attempts == 1
                             && !result_chord_integrity_lost;
                         let recovered_retry_late = result_retried_after_zero_progress
-                            && completion_error_us > retry_late_threshold_us;
+                            && completion_lateness_ticks
+                                .is_some_and(|late| late > retry_late_threshold_ticks);
                         let retry_late_abort = config.strict_timing && recovered_retry_late;
                         let strict_down_completion_late = config.strict_timing
                             && clean_down_sample
-                            && completion_error_us
-                                > config.strict_down_completion_late_us.min(i64::MAX as u64) as i64;
+                            && completion_lateness_ticks
+                                .is_some_and(|late| late > strict_down_completion_late_ticks);
                         if recovered_retry_late {
                             local_metrics.recovered_zero_progress_but_late = local_metrics
                                 .recovered_zero_progress_but_late
                                 .saturating_add(1);
                         }
                         down_saturation_positive_streak =
-                            if lead_down_saturated && completion_error_us > 0 {
+                            if lead_down_saturated && completion_lateness_ticks.is_some() {
                                 down_saturation_positive_streak.saturating_add(1)
                             } else {
                                 0
                             };
                         let saturation_abort = config.strict_timing
                             && down_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-                        if config.enable_adaptive_lead {
-                            update_estimator_after_send_class(
+                        if config.enable_adaptive_lead
+                            && let Err(error) = update_estimator_after_send_class(
                                 &mut estimator,
                                 ActionKind::Down,
                                 result_completed_us.saturating_sub(started_us),
@@ -2300,7 +2890,11 @@ fn run_worker(
                                 completion_error_us,
                                 clean_down_sample,
                                 latency_class,
-                            );
+                            )
+                        {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("estimator update failure: {error}"));
+                            break;
                         }
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
                         telemetry.push(|| {
@@ -2492,11 +3086,16 @@ fn run_worker(
                     }
                 } else {
                     // Up batch: must materialise to drive request_releases (needs generation IDs).
-                    let owned = coordinator.schedule.materialize_batch(
-                        coordinator.cursor - 1,
-                        coordinator.recovery_offset_us(),
-                    );
-                    let (_, suppressed) = coordinator.request_releases(&owned.intents);
+                    let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
+                    let (_, suppressed) = match coordinator.request_releases(&owned.intents) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("coordinator release request failure: {error}"));
+                            break;
+                        }
+                    };
                     if !suppressed.is_empty() {
                         telemetry.push(|| NativeTelemetryRecord {
                             event_index: batch_source_action_index,
@@ -2560,8 +3159,16 @@ fn run_worker(
             } else {
                 0
             };
-            let pending_plan = coordinator.plan_pending_dispatch(|polyphony| {
-                if config.dispatch_lead_us > 0 {
+            let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
+                Ok(ticks) => ticks,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("down lead conversion failure: {error:?}"));
+                    break;
+                }
+            };
+            let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
+                let (lead_us, saturated) = if config.dispatch_lead_us > 0 {
                     (config.dispatch_lead_us, false)
                 } else if config.enable_adaptive_lead {
                     let estimate = estimator.estimate_lead_with_class_and_policy(
@@ -2573,16 +3180,34 @@ fn run_worker(
                     (estimate.applied_us, estimate.saturated)
                 } else {
                     (0, false)
+                };
+                qpc_clock
+                    .duration_from_us(lead_us)
+                    .map(|ticks| (ticks, saturated))
+                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+            }) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("coordinator planning failure: {error}"));
+                    break;
                 }
-            });
-            if let Some(deadline_us) =
-                coordinator.next_deadline_with_pending_plan(lead_down, pending_plan.as_ref())
-            {
+            };
+            let deadline_ticks =
+                match coordinator.next_deadline_ticks(lead_down_ticks, pending_plan.as_ref()) {
+                    Ok(deadline) => deadline,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("coordinator deadline failure: {error}"));
+                        break;
+                    }
+                };
+            if let Some(deadline_ticks) = deadline_ticks {
                 // Take the QPC tick and its logical elapsed-time sample from
                 // the same instant.  Reusing the older outer-loop elapsed
                 // sample after doing bookkeeping shifts the absolute target
                 // late by the whole A->B overhead interval.
-                let target_sample_ticks = match qpc_now_ticks_checked() {
+                let target_sample_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
                         force_full_cleanup = true;
@@ -2591,15 +3216,39 @@ fn run_worker(
                         break;
                     }
                 };
-                let target_sample_elapsed_us = qpc_ticks_to_us(QpcTicks(
-                    clock_state
-                        .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_ticks_to_us(
-                            target_sample_ticks,
-                        ))))
-                        .as_u64(),
-                ));
-                if deadline_us > target_sample_elapsed_us {
-                    let remaining_us = deadline_us - target_sample_elapsed_us;
+                let target_sample_elapsed_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+                    target_sample_ticks,
+                    allow_pre_epoch_startup_dispatch,
+                ) {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
+                };
+                let target_sample_elapsed_us =
+                    qpc_ticks_to_us_or_terminal!(target_sample_elapsed_ticks);
+                if deadline_ticks > target_sample_elapsed_ticks {
+                    let remaining_ticks = match deadline_ticks
+                        .checked_duration_since(target_sample_elapsed_ticks)
+                    {
+                        Ok(duration) => duration,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("deadline ordering failure: {error}"));
+                            break;
+                        }
+                    };
+                    let remaining_us = match qpc_clock.duration_to_us(remaining_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("deadline telemetry conversion failure: {error:?}"));
+                            break;
+                        }
+                    };
                     if config.enable_adaptive_spin
                         && config.enable_spin_reprobe
                         && remaining_us >= 30_000
@@ -2619,27 +3268,39 @@ fn run_worker(
                         }
                         continue;
                     }
-                    let target_qpc = deadline_target_ticks_from_anchor(
-                        target_sample_ticks,
-                        qpc_ticks_to_us(target_sample_ticks),
-                        qpc_ticks_to_us(clock_state.epoch),
-                        deadline_us,
-                    );
+                    let target_qpc = match clock_state
+                        .epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
+                    {
+                        Ok(target) => target,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("deadline arithmetic failure: {error}"));
+                            break;
+                        }
+                    };
+                    let target_sample_qpc_us = qpc_ticks_to_us_or_terminal!(target_sample_ticks);
                     let cold_warmup_us = if last_send_qpc_us.is_none_or(|last| {
-                        qpc_ticks_to_us(target_sample_ticks).saturating_sub(last)
-                            > SEND_COLD_THRESHOLD_US
+                        target_sample_qpc_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US
                     }) {
                         config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US)
                     } else {
                         0
                     };
                     let wait_result = waiter.wait_until_ticks_with_metrics(
-                        lease_bounded_ticks(
+                        match lease_bounded_ticks(
+                            qpc_clock,
                             target_qpc,
-                            target_sample_ticks,
                             config.supervisor_lease_timeout_us,
                             supervisor_heartbeat_us,
-                        ),
+                        ) {
+                            Ok(target) => target,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!("lease deadline failure: {error:?}"));
+                                break;
+                            }
+                        },
                         effective_spin_threshold_us.saturating_add(cold_warmup_us),
                         interrupt,
                     );
@@ -2648,16 +3309,31 @@ fn run_worker(
                         .spin_time_us
                         .saturating_add(wait_result.spin_us);
                     pending_pre_send_spin_us = wait_result.spin_us;
-                    let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(
-                        clock_state
-                            .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_us_or_terminal!())))
-                            .as_u64(),
-                    ));
+                    let wake_qpc_ticks = match qpc_clock.now() {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                            break;
+                        }
+                    };
+                    let wake_elapsed_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+                        wake_qpc_ticks,
+                        allow_pre_epoch_startup_dispatch,
+                    ) {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("playback clock failure: {error}"));
+                            break;
+                        }
+                    };
+                    let wake_elapsed_us = qpc_ticks_to_us_or_terminal!(wake_elapsed_ticks);
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
                             local_metrics.wait_target_error_us = local_metrics
                                 .wait_target_error_us
-                                .max(wake_elapsed_us.saturating_sub(deadline_us));
+                                .max(wake_elapsed_us.saturating_sub(target_sample_elapsed_us));
                         }
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
@@ -2673,7 +3349,8 @@ fn run_worker(
                         WaitOutcome::Interrupted => {}
                     }
                     if config.input_path_warn_us > 0
-                        && wake_elapsed_us > deadline_us.saturating_add(config.input_path_warn_us)
+                        && wake_elapsed_us
+                            > target_sample_elapsed_us.saturating_add(config.input_path_warn_us)
                     {
                         local_metrics.wait_path_degraded = true;
                     }
@@ -2703,8 +3380,16 @@ fn run_worker(
     if let Some(error) = terminal_error.as_ref() {
         *metrics.terminal_error.lock() = Some(error.clone());
     }
-    coordinator.cancel_all();
-    let end_qpc = qpc_now_us_checked();
+    if let Err(error) = coordinator.cancel_all()
+        && terminal_error.is_none()
+    {
+        terminal_error = Some(format!("coordinator cancellation failure: {error}"));
+    }
+    let end_qpc = qpc_clock.now().and_then(|ticks| {
+        qpc_clock
+            .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+            .map_err(|_| QpcError::ConversionOverflow)
+    });
     if let Err(error) = end_qpc
         && terminal_error.is_none()
     {
@@ -2783,29 +3468,25 @@ fn lease_bounded_us(target_us: u64, timeout_us: u64, heartbeat_us: &AtomicU64) -
 }
 
 fn lease_bounded_ticks(
+    qpc_clock: QpcClock,
     target: QpcTicks,
-    now_ticks: QpcTicks,
     timeout_us: u64,
     heartbeat_us: &AtomicU64,
-) -> QpcTicks {
+) -> Result<QpcTicks, QpcError> {
     if timeout_us == 0 {
-        return target;
+        return Ok(target);
     }
     let heartbeat = heartbeat_us.load(Ordering::Acquire);
     if heartbeat == 0 {
-        return target;
+        return Ok(target);
     }
-    let lease_deadline_us = heartbeat.saturating_add(timeout_us);
-    let now_us = qpc_ticks_to_us(now_ticks);
-    if lease_deadline_us <= now_us {
-        return now_ticks;
-    }
-    let lease_deadline = QpcTicks(
-        now_ticks
-            .as_u64()
-            .saturating_add(qpc_us_to_ticks(lease_deadline_us - now_us)),
-    );
-    target.min(lease_deadline)
+    let lease_deadline_us = heartbeat
+        .checked_add(timeout_us)
+        .ok_or(QpcError::DeadlineOverflow)?;
+    let lease_deadline = qpc_clock
+        .timeline_from_us(lease_deadline_us)
+        .map_err(|_| QpcError::DeadlineOverflow)?;
+    Ok(target.min(QpcTicks::from_raw(lease_deadline.as_u64())))
 }
 
 fn drain_commands(
@@ -2876,6 +3557,19 @@ fn record_lateness(
     let _ = latency_tx.try_send(lateness_us);
 }
 
+fn cancel_coordinator_or_terminal(
+    coordinator: &mut RuntimeDispatchCoordinator,
+    force_full_cleanup: &mut bool,
+    terminal_error: &mut Option<String>,
+) {
+    if let Err(error) = coordinator.cancel_all() {
+        *force_full_cleanup = true;
+        if terminal_error.is_none() {
+            *terminal_error = Some(format!("coordinator cancellation failure: {error}"));
+        }
+    }
+}
+
 fn release_runtime_outcome(
     deferred_by_us: u64,
     sent_count: usize,
@@ -2905,7 +3599,7 @@ fn update_estimator_after_send(
     completion_error_us: i64,
     clean_sample: bool,
 ) {
-    update_estimator_after_send_class(
+    let _ = update_estimator_after_send_class(
         estimator,
         kind,
         duration_us,
@@ -2929,14 +3623,15 @@ fn update_estimator_after_send_class(
     completion_error_us: i64,
     clean_sample: bool,
     latency_class: LatencyClass,
-) {
+) -> Result<(), sky_dispatch_core::estimator::EstimatorStateError> {
     if !clean_sample || sent_count == 0 {
-        return;
+        return Ok(());
     }
-    estimator.update_with_class(kind, duration_us, authored_polyphony, latency_class);
+    estimator.update_with_class(kind, duration_us, authored_polyphony, latency_class)?;
     if applied_lead_us > 0 {
-        estimator.update_completion_error_with_class(kind, completion_error_us, latency_class);
+        estimator.update_completion_error_with_class(kind, completion_error_us, latency_class)?;
     }
+    Ok(())
 }
 
 fn record_lead_saturation(
@@ -2957,6 +3652,25 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
+fn signed_timeline_delta_us(
+    qpc_clock: QpcClock,
+    lhs: TimelineTicks,
+    rhs: TimelineTicks,
+) -> Result<i64, String> {
+    let (negative, duration) = if lhs >= rhs {
+        (false, lhs.checked_duration_since(rhs))
+    } else {
+        (true, rhs.checked_duration_since(lhs))
+    };
+    let duration = duration.map_err(|error| error.to_string())?;
+    let microseconds = qpc_clock
+        .duration_to_us(duration)
+        .map_err(|error| format!("{error:?}"))?;
+    let magnitude = i64::try_from(microseconds)
+        .map_err(|_| "signed timing delta exceeds i64 range".to_string())?;
+    Ok(if negative { -magnitude } else { magnitude })
+}
+
 fn classify_latency_class(last_send_qpc_us: Option<u64>, now_qpc_us: u64) -> LatencyClass {
     if last_send_qpc_us.is_none_or(|last| now_qpc_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US)
     {
@@ -2966,55 +3680,46 @@ fn classify_latency_class(last_send_qpc_us: Option<u64>, now_qpc_us: u64) -> Lat
     }
 }
 
-/// Map a non-negative logical deadline to an absolute QPC target using the
-/// clock's physical anchor and one current sample.
-fn deadline_target_ticks_from_anchor(
-    now_ticks: QpcTicks,
-    now_qpc_us: u64,
-    anchor_us: u64,
-    deadline_us: u64,
-) -> QpcTicks {
-    let target_us = anchor_us.saturating_add(deadline_us);
-    if target_us <= now_qpc_us {
-        return now_ticks;
-    }
-    QpcTicks(
-        now_ticks
-            .as_u64()
-            .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
-    )
-}
-
 /// Map an authored timestamp minus lead, including the negative interval that
 /// is intentionally needed for a first note at authored t=0.
+#[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn anchored_dispatch_target_ticks(
+    qpc_clock: QpcClock,
     now_ticks: QpcTicks,
     now_qpc_us: u64,
     anchor_us: u64,
     scheduled_us: u64,
     lead_us: u64,
-) -> QpcTicks {
-    let target_us = anchor_us
-        .saturating_add(scheduled_us)
-        .saturating_sub(lead_us);
+) -> Result<QpcTicks, QpcError> {
+    let target_us = match anchor_us
+        .checked_add(scheduled_us)
+        .ok_or(QpcError::DeadlineOverflow)?
+        .checked_sub(lead_us)
+    {
+        Some(value) => value,
+        None => 0,
+    };
     if target_us <= now_qpc_us {
-        return now_ticks;
+        return Ok(now_ticks);
     }
-    QpcTicks(
-        now_ticks
-            .as_u64()
-            .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
-    )
+    let delta = qpc_clock
+        .duration_from_us(
+            target_us
+                .checked_sub(now_qpc_us)
+                .ok_or(QpcError::DeadlineOverflow)?,
+        )
+        .map_err(|_| QpcError::DeadlineOverflow)?;
+    now_ticks
+        .checked_add_duration(delta)
+        .map_err(|_| QpcError::DeadlineOverflow)
 }
 
 /// Legacy relative helper retained for unit-test compatibility.
 #[cfg(test)]
 fn deadline_target_ticks(now_ticks: QpcTicks, logical_now_us: u64, deadline_us: u64) -> QpcTicks {
-    QpcTicks(
-        now_ticks
-            .as_u64()
-            .saturating_add(qpc_us_to_ticks(deadline_us.saturating_sub(logical_now_us))),
-    )
+    QpcTicks::from_raw(now_ticks.as_u64().saturating_add(
+        qpc_us_to_ticks(deadline_us.saturating_sub(logical_now_us)).expect("test QPC conversion"),
+    ))
 }
 
 fn publish_wake_error_stats(stats: WakeErrorStats, local_metrics: &mut WorkerMetricsLocal) {
@@ -3151,32 +3856,41 @@ mod tests {
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::ActionKind;
-    use sky_dispatch_win32::clock::{QpcTicks, qpc_ticks_to_us, qpc_us_to_ticks};
+    use sky_dispatch_win32::clock::{
+        QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
+    };
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn deadline_mapper_uses_the_current_sample_without_overhead_drift() {
-        let now_ticks = QpcTicks(10_000_000);
-        let logical_now_us = qpc_ticks_to_us(now_ticks);
+        let now_ticks = QpcTicks::from_raw(10_000_000);
+        let logical_now_us = qpc_ticks_to_us(now_ticks).unwrap();
         let target = deadline_target_ticks(now_ticks, logical_now_us, logical_now_us + 1_000);
-        assert_eq!(target.as_u64() - now_ticks.as_u64(), qpc_us_to_ticks(1_000));
+        assert_eq!(
+            target.as_u64() - now_ticks.as_u64(),
+            qpc_us_to_ticks(1_000).unwrap()
+        );
     }
 
     #[test]
     fn first_authored_zero_timestamp_can_use_a_future_physical_anchor() {
-        let now_ticks = QpcTicks(10_000_000);
-        let now_qpc_us = qpc_ticks_to_us(now_ticks);
+        let now_ticks = QpcTicks::from_raw(10_000_000);
+        let now_qpc_us = qpc_ticks_to_us(now_ticks).unwrap();
         let startup_guard_us = 1_000;
         let lead_us = 500;
         let anchor_us = now_qpc_us
             .saturating_add(startup_guard_us)
             .saturating_add(lead_us);
-        let target = anchored_dispatch_target_ticks(now_ticks, now_qpc_us, anchor_us, 0, lead_us);
+        let clock =
+            QpcClock::from_frequency_hz(std::num::NonZeroU64::new(qpc_frequency()).unwrap());
+        let target =
+            anchored_dispatch_target_ticks(clock, now_ticks, now_qpc_us, anchor_us, 0, lead_us)
+                .unwrap();
 
         assert_eq!(
             target.as_u64() - now_ticks.as_u64(),
-            qpc_us_to_ticks(startup_guard_us)
+            qpc_us_to_ticks(startup_guard_us).unwrap()
         );
     }
 

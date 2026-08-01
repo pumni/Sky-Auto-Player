@@ -41,9 +41,9 @@ use std::time::Instant;
 
 use sky_dispatch_core::{
     compile::compile_runtime_intents,
-    coordinator::RuntimeDispatchCoordinator,
+    coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator},
     model::{ActionKind, KeyActionInput},
-    time::TimelineTicks,
+    time::{DurationTicks, TimelineTicks},
 };
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -93,15 +93,6 @@ struct SoakCounters {
 }
 
 impl SoakCounters {
-    fn gate_ok(&self) -> bool {
-        self.keys_dropped == 0
-            && self.chord_split_events == 0
-            && self.failed_release_count == 0
-            && self.rollback_residue_keys == 0
-            && self.authored_conflict == 0
-            && self.nonterminal_after_end == 0
-    }
-
     fn slope_us_per_note(&self) -> f64 {
         linear_regression_slope(&self.timing_errors)
     }
@@ -262,8 +253,15 @@ fn run_soak_scenario(
     let schedule =
         compile_runtime_intents(actions, allowed_codes).map_err(|e| format!("compile: {e:?}"))?;
 
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(schedule, NOTE_HOLD_US / 2, 0, TimelineTicks);
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        NOTE_HOLD_US / 2,
+        DurationTicks::from_raw(NOTE_HOLD_US / 2),
+        0,
+        DurationTicks::ZERO,
+        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+    )
+    .map_err(|error| format!("coordinator construction failed: {error}"))?;
 
     let mut counters = SoakCounters::default();
     let mut now_us: u64 = 0;
@@ -277,27 +275,44 @@ fn run_soak_scenario(
         if let Some(stop) = stop_after_notes
             && note_idx >= stop
         {
-            let residue = coordinator.cancel_all();
+            let residue = coordinator
+                .cancel_all()
+                .map_err(|error| format!("coordinator cancellation failed: {error}"))?;
             counters.rollback_residue_keys += residue.len();
             // After cancel_all the coordinator must report is_finished.
             break;
         }
 
         // Advance to next coordinator deadline.
-        if let Some(dl) = coordinator.next_deadline_us(0, 0) {
-            now_us = now_us.max(dl);
+        if let Some(dl) = coordinator
+            .next_deadline_ticks(DurationTicks::ZERO, None)
+            .map_err(|error| format!("coordinator deadline failed: {error}"))?
+        {
+            now_us = now_us.max(dl.as_u64());
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
 
         // UI stall: inject a large dead gap before this note.
         if inject_ui_stall_at == Some(note_idx) {
-            now_us += UI_STALL_US;
+            now_us = now_us
+                .checked_add(UI_STALL_US)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
             inject_ui_stall_at = None;
         }
 
         // Drain pending releases.
-        let due = coordinator.pop_due_pending(now_us, 0);
+        let pending_plan = PendingDispatchPlan {
+            deadline_ticks: TimelineTicks::from_raw(now_us),
+            lead_ticks: DurationTicks::ZERO,
+            polyphony: 1,
+            lead_saturated: false,
+        };
+        let due = coordinator
+            .pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &pending_plan)
+            .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
         if !due.is_empty() {
             // Simulate a failed release for a specific note.
             if let Some(fail_note) = inject_failed_release_at
@@ -308,37 +323,73 @@ fn run_soak_scenario(
                 // Requeue first pending as failed; complete the rest normally.
                 let (to_fail, to_complete) = due.split_at(1);
                 let completed_codes: Vec<u16> = to_complete.iter().map(|p| p.scan_code).collect();
-                coordinator.complete_releases(to_complete, &completed_codes, &[]);
-                let _requeued =
-                    coordinator.requeue_failed_releases(to_fail, &[], &[], now_us, now_us, Some(5));
+                coordinator
+                    .complete_releases(to_complete, &completed_codes, &[])
+                    .map_err(|error| format!("coordinator completion failed: {error}"))?;
+                let retry_backoff = [
+                    DurationTicks::from_raw(2_000),
+                    DurationTicks::from_raw(5_000),
+                    DurationTicks::from_raw(10_000),
+                    DurationTicks::from_raw(20_000),
+                ];
+                let _requeued = coordinator
+                    .requeue_failed_releases_ticks(
+                        to_fail,
+                        &[],
+                        &[],
+                        TimelineTicks::from_raw(now_us),
+                        TimelineTicks::from_raw(now_us),
+                        &retry_backoff,
+                        Some(5),
+                    )
+                    .map_err(|error| format!("coordinator recovery failed: {error}"))?;
                 counters.failed_release_count += 1;
                 // Save for retry.
                 failed_release_note_idx = Some(fail_note);
-                now_us += SEND_LATENCY_US;
+                now_us = now_us
+                    .checked_add(SEND_LATENCY_US)
+                    .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                 continue;
             }
             let codes: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
-            coordinator.complete_releases(&due, &codes, &[]);
+            coordinator
+                .complete_releases(&due, &codes, &[])
+                .map_err(|error| format!("coordinator completion failed: {error}"))?;
             counters.releases_completed += due.len();
-            let _ = coordinator.finish_release_recovery(now_us);
-            now_us += SEND_LATENCY_US;
+            coordinator
+                .finish_release_recovery_ticks(TimelineTicks::from_raw(now_us))
+                .map_err(|error| format!("coordinator recovery completion failed: {error}"))?;
+            now_us = now_us
+                .checked_add(SEND_LATENCY_US)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
             continue;
         }
 
         // Pop next authored batch.
-        if let Some((batch, _)) = coordinator.pop_next_due_authored(now_us, 0) {
+        if let Some((batch_index, _)) = coordinator
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us), DurationTicks::ZERO)
+            .map_err(|error| format!("coordinator authored pop failed: {error}"))?
+        {
+            let batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(batch_index)
+                .map_err(|error| format!("batch materialization failed: {error}"))?;
             let authored_us = batch.scheduled_us;
             match batch.kind {
                 ActionKind::Down => {
                     // Check for expiration (e.g. after UI stall)
                     if now_us.saturating_sub(authored_us) > 1_000_000 {
-                        coordinator.drop_expired_downs(&batch.intents);
+                        coordinator
+                            .drop_expired_downs(&batch.intents)
+                            .map_err(|error| format!("coordinator expiry failed: {error}"))?;
                         note_idx += 1;
                         continue;
                     }
 
                     // Check for conflicts.
-                    let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
+                    let (playable, conflicts) = coordinator
+                        .split_down_intents(&batch.intents)
+                        .map_err(|error| format!("coordinator split failed: {error}"))?;
                     if !conflicts.is_empty() {
                         counters.chord_split_events += 1;
                         println!(
@@ -349,19 +400,23 @@ fn run_soak_scenario(
                             playable.len(),
                             conflicts.len()
                         );
-                        // Drop conflicted slots.
-                        coordinator.drop_conflicted_downs(&conflicts);
+                        // `split_down_intents` terminalizes the conflict
+                        // generations as part of its Result-returning
+                        // mutation. Do not terminalize them a second time.
                     }
                     if !playable.is_empty() {
                         let codes: Vec<u16> = playable.iter().map(|i| i.scan_code).collect();
-                        coordinator.activate_sent_downs(
-                            &playable,
-                            &codes,
-                            now_us,
-                            TimelineTicks(now_us),
-                            now_us + SEND_LATENCY_US,
-                            TimelineTicks(now_us + SEND_LATENCY_US),
-                        );
+                        let completed_us = now_us
+                            .checked_add(SEND_LATENCY_US)
+                            .ok_or_else(|| "simulation timestamp overflow".to_string())?;
+                        coordinator
+                            .activate_sent_downs_ticks(
+                                &playable,
+                                &codes,
+                                TimelineTicks::from_raw(now_us),
+                                TimelineTicks::from_raw(completed_us),
+                            )
+                            .map_err(|error| format!("coordinator activation failed: {error}"))?;
                     }
 
                     let error = now_us as i64 - authored_us as i64;
@@ -369,15 +424,23 @@ fn run_soak_scenario(
 
                     counters.notes_dispatched += 1;
                     note_idx += 1;
-                    now_us += SEND_LATENCY_US;
+                    now_us = now_us
+                        .checked_add(SEND_LATENCY_US)
+                        .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                 }
                 ActionKind::Up => {
-                    let (requested, _suppressed) = coordinator.request_releases(&batch.intents);
+                    let (requested, _suppressed) = coordinator
+                        .request_releases(&batch.intents)
+                        .map_err(|error| {
+                            format!("coordinator release transition failed: {error}")
+                        })?;
                     let _ = requested;
                 }
             }
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
     }
 
@@ -409,9 +472,40 @@ fn run_soak_scenario(
 // ─── Scenarios ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+struct ScenarioExpectation {
+    allowed_keys_dropped: u64,
+    allowed_chord_splits: u64,
+    allowed_failed_releases: u64,
+    allowed_authored_conflict: u64,
+    allow_cancelled_inflight: bool,
+}
+
+impl ScenarioExpectation {
+    fn ordinary() -> Self {
+        Self {
+            allowed_keys_dropped: 0,
+            allowed_chord_splits: 0,
+            allowed_failed_releases: 0,
+            allowed_authored_conflict: 0,
+            allow_cancelled_inflight: false,
+        }
+    }
+
+    fn gate_ok(&self, counters: &SoakCounters) -> bool {
+        counters.keys_dropped <= self.allowed_keys_dropped
+            && counters.chord_split_events <= self.allowed_chord_splits
+            && counters.failed_release_count <= self.allowed_failed_releases
+            && counters.authored_conflict <= self.allowed_authored_conflict
+            && (self.allow_cancelled_inflight
+                || (counters.rollback_residue_keys == 0 && counters.nonterminal_after_end == 0))
+    }
+}
+
+#[derive(Debug, Clone)]
 struct ScenarioResult {
     name: &'static str,
     counters: SoakCounters,
+    expectation: ScenarioExpectation,
     wall_ms: u64,
     notes: usize,
     polyphony: usize,
@@ -419,7 +513,7 @@ struct ScenarioResult {
 
 impl ScenarioResult {
     fn gate_ok(&self) -> bool {
-        self.counters.gate_ok()
+        self.expectation.gate_ok(&self.counters)
     }
 
     fn slope_label(&self) -> String {
@@ -466,11 +560,11 @@ fn print_row(r: &ScenarioResult) {
 
 fn print_gate_summary(results: &[ScenarioResult]) {
     println!();
-    println!("# Gate (correctness): strict counters = 0 for ordinary scenarios; ");
     println!(
-        "# UI-stall, failed-release, and focus-loss scenarios use documented waivers; slope < ±2 µs/note"
+        "# Gate (correctness): raw counters are preserved and checked against per-scenario expectations;"
     );
-    let all_counters_ok = results.iter().all(|r| r.counters.gate_ok());
+    println!("# slope < ±2 µs/note");
+    let all_counters_ok = results.iter().all(ScenarioResult::gate_ok);
     let slope_ok = results
         .iter()
         .all(|r| r.counters.slope_us_per_note().abs() < 2.0);
@@ -480,15 +574,15 @@ fn print_gate_summary(results: &[ScenarioResult]) {
         .filter(|r| !r.gate_ok() || r.counters.slope_us_per_note().abs() >= 2.0)
         .map(|r| r.name)
         .collect();
-    let waived_count = results
+    let policy_count = results
         .iter()
-        .filter(|r| matches!(r.name, "ui_stall" | "failed_release" | "focus_loss"))
+        .filter(|r| !matches!(r.name, "dense" | "sparse"))
         .count();
     if pass {
         println!(
-            "  → PASS ({} ordinary scenarios; {} documented-waiver scenarios)",
-            results.len().saturating_sub(waived_count),
-            waived_count
+            "  → PASS ({} ordinary scenarios; {} policy-specific scenarios)",
+            results.len().saturating_sub(policy_count),
+            policy_count
         );
     } else {
         println!("  → FAIL: {:?}", failed_names);
@@ -512,7 +606,7 @@ fn main() -> Result<(), String> {
         env!("CARGO_PKG_VERSION")
     );
     println!(
-        "# Gate: ordinary scenarios require dropped=0, chord_splits=0, failed_releases=0, residue=0, nonterminal=0; documented fault scenarios are reported raw and checked with explicit waivers; slope<±2µs/note"
+        "# Gate: raw counters remain unchanged; each scenario has an explicit expectation policy; slope<±2µs/note"
     );
     println!();
 
@@ -532,6 +626,7 @@ fn main() -> Result<(), String> {
                 let r = ScenarioResult {
                     name: "dense",
                     counters: c,
+                    expectation: ScenarioExpectation::ordinary(),
                     wall_ms,
                     notes: n_notes,
                     polyphony: poly,
@@ -556,6 +651,7 @@ fn main() -> Result<(), String> {
                 let r = ScenarioResult {
                     name: "sparse",
                     counters: c,
+                    expectation: ScenarioExpectation::ordinary(),
                     wall_ms,
                     notes,
                     polyphony: poly,
@@ -575,49 +671,24 @@ fn main() -> Result<(), String> {
         let stall_at = n_notes / 2;
         let t0 = Instant::now();
         match run_soak_scenario(&actions, &authored, &allowed, None, Some(stall_at), None) {
-            Ok(mut c) => {
-                // UI stall intentionally drops keys that expire during the stall,
-                // and the catch-up burst causes intentional chord splits due to min_hold.
-                let raw_dropped = c.keys_dropped;
-                let raw_splits = c.chord_split_events;
-                let raw_conflict = c.authored_conflict;
-                c.keys_dropped = 0; // waive for gate
-                c.chord_split_events = 0; // waive for gate
-                c.authored_conflict = 0; // waive for gate
+            Ok(c) => {
                 let wall_ms = t0.elapsed().as_millis() as u64;
                 let r = ScenarioResult {
                     name: "ui_stall",
-                    counters: {
-                        let mut rc = c.clone();
-                        rc.keys_dropped = raw_dropped;
-                        rc.chord_split_events = raw_splits;
-                        rc.authored_conflict = raw_conflict;
-                        rc
+                    counters: c,
+                    expectation: ScenarioExpectation {
+                        allowed_keys_dropped: n_notes as u64,
+                        allowed_chord_splits: n_notes as u64,
+                        allowed_failed_releases: 0,
+                        allowed_authored_conflict: n_notes as u64,
+                        allow_cancelled_inflight: false,
                     },
                     wall_ms,
                     notes: n_notes,
                     polyphony: poly,
                 };
-                let gate = c.gate_ok() && c.slope_us_per_note().abs() < 2.0;
-                println!(
-                    "{:<22}  {:>5}  {:>5}  {:>8}  {:>7}  {:>7}  {:>7}  {:>7}  {:>7}  {:>12}  {:>7}",
-                    r.name,
-                    r.notes,
-                    r.polyphony,
-                    r.wall_ms,
-                    r.counters.keys_dropped,
-                    r.counters.chord_split_events,
-                    r.counters.failed_release_count,
-                    r.counters.rollback_residue_keys,
-                    r.counters.nonterminal_after_end,
-                    format!("{:+.4}", r.counters.slope_us_per_note()),
-                    if gate { "PASS*" } else { "FAIL" },
-                );
-                let mut waived = r.clone();
-                waived.counters.keys_dropped = 0;
-                waived.counters.chord_split_events = 0;
-                waived.counters.authored_conflict = 0;
-                results.push(waived);
+                print_row(&r);
+                results.push(r);
             }
             Err(e) => return Err(format!("ui_stall: {e}")),
         }
@@ -634,44 +705,24 @@ fn main() -> Result<(), String> {
         let fail_at = 50.min(n_notes.saturating_sub(10));
         let t0 = Instant::now();
         match run_soak_scenario(&actions, &authored, &allowed, Some(fail_at), None, None) {
-            Ok(mut c) => {
-                // The recovery scenario intentionally has failed_release_count==1;
-                // clear it so the unified gate does not reject the scenario.
-                // The scenario-level report still shows the raw value.
-                let raw_fail = c.failed_release_count;
-                c.failed_release_count = 0; // gate waiver: one controlled retry
+            Ok(c) => {
                 let wall_ms = t0.elapsed().as_millis() as u64;
                 let r = ScenarioResult {
                     name: "failed_release",
-                    counters: {
-                        let mut rc = c.clone();
-                        rc.failed_release_count = raw_fail; // restore for display
-                        rc
+                    counters: c,
+                    expectation: ScenarioExpectation {
+                        allowed_keys_dropped: 0,
+                        allowed_chord_splits: 0,
+                        allowed_failed_releases: 1,
+                        allowed_authored_conflict: 0,
+                        allow_cancelled_inflight: false,
                     },
                     wall_ms,
                     notes: n_notes,
                     polyphony: poly,
                 };
-                // Evaluate gate with the waived counter.
-                let gate = c.gate_ok() && c.slope_us_per_note().abs() < 2.0;
-                println!(
-                    "{:<22}  {:>5}  {:>5}  {:>8}  {:>7}  {:>7}  {:>7}  {:>7}  {:>7}  {:>12}  {:>7}",
-                    r.name,
-                    r.notes,
-                    r.polyphony,
-                    r.wall_ms,
-                    r.counters.keys_dropped,
-                    r.counters.chord_split_events,
-                    r.counters.failed_release_count,
-                    r.counters.rollback_residue_keys,
-                    r.counters.nonterminal_after_end,
-                    format!("{:+.4}", r.counters.slope_us_per_note()),
-                    if gate { "PASS*" } else { "FAIL" },
-                );
-                // Push with the waived version so print_gate_summary sees PASS.
-                let mut waived = r.clone();
-                waived.counters.failed_release_count = 0;
-                results.push(waived);
+                print_row(&r);
+                results.push(r);
             }
             Err(e) => return Err(format!("failed_release: {e}")),
         }
@@ -689,42 +740,24 @@ fn main() -> Result<(), String> {
         let stop_at = n_notes / 3;
         let t0 = Instant::now();
         match run_soak_scenario(&actions, &authored, &allowed, None, None, Some(stop_at)) {
-            Ok(mut c) => {
-                // Focus-loss scenario: residue is expected (keys in flight at cancel).
-                // waive rollback_residue for the global gate.
-                let raw_residue = c.rollback_residue_keys;
-                c.rollback_residue_keys = 0;
+            Ok(c) => {
                 let wall_ms = t0.elapsed().as_millis() as u64;
                 let r = ScenarioResult {
                     name: "focus_loss",
-                    counters: {
-                        let mut rc = c.clone();
-                        rc.rollback_residue_keys = raw_residue;
-                        rc
+                    counters: c,
+                    expectation: ScenarioExpectation {
+                        allowed_keys_dropped: 0,
+                        allowed_chord_splits: 0,
+                        allowed_failed_releases: 0,
+                        allowed_authored_conflict: 0,
+                        allow_cancelled_inflight: true,
                     },
                     wall_ms,
                     notes: stop_at,
                     polyphony: poly,
                 };
-                let gate = c.gate_ok();
-                println!(
-                    "{:<22}  {:>5}  {:>5}  {:>8}  {:>7}  {:>7}  {:>7}  {:>7}  {:>7}  {:>12}  {:>7}",
-                    r.name,
-                    r.notes,
-                    r.polyphony,
-                    r.wall_ms,
-                    r.counters.keys_dropped,
-                    r.counters.chord_split_events,
-                    r.counters.failed_release_count,
-                    r.counters.rollback_residue_keys,
-                    r.counters.nonterminal_after_end,
-                    format!("{:+.4}", r.counters.slope_us_per_note()),
-                    if gate { "PASS*" } else { "FAIL" },
-                );
-                let mut waived = r.clone();
-                waived.counters.rollback_residue_keys = 0;
-                waived.counters.nonterminal_after_end = 0; // not applicable post-cancel
-                results.push(waived);
+                print_row(&r);
+                results.push(r);
             }
             Err(e) => return Err(format!("focus_loss: {e}")),
         }
@@ -748,7 +781,7 @@ fn main() -> Result<(), String> {
         "# RSS before={rss_before}B  after={rss_after}B  delta={}B",
         (rss_after as i64) - (rss_before as i64),
     );
-    println!("# * = gate waiver documented in bench source (recovery/focus-loss are intentional)");
+    println!("# * = policy-specific expectation; raw counters above are not rewritten");
     if results.is_empty() || results.iter().any(|result| !result.gate_ok()) {
         return Err("coordinator soak simulation gate failed".to_string());
     }

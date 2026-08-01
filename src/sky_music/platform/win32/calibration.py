@@ -425,7 +425,7 @@ def run_calibration_loop(harness: CalibrationHarness) -> None:
             user32.PostMessageW(harness.hwnd, WM_DESTROY, 0, 0)
 
 
-def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
+def _legacy_in_process_calibration_harness(scancode: int = 0x1E) -> dict[str, Any]:
     """Execute raw input latency calibration on an app-owned window."""
     harness = CalibrationHarness(scancode)
     
@@ -610,3 +610,17 @@ def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
         json.dump(result, f, indent=4)
 
     return result
+
+
+def calibrate_input_latency_harness(scancode: int = 0x1E) -> dict[str, Any]:
+    """Run calibration in the dedicated native subprocess.
+
+    ``scancode`` is retained for Python API compatibility.  The native
+    calibration deliberately measures the canonical full instrument rather
+    than accepting an arbitrary key selection.
+    """
+
+    del scancode
+    from sky_music.platform.win32.native_calibration import run_native_calibration
+
+    return run_native_calibration()

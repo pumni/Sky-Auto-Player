@@ -14,12 +14,14 @@ thread_local! {
 /// Returns overshoot in microseconds (actual_us - target_us).
 pub fn sleep_until_us(target_us: u64, spin_margin_us: u64) -> Result<u64, QpcError> {
     let now_ticks = qpc_now_ticks()?;
-    let now_us = qpc_ticks_to_us(now_ticks);
+    let now_us = qpc_ticks_to_us(now_ticks)?;
     if target_us <= now_us {
         return Ok(now_us.saturating_sub(target_us));
     }
     let target_ticks = now_ticks
-        .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(target_us - now_us)))
+        .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(
+            target_us - now_us,
+        )?))
         .map_err(|_| QpcError::DeadlineOverflow)?;
     sleep_until_ticks(target_ticks, spin_margin_us)
 }
@@ -27,14 +29,14 @@ pub fn sleep_until_us(target_us: u64, spin_margin_us: u64) -> Result<u64, QpcErr
 pub fn sleep_until_ticks(target_ticks: QpcTicks, spin_margin_us: u64) -> Result<u64, QpcError> {
     let now_ticks = qpc_now_ticks()?;
     if now_ticks >= target_ticks {
-        return Ok(qpc_ticks_to_us(QpcTicks::from_raw(
+        return qpc_ticks_to_us(QpcTicks::from_raw(
             now_ticks.as_u64().saturating_sub(target_ticks.as_u64()),
-        )));
+        ));
     }
 
     let remaining_us = qpc_ticks_to_us(QpcTicks::from_raw(
         target_ticks.as_u64().saturating_sub(now_ticks.as_u64()),
-    ));
+    ))?;
     if remaining_us > spin_margin_us {
         let sleep_duration_us = remaining_us - spin_margin_us;
         THREAD_TIMER.with(|timer_opt| {
@@ -51,9 +53,9 @@ pub fn sleep_until_ticks(target_ticks: QpcTicks, spin_margin_us: u64) -> Result<
     loop {
         let current_ticks = qpc_now_ticks()?;
         if current_ticks >= target_ticks {
-            return Ok(qpc_ticks_to_us(QpcTicks::from_raw(
+            return qpc_ticks_to_us(QpcTicks::from_raw(
                 current_ticks.as_u64().saturating_sub(target_ticks.as_u64()),
-            )));
+            ));
         }
         std::hint::spin_loop();
     }
@@ -69,7 +71,7 @@ pub fn measure_spin_overhead_us() -> Result<u64, QpcError> {
         std::hint::spin_loop();
         let t1 = qpc_now_ticks()?;
         total_overhead_us +=
-            qpc_ticks_to_us(QpcTicks::from_raw(t1.as_u64().saturating_sub(t0.as_u64())));
+            qpc_ticks_to_us(QpcTicks::from_raw(t1.as_u64().saturating_sub(t0.as_u64())))?;
     }
 
     Ok((total_overhead_us / ITERATIONS as u64).max(1))

@@ -10,6 +10,7 @@ pub enum QpcError {
     FrequencyUnavailable,
     CounterUnavailable,
     DeadlineOverflow,
+    ConversionOverflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +68,10 @@ impl QpcClock {
             / self.frequency_hz.get() as u128;
         u64::try_from(microseconds).map_err(|_| TimeConversionError::Overflow)
     }
+
+    pub fn timeline_to_us(self, ticks: TimelineTicks) -> Result<u64, TimeConversionError> {
+        self.duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+    }
 }
 
 pub fn qpc_frequency_checked() -> Result<u64, QpcError> {
@@ -94,7 +99,12 @@ pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
         let now = {
             use std::time::Instant;
             static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
-            QpcTicks::from_raw(START.elapsed().as_nanos().try_into().unwrap_or(u64::MAX))
+            let nanos = START
+                .elapsed()
+                .as_nanos()
+                .try_into()
+                .map_err(|_| QpcError::CounterUnavailable)?;
+            QpcTicks::from_raw(nanos)
         };
         Ok(now)
     }
@@ -127,33 +137,27 @@ pub fn qpc_now_ticks() -> Result<QpcTicks, QpcError> {
     qpc_now_ticks_checked()
 }
 
-pub fn qpc_ticks_to_us(ticks: QpcTicks) -> u64 {
-    let frequency = qpc_frequency();
-    if frequency == 0 {
-        return 0;
-    }
-    ((ticks.as_u64() as u128).saturating_mul(1_000_000) / frequency as u128).min(u64::MAX as u128)
-        as u64
+pub fn qpc_ticks_to_us(ticks: QpcTicks) -> Result<u64, QpcError> {
+    let frequency = NonZeroU64::new(qpc_frequency()).ok_or(QpcError::FrequencyUnavailable)?;
+    QpcClock::from_frequency_hz(frequency)
+        .timeline_to_us(TimelineTicks::from_raw(ticks.as_u64()))
+        .map_err(|_| QpcError::ConversionOverflow)
 }
 
-pub fn qpc_us_to_ticks(microseconds: u64) -> u64 {
-    let frequency = qpc_frequency();
-    if frequency == 0 {
-        return 0;
-    }
-    ((microseconds as u128)
-        .saturating_mul(frequency as u128)
-        .saturating_add(999_999)
-        / 1_000_000)
-        .min(u64::MAX as u128) as u64
+pub fn qpc_us_to_ticks(microseconds: u64) -> Result<u64, QpcError> {
+    let frequency = NonZeroU64::new(qpc_frequency()).ok_or(QpcError::FrequencyUnavailable)?;
+    QpcClock::from_frequency_hz(frequency)
+        .duration_from_us(microseconds)
+        .map(|ticks| ticks.as_u64())
+        .map_err(|_| QpcError::ConversionOverflow)
 }
 
-pub fn qpc_now_us() -> u64 {
-    qpc_now_us_checked().unwrap_or(0)
+pub fn qpc_now_us() -> Result<u64, QpcError> {
+    qpc_now_us_checked()
 }
 
 pub fn qpc_now_us_checked() -> Result<u64, QpcError> {
-    qpc_now_ticks_checked().map(qpc_ticks_to_us)
+    qpc_now_ticks_checked().and_then(qpc_ticks_to_us)
 }
 
 #[cfg(test)]
@@ -165,10 +169,13 @@ mod tests {
 
     #[test]
     fn qpc_conversion_round_trip_is_monotonic() {
-        let one_second = qpc_us_to_ticks(1_000_000);
+        let one_second = qpc_us_to_ticks(1_000_000).unwrap();
         assert!(one_second > 0);
-        assert!(qpc_ticks_to_us(QpcTicks(one_second)) >= 1_000_000);
-        assert_eq!(qpc_ticks_to_us(QpcTicks(qpc_frequency())), 1_000_000);
+        assert!(qpc_ticks_to_us(QpcTicks::from_raw(one_second)).unwrap() >= 1_000_000);
+        assert_eq!(
+            qpc_ticks_to_us(QpcTicks::from_raw(qpc_frequency())).unwrap(),
+            1_000_000
+        );
     }
 
     #[test]

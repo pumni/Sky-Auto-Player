@@ -480,7 +480,7 @@ def test_differential_terminal_state_all_generations_counted() -> None:
                     at_us=Microseconds(at_us),
                     kind=ActionKind("up"),
                     scan_codes=tuple(ScanCode(c) for c in sorted(releasing)),
-                    reason=f"u",
+                    reason="u",
                 ))
                 open_keys.clear()
             available = [c for c in allowed if c not in open_keys]
@@ -491,7 +491,7 @@ def test_differential_terminal_state_all_generations_counted() -> None:
                     at_us=Microseconds(at_us),
                     kind=ActionKind("down"),
                     scan_codes=tuple(ScanCode(c) for c in sorted(new_keys)),
-                    reason=f"d",
+                    reason="d",
                 ))
                 open_keys |= set(new_keys)
 

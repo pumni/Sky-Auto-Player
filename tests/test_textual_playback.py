@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import pytest
 import asyncio
 import time
 from typing import Any, cast
 
+import pytest
 from textual.widgets import Static
 
 from sky_music.orchestration.core.ports import ProgressCounters

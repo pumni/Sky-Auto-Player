@@ -21,11 +21,6 @@ pub struct QpcTicks {
     value: u64,
 }
 
-#[allow(non_snake_case)]
-pub const fn QpcTicks(value: u64) -> QpcTicks {
-    QpcTicks { value }
-}
-
 #[repr(transparent)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
@@ -34,22 +29,12 @@ pub struct TimelineTicks {
     value: u64,
 }
 
-#[allow(non_snake_case)]
-pub const fn TimelineTicks(value: u64) -> TimelineTicks {
-    TimelineTicks { value }
-}
-
 #[repr(transparent)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 pub struct DurationTicks {
     value: u64,
-}
-
-#[allow(non_snake_case)]
-pub const fn DurationTicks(value: u64) -> DurationTicks {
-    DurationTicks { value }
 }
 
 impl QpcTicks {
@@ -79,7 +64,7 @@ impl QpcTicks {
     ) -> Result<DurationTicks, TimeArithmeticError> {
         self.value
             .checked_sub(earlier.value)
-            .map(DurationTicks)
+            .map(DurationTicks::from_raw)
             .ok_or(TimeArithmeticError::NegativeOrder)
     }
 }
@@ -121,7 +106,7 @@ impl TimelineTicks {
     ) -> Result<DurationTicks, TimeArithmeticError> {
         self.value
             .checked_sub(earlier.value)
-            .map(DurationTicks)
+            .map(DurationTicks::from_raw)
             .ok_or(TimeArithmeticError::NegativeOrder)
     }
 }

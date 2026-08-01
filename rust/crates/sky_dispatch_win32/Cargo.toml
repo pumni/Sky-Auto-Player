@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "native_calibration"
+path = "src/bin/native_calibration.rs"
+
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }
 thiserror = "2"

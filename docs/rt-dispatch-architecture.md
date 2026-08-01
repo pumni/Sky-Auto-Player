@@ -158,14 +158,16 @@ threshold and records the degradation; it does not abort playback. `p95 + 200 µ
 floor/cap, and the existing kill switch remain unchanged.
 
 **Calibration evidence boundary.** The latency calibration cache is an
-`injected_raw_input_delivery_proxy`: the app injects through Windows `SendInput` into an app-owned
-window and observes its `WM_INPUT` delivery. It does not measure Sky process polling, render-frame
-timing, or audio onset. `sampled_at` is UTC metadata and `evidence_kind` identifies this boundary;
-no freshness TTL is applied by the loader. Warm-up injections are excluded from both measured
-classes; Hot samples use a short gap and Cold samples use an explicit idle gap. Partial insertion
-is retained as anomalous evidence while receipts for inserted packets are still collected. The
-calibration session snapshots and restores process Raw Input registrations and performs bounded
-full-instrument KeyUp cleanup; uncertain cleanup is an error, not a successful calibration.
+`injected_raw_input_delivery_proxy`: a dedicated native calibration process injects through
+Windows `SendInput` into an app-owned window and observes its `WM_INPUT` delivery. The player
+process never changes its own Raw Input registration for calibration. It does not measure Sky
+process polling, render-frame timing, or audio onset. `sampled_at` is UTC metadata and
+`evidence_kind` identifies this boundary; no freshness TTL is applied by the loader. Warm-up
+injections are tracked separately and excluded from measured classes. Only complete,
+anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
+receipts remain diagnostic counters. The calibration process snapshots/restores its registration
+and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
+an error, not successful calibration.
 
 **Clock failure policy.** QPC is the sole real-time clock domain after native preparation. A failed
 runtime QPC query, including a query immediately after a successful `SendInput`, is terminal: the

@@ -109,4 +109,10 @@ Running with the `--debug-csv` flag dumps detailed metrics for every event:
 * `observed_hold_us`: The actual duration the key was held, measured from down dispatch completion to up dispatch completion.
 
 ### Calibration Loop
-Calibration is a host-side input-delivery measurement, not a game/audio-onset measurement. The app creates an app-owned Win32 calibration window, injects strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with the native-call completion timestamp. The resulting evidence is stored in `.cache/input_latency.json` with UTC `sampled_at` metadata and the `injected_raw_input_delivery_proxy` evidence label.
+Calibration is a host-side input-delivery measurement, not a game/audio-onset measurement. A
+dedicated `native_calibration.exe` process creates the app-owned Win32 calibration window, injects
+strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with native-call
+completion. The player process does not modify its own Raw Input registration. Only complete,
+anomaly-free samples contribute to quantiles; cleanup or process failures are unsuccessful
+calibration. Validated evidence is stored in `.cache/input_latency.json` with the
+`injected_raw_input_delivery_proxy` label.

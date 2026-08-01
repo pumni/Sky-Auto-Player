@@ -34,6 +34,7 @@
 
 use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ const EARLY_CORRECTION_DECAY: f64 = 0.25;
 
 /// Samples that exceed this value are clamped before storage to prevent a
 /// single catastrophic observation from ruining the model.
-const MAX_SAMPLE_US: u64 = 60_000_000;
+pub const MAX_SAMPLE_US: u64 = 60_000_000;
 
 /// Conservative cold-start prior when no samples are available.
 const BASE_COLD_PRIOR_US: u64 = 100;
@@ -79,6 +80,27 @@ const WAKE_RESERVE_US: u64 = 50;
 /// Current on-disk state format version.
 pub const ESTIMATOR_STATE_VERSION: u32 = 6;
 const HISTOGRAM_STATE_VERSION: u32 = 5;
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum EstimatorConfigError {
+    #[error("alpha must be finite and in (0, 1]")]
+    InvalidAlpha,
+    #[error("max_lead_us must be at most MAX_SAMPLE_US")]
+    InvalidMaxLead,
+    #[error("max_poly must be in 1..=32")]
+    InvalidPolyphony,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum EstimatorStateError {
+    #[error("polyphony bucket {0} is outside the configured range")]
+    InvalidPolyphony(usize),
+    #[error("delivery proxy exceeds MAX_SAMPLE_US")]
+    InvalidDeliveryProxy,
+
+    #[error("estimator arithmetic overflow while updating {0}")]
+    ArithmeticOverflow(&'static str),
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -106,13 +128,23 @@ pub struct LeadComponents {
 
 impl LeadComponents {
     /// Compute the uncapped lead from all components.
+    #[allow(clippy::implicit_saturating_sub)]
     pub fn total_uncapped(&self) -> u64 {
-        let base = self
-            .syscall_us
-            .saturating_add(self.delivery_proxy_us)
-            .saturating_add(self.wake_reserve_us)
-            .saturating_add(self.cold_reserve_us);
-        (base as i64).saturating_add(self.residual_bias_us).max(0) as u64
+        let positive = u128::from(self.syscall_us)
+            + u128::from(self.delivery_proxy_us)
+            + u128::from(self.wake_reserve_us)
+            + u128::from(self.cold_reserve_us);
+        let adjusted = if self.residual_bias_us < 0 {
+            let magnitude = self.residual_bias_us.unsigned_abs() as u128;
+            if magnitude > positive {
+                0
+            } else {
+                positive - magnitude
+            }
+        } else {
+            positive + self.residual_bias_us as u128
+        };
+        adjusted.min(u128::from(u64::MAX)) as u64
     }
 }
 
@@ -169,17 +201,45 @@ impl Default for Histogram {
 }
 
 impl Histogram {
-    fn push(&mut self, value_us: u64) {
+    fn checked_bucket_for(value_us: u64) -> usize {
         let clamped = value_us.min(MAX_SAMPLE_US);
-        if clamped > self.max_seen_us {
-            self.max_seen_us = clamped;
-        }
-        let bucket = ((clamped / BUCKET_WIDTH_US) as usize).min(BUCKET_COUNT - 1);
-        self.buckets[bucket] = self.buckets[bucket].saturating_add(1);
-        self.total = self.total.saturating_add(1);
+        ((clamped / BUCKET_WIDTH_US) as usize).min(BUCKET_COUNT - 1)
+    }
+
+    fn ensure_push(&self, value_us: u64) -> Result<(), EstimatorStateError> {
+        let bucket = Self::checked_bucket_for(value_us);
+        self.buckets[bucket]
+            .checked_add(1)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("histogram bucket"))?;
+        self.total
+            .checked_add(1)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("histogram total"))?;
         if bucket == BUCKET_COUNT - 1 {
-            self.overflow_count = self.overflow_count.saturating_add(1);
+            self.overflow_count
+                .checked_add(1)
+                .ok_or(EstimatorStateError::ArithmeticOverflow(
+                    "histogram overflow count",
+                ))?;
         }
+        Ok(())
+    }
+
+    fn push(&mut self, value_us: u64) -> Result<(), EstimatorStateError> {
+        let clamped = value_us.min(MAX_SAMPLE_US);
+        let bucket = Self::checked_bucket_for(clamped);
+        self.ensure_push(clamped)?;
+        let next_bucket = self.buckets[bucket] + 1;
+        let next_total = self.total + 1;
+        let next_overflow = if bucket == BUCKET_COUNT - 1 {
+            self.overflow_count + 1
+        } else {
+            self.overflow_count
+        };
+        self.buckets[bucket] = next_bucket;
+        self.total = next_total;
+        self.overflow_count = next_overflow;
+        self.max_seen_us = self.max_seen_us.max(clamped);
+        Ok(())
     }
 
     fn is_warm(&self) -> bool {
@@ -251,7 +311,10 @@ impl Histogram {
                 hist.max_seen_us = upper;
             }
             if idx == BUCKET_COUNT as u64 - 1 {
-                hist.overflow_count = hist.overflow_count.saturating_add(count as u32);
+                hist.overflow_count = hist
+                    .overflow_count
+                    .checked_add(count as u32)
+                    .ok_or_else(|| "histogram overflow count overflows u32".to_string())?;
             }
         }
         Ok(hist)
@@ -282,7 +345,7 @@ impl Histogram {
             if v > MAX_SAMPLE_US {
                 return Err("legacy sample exceeds MAX_SAMPLE_US".to_string());
             }
-            hist.push(v);
+            hist.push(v).map_err(|error| error.to_string())?;
         }
         Ok(hist)
     }
@@ -330,16 +393,25 @@ struct ResidualEma {
 }
 
 impl ResidualEma {
-    fn update(&mut self, alpha: f64, sample: i64) {
+    fn update(&mut self, alpha: f64, sample: i64) -> Result<(), EstimatorStateError> {
         let clamped = sample.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
-        self.count = self.count.saturating_add(1);
-        self.sum = self.sum.saturating_add(clamped);
+        let next_count = self
+            .count
+            .checked_add(1)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("residual count"))?;
+        let next_sum = self
+            .sum
+            .checked_add(clamped)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("residual sum"))?;
+        self.count = next_count;
+        self.sum = next_sum;
         if self.warm {
             self.ema = alpha * clamped as f64 + (1.0 - alpha) * self.ema;
         } else if self.count >= SEED_SAMPLES as u64 {
             self.ema = self.sum as f64 / self.count as f64;
             self.warm = true;
         }
+        Ok(())
     }
 
     /// Signed residual contribution.  Late samples raise lead at full rate;
@@ -400,12 +472,30 @@ impl DirectionBuckets {
             .resize(new_size, SlowTailReserve::default());
     }
 
-    fn push(&mut self, n: usize, value_us: u64, class: LatencyClass) {
+    fn push(
+        &mut self,
+        n: usize,
+        value_us: u64,
+        class: LatencyClass,
+    ) -> Result<(), EstimatorStateError> {
         match class {
-            LatencyClass::Hot => self.hot[n].push(value_us),
-            LatencyClass::Cold => self.cold[n].push(value_us),
-        }
+            LatencyClass::Hot => self.hot[n].push(value_us)?,
+            LatencyClass::Cold => self.cold[n].push(value_us)?,
+        };
         self.tail_reserve[n].update(value_us);
+        Ok(())
+    }
+
+    fn ensure_push(
+        &self,
+        n: usize,
+        value_us: u64,
+        class: LatencyClass,
+    ) -> Result<(), EstimatorStateError> {
+        match class {
+            LatencyClass::Hot => self.hot[n].ensure_push(value_us),
+            LatencyClass::Cold => self.cold[n].ensure_push(value_us),
+        }
     }
 
     /// Raw syscall estimate for bucket `n`.
@@ -598,7 +688,24 @@ fn residual_index(kind: ActionKind, class: LatencyClass) -> usize {
 }
 
 impl SendLatencyEstimator {
-    pub fn new(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
+    pub fn try_new(
+        alpha: f64,
+        max_lead_us: u64,
+        max_poly: usize,
+    ) -> Result<Self, EstimatorConfigError> {
+        if !alpha.is_finite() || !(0.0 < alpha && alpha <= 1.0) {
+            return Err(EstimatorConfigError::InvalidAlpha);
+        }
+        if max_lead_us > MAX_SAMPLE_US {
+            return Err(EstimatorConfigError::InvalidMaxLead);
+        }
+        if !(1..=32).contains(&max_poly) {
+            return Err(EstimatorConfigError::InvalidPolyphony);
+        }
+        Ok(Self::new_unchecked(alpha, max_lead_us, max_poly))
+    }
+
+    fn new_unchecked(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
         let size = max_poly + 1;
         Self {
             max_poly,
@@ -621,10 +728,20 @@ impl SendLatencyEstimator {
         }
     }
 
+    pub fn new(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
+        Self::try_new(alpha, max_lead_us, max_poly)
+            .expect("internal estimator defaults must be valid")
+    }
+
     // ── Update API ────────────────────────────────────────────────────────────
 
-    pub fn update(&mut self, kind: ActionKind, duration_us: u64, n_keys: usize) {
-        self.update_with_class(kind, duration_us, n_keys, LatencyClass::Hot);
+    pub fn update(
+        &mut self,
+        kind: ActionKind,
+        duration_us: u64,
+        n_keys: usize,
+    ) -> Result<(), EstimatorStateError> {
+        self.update_with_class(kind, duration_us, n_keys, LatencyClass::Hot)
     }
 
     pub fn update_with_class(
@@ -633,32 +750,85 @@ impl SendLatencyEstimator {
         duration_us: u64,
         n_keys: usize,
         latency_class: LatencyClass,
-    ) {
+    ) -> Result<(), EstimatorStateError> {
         let duration_us = duration_us.min(MAX_SAMPLE_US);
         let n = 1.max(self.max_poly.min(n_keys));
         match kind {
             ActionKind::Down => {
-                self.down.push(n, duration_us, latency_class);
-                self.down_total.push(duration_us);
-                self.count_down[n] = self.count_down[n].saturating_add(1);
-                self.sum_down[n] = self.sum_down[n].saturating_add(duration_us);
-                self.count_down_total = self.count_down_total.saturating_add(1);
-                self.sum_down_total = self.sum_down_total.saturating_add(duration_us);
+                self.down.ensure_push(n, duration_us, latency_class)?;
+                self.down_total.ensure_push(duration_us)?;
+                self.count_down[n]
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
+                self.sum_down[n]
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket sum"))?;
+                self.count_down_total
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total count"))?;
+                self.sum_down_total
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total sum"))?;
+                self.down.push(n, duration_us, latency_class)?;
+                self.down_total.push(duration_us)?;
+                self.count_down[n] = self.count_down[n]
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
+                self.sum_down[n] = self.sum_down[n]
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket sum"))?;
+                self.count_down_total = self
+                    .count_down_total
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total count"))?;
+                self.sum_down_total = self
+                    .sum_down_total
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total sum"))?;
             }
             ActionKind::Up => {
-                self.up.push(n, duration_us, latency_class);
-                self.up_total.push(duration_us);
-                self.count_up[n] = self.count_up[n].saturating_add(1);
-                self.sum_up[n] = self.sum_up[n].saturating_add(duration_us);
-                self.count_up_total = self.count_up_total.saturating_add(1);
-                self.sum_up_total = self.sum_up_total.saturating_add(duration_us);
+                self.up.ensure_push(n, duration_us, latency_class)?;
+                self.up_total.ensure_push(duration_us)?;
+                self.count_up[n]
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
+                self.sum_up[n]
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket sum"))?;
+                self.count_up_total
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total count"))?;
+                self.sum_up_total
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total sum"))?;
+                self.up.push(n, duration_us, latency_class)?;
+                self.up_total.push(duration_us)?;
+                self.count_up[n] = self.count_up[n]
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
+                self.sum_up[n] = self.sum_up[n]
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket sum"))?;
+                self.count_up_total = self
+                    .count_up_total
+                    .checked_add(1)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total count"))?;
+                self.sum_up_total = self
+                    .sum_up_total
+                    .checked_add(duration_us)
+                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total sum"))?;
             }
         }
+        Ok(())
     }
 
     /// Record a completion-error residual for the given kind, assuming Hot class for backward compatibility.
-    pub fn update_completion_error(&mut self, kind: ActionKind, error_us: i64) {
-        self.update_completion_error_with_class(kind, error_us, LatencyClass::Hot);
+    pub fn update_completion_error(
+        &mut self,
+        kind: ActionKind,
+        error_us: i64,
+    ) -> Result<(), EstimatorStateError> {
+        self.update_completion_error_with_class(kind, error_us, LatencyClass::Hot)
     }
 
     /// Record a completion-error residual for the given kind and class.
@@ -671,17 +841,39 @@ impl SendLatencyEstimator {
         kind: ActionKind,
         error_us: i64,
         class: LatencyClass,
-    ) {
+    ) -> Result<(), EstimatorStateError> {
         let alpha = self.alpha;
-        self.residuals[residual_index(kind, class)].update(alpha, error_us);
+        self.residuals[residual_index(kind, class)].update(alpha, error_us)
     }
 
     /// Update the calibrated delivery proxy prior for a polyphony bucket.
     ///
     /// Should be called from the calibration harness output processor, not
     /// from the real-time dispatch path.
-    pub fn set_delivery_proxy_us(&mut self, n_keys: usize, value_us: u64) {
-        self.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, n_keys, value_us);
+    pub fn set_delivery_proxy_us(
+        &mut self,
+        n_keys: usize,
+        value_us: u64,
+    ) -> Result<(), EstimatorStateError> {
+        self.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, n_keys, value_us)
+    }
+
+    pub fn try_set_delivery_proxy_us_for(
+        &mut self,
+        kind: ActionKind,
+        class: LatencyClass,
+        n_keys: usize,
+        value_us: u64,
+    ) -> Result<(), EstimatorStateError> {
+        if value_us > MAX_SAMPLE_US {
+            return Err(EstimatorStateError::InvalidDeliveryProxy);
+        }
+        if n_keys == 0 || n_keys > self.max_poly {
+            return Err(EstimatorStateError::InvalidPolyphony(n_keys));
+        }
+        let n = 1.max(self.max_poly.min(n_keys));
+        self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
+        Ok(())
     }
 
     pub fn set_delivery_proxy_us_for(
@@ -690,9 +882,8 @@ impl SendLatencyEstimator {
         class: LatencyClass,
         n_keys: usize,
         value_us: u64,
-    ) {
-        let n = 1.max(self.max_poly.min(n_keys));
-        self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
+    ) -> Result<(), EstimatorStateError> {
+        self.try_set_delivery_proxy_us_for(kind, class, n_keys, value_us)
     }
 
     // ── Query API ─────────────────────────────────────────────────────────────
@@ -1021,6 +1212,58 @@ impl SendLatencyEstimator {
         if !(1..=32).contains(&state.max_poly) {
             return Err("max_poly must be in 1..=32".to_string());
         }
+        if state.version <= 4 {
+            let expected_len = state.max_poly + 1;
+            for (label, actual) in [
+                ("ema_down", state.ema_down.len()),
+                ("warm_down", state.warm_down.len()),
+                ("count_down", state.count_down.len()),
+                ("sum_down", state.sum_down.len()),
+            ] {
+                if actual != expected_len {
+                    return Err(format!("{label} length does not match max_poly"));
+                }
+            }
+        }
+
+        let validate_count_sum = |count: u64, sum: u64, label: &str| {
+            let max_sum = count
+                .checked_mul(MAX_SAMPLE_US)
+                .ok_or_else(|| format!("{label} count/sum range overflows u64"))?;
+            if sum > max_sum {
+                return Err(format!("{label} sum is inconsistent with count"));
+            }
+            Ok::<(), String>(())
+        };
+        for (label, count, sum) in [
+            (
+                "count_down_total",
+                state.count_down_total,
+                state.sum_down_total,
+            ),
+            (
+                "count_residual",
+                state.count_residual,
+                state.sum_residual.unsigned_abs(),
+            ),
+            (
+                "count_residual_up",
+                state.count_residual_up,
+                state.sum_residual_up.unsigned_abs(),
+            ),
+        ] {
+            validate_count_sum(count, sum, label)?;
+        }
+        if state.version <= 4 {
+            for (index, (&count, &sum)) in state
+                .count_down
+                .iter()
+                .zip(state.sum_down.iter())
+                .enumerate()
+            {
+                validate_count_sum(count, sum, &format!("count_down[{index}]"))?;
+            }
+        }
 
         let expected_len = state.max_poly + 1;
         let target_poly = self.max_poly.max(state.max_poly);
@@ -1040,11 +1283,17 @@ impl SendLatencyEstimator {
             for (i, bucket) in state.hist_down.iter().enumerate() {
                 new_down.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
                 new_down.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
+                if bucket.tail_reserve_us > MAX_SAMPLE_US {
+                    return Err(format!("down tail reserve at {i} exceeds sample cap"));
+                }
                 new_down.tail_reserve[i].value_us = bucket.tail_reserve_us;
             }
             for (i, bucket) in state.hist_up.iter().enumerate() {
                 new_up.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
                 new_up.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
+                if bucket.tail_reserve_us > MAX_SAMPLE_US {
+                    return Err(format!("up tail reserve at {i} exceeds sample cap"));
+                }
                 new_up.tail_reserve[i].value_us = bucket.tail_reserve_us;
             }
             // Rebuild global totals by direct bucket merge. Do not reconstruct
@@ -1116,7 +1365,7 @@ impl SendLatencyEstimator {
                     if state.warm_down[i] && state.count_down[i] >= SEED_SAMPLES as u64 {
                         let v = round_half_to_even(state.ema_down[i]).max(0) as u64;
                         for _ in 0..ROLLING_WINDOW.min(state.count_down[i] as usize) {
-                            new_down.hot[i].push(v);
+                            new_down.hot[i].push(v).map_err(|error| error.to_string())?;
                         }
                         new_down.tail_reserve[i].update(v);
                     }
@@ -1125,18 +1374,18 @@ impl SendLatencyEstimator {
                     let v = round_half_to_even(state.ema_up).max(0) as u64;
                     for i in 0..expected_len {
                         for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
-                            new_up.hot[i].push(v);
+                            new_up.hot[i].push(v).map_err(|error| error.to_string())?;
                         }
                         new_up.tail_reserve[i].update(v);
                     }
                     for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
-                        new_up_total.push(v);
+                        new_up_total.push(v).map_err(|error| error.to_string())?;
                     }
                 }
                 if state.warm_down_total && state.count_down_total >= SEED_SAMPLES as u64 {
                     let v = round_half_to_even(state.ema_down_total).max(0) as u64;
                     for _ in 0..ROLLING_WINDOW.min(state.count_down_total as usize) {
-                        new_down_total.push(v);
+                        new_down_total.push(v).map_err(|error| error.to_string())?;
                     }
                 }
             }
@@ -1145,7 +1394,10 @@ impl SendLatencyEstimator {
         // ── Build residuals ───────────────────────────────────────────────────
         let mut new_residuals: [ResidualEma; 4] = Default::default();
 
-        if state.version >= HISTOGRAM_STATE_VERSION && state.residuals.len() == 4 {
+        if state.version >= HISTOGRAM_STATE_VERSION && state.residuals.len() != 4 {
+            return Err("residuals must contain exactly four channels".to_string());
+        }
+        if state.version >= HISTOGRAM_STATE_VERSION {
             for (i, ch) in state.residuals.iter().enumerate() {
                 // Validate bounds.
                 if !ch.ema.is_finite()
@@ -1153,6 +1405,18 @@ impl SendLatencyEstimator {
                     || ch.ema > (MAX_RESIDUAL_US * 2) as f64
                 {
                     return Err(format!("residual channel {i} ema is out of range"));
+                }
+                if (ch.warm && ch.count < SEED_SAMPLES as u64)
+                    || (!ch.warm && ch.count >= SEED_SAMPLES as u64)
+                {
+                    return Err(format!("residual channel {i} has inconsistent warm state"));
+                }
+                if ch.sum.unsigned_abs()
+                    > ch.count
+                        .checked_mul((MAX_RESIDUAL_US * 2) as u64)
+                        .ok_or_else(|| format!("residual channel {i} sum overflows"))?
+                {
+                    return Err(format!("residual channel {i} sum is out of range"));
                 }
                 new_residuals[i] = ResidualEma {
                     count: ch.count,
@@ -1185,7 +1449,7 @@ impl SendLatencyEstimator {
 
         // ── Delivery proxy ────────────────────────────────────────────────────
         let mut new_delivery_proxy: [Vec<u64>; 4] = std::array::from_fn(|_| vec![0u64; target_len]);
-        if state.version >= ESTIMATOR_STATE_VERSION && !state.delivery_proxy_channels.is_empty() {
+        if state.version >= ESTIMATOR_STATE_VERSION {
             if state.delivery_proxy_channels.len() != expected_len {
                 return Err("delivery_proxy_channels length does not match max_poly".to_string());
             }
@@ -1248,6 +1512,7 @@ impl Default for SendLatencyEstimator {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(unused_must_use)]
 mod tests {
     use super::*;
 
@@ -1412,7 +1677,7 @@ mod tests {
             estimator.update(ActionKind::Down, 200, 2);
         }
         let without_proxy = estimator.get_lead_us(ActionKind::Down, 2);
-        estimator.set_delivery_proxy_us(2, 300);
+        estimator.set_delivery_proxy_us(2, 300).unwrap();
         let with_proxy = estimator.get_lead_us(ActionKind::Down, 2);
         assert_eq!(with_proxy, without_proxy + 300);
     }
@@ -1436,10 +1701,18 @@ mod tests {
     #[test]
     fn delivery_proxy_is_independent_by_direction_and_class() {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
-        estimator.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, 1, 100);
-        estimator.set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Cold, 1, 200);
-        estimator.set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Hot, 1, 300);
-        estimator.set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Cold, 1, 400);
+        estimator
+            .set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Hot, 1, 100)
+            .unwrap();
+        estimator
+            .set_delivery_proxy_us_for(ActionKind::Down, LatencyClass::Cold, 1, 200)
+            .unwrap();
+        estimator
+            .set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Hot, 1, 300)
+            .unwrap();
+        estimator
+            .set_delivery_proxy_us_for(ActionKind::Up, LatencyClass::Cold, 1, 400)
+            .unwrap();
 
         assert_eq!(
             estimator
@@ -1684,6 +1957,120 @@ mod tests {
     }
 
     #[test]
+    fn constructor_rejects_invalid_external_configuration() {
+        assert!(matches!(
+            SendLatencyEstimator::try_new(f64::NAN, 5_000, 2),
+            Err(EstimatorConfigError::InvalidAlpha)
+        ));
+        assert!(matches!(
+            SendLatencyEstimator::try_new(f64::INFINITY, 5_000, 2),
+            Err(EstimatorConfigError::InvalidAlpha)
+        ));
+        assert!(matches!(
+            SendLatencyEstimator::try_new(0.0, 5_000, 2),
+            Err(EstimatorConfigError::InvalidAlpha)
+        ));
+        assert!(matches!(
+            SendLatencyEstimator::try_new(0.2, MAX_SAMPLE_US + 1, 2),
+            Err(EstimatorConfigError::InvalidMaxLead)
+        ));
+        assert!(matches!(
+            SendLatencyEstimator::try_new(0.2, 5_000, 0),
+            Err(EstimatorConfigError::InvalidPolyphony)
+        ));
+        assert!(matches!(
+            SendLatencyEstimator::try_new(0.2, 5_000, 33),
+            Err(EstimatorConfigError::InvalidPolyphony)
+        ));
+    }
+
+    #[test]
+    fn malicious_state_is_rejected_atomically() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        estimator.update(ActionKind::Down, 200, 1);
+        let before = serde_json::to_string(&estimator.export_state()).unwrap();
+
+        let mut tail = estimator.export_state();
+        tail.hist_down[1].tail_reserve_us = u64::MAX;
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&tail).unwrap())
+                .is_err()
+        );
+
+        let mut delivery = estimator.export_state();
+        delivery.delivery_proxy_channels[1][0] = u64::MAX;
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&delivery).unwrap())
+                .is_err()
+        );
+
+        let mut count = estimator.export_state();
+        count.hist_down[1].hot_pairs = vec![[1, u32::MAX as u64 + 1]];
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&count).unwrap())
+                .is_err()
+        );
+
+        let mut wrong_length = estimator.export_state();
+        wrong_length.hist_up.pop();
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&wrong_length).unwrap())
+                .is_err()
+        );
+
+        let mut warm_state = estimator.export_state();
+        warm_state.residuals[0].warm = false;
+        warm_state.residuals[0].count = SEED_SAMPLES as u64;
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&warm_state).unwrap())
+                .is_err()
+        );
+
+        let mut zero_poly = estimator.export_state();
+        zero_poly.max_poly = 0;
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&zero_poly).unwrap())
+                .is_err()
+        );
+
+        let mut too_many_poly = estimator.export_state();
+        too_many_poly.max_poly = 33;
+        assert!(
+            estimator
+                .import_state(&serde_json::to_string(&too_many_poly).unwrap())
+                .is_err()
+        );
+
+        assert_eq!(
+            serde_json::to_string(&estimator.export_state()).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn lead_composition_applies_signed_residual_without_unsigned_wrap() {
+        let base = LeadComponents {
+            syscall_us: u64::MAX,
+            residual_bias_us: -1,
+            ..LeadComponents::default()
+        };
+        assert_eq!(base.total_uncapped(), u64::MAX - 1);
+
+        let positive = LeadComponents {
+            syscall_us: u64::MAX,
+            residual_bias_us: 1,
+            ..LeadComponents::default()
+        };
+        assert_eq!(positive.total_uncapped(), u64::MAX);
+    }
+
+    #[test]
     fn rolling_p95_is_conservative_and_bounded() {
         // Compatibility alias for the old test name — now tests the histogram.
         histogram_p95_is_conservative_and_bounded();
@@ -1727,5 +2114,20 @@ mod tests {
     fn invalid_state_does_not_mutate_estimator_v3() {
         // Alias kept for test name compat.
         invalid_state_does_not_mutate_estimator();
+    }
+
+    #[test]
+    fn update_overflow_is_an_error_without_partial_mutation() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
+        estimator.count_down[1] = u64::MAX;
+        let histogram_before = estimator.down.hot[1].total;
+        let sum_before = estimator.sum_down[1];
+
+        assert!(matches!(
+            estimator.update(ActionKind::Down, 100, 1),
+            Err(EstimatorStateError::ArithmeticOverflow("down bucket count"))
+        ));
+        assert_eq!(estimator.down.hot[1].total, histogram_before);
+        assert_eq!(estimator.sum_down[1], sum_before);
     }
 }

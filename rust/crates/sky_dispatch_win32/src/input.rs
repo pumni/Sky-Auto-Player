@@ -3,7 +3,7 @@
 use smallvec::SmallVec;
 use std::fmt;
 
-use crate::clock::QpcTicks;
+use crate::clock::{QpcClock, QpcTicks};
 
 pub const SKY_PLAYER_SIGNATURE: usize = 0x5C1B9111;
 
@@ -87,6 +87,8 @@ pub struct InputSendResult {
     pub success: bool,
     pub error: Option<String>,
     pub send_completed_us: u64,
+    pub send_started_ticks: Option<QpcTicks>,
+    pub send_completed_ticks: Option<QpcTicks>,
     pub first_win32_error: Option<u32>,
     pub last_win32_error: Option<u32>,
     pub send_attempts: u8,
@@ -105,11 +107,14 @@ pub struct InputSendResult {
 pub enum DownSendOutcome {
     Complete {
         completed_us: u64,
+        started_ticks: Option<QpcTicks>,
+        completed_ticks: Option<QpcTicks>,
         sent: SmallVec<[u16; 15]>,
         skipped_duplicates: SmallVec<[u16; 15]>,
         send_attempts: u8,
         zero_progress_retries: u8,
         retried_after_zero_progress: bool,
+        timing_error: Option<crate::clock::QpcError>,
     },
     ZeroProgress {
         error: Option<u32>,
@@ -119,6 +124,9 @@ pub enum DownSendOutcome {
         zero_progress_retries: u8,
         first_error: Option<u32>,
         last_error: Option<u32>,
+        started_ticks: Option<QpcTicks>,
+        completed_ticks: Option<QpcTicks>,
+        timing_error: Option<crate::clock::QpcError>,
     },
     IntegrityLost {
         inserted_prefix: u8,
@@ -127,10 +135,13 @@ pub enum DownSendOutcome {
         first_error: Option<u32>,
         last_error: Option<u32>,
         completed_us: u64,
+        started_ticks: Option<QpcTicks>,
+        completed_ticks: Option<QpcTicks>,
         sent: SmallVec<[u16; 15]>,
         skipped_duplicates: SmallVec<[u16; 15]>,
         send_attempts: u8,
         zero_progress_retries: u8,
+        timing_error: Option<crate::clock::QpcError>,
     },
 }
 
@@ -138,6 +149,8 @@ pub enum DownSendOutcome {
 pub struct EmitResult {
     pub sent: SmallVec<[u16; 15]>,
     pub completed_us: u64,
+    pub started_ticks: Option<QpcTicks>,
+    pub completed_ticks: Option<QpcTicks>,
     pub success: bool,
     pub keys_dropped: u64,
     pub first_win32_error: Option<u32>,
@@ -160,6 +173,47 @@ pub struct ReleaseAllOutcome {
     pub released_successfully: bool,
     pub stuck_keys: Vec<u16>,
     pub verification_inconclusive: bool,
+}
+
+fn no_syscall_boundary_with_clock(
+    clock: Option<QpcClock>,
+) -> (
+    Option<QpcTicks>,
+    Option<QpcTicks>,
+    u64,
+    Option<crate::clock::QpcError>,
+) {
+    let clock = match clock {
+        Some(clock) => clock,
+        None => match QpcClock::initialize() {
+            Ok(clock) => clock,
+            Err(error) => {
+                return (None, None, 0, Some(error));
+            }
+        },
+    };
+    let Ok(_) = crate::clock::qpc_frequency_checked() else {
+        return (
+            None,
+            None,
+            0,
+            Some(crate::clock::QpcError::FrequencyUnavailable),
+        );
+    };
+    match clock.now() {
+        Ok(ticks) => {
+            match clock.timeline_to_us(crate::clock::TimelineTicks::from_raw(ticks.as_u64())) {
+                Ok(micros) => (Some(ticks), Some(ticks), micros, None),
+                Err(_) => (
+                    Some(ticks),
+                    Some(ticks),
+                    0,
+                    Some(crate::clock::QpcError::ConversionOverflow),
+                ),
+            }
+        }
+        Err(error) => (None, None, 0, Some(error)),
+    }
 }
 
 #[cfg(windows)]
@@ -212,6 +266,28 @@ const UP_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX
 };
 
 pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
+    let clock = match QpcClock::initialize() {
+        Ok(clock) => clock,
+        Err(error) => {
+            return PlatformSendResult {
+                requested: u32::try_from(scan_codes.len()).unwrap_or(u32::MAX),
+                inserted: 0,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: None,
+                completed_us: 0,
+                win32_error: 0,
+                timing_error: Some(error),
+            };
+        }
+    };
+    send_input_raw_with_clock(scan_codes, key_up, clock)
+}
+
+pub fn send_input_raw_with_clock(
+    scan_codes: &[u16],
+    key_up: bool,
+    clock: QpcClock,
+) -> PlatformSendResult {
     if scan_codes.len() > PHYSICAL_INSTRUMENT_SCAN_CODES.len()
         || scan_codes
             .iter()
@@ -233,14 +309,16 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
+            let (started_ticks, completed_ticks, completed_us, timing_error) =
+                no_syscall_boundary_with_clock(Some(clock));
             return PlatformSendResult {
                 requested: 0,
                 inserted: 0,
-                started_ticks: QpcTicks::ZERO,
-                completed_ticks: Some(QpcTicks::ZERO),
-                completed_us: 0,
+                started_ticks: started_ticks.unwrap_or(QpcTicks::ZERO),
+                completed_ticks,
+                completed_us,
                 win32_error: 0,
-                timing_error: None,
+                timing_error,
             };
         }
 
@@ -257,7 +335,7 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         let requested = len as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
 
-        let started_ticks = match crate::clock::qpc_now_ticks_checked() {
+        let started_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(timing_error) => {
                 return PlatformSendResult {
@@ -285,11 +363,19 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         } else {
             0
         };
-        let (completed_ticks, completed_us, timing_error) =
-            match crate::clock::qpc_now_ticks_checked() {
-                Ok(ticks) => (Some(ticks), crate::clock::qpc_ticks_to_us(ticks), None),
-                Err(error) => (None, 0, Some(error)),
-            };
+        let (completed_ticks, completed_us, timing_error) = match clock.now() {
+            Ok(ticks) => {
+                match clock.timeline_to_us(crate::clock::TimelineTicks::from_raw(ticks.as_u64())) {
+                    Ok(micros) => (Some(ticks), micros, None),
+                    Err(_) => (
+                        Some(ticks),
+                        0,
+                        Some(crate::clock::QpcError::ConversionOverflow),
+                    ),
+                }
+            }
+            Err(error) => (None, 0, Some(error)),
+        };
 
         PlatformSendResult {
             requested,
@@ -303,14 +389,16 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     }
     #[cfg(not(windows))]
     {
+        let (started_ticks, completed_ticks, completed_us, timing_error) =
+            no_syscall_boundary_with_clock(Some(clock));
         PlatformSendResult {
             requested: scan_codes.len() as u32,
             inserted: scan_codes.len() as u32,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            completed_us: 0,
+            started_ticks: started_ticks.unwrap_or(QpcTicks::ZERO),
+            completed_ticks,
+            completed_us,
             win32_error: 0,
-            timing_error: None,
+            timing_error,
         }
     }
 }
@@ -320,10 +408,14 @@ where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
+        let (started_ticks, completed_ticks, completed_us, timing_error) =
+            no_syscall_boundary_with_clock(None);
         return EmitResult {
             sent: SmallVec::new(),
-            completed_us: crate::clock::qpc_now_us(),
-            success: true,
+            completed_us,
+            started_ticks,
+            completed_ticks,
+            success: timing_error.is_none(),
             keys_dropped: 0,
             first_win32_error: None,
             last_win32_error: None,
@@ -336,7 +428,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
-            timing_error: None,
+            timing_error,
         };
     }
     let n = scan_codes.len();
@@ -349,6 +441,8 @@ where
         return EmitResult {
             sent,
             completed_us: res1.completed_us,
+            started_ticks: Some(res1.started_ticks),
+            completed_ticks: res1.completed_ticks,
             success: true,
             keys_dropped: 0,
             first_win32_error,
@@ -383,6 +477,8 @@ where
         return EmitResult {
             sent,
             completed_us: rollback.completed_us,
+            started_ticks: Some(res1.started_ticks),
+            completed_ticks: rollback.completed_ticks,
             success: false,
             keys_dropped: (n - landed1) as u64,
             first_win32_error,
@@ -409,6 +505,8 @@ where
         return EmitResult {
             sent: scan_codes.iter().copied().collect(),
             completed_us: retry.completed_us,
+            started_ticks: Some(res1.started_ticks),
+            completed_ticks: retry.completed_ticks,
             success: true,
             keys_dropped: 0,
             first_win32_error,
@@ -428,6 +526,8 @@ where
 
     let mut sent: SmallVec<[u16; 15]> = SmallVec::new();
     let mut completed_us = retry.completed_us;
+    let started_ticks = Some(res1.started_ticks);
+    let mut completed_ticks = retry.completed_ticks;
     let mut send_attempts = 2;
     let mut last_win32_error = retry_error.or(first_win32_error);
     let mut rollback_timing_error = None;
@@ -441,6 +541,7 @@ where
                 .copied(),
         );
         completed_us = rollback.completed_us;
+        completed_ticks = rollback.completed_ticks;
         send_attempts = 3;
         last_win32_error = (rollback.win32_error != 0)
             .then_some(rollback.win32_error)
@@ -455,6 +556,8 @@ where
     EmitResult {
         sent,
         completed_us,
+        started_ticks,
+        completed_ticks,
         success: false,
         keys_dropped: (n - retry_inserted) as u64,
         first_win32_error,
@@ -491,10 +594,14 @@ where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
+        let (started_ticks, completed_ticks, completed_us, timing_error) =
+            no_syscall_boundary_with_clock(None);
         return EmitResult {
             sent: SmallVec::new(),
-            completed_us: crate::clock::qpc_now_us(),
-            success: true,
+            completed_us,
+            started_ticks,
+            completed_ticks,
+            success: timing_error.is_none(),
             keys_dropped: 0,
             first_win32_error: None,
             last_win32_error: None,
@@ -507,7 +614,7 @@ where
             keys_inserted_before_failure: 0,
             keys_rolled_back: 0,
             rollback_residue_keys: 0,
-            timing_error: None,
+            timing_error,
         };
     }
     let n = scan_codes.len();
@@ -518,6 +625,8 @@ where
         return EmitResult {
             sent: scan_codes.iter().copied().collect(),
             completed_us: first.completed_us,
+            started_ticks: Some(first.started_ticks),
+            completed_ticks: first.completed_ticks,
             success: true,
             keys_dropped: 0,
             first_win32_error,
@@ -547,6 +656,8 @@ where
     EmitResult {
         sent,
         completed_us: second.completed_us,
+        started_ticks: Some(first.started_ticks),
+        completed_ticks: second.completed_ticks,
         success,
         keys_dropped: (n - sent_total) as u64,
         first_win32_error: first_win32_error.or(second_win32_error),
@@ -594,6 +705,7 @@ pub struct TrackedKeyState {
     pub rollback_residue_keys: u64,
     pub timing_error: Option<crate::clock::QpcError>,
     pub custom_emitter: Option<CustomEmitterFn>,
+    qpc_clock: Option<QpcClock>,
 }
 
 impl fmt::Debug for TrackedKeyState {
@@ -620,6 +732,7 @@ impl fmt::Debug for TrackedKeyState {
             .field("rollback_residue_keys", &self.rollback_residue_keys)
             .field("timing_error", &self.timing_error)
             .field("custom_emitter", &self.custom_emitter.is_some())
+            .field("qpc_clock_configured", &self.qpc_clock.is_some())
             .finish()
     }
 }
@@ -639,11 +752,24 @@ impl TrackedKeyState {
         }
     }
 
+    pub fn with_qpc_clock(clock: QpcClock) -> Self {
+        Self {
+            qpc_clock: Some(clock),
+            ..Default::default()
+        }
+    }
+
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> EmitResult {
         if let Some(ref emitter) = self.custom_emitter {
             emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up))
         } else {
-            emit_down(scan_codes)
+            if let Some(clock) = self.qpc_clock {
+                emit_down_with(scan_codes, |sc, key_up| {
+                    send_input_raw_with_clock(sc, key_up, clock)
+                })
+            } else {
+                emit_down(scan_codes)
+            }
         }
     }
 
@@ -651,19 +777,30 @@ impl TrackedKeyState {
         if let Some(ref emitter) = self.custom_emitter {
             emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up))
         } else {
-            emit_up(scan_codes)
+            if let Some(clock) = self.qpc_clock {
+                emit_up_with(scan_codes, |sc, key_up| {
+                    send_input_raw_with_clock(sc, key_up, clock)
+                })
+            } else {
+                emit_up(scan_codes)
+            }
         }
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> DownSendOutcome {
         if scan_codes.is_empty() {
+            let (started_ticks, completed_ticks, completed_us, timing_error) =
+                no_syscall_boundary_with_clock(self.qpc_clock);
             return DownSendOutcome::Complete {
-                completed_us: crate::clock::qpc_now_us(),
+                completed_us,
+                started_ticks,
+                completed_ticks,
                 sent: SmallVec::new(),
                 skipped_duplicates: SmallVec::new(),
                 send_attempts: 0,
                 zero_progress_retries: 0,
                 retried_after_zero_progress: false,
+                timing_error,
             };
         }
 
@@ -679,13 +816,18 @@ impl TrackedKeyState {
         }
 
         if to_send.is_empty() {
+            let (started_ticks, completed_ticks, completed_us, timing_error) =
+                no_syscall_boundary_with_clock(self.qpc_clock);
             return DownSendOutcome::Complete {
-                completed_us: crate::clock::qpc_now_us(),
+                completed_us,
+                started_ticks,
+                completed_ticks,
                 sent: SmallVec::new(),
                 skipped_duplicates: duplicates,
                 send_attempts: 0,
                 zero_progress_retries: 0,
                 retried_after_zero_progress: false,
+                timing_error,
             };
         }
 
@@ -751,41 +893,54 @@ impl TrackedKeyState {
                 first_error: emitted.first_win32_error,
                 last_error: emitted.last_win32_error,
                 completed_us: emitted.completed_us,
+                started_ticks: emitted.started_ticks,
+                completed_ticks: emitted.completed_ticks,
                 sent: emitted.sent,
                 skipped_duplicates: duplicates,
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
+                timing_error: emitted.timing_error,
             }
         } else if !emitted.success {
             DownSendOutcome::ZeroProgress {
                 error: emitted.last_win32_error.or(emitted.first_win32_error),
                 completed_us: emitted.completed_us,
+                started_ticks: emitted.started_ticks,
+                completed_ticks: emitted.completed_ticks,
                 skipped_duplicates: duplicates,
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
                 first_error: emitted.first_win32_error,
                 last_error: emitted.last_win32_error,
+                timing_error: emitted.timing_error,
             }
         } else {
             DownSendOutcome::Complete {
                 completed_us: emitted.completed_us,
+                started_ticks: emitted.started_ticks,
+                completed_ticks: emitted.completed_ticks,
                 sent: emitted.sent,
                 skipped_duplicates: duplicates,
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
                 retried_after_zero_progress: emitted.retried_after_zero_progress,
+                timing_error: emitted.timing_error,
             }
         }
     }
 
     pub fn key_up(&mut self, scan_codes: &[u16]) -> InputSendResult {
         if scan_codes.is_empty() {
+            let (send_started_ticks, send_completed_ticks, send_completed_us, timing_error) =
+                no_syscall_boundary_with_clock(self.qpc_clock);
             return InputSendResult {
                 sent: SmallVec::new(),
                 skipped_duplicates: SmallVec::new(),
-                success: true,
+                success: timing_error.is_none(),
                 error: None,
-                send_completed_us: crate::clock::qpc_now_us(),
+                send_completed_us,
+                send_started_ticks,
+                send_completed_ticks,
                 first_win32_error: None,
                 last_win32_error: None,
                 send_attempts: 0,
@@ -797,7 +952,7 @@ impl TrackedKeyState {
                 keys_inserted_before_failure: 0,
                 keys_rolled_back: 0,
                 rollback_residue_keys: 0,
-                timing_error: None,
+                timing_error,
             };
         }
 
@@ -817,12 +972,16 @@ impl TrackedKeyState {
         }
 
         if to_release.is_empty() {
+            let (send_started_ticks, send_completed_ticks, send_completed_us, timing_error) =
+                no_syscall_boundary_with_clock(self.qpc_clock);
             return InputSendResult {
                 sent: SmallVec::new(),
                 skipped_duplicates: already_released,
-                success: true,
+                success: timing_error.is_none(),
                 error: None,
-                send_completed_us: crate::clock::qpc_now_us(),
+                send_completed_us,
+                send_started_ticks,
+                send_completed_ticks,
                 first_win32_error: None,
                 last_win32_error: None,
                 send_attempts: 0,
@@ -834,7 +993,7 @@ impl TrackedKeyState {
                 keys_inserted_before_failure: 0,
                 keys_rolled_back: 0,
                 rollback_residue_keys: 0,
-                timing_error: None,
+                timing_error,
             };
         }
 
@@ -890,6 +1049,8 @@ impl TrackedKeyState {
                 Some("partial note-off".to_string())
             },
             send_completed_us: emitted.completed_us,
+            send_started_ticks: emitted.started_ticks,
+            send_completed_ticks: emitted.completed_ticks,
             first_win32_error: emitted.first_win32_error,
             last_win32_error: emitted.last_win32_error,
             send_attempts: emitted.send_attempts,

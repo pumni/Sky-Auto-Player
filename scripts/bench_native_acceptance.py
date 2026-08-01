@@ -244,6 +244,14 @@ def _measure_command_interrupt(
             raise RuntimeError("native worker did not enter running state")
         time.sleep(0.001)
 
+    # The lifecycle flag is published before the worker finishes its bounded
+    # wake-probe/admission setup. Do not charge that startup work to the
+    # command interrupt measurement.
+    while dict(session.snapshot()).get("rt_priority_acquired") == "pending":
+        if time.perf_counter() >= deadline:
+            raise RuntimeError("native worker did not finish startup admission")
+        time.sleep(0.001)
+
     started_ns = time.perf_counter_ns()
     session.pause()
     while not bool(dict(session.snapshot()).get("is_paused")):

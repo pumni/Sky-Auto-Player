@@ -112,10 +112,8 @@ impl HybridWaiter {
                 };
             }
         };
-        let target_ticks = match now_ticks.checked_add_duration(DurationTicks::from_raw(
-            qpc_us_to_ticks(target_us.saturating_sub(qpc_ticks_to_us(now_ticks))),
-        )) {
-            Ok(ticks) => ticks,
+        let now_us = match qpc_ticks_to_us(now_ticks) {
+            Ok(value) => value,
             Err(_) => {
                 return WaitResult {
                     outcome: WaitOutcome::Failed(WaitFailure::Clock),
@@ -123,6 +121,25 @@ impl HybridWaiter {
                 };
             }
         };
+        let delta_ticks = match qpc_us_to_ticks(target_us.saturating_sub(now_us)) {
+            Ok(value) => value,
+            Err(_) => {
+                return WaitResult {
+                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                    spin_us: 0,
+                };
+            }
+        };
+        let target_ticks =
+            match now_ticks.checked_add_duration(DurationTicks::from_raw(delta_ticks)) {
+                Ok(ticks) => ticks,
+                Err(_) => {
+                    return WaitResult {
+                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                        spin_us: 0,
+                    };
+                }
+            };
         self.wait_until_ticks_with_metrics(target_ticks, spin_threshold_us, interrupt)
     }
 
@@ -133,7 +150,15 @@ impl HybridWaiter {
         interrupt: &OwnedEvent,
     ) -> WaitResult {
         let mut spin_started_us = None;
-        let spin_threshold_ticks = qpc_us_to_ticks(spin_threshold_us);
+        let spin_threshold_ticks = match qpc_us_to_ticks(spin_threshold_us) {
+            Ok(value) => value,
+            Err(_) => {
+                return WaitResult {
+                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                    spin_us: 0,
+                };
+            }
+        };
         loop {
             if self.event_wait_enabled && interrupt.try_take() {
                 return WaitResult {
@@ -152,7 +177,15 @@ impl HybridWaiter {
                 }
             };
             if now_ticks >= target_ticks {
-                let now_us = qpc_ticks_to_us(now_ticks);
+                let now_us = match qpc_ticks_to_us(now_ticks) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return WaitResult {
+                            outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                            spin_us: 0,
+                        };
+                    }
+                };
                 return WaitResult {
                     outcome: WaitOutcome::Deadline,
                     spin_us: spin_started_us.map_or(0, |started| now_us.saturating_sub(started)),
@@ -160,14 +193,31 @@ impl HybridWaiter {
             }
             let remaining_ticks = target_ticks.as_u64().saturating_sub(now_ticks.as_u64());
             if remaining_ticks <= spin_threshold_ticks {
-                spin_started_us.get_or_insert(qpc_ticks_to_us(now_ticks));
+                let now_us = match qpc_ticks_to_us(now_ticks) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return WaitResult {
+                            outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                            spin_us: 0,
+                        };
+                    }
+                };
+                spin_started_us.get_or_insert(now_us);
                 std::hint::spin_loop();
                 continue;
             }
 
-            let kernel_wait_us = qpc_ticks_to_us(QpcTicks::from_raw(
+            let kernel_wait_us = match qpc_ticks_to_us(QpcTicks::from_raw(
                 remaining_ticks.saturating_sub(spin_threshold_ticks),
-            ));
+            )) {
+                Ok(value) => value,
+                Err(_) => {
+                    return WaitResult {
+                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                        spin_us: 0,
+                    };
+                }
+            };
             #[cfg(windows)]
             if self.event_wait_enabled {
                 if let Some(timer) = &self.timer {
@@ -248,7 +298,7 @@ impl HybridWaiter {
         for _ in 0..samples {
             let target_ticks = match qpc_now_ticks_checked() {
                 Ok(now) => now
-                    .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(2_000)))
+                    .checked_add_duration(DurationTicks::from_raw(qpc_us_to_ticks(2_000).ok()?))
                     .ok()?,
                 Err(_) => return None,
             };
@@ -263,9 +313,12 @@ impl HybridWaiter {
                 Ok(ticks) => ticks,
                 Err(_) => return None,
             };
-            errors.push(qpc_ticks_to_us(QpcTicks::from_raw(
-                now_ticks.as_u64().saturating_sub(target_ticks.as_u64()),
-            )));
+            errors.push(
+                qpc_ticks_to_us(QpcTicks::from_raw(
+                    now_ticks.as_u64().saturating_sub(target_ticks.as_u64()),
+                ))
+                .ok()?,
+            );
         }
         errors.sort_unstable();
         let percentile = |numerator: usize| {
@@ -324,7 +377,11 @@ mod tests {
         assert!(event.signal());
         let waiter = HybridWaiter::new();
         assert_eq!(
-            waiter.wait_until_us(qpc_now_us() + 1_000_000, 200, &event),
+            waiter.wait_until_us(
+                qpc_now_us().expect("test QPC clock") + 1_000_000,
+                200,
+                &event
+            ),
             WaitOutcome::Interrupted
         );
     }

@@ -27,6 +27,7 @@ DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 
 APP_NAME = "Sky-Auto-Player"
+NATIVE_CALIBRATION_BINARY = "native_calibration.exe"
 REQUIRED_ASSETS = ("config.json", "songs")
 REQUIRED_UPDATER_ASSETS = ("updater.bat", "installer")
 OPTIONAL_ASSETS = ("README.md",)
@@ -346,6 +347,21 @@ def main() -> None:
             check=True,
             cwd=str(PROJECT_ROOT),
         )
+        calibration_manifest = rust_dir / "crates" / "sky_dispatch_win32" / "Cargo.toml"
+        print("[+] Building the process-isolated native calibration binary...")
+        subprocess.run(
+            [
+                "cargo",
+                "build",
+                "--manifest-path",
+                str(calibration_manifest),
+                "--bin",
+                "native_calibration",
+                "--release",
+            ],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+        )
 
     print("[+] Starting PyInstaller...")
     clean_flag = [] if args.no_clean else ["--clean"]
@@ -364,6 +380,11 @@ def main() -> None:
     if release_dir.exists():
         shutil.rmtree(release_dir)
     shutil.move(str(raw_dist), str(release_dir))
+
+    calibration_binary = rust_dir / "target" / "release" / NATIVE_CALIBRATION_BINARY
+    if not calibration_binary.is_file():
+        raise RuntimeError(f"Native calibration binary is missing: {calibration_binary}")
+    copy_asset(calibration_binary, release_dir / NATIVE_CALIBRATION_BINARY)
 
     print("[+] Copying assets...")
     for asset in REQUIRED_ASSETS:

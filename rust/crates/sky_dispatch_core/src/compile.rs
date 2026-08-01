@@ -49,6 +49,8 @@ pub enum CompileError {
         first_scheduled_us: u64,
         second_scheduled_us: u64,
     },
+    #[error("runtime simulation failed: {0}")]
+    Simulation(String),
 }
 
 pub fn compile_runtime_intents(

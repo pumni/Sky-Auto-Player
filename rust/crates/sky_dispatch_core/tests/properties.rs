@@ -1,7 +1,117 @@
+#![allow(unused_must_use)]
+
 use proptest::prelude::*;
 use sky_dispatch_core::compile::compile_runtime_intents;
-use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeBatch, RuntimeKeyIntent};
+use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+fn test_coordinator(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    min_hold_us: u64,
+    delivery_margin_us: u64,
+    _us_to_ticks: fn(u64) -> TimelineTicks,
+) -> RuntimeDispatchCoordinator {
+    RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        min_hold_us,
+        DurationTicks::from_raw(min_hold_us),
+        delivery_margin_us,
+        DurationTicks::from_raw(delivery_margin_us),
+        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+    )
+    .expect("test coordinator configuration is valid")
+}
+
+trait LegacyCoordinatorTestApi {
+    fn next_pending_release_us(&self, lead_up: u64) -> Option<u64>;
+    fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize;
+    fn pop_due_pending(
+        &mut self,
+        now_us: u64,
+        lead_up: u64,
+    ) -> smallvec::SmallVec<[sky_dispatch_core::coordinator::PendingRelease; 15]>;
+    fn pop_next_due_authored(
+        &mut self,
+        now_us: u64,
+        dispatch_lead_us: u64,
+    ) -> Option<(RuntimeBatch, u64)>;
+    fn activate_sent_downs(
+        &mut self,
+        intents: &[RuntimeKeyIntent],
+        sent_scan_codes: &[u16],
+        _dispatch_started_us: u64,
+        dispatch_started_ticks: TimelineTicks,
+        _dispatch_completed_us: u64,
+        dispatch_completed_ticks: TimelineTicks,
+    ) -> Result<(), sky_dispatch_core::coordinator::CoordinatorError>;
+}
+
+impl LegacyCoordinatorTestApi for RuntimeDispatchCoordinator {
+    fn next_pending_release_us(&self, lead_up: u64) -> Option<u64> {
+        self.next_pending_release_ticks(DurationTicks::from_raw(lead_up))
+            .expect("typed pending deadline")
+            .map(TimelineTicks::as_u64)
+    }
+
+    fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize {
+        self.pending_count_due_at_ticks(
+            TimelineTicks::from_raw(deadline_us),
+            DurationTicks::from_raw(lead_up),
+        )
+        .expect("typed pending count")
+    }
+
+    fn pop_due_pending(
+        &mut self,
+        now_us: u64,
+        lead_up: u64,
+    ) -> smallvec::SmallVec<[sky_dispatch_core::coordinator::PendingRelease; 15]> {
+        let plan = PendingDispatchPlan {
+            deadline_ticks: TimelineTicks::from_raw(now_us),
+            lead_ticks: DurationTicks::from_raw(lead_up),
+            polyphony: 1,
+            lead_saturated: false,
+        };
+        self.pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &plan)
+            .expect("typed pending pop")
+    }
+
+    fn pop_next_due_authored(
+        &mut self,
+        now_us: u64,
+        dispatch_lead_us: u64,
+    ) -> Option<(RuntimeBatch, u64)> {
+        let (index, lead) = self
+            .pop_next_due_authored_ticks(
+                TimelineTicks::from_raw(now_us),
+                DurationTicks::from_raw(dispatch_lead_us),
+            )
+            .expect("typed authored pop")?;
+        let batch = self
+            .schedule
+            .try_materialize_batch_authored(index)
+            .expect("typed authored batch materialization");
+        Some((batch, lead.as_u64()))
+    }
+
+    fn activate_sent_downs(
+        &mut self,
+        intents: &[RuntimeKeyIntent],
+        sent_scan_codes: &[u16],
+        _dispatch_started_us: u64,
+        dispatch_started_ticks: TimelineTicks,
+        _dispatch_completed_us: u64,
+        dispatch_completed_ticks: TimelineTicks,
+    ) -> Result<(), sky_dispatch_core::coordinator::CoordinatorError> {
+        self.activate_sent_downs_ticks(
+            intents,
+            sent_scan_codes,
+            dispatch_started_ticks,
+            dispatch_completed_ticks,
+        )
+    }
+}
 
 proptest! {
     /// Source action IDs are metadata and may have arbitrary gaps. They must
@@ -48,31 +158,35 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &[2, 3]).unwrap();
         let generation_count = schedule.generation_count;
-        let mut coordinator = RuntimeDispatchCoordinator::new(
+        let mut coordinator = test_coordinator(
             schedule,
             0,
             0,
-            sky_dispatch_core::time::TimelineTicks,
+            sky_dispatch_core::time::TimelineTicks::from_raw,
         );
 
         while !coordinator.is_finished() {
             if let Some((batch, _)) = coordinator.pop_next_due_authored(u64::MAX, 0) {
                 match batch.kind {
                     ActionKind::Down => {
-                        let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
+                        let (playable, conflicts) = coordinator
+                            .split_down_intents(&batch.intents)
+                            .expect("valid transition");
                         prop_assert!(conflicts.is_empty());
                         let sent: Vec<u16> = playable.iter().map(|intent| intent.scan_code).collect();
                         coordinator.activate_sent_downs(
                             &playable,
                             &sent,
                             batch.scheduled_us,
-                            sky_dispatch_core::time::TimelineTicks(batch.scheduled_us),
+                            sky_dispatch_core::time::TimelineTicks::from_raw(batch.scheduled_us),
                             batch.scheduled_us,
-                            sky_dispatch_core::time::TimelineTicks(batch.scheduled_us),
+                            sky_dispatch_core::time::TimelineTicks::from_raw(batch.scheduled_us),
                         );
                     }
                     ActionKind::Up => {
-                        let (requested, suppressed) = coordinator.request_releases(&batch.intents);
+                        let (requested, suppressed) = coordinator
+                            .request_releases(&batch.intents)
+                            .expect("valid transition");
                         prop_assert!(suppressed.is_empty());
                         let due = coordinator.pop_due_pending(u64::MAX, 0);
                         prop_assert_eq!(due.len(), requested.len());
@@ -119,27 +233,31 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
         let generation_count = schedule.generation_count;
-        let mut coordinator = RuntimeDispatchCoordinator::new(schedule, min_hold_us, 0, sky_dispatch_core::time::TimelineTicks);
+        let mut coordinator = test_coordinator(schedule, min_hold_us, 0, sky_dispatch_core::time::TimelineTicks::from_raw);
 
         let (down, _) = coordinator
             .pop_next_due_authored(down_scheduled_us, 0)
             .expect("down must be due");
-        let (playable, conflicts) = coordinator.split_down_intents(&down.intents);
+        let (playable, conflicts) = coordinator
+            .split_down_intents(&down.intents)
+            .expect("valid transition");
         prop_assert!(conflicts.is_empty());
         let completed_us = down_scheduled_us + send_latency_us;
         coordinator.activate_sent_downs(
             &playable,
             &scan_codes,
             down_scheduled_us,
-            sky_dispatch_core::time::TimelineTicks(down_scheduled_us),
+            sky_dispatch_core::time::TimelineTicks::from_raw(down_scheduled_us),
             completed_us,
-            sky_dispatch_core::time::TimelineTicks(completed_us),
+            sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
         );
 
         let (up, _) = coordinator
             .pop_next_due_authored(up_scheduled_us, 0)
             .expect("up must be due");
-        let (requested, suppressed) = coordinator.request_releases(&up.intents);
+        let (requested, suppressed) = coordinator
+            .request_releases(&up.intents)
+            .expect("valid transition");
         prop_assert!(suppressed.is_empty());
         let expected_due = up_scheduled_us
             .saturating_sub(release_lead_us)
@@ -203,27 +321,31 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
         let generation_count = schedule.generation_count;
-        let mut coord = RuntimeDispatchCoordinator::new(
+        let mut coord = test_coordinator(
             schedule,
             min_hold_us,
             0,
-            sky_dispatch_core::time::TimelineTicks,
+            sky_dispatch_core::time::TimelineTicks::from_raw,
         );
 
         let (down, _) = coord.pop_next_due_authored(1_000, 0).unwrap();
-        let (playable, _) = coord.split_down_intents(&down.intents);
+        let (playable, _) = coord
+            .split_down_intents(&down.intents)
+            .expect("valid transition");
         let completed = 1_000 + send_latency_us;
         coord.activate_sent_downs(
             &playable,
             &scan_codes,
             1_000,
-            sky_dispatch_core::time::TimelineTicks(1_000),
+            sky_dispatch_core::time::TimelineTicks::from_raw(1_000),
             completed,
-            sky_dispatch_core::time::TimelineTicks(completed),
+            sky_dispatch_core::time::TimelineTicks::from_raw(completed),
         );
 
         let (up, _) = coord.pop_next_due_authored(10_000, 0).unwrap();
-        let (requested, _) = coord.request_releases(&up.intents);
+        let (requested, _) = coord
+            .request_releases(&up.intents)
+            .expect("valid transition");
         let due_us = coord.next_pending_release_us(0).unwrap_or(10_000);
         let due = coord.pop_due_pending(due_us, 0);
         coord.complete_releases(&due, &scan_codes, &[]);
@@ -351,23 +473,25 @@ proptest! {
             },
         ];
         let schedule = compile_runtime_intents(&actions, &codes).unwrap();
-        let mut coord = RuntimeDispatchCoordinator::new(
+        let mut coord = test_coordinator(
             schedule,
             min_hold_us,
             0,
-            sky_dispatch_core::time::TimelineTicks,
+            sky_dispatch_core::time::TimelineTicks::from_raw,
         );
 
         let (down, _) = coord.pop_next_due_authored(1_000, 0).unwrap();
-        let (playable, _) = coord.split_down_intents(&down.intents);
+        let (playable, _) = coord
+            .split_down_intents(&down.intents)
+            .expect("valid transition");
         let completed_us = 1_000 + send_latency_us;
         coord.activate_sent_downs(
             &playable,
             &codes,
             1_000,
-            sky_dispatch_core::time::TimelineTicks(1_000),
+            sky_dispatch_core::time::TimelineTicks::from_raw(1_000),
             completed_us,
-            sky_dispatch_core::time::TimelineTicks(completed_us),
+            sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
         );
 
         let (up, _) = coord.pop_next_due_authored(1_000 + hold_us, 0).unwrap();
@@ -407,15 +531,17 @@ proptest! {
             },
         ];
         let schedule = compile_runtime_intents(&actions, &codes).unwrap();
-        let mut coord = RuntimeDispatchCoordinator::new(
+        let mut coord = test_coordinator(
             schedule,
             0,
             0,
-            sky_dispatch_core::time::TimelineTicks,
+            sky_dispatch_core::time::TimelineTicks::from_raw,
         );
 
         let (down, _) = coord.pop_next_due_authored(0, 0).unwrap();
-        let (playable, _) = coord.split_down_intents(&down.intents);
+        let (playable, _) = coord
+            .split_down_intents(&down.intents)
+            .expect("valid transition");
         let order: Vec<u16> = playable.iter().map(|i| i.scan_code).collect();
 
         let mut sorted = order.clone();
@@ -466,23 +592,25 @@ proptest! {
             },
         ];
         let schedule = compile_runtime_intents(&actions, &codes).unwrap();
-        let mut coord = RuntimeDispatchCoordinator::new(
+        let mut coord = test_coordinator(
             schedule,
             min_hold_us,
             0,
-            sky_dispatch_core::time::TimelineTicks,
+            sky_dispatch_core::time::TimelineTicks::from_raw,
         );
 
         let (down, _) = coord.pop_next_due_authored(0, 0).unwrap();
-        let (playable, _) = coord.split_down_intents(&down.intents);
+        let (playable, _) = coord
+            .split_down_intents(&down.intents)
+            .expect("valid transition");
         let completed = send_latency_us;
         coord.activate_sent_downs(
             &playable,
             &codes,
             0,
-            sky_dispatch_core::time::TimelineTicks(0),
+            sky_dispatch_core::time::TimelineTicks::from_raw(0),
             completed,
-            sky_dispatch_core::time::TimelineTicks(completed),
+            sky_dispatch_core::time::TimelineTicks::from_raw(completed),
         );
         let (up, _) = coord.pop_next_due_authored(5_000, 0).unwrap();
         let _ = coord.request_releases(&up.intents);

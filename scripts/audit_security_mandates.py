@@ -76,7 +76,14 @@ ALLOWED_WINDOWS_SYS_MODULES: frozenset[str] = frozenset(
     {
         "Win32::Foundation",
         "Win32::Media",
+        # Calibration runs in a dedicated subprocess and uses Raw Input only
+        # to collect instrument-key evidence; it does not install hooks or
+        # inspect another process.
+        "Win32::UI::Input",
         "Win32::System::Performance",
+        # The native acceptance artifact records the local Windows build as a
+        # host fingerprint; it does not inspect game state or process memory.
+        "Win32::System::SystemInformation",
         "Win32::System::Threading",
         "Win32::UI::Input::KeyboardAndMouse",
         "Win32::UI::WindowsAndMessaging",

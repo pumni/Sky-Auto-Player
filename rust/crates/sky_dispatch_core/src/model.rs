@@ -2,8 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use thiserror::Error;
+
+use crate::time::TimelineTicks;
 
 pub const MAX_KEYS: usize = 15;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RuntimeScheduleError {
+    #[error("invalid runtime batch index {index}")]
+    InvalidBatchIndex { index: usize },
+    #[error("invalid intent range for runtime batch {index}")]
+    InvalidIntentRange { index: usize },
+    #[error("compiled key slot {slot} is not present in the key registry")]
+    InvalidKeySlot { slot: KeySlot },
+}
 
 pub type GenerationId = u64;
 pub type ReasonId = u16;
@@ -146,6 +159,55 @@ pub struct RuntimeSchedule {
 }
 
 impl RuntimeSchedule {
+    pub fn try_materialize_batch_authored(
+        &self,
+        index: usize,
+    ) -> Result<RuntimeBatch, RuntimeScheduleError> {
+        self.view_batch_ticks(index, TimelineTicks::ZERO)
+            .map(|view| view.materialize())
+    }
+
+    pub fn view_batch_ticks(
+        &self,
+        index: usize,
+        scheduled_ticks: TimelineTicks,
+    ) -> Result<BatchView<'_>, RuntimeScheduleError> {
+        let header = self
+            .batches
+            .get(index)
+            .ok_or(RuntimeScheduleError::InvalidBatchIndex { index })?;
+        let start = header.intent_start as usize;
+        let end = start
+            .checked_add(header.intent_len as usize)
+            .ok_or(RuntimeScheduleError::InvalidIntentRange { index })?;
+        let intents = self
+            .intents
+            .get(start..end)
+            .ok_or(RuntimeScheduleError::InvalidIntentRange { index })?;
+        for compact in intents {
+            if self
+                .key_registry
+                .scan_code_for(compact.key_slot())
+                .is_none()
+            {
+                return Err(RuntimeScheduleError::InvalidKeySlot {
+                    slot: compact.key_slot(),
+                });
+            }
+        }
+        Ok(BatchView {
+            batch_index: index,
+            header,
+            intents,
+            registry: &self.key_registry,
+            scheduled_ticks,
+            // This is authored metadata only. Effective scheduling stays in
+            // `scheduled_ticks`; telemetry converts that value at its boundary.
+            scheduled_us: header.scheduled_us,
+        })
+    }
+
+    #[cfg(test)]
     pub fn materialize_batch(&self, index: usize, scheduled_offset_us: u64) -> RuntimeBatch {
         let header = self
             .batches
@@ -192,6 +254,7 @@ impl RuntimeSchedule {
     ///
     /// Lifetime is tied to `self`.  Use `BatchView::materialize` only
     /// when telemetry requires the full `RuntimeBatch` representation.
+    #[cfg(test)]
     pub fn view_batch(&self, index: usize, scheduled_offset_us: u64) -> BatchView<'_> {
         let header = self
             .batches
@@ -200,9 +263,13 @@ impl RuntimeSchedule {
         let start = header.intent_start as usize;
         let end = start + header.intent_len as usize;
         BatchView {
+            batch_index: index,
             header,
             intents: &self.intents[start..end],
             registry: &self.key_registry,
+            scheduled_ticks: TimelineTicks::from_raw(
+                header.scheduled_us.saturating_add(scheduled_offset_us),
+            ),
             scheduled_us: header.scheduled_us.saturating_add(scheduled_offset_us),
         }
     }
@@ -216,12 +283,16 @@ impl RuntimeSchedule {
 /// representation is required (e.g. when full-rate telemetry is enabled).
 #[derive(Debug, Clone, Copy)]
 pub struct BatchView<'a> {
+    pub batch_index: usize,
     pub header: &'a CompiledBatch,
     /// Compact intents stored in the schedule arena (no scan codes inline).
     pub intents: &'a [CompactIntent],
     /// Key registry shared by the whole session (scan-code lookup).
     pub registry: &'a KeyRegistry,
-    /// Effective scheduled time including any recovery offset (microseconds).
+    /// Effective scheduled time including any recovery offset.
+    pub scheduled_ticks: TimelineTicks,
+    /// Authored timestamp retained as telemetry metadata. It is not used for
+    /// production deadline or recovery calculations.
     pub scheduled_us: u64,
 }
 
@@ -284,7 +355,7 @@ impl<'a> BatchView<'a> {
             .intents
             .iter()
             .map(|compact| RuntimeKeyIntent {
-                compiled_batch_index: usize::MAX,
+                compiled_batch_index: self.batch_index,
                 source_action_index: self.header.source_action_index,
                 generation_id: (compact.generation_id() != NO_GENERATION_ID)
                     .then_some(compact.generation_id()),

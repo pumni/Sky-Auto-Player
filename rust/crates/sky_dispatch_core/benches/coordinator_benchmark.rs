@@ -12,9 +12,9 @@
 //! ## Running
 //!
 //! ```powershell
-//! cargo bench --manifest-path rust/Cargo.toml -p sky_dispatch_core -- sender_benchmark
+//! cargo bench --manifest-path rust/Cargo.toml -p sky_dispatch_core -- coordinator_benchmark
 //! # Increase iterations for p99.9:
-//! BENCH_ITERS=1000 cargo bench --manifest-path rust/Cargo.toml -p sky_dispatch_core -- sender_benchmark
+//! BENCH_ITERS=1000 cargo bench --manifest-path rust/Cargo.toml -p sky_dispatch_core -- coordinator_benchmark
 //! ```
 //!
 //! Output is a plain aligned table to stdout.
@@ -32,13 +32,13 @@ use std::time::Instant;
 
 use sky_dispatch_core::{
     compile::compile_runtime_intents,
-    coordinator::RuntimeDispatchCoordinator,
+    coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator},
     estimator::LatencyClass,
     model::{ActionKind, KeyActionInput},
-    time::TimelineTicks,
+    time::{DurationTicks, TimelineTicks},
 };
 
-use stats::{SenderStats, print_header, print_row};
+use stats::{CoordinatorStats, print_header, print_row};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ fn run_iteration(
     kind: ActionKind,
     polyphony: usize,
     _latency_class: LatencyClass,
-    stats: &mut SenderStats,
+    stats: &mut CoordinatorStats,
 ) -> Result<(), String> {
     let actions = build_actions(polyphony);
     let allowed = allowed_codes(polyphony);
@@ -122,35 +122,48 @@ fn run_iteration(
     let t_book_start = Instant::now();
     let schedule =
         compile_runtime_intents(&actions, &allowed).map_err(|e| format!("compile error: {e:?}"))?;
-    let mut coordinator = RuntimeDispatchCoordinator::new(
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         /*min_hold_us=*/ 50,
+        DurationTicks::from_raw(50),
         /*delivery_margin_us=*/ 0,
-        TimelineTicks,
-    );
+        DurationTicks::ZERO,
+        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+    )
+    .map_err(|error| format!("coordinator construction failed: {error}"))?;
     let book_us = t_book_start.elapsed().as_micros() as u64;
 
     match kind {
         ActionKind::Down => {
             // ── Measure Down pop + activate ───────────────────────────────────
-            let deadline = coordinator.next_deadline_us(0, 0).unwrap_or(1_000);
+            let deadline = coordinator
+                .next_deadline_ticks(DurationTicks::ZERO, None)
+                .map_err(|error| format!("coordinator deadline failed: {error}"))?
+                .ok_or("no down deadline")?
+                .as_u64();
             let t_pop = Instant::now();
-            let (batch, _lead) = coordinator
-                .pop_next_due_authored(deadline, 0)
+            let (batch_index, _lead) = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(deadline), DurationTicks::ZERO)
+                .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no down batch due")?;
+            let batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(batch_index)
+                .map_err(|error| format!("batch materialization failed: {error}"))?;
             let scheduled_us = batch.scheduled_us;
 
             let sc_vec: Vec<u16> = batch.intents.iter().map(|i| i.scan_code).collect();
             let t_activate_start = Instant::now();
             let now_us = deadline;
-            coordinator.activate_sent_downs(
-                &batch.intents,
-                &sc_vec,
-                now_us,
-                TimelineTicks(now_us),
-                now_us,
-                TimelineTicks(now_us),
-            );
+            coordinator
+                .activate_sent_downs_compact_ticks(
+                    batch_index,
+                    &sc_vec,
+                    TimelineTicks::from_raw(now_us),
+                    TimelineTicks::from_raw(now_us),
+                    0,
+                )
+                .map_err(|error| format!("coordinator activation failed: {error}"))?;
             let send_us =
                 t_activate_start.elapsed().as_micros() as u64 + t_pop.elapsed().as_micros() as u64;
 
@@ -164,37 +177,68 @@ fn run_iteration(
 
         ActionKind::Up => {
             // ── First do the Down (required for Up to be meaningful) ──────────
-            let down_dl = coordinator.next_deadline_us(0, 0).unwrap_or(1_000);
-            let (down_batch, _) = coordinator
-                .pop_next_due_authored(down_dl, 0)
+            let down_dl = coordinator
+                .next_deadline_ticks(DurationTicks::ZERO, None)
+                .map_err(|error| format!("coordinator deadline failed: {error}"))?
+                .ok_or("no down deadline")?
+                .as_u64();
+            let (down_index, _) = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(down_dl), DurationTicks::ZERO)
+                .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no down batch")?;
+            let down_batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(down_index)
+                .map_err(|error| format!("down batch materialization failed: {error}"))?;
             let sc_vec: Vec<u16> = down_batch.intents.iter().map(|i| i.scan_code).collect();
-            coordinator.activate_sent_downs(
-                &down_batch.intents,
-                &sc_vec,
-                down_dl,
-                TimelineTicks(down_dl),
-                down_dl,
-                TimelineTicks(down_dl),
-            );
+            coordinator
+                .activate_sent_downs_compact_ticks(
+                    down_index,
+                    &sc_vec,
+                    TimelineTicks::from_raw(down_dl),
+                    TimelineTicks::from_raw(down_dl),
+                    0,
+                )
+                .map_err(|error| format!("coordinator activation failed: {error}"))?;
 
             // ── Measure Up pop + request_releases ────────────────────────────
-            let up_dl = coordinator.next_authored_us(0).unwrap_or(2_000);
+            let up_dl = coordinator
+                .next_authored_ticks(DurationTicks::ZERO)
+                .map_err(|error| format!("coordinator deadline failed: {error}"))?
+                .ok_or("no up deadline")?
+                .as_u64();
             let t_pop = Instant::now();
-            let (up_batch, _lead) = coordinator
-                .pop_next_due_authored(up_dl, 0)
+            let (up_index, _lead) = coordinator
+                .pop_next_due_authored_ticks(TimelineTicks::from_raw(up_dl), DurationTicks::ZERO)
+                .map_err(|error| format!("coordinator authored pop failed: {error}"))?
                 .ok_or("no up batch due")?;
+            let up_batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(up_index)
+                .map_err(|error| format!("up batch materialization failed: {error}"))?;
             let scheduled_us = up_batch.scheduled_us;
 
             let t_release_start = Instant::now();
-            let (requested, _suppressed) = coordinator.request_releases(&up_batch.intents);
+            let (requested, _suppressed) = coordinator
+                .request_releases(&up_batch.intents)
+                .map_err(|error| format!("coordinator release transition failed: {error}"))?;
             let _ = requested; // consumed
             let t_after_req = t_release_start.elapsed().as_micros() as u64;
 
             // Pop due pending and complete
-            let due = coordinator.pop_due_pending(up_dl, 0);
+            let pending_plan = PendingDispatchPlan {
+                deadline_ticks: TimelineTicks::from_raw(up_dl),
+                lead_ticks: DurationTicks::ZERO,
+                polyphony,
+                lead_saturated: false,
+            };
+            let due = coordinator
+                .pop_due_pending_ticks(TimelineTicks::from_raw(up_dl), &pending_plan)
+                .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
             let due_sc: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
-            coordinator.complete_releases(&due, &due_sc, &[]);
+            coordinator
+                .complete_releases(&due, &due_sc, &[])
+                .map_err(|error| format!("coordinator completion failed: {error}"))?;
 
             let send_us = t_after_req + t_pop.elapsed().as_micros() as u64;
             let actual_us = up_dl;
@@ -217,7 +261,7 @@ fn run_cell(
     latency_class: LatencyClass,
     load_mode: LoadMode,
     iters: usize,
-) -> Result<SenderStats, String> {
+) -> Result<CoordinatorStats, String> {
     // Spin up background stressor if needed.
     let stop = Arc::new(AtomicBool::new(false));
     let mut stressor_handle = if load_mode == LoadMode::Load {
@@ -231,7 +275,7 @@ fn run_cell(
         None
     };
 
-    let mut stats = SenderStats::default();
+    let mut stats = CoordinatorStats::default();
 
     for _ in 0..iters {
         if let Err(e) = run_iteration(kind, polyphony, latency_class, &mut stats) {
@@ -261,7 +305,9 @@ fn main() -> Result<(), String> {
         .unwrap_or(DEFAULT_ITERS);
 
     println!("# P3.4 Coordinator microbenchmark — sky_dispatch_core");
-    println!("# Evidence scope: deterministic core simulation; no SendInput or Raw Input delivery");
+    println!(
+        "# Evidence scope: deterministic coordinator simulation; no SendInput or Raw Input delivery"
+    );
     println!("# iterations={iters}  built={}", env!("CARGO_PKG_VERSION"));
     println!(
         "# Columns: signed_err/abs_err/late/early in µs (mean); p50/p95/p99/p999/max abs µs; send_us/book_us/wake_us (mean µs)"

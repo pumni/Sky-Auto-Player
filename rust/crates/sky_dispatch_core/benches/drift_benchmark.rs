@@ -45,9 +45,9 @@ mod stats;
 
 use sky_dispatch_core::{
     compile::compile_runtime_intents,
-    coordinator::RuntimeDispatchCoordinator,
+    coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator},
     model::{ActionKind, KeyActionInput},
-    time::TimelineTicks,
+    time::{DurationTicks, TimelineTicks},
 };
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -152,12 +152,15 @@ fn run_simulation(
     let schedule =
         compile_runtime_intents(actions, &allowed).map_err(|e| format!("compile: {e:?}"))?;
 
-    let mut coordinator = RuntimeDispatchCoordinator::new(
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         /*min_hold_us=*/ NOTE_HOLD_US / 2,
+        DurationTicks::from_raw(NOTE_HOLD_US / 2),
         /*delivery_margin_us=*/ 0,
-        TimelineTicks,
-    );
+        DurationTicks::ZERO,
+        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+    )
+    .map_err(|error| format!("coordinator construction failed: {error}"))?;
 
     let mut errors: Vec<i64> = Vec::with_capacity(authored_ts.len());
     // Track which note indices follow a burst-inducing event.
@@ -185,23 +188,47 @@ fn run_simulation(
 
     while !coordinator.is_finished() {
         // Advance to next coordinator deadline.
-        if let Some(dl) = coordinator.next_deadline_us(0, 0) {
-            now_us = now_us.max(dl);
+        if let Some(dl) = coordinator
+            .next_deadline_ticks(DurationTicks::ZERO, None)
+            .map_err(|error| format!("coordinator deadline failed: {error}"))?
+        {
+            now_us = now_us.max(dl.as_u64());
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
 
         // Pop pending releases first.
-        let due = coordinator.pop_due_pending(now_us, 0);
+        let pending_plan = PendingDispatchPlan {
+            deadline_ticks: TimelineTicks::from_raw(now_us),
+            lead_ticks: DurationTicks::ZERO,
+            polyphony: 1,
+            lead_saturated: false,
+        };
+        let due = coordinator
+            .pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &pending_plan)
+            .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
         if !due.is_empty() {
             let sc: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
-            coordinator.complete_releases(&due, &sc, &[]);
-            now_us += SEND_LATENCY_US;
+            coordinator
+                .complete_releases(&due, &sc, &[])
+                .map_err(|error| format!("coordinator completion failed: {error}"))?;
+            now_us = now_us
+                .checked_add(SEND_LATENCY_US)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
             continue;
         }
 
         // Pop next authored batch.
-        if let Some((batch, _lead)) = coordinator.pop_next_due_authored(now_us, 0) {
+        if let Some((batch_index, _lead)) = coordinator
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us), DurationTicks::ZERO)
+            .map_err(|error| format!("coordinator authored pop failed: {error}"))?
+        {
+            let batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(batch_index)
+                .map_err(|error| format!("batch materialization failed: {error}"))?;
             match batch.kind {
                 ActionKind::Down => {
                     let authored = if note_idx < authored_ts.len() {
@@ -214,26 +241,40 @@ fn run_simulation(
                     if recovery_pending && note_idx >= recovery_note {
                         recovery_pending = false;
                         // Just record a simulated offset (deterministic).
-                        now_us += 1_000;
+                        now_us = now_us
+                            .checked_add(1_000)
+                            .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                     }
 
                     let sc: Vec<u16> = batch.intents.iter().map(|i| i.scan_code).collect();
-                    coordinator.activate_sent_downs(
-                        &batch.intents,
-                        &sc,
-                        now_us,
-                        TimelineTicks(now_us),
-                        now_us + SEND_LATENCY_US,
-                        TimelineTicks(now_us + SEND_LATENCY_US),
-                    );
+                    coordinator
+                        .activate_sent_downs_compact_ticks(
+                            batch_index,
+                            &sc,
+                            TimelineTicks::from_raw(now_us),
+                            TimelineTicks::from_raw(
+                                now_us
+                                    .checked_add(SEND_LATENCY_US)
+                                    .ok_or_else(|| "simulation timestamp overflow".to_string())?,
+                            ),
+                            0,
+                        )
+                        .map_err(|error| format!("coordinator activation failed: {error}"))?;
 
                     let actual_us = now_us;
                     errors.push(actual_us as i64 - authored as i64);
                     note_idx += 1;
-                    now_us += SEND_LATENCY_US;
+                    now_us = now_us
+                        .checked_add(SEND_LATENCY_US)
+                        .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                 }
                 ActionKind::Up => {
-                    let (requested, _) = coordinator.request_releases(&batch.intents);
+                    let (requested, _) =
+                        coordinator
+                            .request_releases(&batch.intents)
+                            .map_err(|error| {
+                                format!("coordinator release transition failed: {error}")
+                            })?;
                     let _ = requested;
 
                     // Inject a simulated release failure for recovery scenario.
@@ -242,24 +283,74 @@ fn run_simulation(
                         && note_idx == recovery_note.saturating_sub(1)
                     {
                         // Simulate: pop the pending release, requeue it as failed.
-                        let due = coordinator.pop_due_pending(now_us + NOTE_HOLD_US, 0);
+                        let failure_deadline = now_us
+                            .checked_add(NOTE_HOLD_US)
+                            .ok_or_else(|| "simulation timestamp overflow".to_string())?;
+                        let failure_plan = PendingDispatchPlan {
+                            deadline_ticks: TimelineTicks::from_raw(failure_deadline),
+                            lead_ticks: DurationTicks::ZERO,
+                            polyphony: 1,
+                            lead_saturated: false,
+                        };
+                        let due = coordinator
+                            .pop_due_pending_ticks(
+                                TimelineTicks::from_raw(failure_deadline),
+                                &failure_plan,
+                            )
+                            .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
                         if !due.is_empty() {
-                            let should_stop = coordinator.requeue_failed_releases(
-                                &due,
-                                &[],
-                                &[],
-                                now_us,
-                                now_us + 1_000,
-                                Some(3),
-                            );
+                            let retry_backoff = [
+                                DurationTicks::from_raw(2_000),
+                                DurationTicks::from_raw(5_000),
+                                DurationTicks::from_raw(10_000),
+                                DurationTicks::from_raw(20_000),
+                            ];
+                            let retry_base = now_us
+                                .checked_add(1_000)
+                                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
+                            let should_stop = coordinator
+                                .requeue_failed_releases_ticks(
+                                    &due,
+                                    &[],
+                                    &[],
+                                    TimelineTicks::from_raw(now_us),
+                                    TimelineTicks::from_raw(retry_base),
+                                    &retry_backoff,
+                                    Some(3),
+                                )
+                                .map_err(|error| format!("coordinator recovery failed: {error}"))?;
                             if !should_stop {
                                 recovery_pending = true;
                                 // Complete recovery after backoff.
-                                let retry = coordinator.pop_due_pending(now_us + 3_000, 0);
+                                let retry_deadline = now_us
+                                    .checked_add(3_000)
+                                    .ok_or_else(|| "simulation timestamp overflow".to_string())?;
+                                let retry_plan = PendingDispatchPlan {
+                                    deadline_ticks: TimelineTicks::from_raw(retry_deadline),
+                                    lead_ticks: DurationTicks::ZERO,
+                                    polyphony: 1,
+                                    lead_saturated: false,
+                                };
+                                let retry = coordinator
+                                    .pop_due_pending_ticks(
+                                        TimelineTicks::from_raw(retry_deadline),
+                                        &retry_plan,
+                                    )
+                                    .map_err(|error| {
+                                        format!("coordinator retry pop failed: {error}")
+                                    })?;
                                 if !retry.is_empty() {
                                     let sc: Vec<u16> = retry.iter().map(|p| p.scan_code).collect();
-                                    coordinator.complete_releases(&retry, &sc, &[]);
-                                    coordinator.finish_release_recovery(now_us + 3_000);
+                                    coordinator.complete_releases(&retry, &sc, &[]).map_err(
+                                        |error| format!("coordinator completion failed: {error}"),
+                                    )?;
+                                    coordinator
+                                        .finish_release_recovery_ticks(TimelineTicks::from_raw(
+                                            retry_deadline,
+                                        ))
+                                        .map_err(|error| {
+                                            format!("coordinator recovery failed: {error}")
+                                        })?;
                                 }
                             }
                         }
@@ -267,7 +358,9 @@ fn run_simulation(
                 }
             }
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
     }
 
@@ -370,7 +463,7 @@ impl DriftReport {
 
 // ─── Scenario runner ──────────────────────────────────────────────────────────
 
-fn run_scenario(kind: ScenarioKind, n_notes: usize) -> DriftReport {
+fn run_scenario(kind: ScenarioKind, n_notes: usize) -> Result<DriftReport, String> {
     let interval_us = match kind {
         ScenarioKind::Sparse => SPARSE_INTERVAL_US,
         _ => DENSE_INTERVAL_US,
@@ -388,20 +481,14 @@ fn run_scenario(kind: ScenarioKind, n_notes: usize) -> DriftReport {
 
     let (actions, authored_ts) = build_timeline(n_notes, interval_us, pause_at);
 
-    let (errors, burst_indices) = run_simulation(&actions, &authored_ts, pause_at, recovery_at)
-        .unwrap_or_else(|e| {
-            eprintln!("WARN[{}]: {e}", kind.as_str());
-            (vec![0i64; n_notes], vec![])
-        });
-
-    // Guard: if simulation produced fewer errors than expected, pad with 0.
-    let errors = if errors.len() < n_notes {
-        let mut v = errors;
-        v.resize(n_notes, 0);
-        v
-    } else {
-        errors
-    };
+    let (errors, burst_indices) = run_simulation(&actions, &authored_ts, pause_at, recovery_at)?;
+    if errors.len() != n_notes {
+        return Err(format!(
+            "{}: expected {n_notes} timing samples, got {}",
+            kind.as_str(),
+            errors.len()
+        ));
+    }
 
     let early_end = ((n_notes as f64 * EARLY_LATE_FRACTION) as usize).max(1);
     let late_start = (n_notes as f64 * (1.0 - EARLY_LATE_FRACTION)) as usize;
@@ -417,17 +504,17 @@ fn run_scenario(kind: ScenarioKind, n_notes: usize) -> DriftReport {
         .filter_map(|&i| errors.get(i))
         .map(|&e| e.unsigned_abs() as i64)
         .max()
-        .unwrap_or(0);
+        .unwrap_or_default();
 
     let max_abs = errors
         .iter()
         .map(|&e| e.unsigned_abs() as i64)
         .max()
-        .unwrap_or(0);
+        .ok_or_else(|| format!("{}: simulation produced no timing samples", kind.as_str()))?;
 
     let p95 = p95_abs(&errors);
 
-    DriftReport {
+    Ok(DriftReport {
         scenario: kind.as_str(),
         n_notes: errors.len(),
         slope,
@@ -437,7 +524,7 @@ fn run_scenario(kind: ScenarioKind, n_notes: usize) -> DriftReport {
         burst_max,
         max_abs,
         p95,
-    }
+    })
 }
 
 // ─── Gate check ───────────────────────────────────────────────────────────────
@@ -448,12 +535,12 @@ fn run_scenario(kind: ScenarioKind, n_notes: usize) -> DriftReport {
 /// recovery adds a one-time offset that shifts the entire tail of the error series;
 /// this is expected and does NOT represent cumulative drift.  The gate for recovery
 /// checks that slope is bounded (not unbounded growth), not that it is zero.
-fn print_gate(reports: &[DriftReport]) {
+fn check_gate(reports: &[DriftReport]) -> Result<(), String> {
     println!();
     println!("# Gate check");
     println!("#   dense/sparse/pause:  slope < ±1.0 µs/note, delta < ±10 µs");
     println!("#   with_recovery:       slope < ±15.0 µs/note (one-time offset allowed)");
-    let mut all_pass = true;
+    let mut failures = Vec::new();
     for r in reports {
         // Recovery scenario: one-time offset is expected. Use looser slope gate.
         let (slope_limit, delta_limit): (f64, f64) = if r.scenario == "with_recovery" {
@@ -465,7 +552,10 @@ fn print_gate(reports: &[DriftReport]) {
         let delta_ok = r.delta.abs() < delta_limit;
         let status = if slope_ok && delta_ok { "PASS" } else { "FAIL" };
         if !slope_ok || !delta_ok {
-            all_pass = false;
+            failures.push(format!(
+                "{}: slope={:+.4}, delta={:+.1}",
+                r.scenario, r.slope, r.delta
+            ));
         }
         println!(
             "  {:>15}: {} (slope={:+.4} µs/note, delta={:+.1} µs)",
@@ -473,20 +563,28 @@ fn print_gate(reports: &[DriftReport]) {
         );
     }
     println!();
-    if all_pass {
+    if failures.is_empty() {
         println!("# All scenarios: PASS");
+        Ok(())
     } else {
-        println!("# WARNING: One or more scenarios failed drift gate.");
+        println!("# Drift gate: FAIL");
+        Err(format!("drift gate failed: {}", failures.join("; ")))
     }
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-fn main() {
-    let n_notes: usize = std::env::var("DRIFT_NOTES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_NOTES);
+fn main() -> Result<(), String> {
+    let n_notes: usize = match std::env::var("DRIFT_NOTES") {
+        Ok(value) => value
+            .parse()
+            .map_err(|_| "DRIFT_NOTES must be a positive integer".to_string())?,
+        Err(std::env::VarError::NotPresent) => DEFAULT_NOTES,
+        Err(error) => return Err(format!("failed to read DRIFT_NOTES: {error}")),
+    };
+    if n_notes == 0 {
+        return Err("DRIFT_NOTES must be positive".to_string());
+    }
 
     println!("# P3.5 Drift benchmark — sky_dispatch_core");
     println!("# notes={n_notes}  built={}", env!("CARGO_PKG_VERSION"));
@@ -505,12 +603,13 @@ fn main() {
 
     let mut reports: Vec<DriftReport> = Vec::new();
     for &kind in &scenarios {
-        let report = run_scenario(kind, n_notes);
+        let report = run_scenario(kind, n_notes)?;
         report.print_row();
         reports.push(report);
     }
 
-    print_gate(&reports);
+    check_gate(&reports)?;
 
     println!("# Done. {} scenarios × {} notes.", scenarios.len(), n_notes);
+    Ok(())
 }

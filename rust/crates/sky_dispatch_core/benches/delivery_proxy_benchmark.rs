@@ -36,9 +36,9 @@ mod stats;
 
 use sky_dispatch_core::{
     compile::compile_runtime_intents,
-    coordinator::RuntimeDispatchCoordinator,
+    coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator},
     model::{ActionKind, KeyActionInput},
-    time::TimelineTicks,
+    time::{DurationTicks, TimelineTicks},
 };
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -170,27 +170,49 @@ fn run_chord_simulation(
     let schedule =
         compile_runtime_intents(actions, &allowed).map_err(|e| format!("compile: {e:?}"))?;
 
-    let mut coordinator =
-        RuntimeDispatchCoordinator::new(schedule, MIN_HOLD_US / 2, 0, TimelineTicks);
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        MIN_HOLD_US / 2,
+        DurationTicks::from_raw(MIN_HOLD_US / 2),
+        0,
+        DurationTicks::ZERO,
+        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+    )
+    .map_err(|error| format!("coordinator construction failed: {error}"))?;
 
     let mut receipts: Vec<DispatchReceipt> = Vec::new();
     let mut now_us: u64 = 0;
     let mut chord_index: usize = 0;
 
     while !coordinator.is_finished() {
-        if let Some(dl) = coordinator.next_deadline_us(0, 0) {
-            now_us = now_us.max(dl);
+        if let Some(dl) = coordinator
+            .next_deadline_ticks(DurationTicks::ZERO, None)
+            .map_err(|error| format!("coordinator deadline failed: {error}"))?
+        {
+            now_us = now_us.max(dl.as_u64());
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
 
         // Drain pending releases.
-        let due = coordinator.pop_due_pending(now_us, 0);
+        let pending_plan = PendingDispatchPlan {
+            deadline_ticks: TimelineTicks::from_raw(now_us),
+            lead_ticks: DurationTicks::ZERO,
+            polyphony: 1,
+            lead_saturated: false,
+        };
+        let due = coordinator
+            .pop_due_pending_ticks(TimelineTicks::from_raw(now_us), &pending_plan)
+            .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
         if !due.is_empty() {
             let authored_us = due[0].scheduled_release_us;
             let scan_codes: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             let sc_copy = scan_codes.clone();
-            coordinator.complete_releases(&due, &sc_copy, &[]);
+            coordinator
+                .complete_releases(&due, &sc_copy, &[])
+                .map_err(|error| format!("coordinator completion failed: {error}"))?;
 
             receipts.push(DispatchReceipt {
                 chord_index,
@@ -199,25 +221,39 @@ fn run_chord_simulation(
                 authored_us,
                 scan_codes,
             });
-            now_us += SEND_LATENCY_US;
+            now_us = now_us
+                .checked_add(SEND_LATENCY_US)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
             continue;
         }
 
         // Pop authored batch.
-        if let Some((batch, _)) = coordinator.pop_next_due_authored(now_us, 0) {
+        if let Some((batch_index, _)) = coordinator
+            .pop_next_due_authored_ticks(TimelineTicks::from_raw(now_us), DurationTicks::ZERO)
+            .map_err(|error| format!("coordinator authored pop failed: {error}"))?
+        {
+            let batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(batch_index)
+                .map_err(|error| format!("batch materialization failed: {error}"))?;
             let authored_us = batch.scheduled_us;
             match batch.kind {
                 ActionKind::Down => {
                     let scan_codes: Vec<u16> = batch.intents.iter().map(|i| i.scan_code).collect();
                     let sc_copy = scan_codes.clone();
-                    coordinator.activate_sent_downs(
-                        &batch.intents,
-                        &sc_copy,
-                        now_us,
-                        TimelineTicks(now_us),
-                        now_us + SEND_LATENCY_US,
-                        TimelineTicks(now_us + SEND_LATENCY_US),
-                    );
+                    coordinator
+                        .activate_sent_downs_compact_ticks(
+                            batch_index,
+                            &sc_copy,
+                            TimelineTicks::from_raw(now_us),
+                            TimelineTicks::from_raw(
+                                now_us
+                                    .checked_add(SEND_LATENCY_US)
+                                    .ok_or_else(|| "simulation timestamp overflow".to_string())?,
+                            ),
+                            0,
+                        )
+                        .map_err(|error| format!("coordinator activation failed: {error}"))?;
                     receipts.push(DispatchReceipt {
                         chord_index,
                         kind: ActionKind::Down,
@@ -225,16 +261,24 @@ fn run_chord_simulation(
                         authored_us,
                         scan_codes,
                     });
-                    now_us += SEND_LATENCY_US;
+                    now_us = now_us
+                        .checked_add(SEND_LATENCY_US)
+                        .ok_or_else(|| "simulation timestamp overflow".to_string())?;
                     chord_index += 1;
                 }
                 ActionKind::Up => {
-                    let (requested, _suppressed) = coordinator.request_releases(&batch.intents);
+                    let (requested, _suppressed) = coordinator
+                        .request_releases(&batch.intents)
+                        .map_err(|error| {
+                            format!("coordinator release transition failed: {error}")
+                        })?;
                     let _ = requested;
                 }
             }
         } else {
-            now_us += 100;
+            now_us = now_us
+                .checked_add(100)
+                .ok_or_else(|| "simulation timestamp overflow".to_string())?;
         }
     }
 
