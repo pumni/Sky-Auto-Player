@@ -905,6 +905,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("wait_target_error_us", snap.wait_target_error_us)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
+        dict.set_item("secondary_errors", snap.secondary_errors)?;
         dict.set_item("generation_count", snap.generation_count)?;
         dict.set_item("generation_status_counts", snap.generation_status_counts)?;
         dict.set_item("abort_counts_by_reason", snap.abort_counts_by_reason)?;

@@ -124,6 +124,7 @@ def test_fault_persistent_release_exhausts_and_stops() -> None:
     assert snap["terminal_error"] is not None
     assert "note-off" in snap["terminal_error"] or "exhausted" in snap["terminal_error"]
     assert snap["release_outcome"] is not None
+    assert snap["secondary_errors"], "cleanup diagnostics must retain the primary failure"
 
 
 # ---------------------------------------------------------------------------

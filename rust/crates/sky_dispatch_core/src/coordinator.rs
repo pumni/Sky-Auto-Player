@@ -703,6 +703,30 @@ mod tests {
     }
 
     #[test]
+    fn post_cleanup_invariant_rejects_nonterminal_state_until_cancelled() {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "future".into(),
+            }],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+
+        assert!(coordinator.check_invariants().is_ok());
+        assert!(coordinator.check_post_cleanup_invariants().is_err());
+        coordinator
+            .cancel_all()
+            .expect("terminal cancellation succeeds");
+        assert!(coordinator.check_post_cleanup_invariants().is_ok());
+    }
+
+    #[test]
     fn cancel_live_generations_preserves_future_scheduled_generations() {
         let schedule = compile_runtime_intents(
             &[
@@ -1797,6 +1821,45 @@ impl RuntimeDispatchCoordinator {
                 "terminal ledger count {terminal} != counters {}",
                 self.counters.terminal_total()
             )));
+        }
+        Ok(())
+    }
+
+    /// Verify the stronger state required after terminal backend cleanup.
+    ///
+    /// `check_invariants` proves that the ledger and masks agree; this method
+    /// additionally proves that cleanup did not leave a live generation,
+    /// pending slot, blocked slot, or authored cursor behind.
+    pub fn check_post_cleanup_invariants(&self) -> Result<(), CoordinatorInvariantError> {
+        self.check_invariants()?;
+        if self.active_mask != 0 || self.pending_mask != 0 || self.blocked_mask != 0 {
+            return Err(CoordinatorInvariantError::Accounting(
+                "terminal cleanup left a live coordinator mask".to_string(),
+            ));
+        }
+        if self.active_by_slot.iter().any(Option::is_some)
+            || self.pending_by_slot.iter().any(Option::is_some)
+        {
+            return Err(CoordinatorInvariantError::Accounting(
+                "terminal cleanup left a live coordinator slot".to_string(),
+            ));
+        }
+        if self.release_recovery_started_ticks.is_some() {
+            return Err(CoordinatorInvariantError::Accounting(
+                "terminal cleanup left release recovery state".to_string(),
+            ));
+        }
+        if self.generation_states.iter().any(|state| {
+            matches!(
+                state,
+                GenerationStatus::Scheduled
+                    | GenerationStatus::Active
+                    | GenerationStatus::ReleasePending
+            )
+        }) {
+            return Err(CoordinatorInvariantError::Accounting(
+                "terminal cleanup left a nonterminal generation".to_string(),
+            ));
         }
         Ok(())
     }

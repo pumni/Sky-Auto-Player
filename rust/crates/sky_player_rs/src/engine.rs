@@ -258,6 +258,7 @@ pub struct EngineSnapshot {
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
     pub terminal_error: Option<String>,
+    pub secondary_errors: Vec<String>,
     pub generation_count: u64,
     pub generation_status_counts: HashMap<String, u64>,
     pub abort_counts_by_reason: HashMap<String, u64>,
@@ -567,6 +568,7 @@ struct SharedMetrics {
     last_error: Mutex<Option<String>>,
     wait_strategy_acquired: Mutex<String>,
     terminal_error: Mutex<Option<String>>,
+    secondary_errors: Mutex<Vec<String>>,
     generation_status_counts: Mutex<HashMap<String, u64>>,
     abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
@@ -1023,6 +1025,7 @@ impl NativeDispatchSession {
             wait_target_error_us: local.wait_target_error_us,
             idle_wake_count: local.idle_wake_count,
             terminal_error: self.metrics.terminal_error.lock().clone(),
+            secondary_errors: self.metrics.secondary_errors.lock().clone(),
             generation_count: self.generation_count,
             generation_status_counts: self.metrics.generation_status_counts.lock().clone(),
             abort_counts_by_reason: self.metrics.abort_counts_by_reason.lock().clone(),
@@ -1273,6 +1276,7 @@ fn run_worker(
     let mut local_metrics = WorkerMetricsLocal::default();
     let mut force_full_cleanup = false;
     let mut terminal_error: Option<String> = None;
+    let mut secondary_errors: Vec<String> = Vec::new();
     let mut last_published_error: Option<String> = None;
     let power_guard = PowerThrottlingGuard::disable_current_thread();
     local_metrics.power_throttling_disabled = power_guard.is_active();
@@ -1603,11 +1607,22 @@ fn run_worker(
                 break;
             }
             if panic_requested.swap(false, Ordering::AcqRel) {
-                let _ = backend.release_all_full_instrument();
+                let panic_release = backend.release_all_full_instrument();
+                if !release_outcome_verified(&panic_release) {
+                    record_termination_error(
+                        &mut terminal_error,
+                        &mut secondary_errors,
+                        format!(
+                            "panic cleanup release verification failed: {}",
+                            describe_release_outcome(&panic_release)
+                        ),
+                    );
+                }
                 cancel_coordinator_or_terminal(
                     &mut coordinator,
                     &mut force_full_cleanup,
                     &mut terminal_error,
+                    &mut secondary_errors,
                 );
                 *abort_counts.entry("panic").or_insert(0) += 1;
                 publish_backend_metrics(
@@ -2265,11 +2280,22 @@ fn run_worker(
                             .last_win32_error
                             .map_or(String::new(), |error| format!(" (Win32 error {error})"))
                     ));
-                    let _ = backend.release_all_full_instrument();
+                    let recovery_cleanup = backend.release_all_full_instrument();
+                    if !release_outcome_verified(&recovery_cleanup) {
+                        record_termination_error(
+                            &mut terminal_error,
+                            &mut secondary_errors,
+                            format!(
+                                "recovery cleanup release verification failed: {}",
+                                describe_release_outcome(&recovery_cleanup)
+                            ),
+                        );
+                    }
                     cancel_coordinator_or_terminal(
                         &mut coordinator,
                         &mut force_full_cleanup,
                         &mut terminal_error,
+                        &mut secondary_errors,
                     );
                     break;
                 }
@@ -3339,36 +3365,93 @@ fn run_worker(
         }
     }));
 
+    // Validate before either cleanup operation can erase the evidence of a
+    // coordinator mismatch. The first failure remains primary; later cleanup
+    // and accounting failures are retained as secondary diagnostics.
+    if let Err(error) = coordinator.check_invariants() {
+        force_full_cleanup = true;
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator pre-cleanup invariant failure: {error}"),
+        );
+    }
+
+    if worker_result.is_err() {
+        force_full_cleanup = true;
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            "worker panicked before terminal cleanup".to_string(),
+        );
+    }
+
     // This cleanup sits outside the contained loop so it also runs when an
     // unexpected panic crosses the orchestration/backend seam.
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        if worker_result.is_err() || force_full_cleanup {
+        let outcome = if worker_result.is_err() || force_full_cleanup {
             backend.release_all_full_instrument()
         } else {
             backend.release_all()
+        };
+        if release_outcome_verified(&outcome) {
+            outcome
+        } else {
+            // A normal-path release that cannot be verified gets one bounded
+            // full-instrument recovery attempt before the result is published.
+            backend.release_all_full_instrument()
         }
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
+        if !release_outcome_verified(outcome) {
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!(
+                    "terminal release verification failed: {}",
+                    describe_release_outcome(outcome)
+                ),
+            );
+        }
+    } else {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            "terminal backend cleanup panicked".to_string(),
+        );
     }
-    if let Some(error) = terminal_error.as_ref() {
-        *metrics.terminal_error.lock() = Some(error.clone());
+
+    if let Err(error) = coordinator.cancel_all() {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator cancellation failure: {error}"),
+        );
     }
-    if let Err(error) = coordinator.cancel_all()
-        && terminal_error.is_none()
-    {
-        terminal_error = Some(format!("coordinator cancellation failure: {error}"));
+    if let Err(error) = coordinator.check_post_cleanup_invariants() {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator post-cleanup invariant failure: {error}"),
+        );
     }
     let end_qpc = qpc_clock.now().and_then(|ticks| {
         qpc_clock
             .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
             .map_err(|_| QpcError::ConversionOverflow)
     });
-    if let Err(error) = end_qpc
-        && terminal_error.is_none()
-    {
-        terminal_error = Some(format!("QPC runtime failure during termination: {error:?}"));
-    }
+    let end_us = match end_qpc {
+        Ok(value) => value,
+        Err(error) => {
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!("QPC runtime failure during termination: {error:?}"),
+            );
+            start_wall_time_us
+        }
+    };
     let terminal_abort_reason =
         if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
             "error"
@@ -3384,6 +3467,8 @@ fn run_worker(
         .into_iter()
         .map(|(reason, count)| (reason.to_string(), count))
         .collect();
+    *metrics.terminal_error.lock() = terminal_error.clone();
+    *metrics.secondary_errors.lock() = secondary_errors;
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
     publish_backend_metrics(
         &backend,
@@ -3392,7 +3477,6 @@ fn run_worker(
         &mut last_published_error,
     );
 
-    let end_us = end_qpc.unwrap_or(start_wall_time_us);
     local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
     local_metrics.worker_cpu_time_us =
         current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
@@ -3535,12 +3619,15 @@ fn cancel_coordinator_or_terminal(
     coordinator: &mut RuntimeDispatchCoordinator,
     force_full_cleanup: &mut bool,
     terminal_error: &mut Option<String>,
+    secondary_errors: &mut Vec<String>,
 ) {
     if let Err(error) = coordinator.cancel_all() {
         *force_full_cleanup = true;
-        if terminal_error.is_none() {
-            *terminal_error = Some(format!("coordinator cancellation failure: {error}"));
-        }
+        record_termination_error(
+            terminal_error,
+            secondary_errors,
+            format!("coordinator cancellation failure: {error}"),
+        );
     }
 }
 
@@ -3555,6 +3642,18 @@ fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
         "released_successfully={}, stuck_keys={:?}, verification_inconclusive={}",
         outcome.released_successfully, outcome.stuck_keys, outcome.verification_inconclusive
     )
+}
+
+fn record_termination_error(
+    primary: &mut Option<String>,
+    secondary: &mut Vec<String>,
+    error: String,
+) {
+    if primary.is_none() {
+        *primary = Some(error);
+    } else if primary.as_deref() != Some(error.as_str()) && !secondary.contains(&error) {
+        secondary.push(error);
+    }
 }
 
 /// Release physical input before cancelling only generations that still own it.
@@ -3873,7 +3972,7 @@ mod tests {
         INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
         anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
         derive_spin_threshold_us, drain_commands, focus_gate_matches, record_input_path_health,
-        release_runtime_outcome, update_estimator_after_send,
+        record_termination_error, release_runtime_outcome, update_estimator_after_send,
     };
     use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -4073,5 +4172,29 @@ mod tests {
             release_runtime_outcome(100, 0, 1, true),
             "deferred_failed_note_off"
         );
+    }
+
+    #[test]
+    fn termination_error_aggregation_preserves_primary_and_secondary_errors() {
+        let mut primary = None;
+        let mut secondary = Vec::new();
+        record_termination_error(
+            &mut primary,
+            &mut secondary,
+            "coordinator pre-cleanup mismatch".to_string(),
+        );
+        record_termination_error(
+            &mut primary,
+            &mut secondary,
+            "release verification failed".to_string(),
+        );
+        record_termination_error(
+            &mut primary,
+            &mut secondary,
+            "release verification failed".to_string(),
+        );
+
+        assert_eq!(primary.as_deref(), Some("coordinator pre-cleanup mismatch"));
+        assert_eq!(secondary, vec!["release verification failed"]);
     }
 }
