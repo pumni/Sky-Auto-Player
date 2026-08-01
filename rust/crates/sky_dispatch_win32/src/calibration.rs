@@ -34,8 +34,10 @@
 //! On non-Windows targets the public surface compiles but every function
 //! returns [`CalibrationError::PlatformUnsupported`].
 
-use crate::clock::{QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
+use crate::clock::{QpcClock, QpcTicks, qpc_now_ticks_checked, qpc_ticks_to_us};
+use crate::input::PlatformSendResult;
 use serde::{Deserialize, Serialize};
+use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -76,6 +78,28 @@ pub enum CalibrationError {
 
     #[error("calibration statistics overflowed")]
     StatisticsOverflow,
+
+    #[error(
+        "cold idle gap {configured_us}us is shorter than the shared threshold {threshold_us}us"
+    )]
+    ColdIdleGapTooShort {
+        configured_us: u64,
+        threshold_us: u64,
+    },
+
+    #[error("calibration state lock was poisoned")]
+    StateLockFailed,
+
+    #[error("calibration sequence id exhausted")]
+    SequenceOverflow,
+
+    #[error("{phase} packet {sequence_id} was not fully clean: {received}/{expected} receipts")]
+    PacketIntegrity {
+        phase: &'static str,
+        sequence_id: u32,
+        expected: u8,
+        received: u8,
+    },
 
     #[error("keyboard cleanup could not be verified; stuck keys: {stuck_keys:?}")]
     CleanupFailed { stuck_keys: Vec<u16> },
@@ -255,6 +279,49 @@ pub enum PacketKind {
     Up,
 }
 
+pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CalibrationStep {
+    MeasureDown,
+    PrepareDown,
+    HotGap,
+    ColdGapAfterPrepare,
+    MeasureUp,
+    CleanupUp,
+}
+
+pub(crate) fn calibration_protocol(
+    kind: PacketKind,
+    class: SampleClass,
+) -> &'static [CalibrationStep] {
+    match (kind, class) {
+        (PacketKind::Down, _) => &[CalibrationStep::MeasureDown, CalibrationStep::CleanupUp],
+        (PacketKind::Up, SampleClass::Hot) => &[
+            CalibrationStep::PrepareDown,
+            CalibrationStep::HotGap,
+            CalibrationStep::MeasureUp,
+        ],
+        (PacketKind::Up, SampleClass::Cold) => &[
+            CalibrationStep::PrepareDown,
+            CalibrationStep::ColdGapAfterPrepare,
+            CalibrationStep::MeasureUp,
+        ],
+    }
+}
+
+fn exact_sendinput_boundaries(
+    result: &PlatformSendResult,
+) -> Result<(QpcTicks, QpcTicks), CalibrationError> {
+    if result.timing_error.is_some() {
+        return Err(CalibrationError::ClockFailure);
+    }
+    let completed = result
+        .completed_ticks
+        .ok_or(CalibrationError::ClockFailure)?;
+    Ok((result.started_ticks, completed))
+}
+
 /// Parameters for a single calibration run.
 #[derive(Debug, Clone)]
 pub struct CalibrationConfig {
@@ -317,8 +384,14 @@ impl CalibrationConfig {
 /// The complete output of one calibration run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationOutput {
-    /// Schema version — bump when fields are added or renamed.
+    /// Output schema version — bump when fields are added or renamed.
     pub version: u32,
+    /// Measurement protocol version — bump when packet sequencing changes.
+    pub measurement_protocol_version: u32,
+    pub source_git_sha: &'static str,
+    pub native_build_id: &'static str,
+    pub native_source_fingerprint: &'static str,
+    pub rustc_version: &'static str,
     pub evidence_kind: &'static str,
     pub host_fingerprint: HostFingerprint,
     /// Buckets keyed by (kind, polyphony, class).
@@ -328,7 +401,11 @@ pub struct CalibrationOutput {
     pub warmup_attempted: u64,
     /// Measured attempts represented by the bucket map.
     pub measured_attempted: u64,
-    /// Total samples attempted (warm-up plus measured).
+    /// Physical setup Down samples, excluded from timing quantiles.
+    pub setup_attempted: u64,
+    pub setup_anomalous: u64,
+    pub setup_timed_out: u64,
+    /// Total sample attempts (warm-up plus measured plus setup Down).
     pub total_attempted: u64,
     pub warmup_anomalous: u64,
     pub measured_anomalous: u64,
@@ -353,6 +430,7 @@ pub struct CleanupOutcome {
     /// The calibration process could not prove that its Raw Input registration
     /// was restored before the pump thread exited.
     pub raw_input_restore_failed: bool,
+    pub pump_thread_failed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -395,6 +473,7 @@ struct SharedCalibState {
     hwnd: isize,
     clock_failed: bool,
     raw_input_restore_failed: bool,
+    pump_thread_failed: bool,
 }
 
 // ─── Platform-specific implementation ────────────────────────────────────────
@@ -800,6 +879,7 @@ mod platform {
         shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
         hwnd: isize,
         pump_thread: Option<std::thread::JoinHandle<()>>,
+        qpc_clock: QpcClock,
         next_sequence: u32,
         possibly_active_mask: u16,
     }
@@ -823,6 +903,7 @@ mod platform {
 
     impl CalibrationSession {
         pub fn open() -> Result<Self, CalibrationError> {
+            let qpc_clock = QpcClock::initialize().map_err(|_| CalibrationError::ClockFailure)?;
             let initial = SharedCalibState {
                 pending_receipts: Vec::new(),
                 active_sequence: None,
@@ -831,6 +912,7 @@ mod platform {
                 hwnd: 0,
                 clock_failed: false,
                 raw_input_restore_failed: false,
+                pump_thread_failed: false,
             };
             let shared = Arc::new((Mutex::new(initial), Condvar::new()));
             let shared_clone = Arc::clone(&shared);
@@ -872,6 +954,7 @@ mod platform {
                 shared,
                 hwnd,
                 pump_thread: Some(handle),
+                qpc_clock,
                 next_sequence: 1,
                 possibly_active_mask: 0,
             })
@@ -905,6 +988,7 @@ mod platform {
                 cleanup_stuck_keys: stuck_keys,
                 cleanup_verification_inconclusive: verification_inconclusive,
                 raw_input_restore_failed: false,
+                pump_thread_failed: false,
             }
         }
 
@@ -930,7 +1014,12 @@ mod platform {
             }
 
             let seq = self.next_sequence;
-            self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
+            if seq == 0 {
+                return Err(CalibrationError::SequenceOverflow);
+            }
+            self.next_sequence = seq
+                .checked_add(1)
+                .ok_or(CalibrationError::SequenceOverflow)?;
 
             // Prepare extra_info with sequence tag.
             let extra = make_extra_info(seq);
@@ -939,21 +1028,25 @@ mod platform {
             // receipt delivered before the mutex is acquired after SendInput.
             {
                 let (lock, _cvar) = self.shared.as_ref();
-                let mut g = lock.lock().unwrap();
+                let mut g = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 g.active_sequence = Some(seq);
                 g.pending_receipts.clear();
             }
 
-            // Build and send the INPUT packets with the tagged extra_info.
-            let call_started =
-                qpc_now_ticks_checked().map_err(|_| CalibrationError::ClockFailure)?;
-            let psr = send_input_raw_tagged(scan_codes, key_up, extra);
-            let call_completed =
-                qpc_now_ticks_checked().map_err(|_| CalibrationError::ClockFailure)?;
-            if psr.timing_error.is_some() {
-                return Err(CalibrationError::ClockFailure);
-            }
-
+            // The tagged sender owns both QPC boundaries. Do not add outer
+            // timestamps here: those would include calibration bookkeeping and
+            // would mislabel it as the SendInput syscall duration.
+            let psr = send_input_raw_tagged(scan_codes, key_up, extra, self.qpc_clock);
+            let (call_started, call_completed) = match exact_sendinput_boundaries(&psr) {
+                Ok(boundaries) => boundaries,
+                Err(error) => {
+                    let (lock, cvar) = self.shared.as_ref();
+                    let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+                    guard.active_sequence = None;
+                    cvar.notify_all();
+                    return Err(error);
+                }
+            };
             let expected = scan_codes.len() as u8;
             let partial_send = psr.inserted < expected as u32;
             if !key_up {
@@ -977,9 +1070,11 @@ mod platform {
             let deadline = std::time::Instant::now() + receipt_timeout;
             let (first, last, count, anomalies) = {
                 let (lock, cvar) = self.shared.as_ref();
-                let mut guard = lock.lock().unwrap();
+                let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
                 loop {
                     if guard.clock_failed {
+                        guard.active_sequence = None;
+                        cvar.notify_all();
                         return Err(CalibrationError::ClockFailure);
                     }
                     let n_received = guard.pending_receipts.len();
@@ -990,7 +1085,10 @@ mod platform {
                     if remaining.is_zero() {
                         break;
                     }
-                    guard = cvar.wait_timeout(guard, remaining).unwrap().0;
+                    guard = cvar
+                        .wait_timeout(guard, remaining)
+                        .map_err(|_| CalibrationError::StateLockFailed)?
+                        .0;
                 }
 
                 let receipts = std::mem::take(&mut guard.pending_receipts);
@@ -1020,6 +1118,82 @@ mod platform {
             })
         }
 
+        fn require_clean_packet(
+            sample: CalibrationSample,
+            phase: &'static str,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            if sample.is_complete() && !sample.anomalies.any() {
+                return Ok(sample);
+            }
+            Err(CalibrationError::PacketIntegrity {
+                phase,
+                sequence_id: sample.sequence_id,
+                expected: sample.expected_receipt_count,
+                received: sample.receipt_count,
+            })
+        }
+
+        /// Inject the setup packet used to establish a physical Down state.
+        /// Setup evidence is never admitted to timing quantiles.
+        pub fn prepare_keys_down(
+            &mut self,
+            scan_codes: &[u16],
+            receipt_timeout: Duration,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let sample = self.measure_packet(scan_codes, false, receipt_timeout)?;
+            Self::require_clean_packet(sample, "setup down")
+        }
+
+        /// Release a measured packet and verify that its receipt was complete.
+        /// Cleanup packets are bookkeeping, not measured evidence.
+        pub fn cleanup_keys_up(
+            &mut self,
+            scan_codes: &[u16],
+            receipt_timeout: Duration,
+        ) -> Result<CalibrationSample, CalibrationError> {
+            let sample = self.measure_packet(scan_codes, true, receipt_timeout)?;
+            Self::require_clean_packet(sample, "cleanup up")
+        }
+
+        /// Wait from an exact SendInput completion boundary until the physical
+        /// cold threshold has elapsed. The completion tick, rather than a
+        /// receipt or authored timestamp, is the classification anchor.
+        pub fn wait_cold_gap_after(
+            &self,
+            completed_ticks: QpcTicks,
+            gap_us: u64,
+        ) -> Result<(), CalibrationError> {
+            let gap_ticks = self
+                .qpc_clock
+                .duration_from_us(gap_us)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let deadline = completed_ticks
+                .checked_add_duration(gap_ticks)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            loop {
+                let now = self
+                    .qpc_clock
+                    .now()
+                    .map_err(|_| CalibrationError::ClockFailure)?;
+                if now >= deadline {
+                    return Ok(());
+                }
+                let remaining = deadline
+                    .as_u64()
+                    .checked_sub(now.as_u64())
+                    .ok_or(CalibrationError::ClockFailure)?;
+                let remaining_us = self
+                    .qpc_clock
+                    .duration_to_us(crate::clock::DurationTicks::from_raw(remaining))
+                    .map_err(|_| CalibrationError::ClockFailure)?;
+                if remaining_us > 100 {
+                    std::thread::sleep(Duration::from_micros(remaining_us.min(1_000)));
+                } else {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+
         pub fn close(mut self) -> CleanupOutcome {
             let mut cleanup = self.cleanup_keyboard();
             // Signal the pump thread to exit.
@@ -1028,8 +1202,11 @@ mod platform {
                 unsafe { PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0) };
                 self.hwnd = 0;
             }
-            if let Some(h) = self.pump_thread.take() {
-                let _ = h.join();
+            if let Some(h) = self.pump_thread.take()
+                && h.join().is_err()
+                && let Ok(mut state) = self.shared.0.lock()
+            {
+                state.pump_thread_failed = true;
             }
             let restore_failed = self
                 .shared
@@ -1038,7 +1215,14 @@ mod platform {
                 .map(|state| state.raw_input_restore_failed)
                 .unwrap_or(true);
             cleanup.raw_input_restore_failed = restore_failed;
+            cleanup.pump_thread_failed = self
+                .shared
+                .0
+                .lock()
+                .map(|state| state.pump_thread_failed)
+                .unwrap_or(true);
             cleanup.cleanup_success &= !restore_failed;
+            cleanup.cleanup_success &= !cleanup.pump_thread_failed;
             cleanup
         }
     }
@@ -1055,8 +1239,11 @@ mod platform {
                     PostMessageW(self.hwnd as HWND, WM_CALIB_EXIT, 0, 0);
                 }
             }
-            if let Some(h) = self.pump_thread.take() {
-                let _ = h.join();
+            if let Some(h) = self.pump_thread.take()
+                && h.join().is_err()
+                && let Ok(mut state) = self.shared.0.lock()
+            {
+                state.pump_thread_failed = true;
             }
         }
     }
@@ -1067,6 +1254,7 @@ mod platform {
         scan_codes: &[u16],
         key_up: bool,
         extra: usize,
+        clock: QpcClock,
     ) -> crate::input::PlatformSendResult {
         use smallvec::SmallVec;
         use windows_sys::Win32::Foundation::SetLastError;
@@ -1075,7 +1263,7 @@ mod platform {
         };
 
         if scan_codes.is_empty() {
-            let completed_ticks = match qpc_now_ticks_checked() {
+            let completed_ticks = match clock.now() {
                 Ok(ticks) => ticks,
                 Err(error) => {
                     return crate::input::PlatformSendResult {
@@ -1089,7 +1277,12 @@ mod platform {
                     };
                 }
             };
-            let (completed_us, timing_error) = match qpc_ticks_to_us(completed_ticks) {
+            let (completed_us, timing_error) = match clock
+                .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
+                    completed_ticks.as_u64(),
+                ))
+                .map_err(|_| crate::clock::QpcError::ConversionOverflow)
+            {
                 Ok(micros) => (micros, None),
                 Err(error) => (0, Some(error)),
             };
@@ -1104,7 +1297,7 @@ mod platform {
             };
         }
 
-        let started_ticks = match qpc_now_ticks_checked() {
+        let started_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
                 return crate::input::PlatformSendResult {
@@ -1152,8 +1345,13 @@ mod platform {
         } else {
             0
         };
-        let (completed_ticks, completed_us, timing_error) = match qpc_now_ticks_checked() {
-            Ok(ticks) => match qpc_ticks_to_us(ticks) {
+        let (completed_ticks, completed_us, timing_error) = match clock.now() {
+            Ok(ticks) => match clock
+                .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
+                    ticks.as_u64(),
+                ))
+                .map_err(|_| crate::clock::QpcError::ConversionOverflow)
+            {
                 Ok(micros) => (Some(ticks), micros, None),
                 Err(error) => (Some(ticks), 0, Some(error)),
             },
@@ -1279,6 +1477,12 @@ mod platform {
         {
             return Err(CalibrationError::ZeroSamples);
         }
+        if config.cold_idle_gap_us < SEND_COLD_THRESHOLD_US {
+            return Err(CalibrationError::ColdIdleGapTooShort {
+                configured_us: config.cold_idle_gap_us,
+                threshold_us: SEND_COLD_THRESHOLD_US,
+            });
+        }
         for &p in &config.polyphonies {
             if p == 0 || p as usize > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
                 return Err(CalibrationError::PolyphonyTooLarge(p as usize));
@@ -1298,6 +1502,9 @@ mod platform {
             HashMap::new();
         let mut warmup_attempted: u64 = 0;
         let mut measured_attempted: u64 = 0;
+        let mut setup_attempted: u64 = 0;
+        let mut setup_anomalous: u64 = 0;
+        let mut setup_timed_out: u64 = 0;
         let mut total_attempted: u64 = 0;
         let mut warmup_anomalous: u64 = 0;
         let mut measured_anomalous: u64 = 0;
@@ -1306,18 +1513,24 @@ mod platform {
         let mut measured_timed_out: u64 = 0;
         let mut total_timed_out: u64 = 0;
 
-        let mut record_attempt = |sample: &CalibrationSample, warmup: bool| {
-            let attempted = if warmup {
+        let mut record_attempt = |sample: &CalibrationSample, warmup: bool, setup: bool| {
+            let attempted = if setup {
+                &mut setup_attempted
+            } else if warmup {
                 &mut warmup_attempted
             } else {
                 &mut measured_attempted
             };
-            let anomalous = if warmup {
+            let anomalous = if setup {
+                &mut setup_anomalous
+            } else if warmup {
                 &mut warmup_anomalous
             } else {
                 &mut measured_anomalous
             };
-            let timed_out = if warmup {
+            let timed_out = if setup {
+                &mut setup_timed_out
+            } else if warmup {
                 &mut warmup_timed_out
             } else {
                 &mut measured_timed_out
@@ -1342,24 +1555,19 @@ mod platform {
                 // Warm-up is deliberately excluded from both measured
                 // classes. It is not evidence of either hot or cold state.
                 for _ in 0..config.warmup_samples {
-                    // For Down samples: send Down, then release before next Down.
-                    // For Up samples: ensure keys are down first, then send Up.
-                    // We alternate down/up pairs to keep state consistent.
                     let sample = match kind {
                         PacketKind::Down => {
                             let s = session.measure_packet(scan_codes, false, receipt_timeout)?;
-                            // Release immediately so the next Down is valid.
-                            let _ = session.measure_packet(scan_codes, true, receipt_timeout)?;
+                            session.cleanup_keys_up(scan_codes, receipt_timeout)?;
                             s
                         }
                         PacketKind::Up => {
-                            // Inject Down first (not counted).
-                            let _ = session.measure_packet(scan_codes, false, receipt_timeout)?;
-                            // Counted Up sample.
+                            let setup = session.prepare_keys_down(scan_codes, receipt_timeout)?;
+                            record_attempt(&setup, true, true)?;
                             session.measure_packet(scan_codes, true, receipt_timeout)?
                         }
                     };
-                    record_attempt(&sample, true)?;
+                    record_attempt(&sample, true, false)?;
                     if !inter_sample_sleep.is_zero() {
                         std::thread::sleep(inter_sample_sleep);
                     }
@@ -1378,25 +1586,40 @@ mod platform {
                     ),
                 ] {
                     for _ in 0..sample_count {
-                        if !gap.is_zero() {
+                        let protocol = calibration_protocol(kind, class);
+                        // Up/Cold must establish the physical Down state first;
+                        // its cold wait is anchored to that setup completion.
+                        if !protocol.contains(&CalibrationStep::ColdGapAfterPrepare)
+                            && !gap.is_zero()
+                        {
                             std::thread::sleep(gap);
                         }
                         let sample = match kind {
                             PacketKind::Down => {
                                 let s =
                                     session.measure_packet(scan_codes, false, receipt_timeout)?;
-                                let _ =
-                                    session.measure_packet(scan_codes, true, receipt_timeout)?;
+                                session.cleanup_keys_up(scan_codes, receipt_timeout)?;
                                 s
                             }
                             PacketKind::Up => {
-                                let _ =
-                                    session.measure_packet(scan_codes, false, receipt_timeout)?;
+                                let setup =
+                                    session.prepare_keys_down(scan_codes, receipt_timeout)?;
+                                record_attempt(&setup, false, true)?;
+                                if protocol.contains(&CalibrationStep::HotGap) {
+                                    if !inter_sample_sleep.is_zero() {
+                                        std::thread::sleep(inter_sample_sleep);
+                                    }
+                                } else {
+                                    session.wait_cold_gap_after(
+                                        setup.call_completed_ticks,
+                                        config.cold_idle_gap_us,
+                                    )?;
+                                }
                                 session.measure_packet(scan_codes, true, receipt_timeout)?
                             }
                         };
 
-                        record_attempt(&sample, false)?;
+                        record_attempt(&sample, false, false)?;
                         all_raw.entry((kind, poly, class)).or_default().push(sample);
                     }
                 }
@@ -1437,12 +1660,20 @@ mod platform {
         }
 
         Ok(CalibrationOutput {
-            version: 4,
+            version: 5,
+            measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
+            source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
+            native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
+            native_source_fingerprint: env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
+            rustc_version: env!("SKY_RUSTC_VERSION"),
             evidence_kind: "injected_raw_input_delivery_proxy",
             host_fingerprint: build_host_fingerprint()?,
             buckets,
             warmup_attempted,
             measured_attempted,
+            setup_attempted,
+            setup_anomalous,
+            setup_timed_out,
             total_attempted,
             warmup_anomalous,
             measured_anomalous,
@@ -1810,6 +2041,68 @@ mod tests {
         assert!(matches!(
             quantile_stats_u64(&[u64::MAX, u64::MAX]),
             Err(CalibrationError::StatisticsOverflow)
+        ));
+    }
+
+    #[test]
+    fn up_cold_protocol_waits_after_setup_down() {
+        assert_eq!(
+            calibration_protocol(PacketKind::Up, SampleClass::Cold),
+            &[
+                CalibrationStep::PrepareDown,
+                CalibrationStep::ColdGapAfterPrepare,
+                CalibrationStep::MeasureUp,
+            ]
+        );
+        assert_eq!(
+            calibration_protocol(PacketKind::Up, SampleClass::Hot),
+            &[
+                CalibrationStep::PrepareDown,
+                CalibrationStep::HotGap,
+                CalibrationStep::MeasureUp,
+            ]
+        );
+    }
+
+    #[test]
+    fn down_protocol_measures_down_then_cleans_up() {
+        assert_eq!(
+            calibration_protocol(PacketKind::Down, SampleClass::Cold),
+            &[CalibrationStep::MeasureDown, CalibrationStep::CleanupUp]
+        );
+    }
+
+    #[test]
+    fn calibration_sample_uses_exact_sender_tick_boundaries() {
+        let result = PlatformSendResult {
+            requested: 1,
+            inserted: 1,
+            started_ticks: QpcTicks::from_raw(101),
+            completed_ticks: Some(QpcTicks::from_raw(211)),
+            completed_us: 0,
+            win32_error: 0,
+            timing_error: None,
+        };
+        assert_eq!(
+            exact_sendinput_boundaries(&result).unwrap(),
+            (QpcTicks::from_raw(101), QpcTicks::from_raw(211))
+        );
+    }
+
+    #[test]
+    fn missing_sender_completion_is_not_a_zero_timestamp_sample() {
+        let result = PlatformSendResult {
+            requested: 1,
+            inserted: 1,
+            started_ticks: QpcTicks::from_raw(101),
+            completed_ticks: None,
+            completed_us: 0,
+            win32_error: 0,
+            timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+        };
+        assert!(matches!(
+            exact_sendinput_boundaries(&result),
+            Err(CalibrationError::ClockFailure)
         ));
     }
 }

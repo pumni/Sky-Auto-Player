@@ -6,7 +6,7 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
-use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
 use sky_dispatch_win32::clock::{
@@ -36,7 +36,6 @@ const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const OUTCOME_SHUTDOWN_TIMEOUT: u8 = 5;
 const PAUSED_POLL_US: u64 = 2_000;
-const SEND_COLD_THRESHOLD_US: u64 = 20_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;

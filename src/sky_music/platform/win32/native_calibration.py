@@ -9,13 +9,19 @@ clean-sample gates have passed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
+
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 5
+SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 2
+MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
 
 
 class NativeCalibrationError(RuntimeError):
@@ -91,10 +97,26 @@ def _clean_quantile(bucket: dict[str, Any], kind: str) -> dict[str, int]:
 
 def _validate_result(result: object) -> dict[str, Any]:
     data = _require_mapping(result, "root")
-    if data.get("version") != 4:
+    if data.get("version") != SUPPORTED_NATIVE_CALIBRATION_VERSION:
         raise NativeCalibrationError("unsupported native calibration schema version")
+    if data.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
+        raise NativeCalibrationError("unsupported native calibration measurement protocol")
     if data.get("evidence_kind") != "injected_raw_input_delivery_proxy":
         raise NativeCalibrationError("native calibration evidence kind is not the expected proxy")
+    for name in (
+        "source_git_sha",
+        "native_build_id",
+        "native_source_fingerprint",
+        "rustc_version",
+    ):
+        value = data.get(name)
+        if not isinstance(value, str) or not value.strip() or value == "unknown":
+            raise NativeCalibrationError(f"native calibration has invalid {name}")
+
+    host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")
+    frequency = host.get("qpc_frequency_hz")
+    if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
+        raise NativeCalibrationError("native calibration has invalid QPC frequency")
 
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
     if cleanup.get("cleanup_success") is not True:
@@ -105,10 +127,64 @@ def _validate_result(result: object) -> dict[str, Any]:
         raise NativeCalibrationError(
             "native calibration did not verify Raw Input registration restoration"
         )
+    if cleanup.get("pump_thread_failed") is not False:
+        raise NativeCalibrationError("native calibration pump thread did not exit cleanly")
 
-    measured = data.get("measured_attempted")
-    if not isinstance(measured, int) or isinstance(measured, bool) or measured <= 0:
+    count_names = (
+        "warmup_attempted",
+        "measured_attempted",
+        "setup_attempted",
+        "warmup_anomalous",
+        "measured_anomalous",
+        "setup_anomalous",
+        "warmup_timed_out",
+        "measured_timed_out",
+        "setup_timed_out",
+        "total_attempted",
+        "total_anomalous",
+        "total_timed_out",
+    )
+    counts: dict[str, int] = {}
+    for name in count_names:
+        value = data.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise NativeCalibrationError(f"native calibration has invalid {name}")
+        counts[name] = value
+    if counts["measured_attempted"] <= 0:
         raise NativeCalibrationError("native calibration has no measured attempts")
+    if counts["total_attempted"] != sum(
+        counts[name] for name in ("warmup_attempted", "measured_attempted", "setup_attempted")
+    ):
+        raise NativeCalibrationError("native calibration attempt totals are inconsistent")
+    if counts["total_anomalous"] != sum(
+        counts[name] for name in ("warmup_anomalous", "measured_anomalous", "setup_anomalous")
+    ):
+        raise NativeCalibrationError("native calibration anomaly totals are inconsistent")
+    if counts["total_timed_out"] != sum(
+        counts[name] for name in ("warmup_timed_out", "measured_timed_out", "setup_timed_out")
+    ):
+        raise NativeCalibrationError("native calibration timeout totals are inconsistent")
+
+    buckets = _require_mapping(data.get("buckets"), "buckets")
+    for kind in ("down", "up"):
+        by_polyphony = _require_mapping(buckets.get(kind), f"buckets.{kind}")
+        for polyphony, classes in by_polyphony.items():
+            _require_mapping(classes, f"buckets.{kind}.{polyphony}")
+            for class_name, bucket_value in classes.items():
+                bucket = _require_mapping(
+                    bucket_value, f"buckets.{kind}.{polyphony}.{class_name}"
+                )
+                attempted = bucket.get("attempted")
+                clean = bucket.get("clean")
+                rejected = bucket.get("rejected")
+                clean_samples = bucket.get("clean_sample_count")
+                if not all(
+                    isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                    for value in (attempted, clean, rejected, clean_samples)
+                ):
+                    raise NativeCalibrationError("native calibration bucket counts are invalid")
+                if clean_samples != clean or clean + rejected != attempted:
+                    raise NativeCalibrationError("native calibration bucket totals are inconsistent")
     return data
 
 
@@ -128,10 +204,14 @@ def _legacy_cache(result: dict[str, Any]) -> dict[str, Any]:
         "n": clean_count,
         "sample_count": clean_count,
         "native_calibration_version": result["version"],
+        "measurement_protocol_version": result["measurement_protocol_version"],
+        "source_git_sha": result.get("source_git_sha"),
+        "native_build_id": result.get("native_build_id"),
         "host_fingerprint": result.get("host_fingerprint"),
         "anomaly_counts": {
             "warmup": result.get("warmup_anomalous"),
             "measured": result.get("measured_anomalous"),
+            "setup": result.get("setup_anomalous"),
             "total": result.get("total_anomalous"),
         },
     }
@@ -158,33 +238,49 @@ def run_native_calibration(
 
     if mode not in {"quick", "full"}:
         raise NativeCalibrationError("mode must be quick or full")
-    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
+    if (
+        not isinstance(timeout_seconds, (int, float))
+        or isinstance(timeout_seconds, bool)
+        or not math.isfinite(float(timeout_seconds))
+    ):
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
     if timeout_seconds <= 0:
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
 
     binary = _find_binary()
-    try:
-        completed = subprocess.run(
-            [str(binary), "--mode", mode],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise NativeCalibrationError("native calibration timed out") from exc
-    except OSError as exc:
-        raise NativeCalibrationError(f"could not start native calibration: {exc}") from exc
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        try:
+            process = subprocess.Popen(
+                [str(binary), "--mode", mode],
+                stdout=stdout_file,
+                stderr=stderr_file,
+                shell=False,
+            )
+            try:
+                return_code = process.wait(timeout=float(timeout_seconds))
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                raise NativeCalibrationError("native calibration timed out") from exc
+        except OSError as exc:
+            raise NativeCalibrationError(f"could not start native calibration: {exc}") from exc
 
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or "native calibration exited without diagnostics"
-        raise NativeCalibrationError(f"native calibration failed ({completed.returncode}): {detail}")
-    if completed.stderr.strip():
+        stdout_size = stdout_file.tell()
+        if stdout_size > MAX_NATIVE_CALIBRATION_STDOUT_BYTES:
+            raise NativeCalibrationError("native calibration stdout exceeded the size limit")
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read().decode("utf-8", errors="strict")
+        stderr = stderr_file.read().decode("utf-8", errors="replace")
+
+    if return_code != 0:
+        detail = stderr.strip() or "native calibration exited without diagnostics"
+        raise NativeCalibrationError(f"native calibration failed ({return_code}): {detail}")
+    if stderr.strip():
         # Diagnostics are allowed on stderr, but stdout must remain JSON-only.
         pass
     try:
-        result = _validate_result(json.loads(completed.stdout))
+        result = _validate_result(json.loads(stdout))
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise NativeCalibrationError("native calibration stdout was not valid JSON") from exc
 

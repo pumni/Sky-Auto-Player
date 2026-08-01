@@ -3,6 +3,13 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Physical idle interval separating cold and hot SendInput classifications.
+///
+/// The same threshold is used by the production worker and the isolated
+/// calibration process. It is intentionally expressed at the configuration
+/// boundary; callers convert it once into their local QPC tick domain.
+pub const SEND_COLD_THRESHOLD_US: u64 = 20_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TimeArithmeticError {
     #[error("timestamp arithmetic overflow")]
