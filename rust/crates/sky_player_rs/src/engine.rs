@@ -202,7 +202,7 @@ impl NativeTelemetrySummary {
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct NativeTelemetryOutput {
-    pub records: Vec<NativeTelemetryRecord>,
+    pub records: VecDeque<NativeTelemetryRecord>,
     pub summary: NativeTelemetrySummary,
     pub attempted: u64,
     pub accepted: u64,
@@ -216,16 +216,16 @@ const MIXED_RELEASE_REASON: &str = "mixed_deferred_release";
 const MIXED_RELEASE_REASON_ID: u16 = u16::MAX;
 
 impl NativeTelemetryOutput {
-    fn new(enabled: bool, capacity: usize, reason_table: Vec<String>) -> Self {
+    fn new(mode: TelemetryMode, capacity: usize, reason_table: Vec<String>) -> Self {
         Self {
-            records: if enabled {
+            records: if matches!(mode, TelemetryMode::Ring | TelemetryMode::FullTrace) {
                 // Reserve the complete bounded buffer before the worker
                 // epoch. Telemetry is an opt-in diagnostic mode; once it is
-                // enabled, a later Vec growth/copy on the dispatch thread is
+                // enabled, a later VecDeque growth/copy on the dispatch thread is
                 // a worse failure mode than its predictable memory cost.
-                Vec::with_capacity(capacity)
+                VecDeque::with_capacity(capacity)
             } else {
-                Vec::new()
+                VecDeque::new()
             },
             summary: NativeTelemetrySummary::default(),
             attempted: 0,
@@ -253,8 +253,16 @@ impl NativeTelemetryOutput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryMode {
+    Off,
+    Summary,
+    Ring,
+    FullTrace,
+}
+
 struct TelemetryCollector {
-    enabled: bool,
+    mode: TelemetryMode,
     capacity: usize,
     output: NativeTelemetryOutput,
     mixed_release_reason_id: u16,
@@ -263,11 +271,11 @@ struct TelemetryCollector {
 }
 
 impl TelemetryCollector {
-    fn new(enabled: bool, capacity: usize, reason_table: Vec<String>) -> Self {
+    fn new(mode: TelemetryMode, capacity: usize, reason_table: Vec<String>) -> Self {
         Self {
-            enabled,
+            mode,
             capacity,
-            output: NativeTelemetryOutput::new(enabled, capacity, reason_table),
+            output: NativeTelemetryOutput::new(mode, capacity, reason_table),
             mixed_release_reason_id: MIXED_RELEASE_REASON_ID,
             next_dispatch_id: 0,
             last_completed_us: None,
@@ -279,27 +287,40 @@ impl TelemetryCollector {
         F: FnOnce() -> NativeTelemetryRecord,
     {
         self.output.attempted = self.output.attempted.saturating_add(1);
-        // The worker still counts attempted dispatches, but disabled
-        // production telemetry must not materialize SmallVecs, generation
-        // lists, or other event-owned data on the real-time thread.
-        if !self.enabled {
+        if self.mode == TelemetryMode::Off {
             return;
         }
+
         let mut record = build();
         self.output.summary.observe(&record);
         record.dispatch_id = self.next_dispatch_id;
-        self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
         record.idle_gap_us = self
             .last_completed_us
             .map_or(0, |previous| record.actual_us.saturating_sub(previous));
         self.last_completed_us = Some(record.dispatch_completed_us);
-        if self.output.records.len() < self.capacity {
-            self.output.records.push(record);
-            self.output.accepted = self.output.accepted.saturating_add(1);
-        } else {
-            self.output.dropped = self.output.dropped.saturating_add(1);
-            self.output.truncated = true;
+
+        match self.mode {
+            TelemetryMode::Off => unreachable!(),
+            TelemetryMode::Summary => {}
+            TelemetryMode::Ring => {
+                if self.output.records.len() == self.capacity {
+                    self.output.records.pop_front();
+                }
+                self.output.records.push_back(record);
+                self.output.accepted = self.output.accepted.saturating_add(1);
+            }
+            TelemetryMode::FullTrace => {
+                if self.output.records.len() < self.capacity {
+                    self.output.records.push_back(record);
+                    self.output.accepted = self.output.accepted.saturating_add(1);
+                } else {
+                    self.output.dropped = self.output.dropped.saturating_add(1);
+                    self.output.truncated = true;
+                }
+            }
         }
+        
+        self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
     }
 }
 
@@ -394,7 +415,7 @@ struct WorkerConfig {
     core_warmup_budget_us: u64,
     late_pulse_drop_threshold_us: Option<u64>,
     chord_conflict_policy: ChordConflictPolicy,
-    telemetry_enabled: bool,
+    telemetry_mode: TelemetryMode,
     telemetry_capacity: usize,
     priority_mode: PriorityMode,
     enable_waitable_timer: bool,
@@ -454,7 +475,7 @@ impl NativeDispatchSession {
         core_warmup_budget_us: u64,
         late_pulse_drop_threshold_us: Option<u64>,
         chord_conflict_policy: ChordConflictPolicy,
-        telemetry_enabled: bool,
+        telemetry_mode: TelemetryMode,
         telemetry_capacity: usize,
         priority_mode: PriorityMode,
         enable_waitable_timer: bool,
@@ -503,7 +524,7 @@ impl NativeDispatchSession {
                 core_warmup_budget_us,
                 late_pulse_drop_threshold_us,
                 chord_conflict_policy,
-                telemetry_enabled,
+                telemetry_mode,
                 telemetry_capacity,
                 priority_mode,
                 enable_waitable_timer,
@@ -945,7 +966,7 @@ fn run_worker(
     let mut coordinator = RuntimeDispatchCoordinator::new(config.schedule, config.min_hold_us, 0, |us| TimelineTicks(qpc_us_to_ticks(us)));
     local_metrics.total_us = coordinator.effective_total_us();
     let mut telemetry = TelemetryCollector::new(
-        config.telemetry_enabled,
+        config.telemetry_mode,
         config.telemetry_capacity,
         telemetry_reason_table,
     );
@@ -1457,9 +1478,9 @@ fn run_worker(
                     sky_dispatch_core::model::ScanCodeBatch::new_empty()
                 };
                 // Materialise full generation ids for telemetry (only if enabled).
-                // This allocation is guarded by the telemetry flag so production
-                // runs pay nothing.
-                let materialized_for_telemetry = if telemetry.enabled {
+                // This allocation is guarded by the telemetry mode so production
+                // fast path avoids SmallVec creation.
+                let materialized_for_telemetry = if telemetry.mode != TelemetryMode::Off {
                     Some(batch_view.materialize())
                 } else {
                     None

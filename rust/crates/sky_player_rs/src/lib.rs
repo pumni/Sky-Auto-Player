@@ -412,7 +412,7 @@ struct NativeDispatchSessionPy {
 impl NativeDispatchSessionPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), supervisor_lease_timeout_us = StrictU64(0), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_mode = None, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), supervisor_lease_timeout_us = StrictU64(0), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -427,6 +427,7 @@ impl NativeDispatchSessionPy {
         late_pulse_drop_threshold_us: Option<StrictU64>,
         same_key_conflict_policy: &str,
         telemetry_enabled: bool,
+        telemetry_mode: Option<&str>,
         telemetry_capacity: StrictU64,
         rt_priority_mode: &str,
         enable_waitable_timer: bool,
@@ -456,6 +457,24 @@ impl NativeDispatchSessionPy {
         let late_pulse_drop_threshold_us = late_pulse_drop_threshold_us.map(|value| value.0);
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
+        let parsed_telemetry_mode = match telemetry_mode {
+            Some("off") => crate::engine::TelemetryMode::Off,
+            Some("summary") => crate::engine::TelemetryMode::Summary,
+            Some("ring") => crate::engine::TelemetryMode::Ring,
+            Some("full_trace") => crate::engine::TelemetryMode::FullTrace,
+            Some(_) => {
+                return Err(PyValueError::new_err(
+                    "telemetry_mode must be 'off', 'summary', 'ring', or 'full_trace'",
+                ));
+            }
+            None => {
+                if telemetry_enabled {
+                    crate::engine::TelemetryMode::FullTrace
+                } else {
+                    crate::engine::TelemetryMode::Off
+                }
+            }
+        };
         let spin_floor_us = spin_floor_us.0;
         let input_path_warn_us = input_path_warn_us.0;
         let strict_down_completion_late_us = strict_down_completion_late_us.0;
@@ -610,7 +629,7 @@ impl NativeDispatchSessionPy {
             core_warmup_budget_us,
             late_pulse_drop_threshold_us,
             chord_conflict_policy,
-            telemetry_enabled,
+            parsed_telemetry_mode,
             telemetry_capacity,
             priority_mode,
             enable_waitable_timer,
