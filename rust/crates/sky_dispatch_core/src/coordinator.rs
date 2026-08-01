@@ -866,6 +866,11 @@ impl RuntimeDispatchCoordinator {
         1u16 << slot
     }
 
+    #[inline]
+    pub fn bit_for_slot_pub(slot: KeySlot) -> u16 {
+        Self::bit_for_slot(slot)
+    }
+
     fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
         self.active_by_slot
             .get(slot as usize)
@@ -1152,6 +1157,142 @@ impl RuntimeDispatchCoordinator {
             .materialize_batch(self.cursor, self.recovery_offset_us);
         self.cursor += 1;
         Some((popped, effective_lead))
+    }
+
+    /// Variant of [`pop_next_due_authored`] that returns the batch index.
+    ///
+    /// This avoids returning a borrow tied to `&mut self`, allowing the caller
+    /// to immutably borrow the schedule via `coordinator.schedule.view_batch(...)`
+    /// and then call other `&self` methods like `check_down_conflicts_compact`.
+    pub fn pop_next_due_authored_index(
+        &mut self,
+        now_us: u64,
+        dispatch_lead_us: u64,
+    ) -> Option<(usize, u64)> {
+        if self.cursor >= self.schedule.batches.len() {
+            return None;
+        }
+        if self.release_recovery_active() {
+            return None;
+        }
+        let batch = &self.schedule.batches[self.cursor];
+        let effective_scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
+        let effective_lead =
+            Self::effective_authored_lead(effective_scheduled_us, dispatch_lead_us);
+        if effective_scheduled_us > now_us.saturating_add(effective_lead) {
+            return None;
+        }
+        if effective_scheduled_us > now_us && self.early_pop_blocked(batch) {
+            return None;
+        }
+        let index = self.cursor;
+        self.cursor += 1;
+        Some((index, effective_lead))
+    }
+
+    /// Check whether any intent in `compact_intents` conflicts with an
+    /// already-active key slot.
+    ///
+    /// Returns a bitmask (`u16`) where each set bit corresponds to a key slot
+    /// that is currently active.  A return value of `0` means no conflicts.
+    ///
+    /// This is the hot-path alternative to [`split_down_intents`] —
+    /// it operates directly on the compact arena slice with one bitwise AND
+    /// per intent and produces no allocation.
+    pub fn check_down_conflicts_compact(&self, compact_intents: &[CompactIntent]) -> u16 {
+        if self.active_mask == 0 {
+            return 0;
+        }
+        let mut conflict_mask: u16 = 0;
+        for compact in compact_intents {
+            let bit = Self::bit_for_slot(compact.key_slot());
+            if self.active_mask & bit != 0 {
+                conflict_mask |= bit;
+            }
+        }
+        conflict_mask
+    }
+
+    /// Terminalize the generations associated with every slot set in
+    /// `conflict_mask` as `DroppedConflict`.
+    ///
+    /// Called after [`check_down_conflicts_compact`] returns a non-zero mask.
+    /// Updating counters is the only side-effect; no mask bits are cleared
+    /// (the slots were never activated for the conflicting batch).
+    pub fn terminalize_conflicted_slots(
+        &mut self,
+        compact_intents: &[CompactIntent],
+        conflict_mask: u16,
+    ) {
+        if conflict_mask == 0 {
+            return;
+        }
+        for compact in compact_intents {
+            if conflict_mask & Self::bit_for_slot(compact.key_slot()) != 0 {
+                // Only Down intents with a generation ID need terminalizing.
+                if compact.generation_id() != NO_GENERATION_ID {
+                    self.counters.increment(GenerationStatus::DroppedConflict);
+                }
+            }
+        }
+    }
+
+    /// Activate sent downs from a batch index without allocating.
+    ///
+    /// `sent_scan_codes` is the slice returned by `SendInput` bookkeeping —
+    /// only keys present in this slice are activated.  Keys in the batch
+    /// that were not sent are terminated as `DroppedBackend`.
+    pub fn activate_sent_downs_compact(
+        &mut self,
+        batch_index: usize,
+        sent_scan_codes: &[u16],
+        dispatch_started_us: u64,
+        dispatch_started_ticks: TimelineTicks,
+        dispatch_completed_us: u64,
+        dispatch_completed_ticks: TimelineTicks,
+    ) {
+        let release_not_before_us =
+            dispatch_completed_us + self.min_hold_us + self.delivery_margin_us;
+        let release_not_before_ticks = dispatch_completed_ticks
+            .saturating_add(self.min_hold_ticks)
+            .saturating_add(self.delivery_margin_ticks);
+        
+        let batch = self.schedule.batches.get(batch_index).unwrap();
+        let source_action_index = batch.source_action_index;
+        let scheduled_us = batch.scheduled_us.saturating_add(self.recovery_offset_us);
+        let start = batch.intent_start as usize;
+        let end = start + batch.intent_len as usize;
+        let compact_intents = &self.schedule.intents[start..end];
+
+        for compact in compact_intents {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let Some(sc) = self.schedule.key_registry.scan_code_for(slot) else {
+                continue;
+            };
+            if !sent_scan_codes.contains(&sc) {
+                self.counters.increment(GenerationStatus::DroppedBackend);
+                continue;
+            }
+            self.active_by_slot[slot as usize] = Some(ActiveGeneration {
+                generation_id,
+                scan_code: sc,
+                key_slot: slot,
+                source_action_index,
+                scheduled_down_us: scheduled_us,
+                scheduled_down_ticks: self.batch_scheduled_ticks[source_action_index as usize],
+                down_dispatch_started_us: dispatch_started_us,
+                down_dispatch_started_ticks: dispatch_started_ticks,
+                down_dispatch_completed_us: dispatch_completed_us,
+                down_dispatch_completed_ticks: dispatch_completed_ticks,
+                release_not_before_us,
+                release_not_before_ticks,
+            });
+            self.active_mask |= Self::bit_for_slot(slot);
+        }
     }
 
     pub fn activate_sent_downs(

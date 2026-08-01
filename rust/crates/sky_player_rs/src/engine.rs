@@ -1432,174 +1432,257 @@ fn run_worker(
             } else {
                 (0, false)
             };
-            if let Some((batch, _lead)) =
-                coordinator.pop_next_due_authored(effective_now_us, lead_down)
+            if let Some((batch_index, _lead)) =
+                coordinator.pop_next_due_authored_index(effective_now_us, lead_down)
             {
-                if batch.kind == ActionKind::Down {
+                // --- Borrow scope: extract all scalar and stack data before any &mut call ---
+                // `batch_view` borrows from `coordinator.schedule`. We must not call any
+                // `&mut coordinator` method until this scope ends. Pull every field we need
+                // into Copy / stack-owned values here.
+                let batch_view = coordinator.schedule.view_batch(batch_index, coordinator.recovery_offset_us());
+                let batch_kind = batch_view.kind();
+                let batch_source_action_index = batch_view.source_action_index();
+                let batch_scheduled_us = batch_view.scheduled_us;
+                let batch_reason_id = batch_view.reason_id();
+                let batch_intent_count = batch_view.intents.len();
+                // Conflict check: O(N) bitwise, no allocation.
+                let conflict_mask = coordinator.check_down_conflicts_compact(batch_view.intents);
+                let has_conflicts = conflict_mask != 0;
+                // Scan codes for SendInput: stack-only buffer.
+                let scan_batch = batch_view.scan_code_batch_excluding_mask(conflict_mask);
+                // Collect conflict scan codes into stack buffer for telemetry.
+                let conflict_scan_batch = if has_conflicts {
+                    batch_view.scan_code_batch_excluding_mask(!conflict_mask)
+                } else {
+                    sky_dispatch_core::model::ScanCodeBatch::new_empty()
+                };
+                // Materialise full generation ids for telemetry (only if enabled).
+                // This allocation is guarded by the telemetry flag so production
+                // runs pay nothing.
+                let materialized_for_telemetry = if telemetry.enabled {
+                    Some(batch_view.materialize())
+                } else {
+                    None
+                };
+                // --- End of borrow scope: all data is now in stack-local copies ---
+
+                if batch_kind == ActionKind::Down {
                     // Repeat the foreground comparison at the final boundary
                     // immediately before SendInput. If focus changed after
                     // the outer-loop sample, terminalize this authored batch;
                     // it must not be replayed after the focus grace period.
                     if !focus_matches(config.require_focus, focus_active, target_hwnd) {
-                        coordinator.drop_expired_downs(&batch.intents);
+                        // Terminalize ALL intents (both conflicting and non-conflicting).
+                        // We use the compact path: terminalize non-conflicting as DroppedExpired,
+                        // conflicting were already accounted by check_down_conflicts_compact.
+                        if !has_conflicts {
+                            // Non-conflicting slots: terminate as expired.
+                            // Fallback to the owned path for the cleanup branch — not hot.
+                            let owned = coordinator.schedule.materialize_batch(
+                                coordinator.cursor - 1,
+                                coordinator.recovery_offset_us(),
+                            );
+                            coordinator.drop_expired_downs(&owned.intents);
+                        } else {
+                            let owned = coordinator.schedule.materialize_batch(
+                                coordinator.cursor - 1,
+                                coordinator.recovery_offset_us(),
+                            );
+                            coordinator.drop_expired_downs(&owned.intents);
+                        }
                         let _ = backend.release_all();
                         coordinator.cancel_all();
                         clock_state.enter_pause("focus", QpcTicks(qpc_us_to_ticks(now_us)));
                         focus_restore_started_us = None;
-                        telemetry.push(|| NativeTelemetryRecord {
-                            event_index: batch.source_action_index,
-                            dispatch_id: 0,
-                            kind: "down",
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: effective_now_us,
-                            dispatch_completed_us: effective_now_us,
-                            lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            visible_lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            send_duration_us: 0,
-                            send_duration_pure_us: 0,
-                            bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(
-                                effective_now_us,
-                                batch.scheduled_us,
-                            ),
-                            scan_codes: batch
-                                .intents
-                                .iter()
-                                .map(|intent| intent.scan_code)
-                                .collect(),
-                            sent_scan_codes: SmallVec::new(),
-                            skipped_scan_codes: SmallVec::new(),
-                            generation_ids: batch
-                                .intents
-                                .iter()
-                                .filter_map(|intent| intent.generation_id)
-                                .collect(),
-                            runtime_outcome: "blocked_unfocused",
-                            deferred_by_us: 0,
-                            pre_send_spin_us: 0,
-                            idle_gap_us: 0,
-                            reason_id: batch.reason_id,
-                            reason: None,
-                            applied_lead_us: lead_down,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            send_attempts: 0,
-                            zero_progress_retries: 0,
+                        telemetry.push(|| {
+                            let scan_codes: SmallVec<[u16; 15]> = scan_batch.as_slice().iter().copied().collect();
+                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
+                                .as_ref()
+                                .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
+                                .unwrap_or_default();
+                            NativeTelemetryRecord {
+                                event_index: batch_source_action_index,
+                                dispatch_id: 0,
+                                kind: "down",
+                                scheduled_us: batch_scheduled_us,
+                                actual_us: effective_now_us,
+                                dispatch_completed_us: effective_now_us,
+                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                send_duration_us: 0,
+                                send_duration_pure_us: 0,
+                                bookkeeping_us: 0,
+                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                scan_codes,
+                                sent_scan_codes: SmallVec::new(),
+                                skipped_scan_codes: SmallVec::new(),
+                                generation_ids,
+                                runtime_outcome: "blocked_unfocused",
+                                deferred_by_us: 0,
+                                pre_send_spin_us: 0,
+                                idle_gap_us: 0,
+                                reason_id: batch_reason_id,
+                                reason: None,
+                                applied_lead_us: lead_down,
+                                first_win32_error: None,
+                                last_win32_error: None,
+                                send_attempts: 0,
+                                zero_progress_retries: 0,
+                            }
                         });
                         publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                        try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                         continue;
                     }
                     if config
                         .late_pulse_drop_threshold_us
                         .is_some_and(|threshold| {
                             threshold == 0
-                                || (effective_now_us >= batch.scheduled_us
-                                    && effective_now_us.saturating_sub(batch.scheduled_us)
+                                || (effective_now_us >= batch_scheduled_us
+                                    && effective_now_us.saturating_sub(batch_scheduled_us)
                                         > threshold)
                         })
                     {
-                        coordinator.drop_expired_downs(&batch.intents);
-                        telemetry.push(|| NativeTelemetryRecord {
-                            event_index: batch.source_action_index,
-                            dispatch_id: 0,
-                            kind: "down",
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: effective_now_us,
-                            dispatch_completed_us: effective_now_us,
-                            lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            visible_lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            send_duration_us: 0,
-                            send_duration_pure_us: 0,
-                            bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(
-                                effective_now_us,
-                                batch.scheduled_us,
-                            ),
-                            scan_codes: batch
-                                .intents
-                                .iter()
-                                .map(|intent| intent.scan_code)
-                                .collect(),
-                            sent_scan_codes: SmallVec::new(),
-                            skipped_scan_codes: SmallVec::new(),
-                            generation_ids: batch
-                                .intents
-                                .iter()
-                                .filter_map(|intent| intent.generation_id)
-                                .collect(),
-                            runtime_outcome: "dropped_expired",
-                            deferred_by_us: 0,
-                            pre_send_spin_us: 0,
-                            idle_gap_us: 0,
-                            reason_id: batch.reason_id,
-                            reason: None,
-                            applied_lead_us: lead_down,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            send_attempts: 0,
-                            zero_progress_retries: 0,
+                        // Expired drop — materialize only for the coordinator call.
+                        let owned = coordinator.schedule.materialize_batch(
+                            coordinator.cursor - 1,
+                            coordinator.recovery_offset_us(),
+                        );
+                        coordinator.drop_expired_downs(&owned.intents);
+                        telemetry.push(|| {
+                            let scan_codes: SmallVec<[u16; 15]> = scan_batch.as_slice().iter().copied().collect();
+                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
+                                .as_ref()
+                                .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
+                                .unwrap_or_default();
+                            NativeTelemetryRecord {
+                                event_index: batch_source_action_index,
+                                dispatch_id: 0,
+                                kind: "down",
+                                scheduled_us: batch_scheduled_us,
+                                actual_us: effective_now_us,
+                                dispatch_completed_us: effective_now_us,
+                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                send_duration_us: 0,
+                                send_duration_pure_us: 0,
+                                bookkeeping_us: 0,
+                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                scan_codes,
+                                sent_scan_codes: SmallVec::new(),
+                                skipped_scan_codes: SmallVec::new(),
+                                generation_ids,
+                                runtime_outcome: "dropped_expired",
+                                deferred_by_us: 0,
+                                pre_send_spin_us: 0,
+                                idle_gap_us: 0,
+                                reason_id: batch_reason_id,
+                                reason: None,
+                                applied_lead_us: lead_down,
+                                first_win32_error: None,
+                                last_win32_error: None,
+                                send_attempts: 0,
+                                zero_progress_retries: 0,
+                            }
                         });
                         continue;
                     }
-                    let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
-                    if !conflicts.is_empty() {
-                        local_metrics.authored_conflict_events = local_metrics.authored_conflict_events.saturating_add(1);
-                        local_metrics.authored_keys_rejected = local_metrics.authored_keys_rejected.saturating_add(
-                            if matches!(
-                                config.chord_conflict_policy,
-                                ChordConflictPolicy::DropWholeChord
-                                    | ChordConflictPolicy::AbortPlayback
-                            ) {
-                                batch.intents.len() as u64
-                            } else {
-                                conflicts.len() as u64
-                            }
+
+                    // Conflict handling. Conflict slots were checked with the compact mask;
+                    // now update counters and decide policy.
+                    let playable_count = scan_batch.len();
+                    let conflict_count = conflict_scan_batch.len();
+                    if has_conflicts {
+                        local_metrics.authored_conflict_events =
+                            local_metrics.authored_conflict_events.saturating_add(1);
+                        local_metrics.authored_keys_rejected =
+                            local_metrics.authored_keys_rejected.saturating_add(
+                                if matches!(
+                                    config.chord_conflict_policy,
+                                    ChordConflictPolicy::DropWholeChord
+                                        | ChordConflictPolicy::AbortPlayback
+                                ) {
+                                    batch_intent_count as u64
+                                } else {
+                                    conflict_count as u64
+                                },
+                            );
+                        // Terminalize conflicted slots (counter update only, no mask change).
+                        let owned = coordinator.schedule.materialize_batch(
+                            coordinator.cursor - 1,
+                            coordinator.recovery_offset_us(),
                         );
-                        telemetry.push(|| NativeTelemetryRecord {
-                            event_index: batch.source_action_index,
-                            dispatch_id: 0,
-                            kind: "down",
-                            scheduled_us: batch.scheduled_us,
-                            actual_us: effective_now_us,
-                            dispatch_completed_us: effective_now_us,
-                            lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            visible_lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            send_duration_us: 0,
-                            send_duration_pure_us: 0,
-                            bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(
-                                effective_now_us,
-                                batch.scheduled_us,
-                            ),
-                            scan_codes: conflicts.iter().map(|intent| intent.scan_code).collect(),
-                            sent_scan_codes: SmallVec::new(),
-                            skipped_scan_codes: SmallVec::new(),
-                            generation_ids: conflicts
-                                .iter()
-                                .filter_map(|intent| intent.generation_id)
-                                .collect(),
-                            runtime_outcome: "dropped_conflict",
-                            deferred_by_us: 0,
-                            pre_send_spin_us: 0,
-                            idle_gap_us: 0,
-                            reason_id: batch.reason_id,
-                            reason: None,
-                            applied_lead_us: lead_down,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            send_attempts: 0,
-                            zero_progress_retries: 0,
+                        // Use the existing API which operates on RuntimeKeyIntent.
+                        let conflicts_intents: SmallVec<[_; 15]> = owned
+                            .intents
+                            .iter()
+                            .filter(|i| {
+                                conflict_mask
+                                    & sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::bit_for_slot_pub(i.key_slot)
+                                    != 0
+                            })
+                            .cloned()
+                            .collect();
+                        telemetry.push(|| {
+                            let scan_codes: SmallVec<[u16; 15]> =
+                                conflict_scan_batch.as_slice().iter().copied().collect();
+                            let generation_ids: SmallVec<[u64; 15]> =
+                                conflicts_intents.iter().filter_map(|i| i.generation_id).collect();
+                            NativeTelemetryRecord {
+                                event_index: batch_source_action_index,
+                                dispatch_id: 0,
+                                kind: "down",
+                                scheduled_us: batch_scheduled_us,
+                                actual_us: effective_now_us,
+                                dispatch_completed_us: effective_now_us,
+                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                send_duration_us: 0,
+                                send_duration_pure_us: 0,
+                                bookkeeping_us: 0,
+                                dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                                scan_codes,
+                                sent_scan_codes: SmallVec::new(),
+                                skipped_scan_codes: SmallVec::new(),
+                                generation_ids,
+                                runtime_outcome: "dropped_conflict",
+                                deferred_by_us: 0,
+                                pre_send_spin_us: 0,
+                                idle_gap_us: 0,
+                                reason_id: batch_reason_id,
+                                reason: None,
+                                applied_lead_us: lead_down,
+                                first_win32_error: None,
+                                last_win32_error: None,
+                                send_attempts: 0,
+                                zero_progress_retries: 0,
+                            }
                         });
                     }
-                    let send_playable = conflicts.is_empty()
+                    let send_playable = !has_conflicts
                         || matches!(
                             config.chord_conflict_policy,
                             ChordConflictPolicy::DropConflictingKeys
                         );
-                    if !conflicts.is_empty() && !send_playable {
-                        local_metrics.authored_chords_rejected = local_metrics.authored_chords_rejected.saturating_add(1);
-                        coordinator.drop_conflicted_downs(&playable);
+                    if has_conflicts && !send_playable {
+                        local_metrics.authored_chords_rejected =
+                            local_metrics.authored_chords_rejected.saturating_add(1);
+                        // Terminalize playable (non-conflict) intents too since whole chord drops.
+                        let owned = coordinator.schedule.materialize_batch(
+                            coordinator.cursor - 1,
+                            coordinator.recovery_offset_us(),
+                        );
+                        let playable_intents: SmallVec<[_; 15]> = owned
+                            .intents
+                            .iter()
+                            .filter(|i| {
+                                conflict_mask
+                                    & sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::bit_for_slot_pub(i.key_slot)
+                                    == 0
+                            })
+                            .cloned()
+                            .collect();
+                        coordinator.drop_conflicted_downs(&playable_intents);
                         if matches!(
                             config.chord_conflict_policy,
                             ChordConflictPolicy::AbortPlayback
@@ -1607,19 +1690,27 @@ fn run_worker(
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "same-key conflict rejected authored chord at action {}",
-                                batch.source_action_index
+                                batch_source_action_index
                             ));
-                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                     }
-                    if send_playable && !playable.is_empty() {
-                        let scan_codes: SmallVec<[u16; 15]> =
-                            playable.iter().map(|intent| intent.scan_code).collect();
+                    if send_playable && !scan_batch.is_empty() {
                         let started_us = qpc_now_us();
-                        let actual_us = qpc_ticks_to_us(QpcTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(started_us))).0));
-                        let result = backend.key_down(&scan_codes);
+                        let actual_us = qpc_ticks_to_us(QpcTicks(
+                            clock_state
+                                .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
+                                .0,
+                        ));
+                        // SendInput uses the stack-only scan code buffer — no allocation.
+                        let result = backend.key_down(scan_batch.as_slice());
 
                         let (
                             result_completed_us,
@@ -1634,28 +1725,78 @@ fn run_worker(
                             result_success,
                         ) = match &result {
                             sky_dispatch_win32::input::DownSendOutcome::Complete {
-                                completed_us, sent, skipped_duplicates, send_attempts, zero_progress_retries, retried_after_zero_progress
+                                completed_us,
+                                sent,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                retried_after_zero_progress,
                             } => (
-                                *completed_us, sent.clone(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *retried_after_zero_progress, false, None, None, true
+                                *completed_us,
+                                sent.clone(),
+                                skipped_duplicates.clone(),
+                                *send_attempts,
+                                *zero_progress_retries,
+                                *retried_after_zero_progress,
+                                false,
+                                None,
+                                None,
+                                true,
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
-                                completed_us, skipped_duplicates, send_attempts, zero_progress_retries, first_error, last_error, ..
+                                completed_us,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                first_error,
+                                last_error,
+                                ..
                             } => (
-                                *completed_us, smallvec::SmallVec::<[u16; 15]>::new(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *zero_progress_retries > 0, false, *first_error, *last_error, false
+                                *completed_us,
+                                smallvec::SmallVec::<[u16; 15]>::new(),
+                                skipped_duplicates.clone(),
+                                *send_attempts,
+                                *zero_progress_retries,
+                                *zero_progress_retries > 0,
+                                false,
+                                *first_error,
+                                *last_error,
+                                false,
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
-                                completed_us, sent, skipped_duplicates, send_attempts, zero_progress_retries, first_error, last_error, ..
+                                completed_us,
+                                sent,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                first_error,
+                                last_error,
+                                ..
                             } => (
-                                *completed_us, sent.clone(), skipped_duplicates.clone(), *send_attempts, *zero_progress_retries, *zero_progress_retries > 0, true, *first_error, *last_error, false
+                                *completed_us,
+                                sent.clone(),
+                                skipped_duplicates.clone(),
+                                *send_attempts,
+                                *zero_progress_retries,
+                                *zero_progress_retries > 0,
+                                true,
+                                *first_error,
+                                *last_error,
+                                false,
                             ),
                         };
 
-                        let completed_effective_ticks = TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(result_completed_us))).0);
+                        let completed_effective_ticks = TimelineTicks(
+                            clock_state
+                                .get_elapsed(QpcTicks(qpc_us_to_ticks(result_completed_us)))
+                                .0,
+                        );
                         let completed_effective =
                             qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
                         last_send_qpc_us = Some(result_completed_us);
-                        coordinator.activate_sent_downs(
-                            &playable,
+                        // Activate sent downs via the compact path.
+                        coordinator.activate_sent_downs_compact(
+                            coordinator.cursor - 1,
                             &result_sent,
                             actual_us,
                             effective_now_ticks,
@@ -1663,14 +1804,14 @@ fn run_worker(
                             completed_effective_ticks,
                         );
                         let completion_error_us =
-                            signed_delta(completed_effective, batch.scheduled_us);
+                            signed_delta(completed_effective, batch_scheduled_us);
                         let retry_late_threshold_us = config
                             .late_pulse_drop_threshold_us
                             .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US)
                             .min(i64::MAX as u64)
                             as i64;
                         let clean_down_sample = result_success
-                            && result_sent.len() == playable.len()
+                            && result_sent.len() == playable_count
                             && result_skipped_duplicates.is_empty()
                             && result_send_attempts == 1
                             && !result_chord_integrity_lost;
@@ -1680,9 +1821,11 @@ fn run_worker(
                         let strict_down_completion_late = config.strict_timing
                             && clean_down_sample
                             && completion_error_us
-                                > config.strict_down_completion_late_us.min(i64::MAX as u64) as i64;
+                                > config.strict_down_completion_late_us.min(i64::MAX as u64)
+                                    as i64;
                         if recovered_retry_late {
-                            local_metrics.recovered_zero_progress_but_late = local_metrics.recovered_zero_progress_but_late.saturating_add(1);
+                            local_metrics.recovered_zero_progress_but_late =
+                                local_metrics.recovered_zero_progress_but_late.saturating_add(1);
                         }
                         down_saturation_positive_streak =
                             if lead_down_saturated && completion_error_us > 0 {
@@ -1698,7 +1841,7 @@ fn run_worker(
                                 ActionKind::Down,
                                 result_completed_us.saturating_sub(started_us),
                                 result_sent.len(),
-                                playable.len(),
+                                playable_count,
                                 lead_down,
                                 completion_error_us,
                                 clean_down_sample,
@@ -1706,62 +1849,80 @@ fn run_worker(
                             );
                         }
                         let bookkeeping_completed_us = qpc_now_us();
-                        telemetry.push(|| NativeTelemetryRecord {
-                            event_index: batch.source_action_index,
-                            dispatch_id: 0,
-                            kind: "down",
-                            scheduled_us: batch.scheduled_us,
-                            actual_us,
-                            dispatch_completed_us: completed_effective,
-                            lateness_us: signed_delta(actual_us, batch.scheduled_us),
-                            visible_lateness_us: signed_delta(
-                                completed_effective,
-                                batch.scheduled_us,
-                            ),
-                            send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
-                            send_duration_pure_us: result_completed_us
-                                .saturating_sub(started_us),
-                            bookkeeping_us: bookkeeping_completed_us
-                                .saturating_sub(result_completed_us),
-                            dispatch_lateness_us: signed_delta(actual_us, batch.scheduled_us)
-                                .saturating_add(
-                                    result_completed_us.saturating_sub(started_us) as i64,
+                        telemetry.push(|| {
+                            // Scan codes: materialized view for telemetry includes full chord.
+                            let scan_codes: SmallVec<[u16; 15]> =
+                                scan_batch.as_slice().iter().copied().collect();
+                            let generation_ids: SmallVec<[u64; 15]> =
+                                materialized_for_telemetry
+                                    .as_ref()
+                                    .map(|b| {
+                                        b.intents
+                                            .iter()
+                                            .filter(|i| {
+                                                conflict_mask
+                                                    & (1u16 << i.key_slot)
+                                                    == 0
+                                            })
+                                            .filter_map(|i| i.generation_id)
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                            NativeTelemetryRecord {
+                                event_index: batch_source_action_index,
+                                dispatch_id: 0,
+                                kind: "down",
+                                scheduled_us: batch_scheduled_us,
+                                actual_us,
+                                dispatch_completed_us: completed_effective,
+                                lateness_us: signed_delta(actual_us, batch_scheduled_us),
+                                visible_lateness_us: signed_delta(
+                                    completed_effective,
+                                    batch_scheduled_us,
                                 ),
-                            scan_codes: scan_codes.clone(),
-                            sent_scan_codes: result_sent.clone(),
-                            skipped_scan_codes: result_skipped_duplicates.clone(),
-                            generation_ids: playable
-                                .iter()
-                                .filter_map(|intent| intent.generation_id)
-                                .collect(),
-                            runtime_outcome: if recovered_retry_late {
-                                "recovered_zero_progress_but_late"
-                            } else if strict_down_completion_late {
-                                "strict_completion_slo_exceeded"
-                            } else if result_chord_integrity_lost {
-                                "chord_integrity_lost"
-                            } else if result_sent.len() == scan_codes.len() {
-                                "sent"
-                            } else {
-                                "partial_note_on"
-                            },
-                            deferred_by_us: 0,
-                            pre_send_spin_us: pending_pre_send_spin_us,
-                            idle_gap_us: 0,
-                            reason_id: batch.reason_id,
-                            reason: None,
-                            applied_lead_us: lead_down,
-                            first_win32_error: result_first_win32_error,
-                            last_win32_error: result_last_win32_error,
-                            send_attempts: result_send_attempts,
-                            zero_progress_retries: result_zero_progress_retries,
+                                send_duration_us: bookkeeping_completed_us
+                                    .saturating_sub(started_us),
+                                send_duration_pure_us: result_completed_us
+                                    .saturating_sub(started_us),
+                                bookkeeping_us: bookkeeping_completed_us
+                                    .saturating_sub(result_completed_us),
+                                dispatch_lateness_us: signed_delta(actual_us, batch_scheduled_us)
+                                    .saturating_add(
+                                        result_completed_us.saturating_sub(started_us) as i64,
+                                    ),
+                                scan_codes,
+                                sent_scan_codes: result_sent.clone(),
+                                skipped_scan_codes: result_skipped_duplicates.clone(),
+                                generation_ids,
+                                runtime_outcome: if recovered_retry_late {
+                                    "recovered_zero_progress_but_late"
+                                } else if strict_down_completion_late {
+                                    "strict_completion_slo_exceeded"
+                                } else if result_chord_integrity_lost {
+                                    "chord_integrity_lost"
+                                } else if result_sent.len() == scan_batch.len() {
+                                    "sent"
+                                } else {
+                                    "partial_note_on"
+                                },
+                                deferred_by_us: 0,
+                                pre_send_spin_us: pending_pre_send_spin_us,
+                                idle_gap_us: 0,
+                                reason_id: batch_reason_id,
+                                reason: None,
+                                applied_lead_us: lead_down,
+                                first_win32_error: result_first_win32_error,
+                                last_win32_error: result_last_win32_error,
+                                send_attempts: result_send_attempts,
+                                zero_progress_retries: result_zero_progress_retries,
+                            }
                         });
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
                                 &mut local_metrics.lead_saturation_count_down,
                                 &mut local_metrics.positive_residual_at_cap,
-                                batch.intents.len(),
-                                signed_delta(completed_effective, batch.scheduled_us),
+                                batch_intent_count,
+                                signed_delta(completed_effective, batch_scheduled_us),
                             );
                         }
                         pending_pre_send_spin_us = 0;
@@ -1793,7 +1954,7 @@ fn run_worker(
                             &mut local_metrics.bookkeeping_degraded,
                         );
                         record_lateness(
-                            signed_delta(completed_effective, batch.scheduled_us),
+                            signed_delta(completed_effective, batch_scheduled_us),
                             false,
                             false,
                             &mut local_metrics,
@@ -1803,30 +1964,45 @@ fn run_worker(
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "SendInput split authored chord at action {}",
-                                batch.source_action_index
+                                batch_source_action_index
                             ));
-                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if retry_late_abort {
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "strict timing rejected zero-progress retry at action {}: completion was {}us late",
-                                batch.source_action_index, completion_error_us
+                                batch_source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if strict_down_completion_late {
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "strict timing completion SLO exceeded for note-on at action {}: completion was {}us late",
-                                batch.source_action_index, completion_error_us
+                                batch_source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                         if saturation_abort {
@@ -1835,31 +2011,41 @@ fn run_worker(
                                 "strict timing SLO exceeded: note-on lead saturated with positive residual for {} consecutive dispatches",
                                 STRICT_SATURATION_ABORT_STREAK
                             ));
-                            publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                             break;
                         }
                     }
                 } else {
-                    let (_, suppressed) = coordinator.request_releases(&batch.intents);
+                    // Up batch: must materialise to drive request_releases (needs generation IDs).
+                    let owned = coordinator.schedule.materialize_batch(
+                        coordinator.cursor - 1,
+                        coordinator.recovery_offset_us(),
+                    );
+                    let (_, suppressed) = coordinator.request_releases(&owned.intents);
                     if !suppressed.is_empty() {
                         telemetry.push(|| NativeTelemetryRecord {
-                            event_index: batch.source_action_index,
+                            event_index: batch_source_action_index,
                             dispatch_id: 0,
                             kind: "up",
-                            scheduled_us: batch.scheduled_us,
+                            scheduled_us: batch_scheduled_us,
                             actual_us: effective_now_us,
                             dispatch_completed_us: effective_now_us,
-                            lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
-                            visible_lateness_us: signed_delta(effective_now_us, batch.scheduled_us),
+                            lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                            visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
                             send_duration_us: 0,
                             send_duration_pure_us: 0,
                             bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(
-                                effective_now_us,
-                                batch.scheduled_us,
-                            ),
-                            scan_codes: suppressed.iter().map(|intent| intent.scan_code).collect(),
+                            dispatch_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
+                            scan_codes: suppressed
+                                .iter()
+                                .map(|intent| intent.scan_code)
+                                .collect(),
                             sent_scan_codes: SmallVec::new(),
                             skipped_scan_codes: SmallVec::new(),
                             generation_ids: suppressed
@@ -1870,7 +2056,7 @@ fn run_worker(
                             deferred_by_us: 0,
                             pre_send_spin_us: 0,
                             idle_gap_us: 0,
-                            reason_id: batch.reason_id,
+                            reason_id: batch_reason_id,
                             reason: None,
                             applied_lead_us: lead_up,
                             first_win32_error: None,
@@ -1880,7 +2066,12 @@ fn run_worker(
                         });
                     }
                 }
-                publish_backend_metrics(&backend, &mut local_metrics, metrics, &mut last_published_error);
+                publish_backend_metrics(
+                    &backend,
+                    &mut local_metrics,
+                    metrics,
+                    &mut last_published_error,
+                );
                 try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
                 continue;
             }
