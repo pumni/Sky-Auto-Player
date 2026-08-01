@@ -407,16 +407,21 @@ class NativeHeartbeatThread(threading.Thread):
         self._session = session
         self._interval_s = interval_s
         self._stop_event = threading.Event()
+        self.error: BaseException | None = None
 
     def stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
-        heartbeat = getattr(self._session, "heartbeat", None)
-        if not callable(heartbeat):
-            return
-        while not self._stop_event.wait(self._interval_s):
-            heartbeat()
+        try:
+            heartbeat = getattr(self._session, "heartbeat", None)
+            if not callable(heartbeat):
+                return
+            while not self._stop_event.wait(self._interval_s):
+                heartbeat()
+        except BaseException as exc:
+            self.error = exc
+            self._stop_event.set()
 
 
 class RustDispatchRuntime:
@@ -664,6 +669,11 @@ class RustDispatchRuntime:
             latest = self._session.snapshot()
 
             while not latest["is_finished"]:
+                if heartbeat_thread.error is not None:
+                    error = heartbeat_thread.error
+                    raise RuntimeError(
+                        f"native heartbeat failed: {type(error).__name__}: {error}"
+                    ) from error
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
                 self._publish_focus()
@@ -707,6 +717,11 @@ class RustDispatchRuntime:
                 time.sleep(self._sleep_s)
 
             joined = self._join_owned()
+            if heartbeat_thread.error is not None:
+                error = heartbeat_thread.error
+                raise RuntimeError(
+                    f"native heartbeat failed: {type(error).__name__}: {error}"
+                ) from error
             latest = self._session.snapshot()
             if not joined:
                 outcome = PLAYBACK_SHUTDOWN_TIMEOUT
@@ -758,6 +773,9 @@ class RustDispatchRuntime:
             if heartbeat_thread is not None:
                 heartbeat_thread.stop()
                 heartbeat_thread.join(timeout=1.0)
+                if heartbeat_thread.is_alive() and started and not joined:
+                    with contextlib.suppress(Exception):
+                        self._session.panic_release()
             
             if started and not joined:
                 with contextlib.suppress(Exception):

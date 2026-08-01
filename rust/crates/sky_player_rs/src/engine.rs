@@ -8,7 +8,7 @@ use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{
-    QpcTicks, qpc_frequency_checked, qpc_now_ticks, qpc_now_ticks_checked, qpc_now_us,
+    QpcError, QpcTicks, qpc_frequency_checked, qpc_now_ticks_checked, qpc_now_us_checked,
     qpc_ticks_to_us, qpc_us_to_ticks,
 };
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
@@ -92,13 +92,6 @@ impl FaultInjectionScript {
         Self {
             entries: vec![
                 (
-                    0,
-                    InjectedSendOutcome::Zero {
-                        latency_ticks: 0,
-                        win32_error: 1460,
-                    },
-                ),
-                (
                     1,
                     InjectedSendOutcome::Zero {
                         latency_ticks: 0,
@@ -112,6 +105,13 @@ impl FaultInjectionScript {
                         win32_error: 1460,
                     },
                 ),
+                (
+                    3,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
             ],
             ..Default::default()
         }
@@ -119,14 +119,14 @@ impl FaultInjectionScript {
 
     /// All Up calls fail (persistent release failure).
     ///
-    /// Up calls are those with odd call indices in alternating Down/Up schedules;
-    /// for general use the caller should use a script with explicit indices.
-    /// This variant matches all calls whose index >= 1 (approximation for simple
-    /// single-chord schedules).
+    /// The first Down call is index 0.  Every subsequent emitter call is an Up
+    /// call or an Up retry for the fault-injection schedules used by the
+    /// worker tests, so all indices from 1 onward fail.  This deliberately
+    /// avoids assuming that Up calls have odd indices: an immediate retry is
+    /// another Up call and must remain failed in this mode.
     pub fn persistent_release() -> Self {
-        // Inject 128 Up failures — sufficient for any reasonable test schedule.
-        let entries = (0..128)
-            .filter(|i| i % 2 == 1)
+        // Inject 128 failures — sufficient for any reasonable test schedule.
+        let entries = (1..128)
             .map(|i| {
                 (
                     i,
@@ -307,6 +307,34 @@ pub struct NativeTelemetrySummary {
     pub max_send_duration_us: u64,
     pub lateness_histogram_50us: [u64; 16],
     pub send_duration_histogram_50us: [u64; 16],
+    /// Values at or above the final finite histogram bucket. The last array
+    /// slot is retained for compatibility; this counter makes the tail
+    /// explicit instead of pretending it is a narrow 750–800 µs bucket.
+    pub lateness_overflow_count: u64,
+    pub send_duration_overflow_count: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TimingSemantics {
+    pub evidence_kind: &'static str,
+    pub scheduled_boundary: &'static str,
+    pub wake_boundary: &'static str,
+    pub sender_start_boundary: &'static str,
+    pub sender_completion_boundary: &'static str,
+    pub game_observed_available: bool,
+}
+
+impl Default for TimingSemantics {
+    fn default() -> Self {
+        Self {
+            evidence_kind: "sender_and_injected_raw_input_proxy",
+            scheduled_boundary: "authored_timeline",
+            wake_boundary: "worker_wake_before_sendinput",
+            sender_start_boundary: "sendinput_call_entry",
+            sender_completion_boundary: "sendinput_call_return",
+            game_observed_available: false,
+        }
+    }
 }
 
 impl NativeTelemetrySummary {
@@ -335,6 +363,12 @@ impl NativeTelemetrySummary {
             .saturating_div(50)
             .min(15) as usize;
         let send_bucket = record.send_duration_us.saturating_div(50).min(15) as usize;
+        if record.visible_lateness_us.max(0).unsigned_abs() / 50 >= 15 {
+            self.lateness_overflow_count = self.lateness_overflow_count.saturating_add(1);
+        }
+        if record.send_duration_us / 50 >= 15 {
+            self.send_duration_overflow_count = self.send_duration_overflow_count.saturating_add(1);
+        }
         self.lateness_histogram_50us[lateness_bucket] =
             self.lateness_histogram_50us[lateness_bucket].saturating_add(1);
         self.send_duration_histogram_50us[send_bucket] =
@@ -350,6 +384,7 @@ pub struct NativeTelemetryOutput {
     pub accepted: u64,
     pub dropped: u64,
     pub truncated: bool,
+    pub timing_semantics: TimingSemantics,
     #[serde(skip)]
     reason_table: Vec<String>,
 }
@@ -374,6 +409,7 @@ impl NativeTelemetryOutput {
             accepted: 0,
             dropped: 0,
             truncated: false,
+            timing_semantics: TimingSemantics::default(),
             reason_table,
         }
     }
@@ -642,6 +678,8 @@ impl NativeDispatchSession {
         strict_up_completion_late_us: u64,
         supervisor_lease_timeout_us: u64,
     ) -> Result<Self, String> {
+        let initial_heartbeat_us = qpc_now_us_checked()
+            .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
         let total_us = schedule
@@ -711,7 +749,7 @@ impl NativeDispatchSession {
             telemetry_output: Arc::new(Mutex::new(None)),
             priority_acquired: Arc::new(Mutex::new("pending".to_string())),
             estimator_output: Arc::new(Mutex::new(None)),
-            supervisor_heartbeat_us: Arc::new(AtomicU64::new(qpc_now_us())),
+            supervisor_heartbeat_us: Arc::new(AtomicU64::new(initial_heartbeat_us)),
         })
     }
 
@@ -724,6 +762,15 @@ impl NativeDispatchSession {
                 Ordering::Acquire,
             )
             .map_err(|state| format!("session cannot start from lifecycle state {state}"))?;
+        let heartbeat_us = match qpc_now_us_checked() {
+            Ok(value) => value,
+            Err(error) => {
+                self.lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
+                return Err(format!(
+                    "QPC admission failed before worker start: {error:?}"
+                ));
+            }
+        };
         let Some(config) = self.config.lock().take() else {
             self.lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
             return Err("session configuration is no longer available".to_string());
@@ -746,7 +793,7 @@ impl NativeDispatchSession {
         let estimator_output = Arc::clone(&self.estimator_output);
         let supervisor_heartbeat_us = Arc::clone(&self.supervisor_heartbeat_us);
         let latency_tx = self.latency_tx.clone();
-        supervisor_heartbeat_us.store(qpc_now_us(), Ordering::Release);
+        supervisor_heartbeat_us.store(heartbeat_us, Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
@@ -889,11 +936,13 @@ impl NativeDispatchSession {
         }
     }
 
-    pub fn heartbeat(&self) {
+    pub fn heartbeat(&self) -> Result<(), String> {
         if self.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING {
-            self.supervisor_heartbeat_us
-                .store(qpc_now_us(), Ordering::Release);
+            let now =
+                qpc_now_us_checked().map_err(|error| format!("QPC heartbeat failed: {error:?}"))?;
+            self.supervisor_heartbeat_us.store(now, Ordering::Release);
         }
+        Ok(())
     }
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
@@ -1052,6 +1101,70 @@ impl NativeDispatchSession {
     }
 }
 
+fn mock_platform_send_result(
+    requested: u32,
+    inserted: u32,
+    win32_error: u32,
+    latency_ticks: u64,
+) -> PlatformSendResult {
+    let started_ticks = match qpc_now_ticks_checked() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return PlatformSendResult {
+                requested,
+                inserted: 0,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: None,
+                completed_us: 0,
+                win32_error,
+                timing_error: Some(error),
+            };
+        }
+    };
+    let deadline = match started_ticks.checked_add_duration(DurationTicks::from_raw(latency_ticks))
+    {
+        Ok(deadline) => deadline,
+        Err(_) => {
+            return PlatformSendResult {
+                requested,
+                inserted: 0,
+                started_ticks,
+                completed_ticks: None,
+                completed_us: 0,
+                win32_error,
+                timing_error: Some(QpcError::DeadlineOverflow),
+            };
+        }
+    };
+    loop {
+        match qpc_now_ticks_checked() {
+            Ok(now) if now >= deadline => {
+                return PlatformSendResult {
+                    requested,
+                    inserted,
+                    started_ticks,
+                    completed_ticks: Some(now),
+                    completed_us: qpc_ticks_to_us(now),
+                    win32_error,
+                    timing_error: None,
+                };
+            }
+            Ok(_) => std::hint::spin_loop(),
+            Err(error) => {
+                return PlatformSendResult {
+                    requested,
+                    inserted: 0,
+                    started_ticks,
+                    completed_ticks: None,
+                    completed_us: 0,
+                    win32_error,
+                    timing_error: Some(error),
+                };
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_worker(
     config: WorkerConfig,
@@ -1092,72 +1205,38 @@ fn run_worker(
             match script_emitter.resolve(idx) {
                 None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => {
                     // Fast path: full success, no extra latency.
-                    PlatformSendResult {
-                        requested: codes.len() as u32,
-                        inserted: codes.len() as u32,
-                        completed_us: qpc_now_us(),
-                        win32_error: 0,
-                    }
+                    mock_platform_send_result(codes.len() as u32, codes.len() as u32, 0, 0)
                 }
-                Some(InjectedSendOutcome::Full { latency_ticks }) => {
-                    // Spin-wait for the specified QPC tick count.
-                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
-                    while qpc_now_ticks() < deadline {
-                        std::hint::spin_loop();
-                    }
-                    PlatformSendResult {
-                        requested: codes.len() as u32,
-                        inserted: codes.len() as u32,
-                        completed_us: qpc_now_us(),
-                        win32_error: 0,
-                    }
-                }
+                Some(InjectedSendOutcome::Full { latency_ticks }) => mock_platform_send_result(
+                    codes.len() as u32,
+                    codes.len() as u32,
+                    0,
+                    *latency_ticks,
+                ),
                 Some(InjectedSendOutcome::Zero {
                     latency_ticks,
                     win32_error,
                 }) => {
-                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
-                    while qpc_now_ticks() < deadline {
-                        std::hint::spin_loop();
-                    }
-                    PlatformSendResult {
-                        requested: codes.len() as u32,
-                        inserted: 0,
-                        completed_us: qpc_now_us(),
-                        win32_error: *win32_error,
-                    }
+                    mock_platform_send_result(codes.len() as u32, 0, *win32_error, *latency_ticks)
                 }
                 Some(InjectedSendOutcome::Prefix {
                     inserted,
                     latency_ticks,
                     win32_error,
                 }) => {
-                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*latency_ticks));
-                    while qpc_now_ticks() < deadline {
-                        std::hint::spin_loop();
-                    }
                     let inserted = (*inserted as u32).min(codes.len() as u32);
-                    PlatformSendResult {
-                        requested: codes.len() as u32,
+                    mock_platform_send_result(
+                        codes.len() as u32,
                         inserted,
-                        completed_us: qpc_now_us(),
-                        win32_error: *win32_error,
-                    }
+                        *win32_error,
+                        *latency_ticks,
+                    )
                 }
                 Some(InjectedSendOutcome::Stall { duration_ticks }) => {
                     // Spin-stall: hold the emitter without sending any key.
                     // This simulates a scheduler stall or OS freeze without
                     // actually blocking the thread (consistent with RT discipline).
-                    let deadline = qpc_now_ticks().saturating_add(DurationTicks(*duration_ticks));
-                    while qpc_now_ticks() < deadline {
-                        std::hint::spin_loop();
-                    }
-                    PlatformSendResult {
-                        requested: codes.len() as u32,
-                        inserted: 0,
-                        completed_us: qpc_now_us(),
-                        win32_error: 0,
-                    }
+                    mock_platform_send_result(codes.len() as u32, 0, 0, *duration_ticks)
                 }
             }
         })
@@ -1198,7 +1277,10 @@ fn run_worker(
         effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
     }
     local_metrics.effective_spin_threshold_us = effective_spin_threshold_us;
-    let mut last_spin_probe_us = qpc_now_us();
+    let initial_now_us = qpc_now_us_checked();
+    let initial_qpc_error = initial_now_us.as_ref().err().copied();
+    let initial_now_us = initial_now_us.unwrap_or(0);
+    let mut last_spin_probe_us = initial_now_us;
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
@@ -1242,7 +1324,7 @@ fn run_worker(
     let startup_guard_us = STARTUP_WAKE_GUARD_US
         .saturating_add(effective_spin_threshold_us)
         .saturating_add(config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US));
-    let startup_anchor_us = qpc_now_us()
+    let startup_anchor_us = initial_now_us
         .saturating_add(startup_guard_us)
         .saturating_add(startup_lead_us);
     let mut clock_state = PlaybackClockState::new(
@@ -1251,7 +1333,7 @@ fn run_worker(
     );
     let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
     let mut focus_restore_started_us: Option<u64> = None;
-    let start_wall_time_us = qpc_now_us();
+    let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
     let mut force_full_cleanup = false;
@@ -1266,6 +1348,7 @@ fn run_worker(
                 .err()
                 .map(|error| format!("QPC counter unavailable: {error:?}"))
         })
+        .or_else(|| initial_qpc_error.map(|error| format!("QPC counter unavailable: {error:?}")))
         .or_else(|| {
             config
                 .strict_timing
@@ -1277,12 +1360,28 @@ fn run_worker(
         terminal_error = Some(error);
     }
 
+    // Every QPC query after admission is part of the worker's correctness
+    // boundary. A failed query is terminal and must take the cleanup path;
+    // it must never become timestamp zero or a best-effort continuation.
+    macro_rules! qpc_us_or_terminal {
+        () => {{
+            match qpc_now_us_checked() {
+                Ok(value) => value,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                    break;
+                }
+            }
+        }};
+    }
+
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         if terminal_error.is_some() {
             return;
         }
         while !coordinator.is_finished() {
-            let loop_start_us = qpc_now_us();
+            let loop_start_us = qpc_us_or_terminal!();
             local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
             local_metrics.worker_cpu_time_us =
                 current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
@@ -1294,11 +1393,21 @@ fn run_worker(
                     as u64;
             }
             try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
-            if supervisor_lease_expired(config.supervisor_lease_timeout_us, supervisor_heartbeat_us)
-            {
-                force_full_cleanup = true;
-                terminal_error = Some("supervisor_lease_expired".to_string());
-                break;
+            match supervisor_lease_expired(
+                config.supervisor_lease_timeout_us,
+                supervisor_heartbeat_us,
+            ) {
+                Ok(true) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some("supervisor_lease_expired".to_string());
+                    break;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                    break;
+                }
             }
             drain_commands(rx, quit_requested, skip_requested, panic_requested);
             if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
@@ -1314,10 +1423,10 @@ fn run_worker(
                     metrics,
                     &mut last_published_error,
                 );
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
             }
 
-            let mut now_us = qpc_now_us();
+            let mut now_us = qpc_us_or_terminal!();
             let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
 
@@ -1334,7 +1443,7 @@ fn run_worker(
                         metrics,
                         &mut last_published_error,
                     );
-                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
                 let restored_at = *focus_restore_started_us.get_or_insert(now_us);
@@ -1347,7 +1456,7 @@ fn run_worker(
                     // QPC after it completes so that the cleanup interval is
                     // included in the focus pause rather than lost from the
                     // playback clock.
-                    let resumed_us = qpc_now_us();
+                    let resumed_us = qpc_us_or_terminal!();
                     let _ = clock_state.exit_pause("focus", QpcTicks(qpc_us_to_ticks(resumed_us)));
                     focus_restore_started_us = None;
                     publish_backend_metrics(
@@ -1356,7 +1465,7 @@ fn run_worker(
                         metrics,
                         &mut last_published_error,
                     );
-                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             }
 
@@ -1371,7 +1480,7 @@ fn run_worker(
                         metrics,
                         &mut last_published_error,
                     );
-                    try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
                 clock_state.enter_pause("manual", QpcTicks(qpc_us_to_ticks(now_us)));
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
@@ -1390,7 +1499,7 @@ fn run_worker(
                     waiter.wait_until_us(pause_target_us, 0, interrupt)
                 {
                     local_metrics.wait_path_degraded = true;
-                    if config.strict_timing {
+                    if config.strict_timing || matches!(failure, WaitFailure::Clock) {
                         force_full_cleanup = true;
                         terminal_error = Some(wait_failure_message(failure));
                         break;
@@ -1401,7 +1510,15 @@ fn run_worker(
             }
 
             if let Some((startup_scheduled_us, startup_lead_us)) = startup_gate {
-                let target_sample_ticks = qpc_now_ticks();
+                let target_sample_ticks = match qpc_now_ticks_checked() {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("QPC failure before startup wait: {error:?}"));
+                        break;
+                    }
+                };
                 let target_sample_qpc_us = qpc_ticks_to_us(target_sample_ticks);
                 let target_qpc = anchored_dispatch_target_ticks(
                     target_sample_ticks,
@@ -1431,7 +1548,7 @@ fn run_worker(
                         WaitOutcome::Deadline => continue,
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
-                            if config.strict_timing {
+                            if config.strict_timing || matches!(failure, WaitFailure::Clock) {
                                 force_full_cleanup = true;
                                 terminal_error = Some(wait_failure_message(failure));
                                 break;
@@ -1442,12 +1559,11 @@ fn run_worker(
                     }
                 }
                 startup_gate = None;
-                now_us = qpc_now_us();
+                now_us = qpc_us_or_terminal!();
             }
 
-            let effective_now_ticks =
-                TimelineTicks(clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us))).0);
-            let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.0));
+            let effective_now_ticks = clock_state.get_elapsed(QpcTicks(qpc_us_to_ticks(now_us)));
+            let effective_now_us = qpc_ticks_to_us(QpcTicks(effective_now_ticks.as_u64()));
             local_metrics.elapsed_us = effective_now_us;
             let latency_class = classify_latency_class(last_send_qpc_us, now_us);
 
@@ -1473,19 +1589,25 @@ fn run_worker(
             if !due_pending.is_empty() {
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
-                let started_us = qpc_now_us();
+                let started_us = qpc_us_or_terminal!();
                 let actual_us = qpc_ticks_to_us(QpcTicks(
                     clock_state
                         .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
-                        .0,
+                        .as_u64(),
                 ));
                 let result = backend.key_up(&scan_codes);
+                if let Some(error) = backend.timing_error.take() {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC failure after note-off: {error:?}"));
+                    break;
+                }
                 let completed_effective_ticks = TimelineTicks(
                     clock_state
                         .get_elapsed(QpcTicks(qpc_us_to_ticks(result.send_completed_us)))
-                        .0,
+                        .as_u64(),
                 );
-                let completed_effective = qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
+                let completed_effective =
+                    qpc_ticks_to_us(QpcTicks(completed_effective_ticks.as_u64()));
                 last_send_qpc_us = Some(result.send_completed_us);
                 let recovery_required = coordinator.requeue_failed_releases(
                     &due_pending,
@@ -1510,7 +1632,7 @@ fn run_worker(
                     local_metrics.total_us =
                         local_metrics.total_us.saturating_add(recovery_pause_us);
                 }
-                let bookkeeping_completed_us = qpc_now_us();
+                let bookkeeping_completed_us = qpc_us_or_terminal!();
                 let first = due_pending
                     .iter()
                     .min_by_key(|pending| {
@@ -1678,7 +1800,7 @@ fn run_worker(
                     metrics,
                     &mut last_published_error,
                 );
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 if recovery_required {
                     force_full_cleanup = true;
                     terminal_error = Some(format!(
@@ -1838,7 +1960,7 @@ fn run_worker(
                             metrics,
                             &mut last_published_error,
                         );
-                        try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                        try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
                     if config
@@ -2020,19 +2142,29 @@ fn run_worker(
                                 metrics,
                                 &mut last_published_error,
                             );
-                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
                             break;
                         }
                     }
                     if send_playable && !scan_batch.is_empty() {
-                        let started_us = qpc_now_us();
+                        let started_us = qpc_us_or_terminal!();
                         let actual_us = qpc_ticks_to_us(QpcTicks(
                             clock_state
                                 .get_elapsed(QpcTicks(qpc_us_to_ticks(started_us)))
-                                .0,
+                                .as_u64(),
                         ));
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
+                        if let Some(error) = backend.timing_error.take() {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!("QPC failure after note-on: {error:?}"));
+                            break;
+                        }
 
                         let (
                             result_completed_us,
@@ -2111,10 +2243,10 @@ fn run_worker(
                         let completed_effective_ticks = TimelineTicks(
                             clock_state
                                 .get_elapsed(QpcTicks(qpc_us_to_ticks(result_completed_us)))
-                                .0,
+                                .as_u64(),
                         );
                         let completed_effective =
-                            qpc_ticks_to_us(QpcTicks(completed_effective_ticks.0));
+                            qpc_ticks_to_us(QpcTicks(completed_effective_ticks.as_u64()));
                         last_send_qpc_us = Some(result_completed_us);
                         // Activate sent downs via the compact path.
                         coordinator.activate_sent_downs_compact(
@@ -2170,7 +2302,7 @@ fn run_worker(
                                 latency_class,
                             );
                         }
-                        let bookkeeping_completed_us = qpc_now_us();
+                        let bookkeeping_completed_us = qpc_us_or_terminal!();
                         telemetry.push(|| {
                             // Scan codes: materialized view for telemetry includes full chord.
                             let scan_codes: SmallVec<[u16; 15]> =
@@ -2289,7 +2421,12 @@ fn run_worker(
                                 metrics,
                                 &mut last_published_error,
                             );
-                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
                             break;
                         }
                         if retry_late_abort {
@@ -2304,7 +2441,12 @@ fn run_worker(
                                 metrics,
                                 &mut last_published_error,
                             );
-                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
                             break;
                         }
                         if strict_down_completion_late {
@@ -2319,7 +2461,12 @@ fn run_worker(
                                 metrics,
                                 &mut last_published_error,
                             );
-                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
                             break;
                         }
                         if saturation_abort {
@@ -2334,7 +2481,12 @@ fn run_worker(
                                 metrics,
                                 &mut last_published_error,
                             );
-                            try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
                             break;
                         }
                     }
@@ -2389,7 +2541,7 @@ fn run_worker(
                     metrics,
                     &mut last_published_error,
                 );
-                try_publish_metrics(&local_metrics, metrics, qpc_now_us(), true);
+                try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 continue;
             }
 
@@ -2430,13 +2582,21 @@ fn run_worker(
                 // the same instant.  Reusing the older outer-loop elapsed
                 // sample after doing bookkeeping shifts the absolute target
                 // late by the whole A->B overhead interval.
-                let target_sample_ticks = qpc_now_ticks();
+                let target_sample_ticks = match qpc_now_ticks_checked() {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("QPC failure before dispatch wait: {error:?}"));
+                        break;
+                    }
+                };
                 let target_sample_elapsed_us = qpc_ticks_to_us(QpcTicks(
                     clock_state
                         .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_ticks_to_us(
                             target_sample_ticks,
                         ))))
-                        .0,
+                        .as_u64(),
                 ));
                 if deadline_us > target_sample_elapsed_us {
                     let remaining_us = deadline_us - target_sample_elapsed_us;
@@ -2455,7 +2615,7 @@ fn run_worker(
                                 effective_spin_threshold_us = adjusted;
                                 local_metrics.effective_spin_threshold_us = adjusted;
                             }
-                            last_spin_probe_us = qpc_now_us();
+                            last_spin_probe_us = qpc_us_or_terminal!();
                         }
                         continue;
                     }
@@ -2490,8 +2650,8 @@ fn run_worker(
                     pending_pre_send_spin_us = wait_result.spin_us;
                     let wake_elapsed_us = qpc_ticks_to_us(QpcTicks(
                         clock_state
-                            .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_now_us())))
-                            .0,
+                            .get_elapsed(QpcTicks(qpc_us_to_ticks(qpc_us_or_terminal!())))
+                            .as_u64(),
                     ));
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
@@ -2501,7 +2661,7 @@ fn run_worker(
                         }
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
-                            if config.strict_timing {
+                            if config.strict_timing || matches!(failure, WaitFailure::Clock) {
                                 force_full_cleanup = true;
                                 terminal_error = Some(wait_failure_message(failure));
                                 break;
@@ -2544,6 +2704,12 @@ fn run_worker(
         *metrics.terminal_error.lock() = Some(error.clone());
     }
     coordinator.cancel_all();
+    let end_qpc = qpc_now_us_checked();
+    if let Err(error) = end_qpc
+        && terminal_error.is_none()
+    {
+        terminal_error = Some(format!("QPC runtime failure during termination: {error:?}"));
+    }
     let terminal_abort_reason =
         if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
             "error"
@@ -2567,7 +2733,7 @@ fn run_worker(
         &mut last_published_error,
     );
 
-    let end_us = qpc_now_us();
+    let end_us = end_qpc.unwrap_or(start_wall_time_us);
     local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
     local_metrics.worker_cpu_time_us =
         current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
@@ -2597,8 +2763,12 @@ fn run_worker(
     }
 }
 
-fn supervisor_lease_expired(timeout_us: u64, heartbeat_us: &AtomicU64) -> bool {
-    timeout_us > 0 && qpc_now_us().saturating_sub(heartbeat_us.load(Ordering::Acquire)) > timeout_us
+fn supervisor_lease_expired(
+    timeout_us: u64,
+    heartbeat_us: &AtomicU64,
+) -> Result<bool, sky_dispatch_win32::clock::QpcError> {
+    let now = sky_dispatch_win32::clock::qpc_now_us_checked()?;
+    Ok(timeout_us > 0 && now.saturating_sub(heartbeat_us.load(Ordering::Acquire)) > timeout_us)
 }
 
 fn lease_bounded_us(target_us: u64, timeout_us: u64, heartbeat_us: &AtomicU64) -> u64 {
@@ -2632,7 +2802,7 @@ fn lease_bounded_ticks(
     }
     let lease_deadline = QpcTicks(
         now_ticks
-            .0
+            .as_u64()
             .saturating_add(qpc_us_to_ticks(lease_deadline_us - now_us)),
     );
     target.min(lease_deadline)
@@ -2810,7 +2980,7 @@ fn deadline_target_ticks_from_anchor(
     }
     QpcTicks(
         now_ticks
-            .0
+            .as_u64()
             .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
     )
 }
@@ -2832,7 +3002,7 @@ fn anchored_dispatch_target_ticks(
     }
     QpcTicks(
         now_ticks
-            .0
+            .as_u64()
             .saturating_add(qpc_us_to_ticks(target_us.saturating_sub(now_qpc_us))),
     )
 }
@@ -2842,7 +3012,7 @@ fn anchored_dispatch_target_ticks(
 fn deadline_target_ticks(now_ticks: QpcTicks, logical_now_us: u64, deadline_us: u64) -> QpcTicks {
     QpcTicks(
         now_ticks
-            .0
+            .as_u64()
             .saturating_add(qpc_us_to_ticks(deadline_us.saturating_sub(logical_now_us))),
     )
 }
@@ -2868,6 +3038,7 @@ fn wait_failure_message(failure: WaitFailure) -> String {
         WaitFailure::MultiWait { win32_error } => {
             format!("interruptible wait failed (Win32 error {win32_error})")
         }
+        WaitFailure::Clock => "QPC failed during real-time wait".to_string(),
     }
 }
 
@@ -2989,7 +3160,7 @@ mod tests {
         let now_ticks = QpcTicks(10_000_000);
         let logical_now_us = qpc_ticks_to_us(now_ticks);
         let target = deadline_target_ticks(now_ticks, logical_now_us, logical_now_us + 1_000);
-        assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(1_000));
+        assert_eq!(target.as_u64() - now_ticks.as_u64(), qpc_us_to_ticks(1_000));
     }
 
     #[test]
@@ -3003,7 +3174,10 @@ mod tests {
             .saturating_add(lead_us);
         let target = anchored_dispatch_target_ticks(now_ticks, now_qpc_us, anchor_us, 0, lead_us);
 
-        assert_eq!(target.0 - now_ticks.0, qpc_us_to_ticks(startup_guard_us));
+        assert_eq!(
+            target.as_u64() - now_ticks.as_u64(),
+            qpc_us_to_ticks(startup_guard_us)
+        );
     }
 
     #[test]

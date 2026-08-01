@@ -210,8 +210,11 @@ impl RustInputBackend {
                 sky_dispatch_win32::input::PlatformSendResult {
                     requested: scan_codes.len() as u32,
                     inserted: scan_codes.len() as u32,
-                    completed_us: sky_dispatch_win32::clock::qpc_now_us(),
+                    started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+                    completed_ticks: Some(sky_dispatch_win32::clock::QpcTicks::ZERO),
+                    completed_us: 0,
                     win32_error: 0,
+                    timing_error: None,
                 }
             })
         } else {
@@ -723,8 +726,8 @@ impl NativeDispatchSessionPy {
             .map_err(PyRuntimeError::new_err)
     }
 
-    fn heartbeat(&self) {
-        self.session.heartbeat();
+    fn heartbeat(&self) -> PyResult<()> {
+        self.session.heartbeat().map_err(PyRuntimeError::new_err)
     }
 
     fn send_command(&self, command: &str) -> PyResult<bool> {
@@ -947,18 +950,21 @@ fn simulate_schedule_rs(
 }
 
 #[pyfunction]
-fn sleep_until_rs(target_us: StrictU64, spin_margin_us: StrictU64) -> u64 {
+fn sleep_until_rs(target_us: StrictU64, spin_margin_us: StrictU64) -> PyResult<u64> {
     sky_dispatch_win32::sleeper::sleep_until_us(target_us.0, spin_margin_us.0)
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 #[pyfunction]
-fn measure_spin_overhead_rs() -> u64 {
+fn measure_spin_overhead_rs() -> PyResult<u64> {
     sky_dispatch_win32::sleeper::measure_spin_overhead_us()
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 #[pyfunction]
-fn qpc_now_rs() -> u64 {
-    sky_dispatch_win32::clock::qpc_now_us()
+fn qpc_now_rs() -> PyResult<u64> {
+    sky_dispatch_win32::clock::qpc_now_us_checked()
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 /// Free-threaded PyO3 extension module for Sky Auto Player dispatch engine.

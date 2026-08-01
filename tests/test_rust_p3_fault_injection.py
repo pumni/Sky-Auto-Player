@@ -17,7 +17,6 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
-import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
 # ---------------------------------------------------------------------------
