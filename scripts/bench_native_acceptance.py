@@ -129,6 +129,7 @@ def _new_session(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> Any:
     import sky_player_rs
 
@@ -143,7 +144,7 @@ def _new_session(
         require_focus=False,
         telemetry_enabled=True,
         telemetry_capacity=max(1_024, len(actions) + 16),
-        rt_priority_mode="off",
+        rt_priority_mode=rt_priority_mode,
         enable_waitable_timer=True,
         enable_event_wait=True,
         enable_adaptive_spin=adaptive_spin,
@@ -160,6 +161,7 @@ def _run_dispatch(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -167,6 +169,7 @@ def _run_dispatch(
         mock_base_latency_us=mock_base_latency_us,
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
     )
     started_ns = time.perf_counter_ns()
     session.start()
@@ -221,6 +224,7 @@ def _measure_command_interrupt(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> int:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
@@ -231,6 +235,7 @@ def _measure_command_interrupt(
         mock_base_latency_us=mock_base_latency_us,
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
     )
     session.start()
     deadline = time.perf_counter() + 2.0
@@ -282,6 +287,12 @@ def _parse_args() -> argparse.Namespace:
         "--no-adaptive-spin",
         action="store_true",
         help="disable adaptive wait probing; adaptive lead remains enabled",
+    )
+    parser.add_argument(
+        "--rt-priority-mode",
+        choices=("auto", "mmcss", "time_critical", "highest", "off"),
+        default="off",
+        help="real-time priority policy (default: off)",
     )
     parser.add_argument(
         "--baseline",
@@ -411,6 +422,7 @@ def main() -> int:
                 mock_base_latency_us=args.mock_base_latency_us,
                 mock_per_key_latency_us=args.mock_per_key_latency_us,
                 adaptive_spin=not args.no_adaptive_spin,
+                rt_priority_mode=args.rt_priority_mode,
             )
             for _ in range(args.repeats)
         ]
@@ -462,6 +474,7 @@ def main() -> int:
             mock_base_latency_us=args.mock_base_latency_us,
             mock_per_key_latency_us=args.mock_per_key_latency_us,
             adaptive_spin=not args.no_adaptive_spin,
+            rt_priority_mode=args.rt_priority_mode,
         )
         for _ in range(args.repeats)
     ]
