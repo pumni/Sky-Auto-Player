@@ -6,12 +6,12 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
-use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
+use sky_dispatch_core::time::{
+    DurationTicks, SEND_COLD_THRESHOLD_US, TimeArithmeticError, TimelineTicks,
+};
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
-use sky_dispatch_win32::clock::{
-    QpcClock, QpcError, QpcTicks, qpc_frequency_checked, qpc_now_us_checked,
-};
+use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
@@ -644,7 +644,7 @@ pub struct NativeDispatchSession {
     telemetry_output: Arc<Mutex<Option<NativeTelemetryOutput>>>,
     priority_acquired: Arc<Mutex<String>>,
     estimator_output: Arc<Mutex<Option<String>>>,
-    supervisor_heartbeat_us: Arc<AtomicU64>,
+    supervisor_heartbeat_ticks: Arc<AtomicU64>,
 }
 
 impl NativeDispatchSession {
@@ -681,7 +681,7 @@ impl NativeDispatchSession {
         strict_up_completion_late_us: u64,
         supervisor_lease_timeout_us: u64,
     ) -> Result<Self, String> {
-        let initial_heartbeat_us = qpc_now_us_checked()
+        let initial_heartbeat_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
@@ -753,7 +753,7 @@ impl NativeDispatchSession {
             telemetry_output: Arc::new(Mutex::new(None)),
             priority_acquired: Arc::new(Mutex::new("pending".to_string())),
             estimator_output: Arc::new(Mutex::new(None)),
-            supervisor_heartbeat_us: Arc::new(AtomicU64::new(initial_heartbeat_us)),
+            supervisor_heartbeat_ticks: Arc::new(AtomicU64::new(initial_heartbeat_ticks.as_u64())),
         })
     }
 
@@ -766,7 +766,7 @@ impl NativeDispatchSession {
                 Ordering::Acquire,
             )
             .map_err(|state| format!("session cannot start from lifecycle state {state}"))?;
-        let heartbeat_us = match qpc_now_us_checked() {
+        let heartbeat_ticks = match sky_dispatch_win32::clock::qpc_now_ticks_checked() {
             Ok(value) => value,
             Err(error) => {
                 self.lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
@@ -795,9 +795,9 @@ impl NativeDispatchSession {
         let telemetry_output = Arc::clone(&self.telemetry_output);
         let priority_acquired = Arc::clone(&self.priority_acquired);
         let estimator_output = Arc::clone(&self.estimator_output);
-        let supervisor_heartbeat_us = Arc::clone(&self.supervisor_heartbeat_us);
+        let supervisor_heartbeat_ticks = Arc::clone(&self.supervisor_heartbeat_ticks);
         let latency_tx = self.latency_tx.clone();
-        supervisor_heartbeat_us.store(heartbeat_us, Ordering::Release);
+        supervisor_heartbeat_ticks.store(heartbeat_ticks.as_u64(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
@@ -818,7 +818,7 @@ impl NativeDispatchSession {
                         &priority_acquired,
                         &estimator_output,
                         &latency_tx,
-                        &supervisor_heartbeat_us,
+                        &supervisor_heartbeat_ticks,
                     )
                 }));
                 let (worker_outcome, panic_message) = match worker_result {
@@ -942,9 +942,10 @@ impl NativeDispatchSession {
 
     pub fn heartbeat(&self) -> Result<(), String> {
         if self.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING {
-            let now =
-                qpc_now_us_checked().map_err(|error| format!("QPC heartbeat failed: {error:?}"))?;
-            self.supervisor_heartbeat_us.store(now, Ordering::Release);
+            let now = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+                .map_err(|error| format!("QPC heartbeat failed: {error:?}"))?;
+            self.supervisor_heartbeat_ticks
+                .store(now.as_u64(), Ordering::Release);
         }
         Ok(())
     }
@@ -1192,7 +1193,7 @@ fn run_worker(
     priority_acquired: &Mutex<String>,
     estimator_output: &Mutex<Option<String>>,
     latency_tx: &Sender<i64>,
-    supervisor_heartbeat_us: &AtomicU64,
+    supervisor_heartbeat_ticks: &AtomicU64,
 ) -> u8 {
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
@@ -1355,6 +1356,78 @@ fn run_worker(
                 return 1;
             }
         };
+    let focus_restore_grace_ticks = match qpc_clock.duration_from_us(config.focus_restore_grace_us)
+    {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("focus grace conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let paused_poll_ticks = match qpc_clock.duration_from_us(PAUSED_POLL_US) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("paused polling conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let cold_threshold_ticks = match qpc_clock.duration_from_us(SEND_COLD_THRESHOLD_US) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("cold threshold conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let core_warmup_ticks = match qpc_clock
+        .duration_from_us(config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US))
+    {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("core warmup conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let spin_reprobe_interval_ticks = match qpc_clock.duration_from_us(30_000_000) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("spin reprobe conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let lease_timeout_ticks = match qpc_clock.duration_from_us(config.supervisor_lease_timeout_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() =
+                Some(format!("lease timeout conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()] =
+        match RELEASE_RETRY_BACKOFF_US
+            .map(|delay| qpc_clock.duration_from_us(delay))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|values| {
+                values
+                    .try_into()
+                    .map_err(|_| sky_dispatch_win32::clock::TimeConversionError::Overflow)
+            }) {
+            Ok(backoff) => backoff,
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() =
+                    Some(format!("retry backoff conversion failed: {error:?}"));
+                return 1;
+            }
+        };
     let delivery_margin_ticks = DurationTicks::ZERO;
     let telemetry_reason_table = config.schedule.reason_table.clone();
     let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
@@ -1397,17 +1470,13 @@ fn run_worker(
     let mut effective_spin_threshold_us = config.spin_threshold_us;
     let _ = interrupt.try_take();
     if config.enable_adaptive_spin
-        && let Some(stats) = waiter.probe_wake_error_stats(interrupt, 30)
+        && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 30)
     {
         publish_wake_error_stats(stats, &mut local_metrics);
         effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
     }
     local_metrics.effective_spin_threshold_us = effective_spin_threshold_us;
-    let initial_now_us = match qpc_clock.now().and_then(|ticks| {
-        qpc_clock
-            .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
-            .map_err(|_| QpcError::ConversionOverflow)
-    }) {
+    let initial_now_ticks = match qpc_clock.now() {
         Ok(now) => now,
         Err(error) => {
             let _ = backend.release_all_full_instrument();
@@ -1415,11 +1484,31 @@ fn run_worker(
             return 1;
         }
     };
-    let mut last_spin_probe_us = initial_now_us;
+    let initial_now_us =
+        match qpc_clock.duration_to_us(DurationTicks::from_raw(initial_now_ticks.as_u64())) {
+            Ok(now) => now,
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() =
+                    Some(format!("QPC admission conversion failed: {error:?}"));
+                return 1;
+            }
+        };
+    let mut effective_spin_threshold_ticks =
+        match qpc_clock.duration_from_us(effective_spin_threshold_us) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                let _ = backend.release_all_full_instrument();
+                *metrics.last_error.lock() =
+                    Some(format!("spin threshold conversion failed: {error:?}"));
+                return 1;
+            }
+        };
+    let mut last_spin_probe_ticks = initial_now_ticks;
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
-    let mut last_send_qpc_us: Option<u64> = None;
+    let mut last_send_qpc_ticks: Option<QpcTicks> = None;
     let mut pending_pre_send_spin_us = 0;
     let mut down_saturation_positive_streak: u8 = 0;
     let mut up_saturation_positive_streak: u8 = 0;
@@ -1451,23 +1540,41 @@ fn run_worker(
     } else {
         0
     };
-    let startup_authored_us = coordinator
-        .schedule
-        .batches
-        .first()
-        .map(|batch| batch.scheduled_us);
-    let startup_guard_us = STARTUP_WAKE_GUARD_US
-        .saturating_add(effective_spin_threshold_us)
-        .saturating_add(config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US));
-    let startup_anchor_us = initial_now_us
-        .saturating_add(startup_guard_us)
-        .saturating_add(startup_lead_us);
-    let startup_anchor_ticks = match qpc_clock.timeline_from_us(startup_anchor_us) {
-        Ok(ticks) => QpcTicks::from_raw(ticks.as_u64()),
+    let startup_lead_ticks = match qpc_clock.duration_from_us(startup_lead_us) {
+        Ok(ticks) => ticks,
         Err(error) => {
             let _ = backend.release_all_full_instrument();
-            *metrics.last_error.lock() =
-                Some(format!("startup anchor conversion failed: {error:?}"));
+            *metrics.last_error.lock() = Some(format!("startup lead conversion failed: {error:?}"));
+            return 1;
+        }
+    };
+    let startup_guard_ticks = (|| {
+        let wake_guard = qpc_clock
+            .duration_from_us(STARTUP_WAKE_GUARD_US)
+            .map_err(|error| format!("{error:?}"))?;
+        let with_spin = wake_guard
+            .checked_add(effective_spin_threshold_ticks)
+            .map_err(|error| error.to_string())?;
+        with_spin
+            .checked_add(core_warmup_ticks)
+            .map_err(|error| error.to_string())
+    })();
+    let startup_guard_ticks = match startup_guard_ticks {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("startup guard conversion failed: {error}"));
+            return 1;
+        }
+    };
+    let startup_anchor_ticks = match initial_now_ticks
+        .checked_add_duration(startup_guard_ticks)
+        .and_then(|ticks| ticks.checked_add_duration(startup_lead_ticks))
+    {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            let _ = backend.release_all_full_instrument();
+            *metrics.last_error.lock() = Some(format!("startup anchor arithmetic failed: {error}"));
             return 1;
         }
     };
@@ -1483,8 +1590,12 @@ fn run_worker(
             return 1;
         }
     };
-    let mut startup_gate = startup_authored_us.map(|scheduled_us| (scheduled_us, startup_lead_us));
-    let mut focus_restore_started_us: Option<u64> = None;
+    let mut startup_gate = coordinator
+        .batch_scheduled_ticks
+        .first()
+        .copied()
+        .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
+    let mut focus_restore_started_ticks: Option<QpcTicks> = None;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
@@ -1574,7 +1685,8 @@ fn run_worker(
         }
         let mut allow_pre_epoch_startup_dispatch = false;
         while !coordinator.is_finished() {
-            let loop_start_us = qpc_us_or_terminal!();
+            let loop_start_ticks = qpc_ticks_or_terminal!();
+            let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
             local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
             local_metrics.worker_cpu_time_us =
                 current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
@@ -1587,8 +1699,9 @@ fn run_worker(
             }
             try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
             match supervisor_lease_expired(
-                config.supervisor_lease_timeout_us,
-                supervisor_heartbeat_us,
+                loop_start_ticks,
+                lease_timeout_ticks,
+                supervisor_heartbeat_ticks,
             ) {
                 Ok(true) => {
                     force_full_cleanup = true;
@@ -1635,12 +1748,11 @@ fn run_worker(
             }
 
             let mut now_ticks = qpc_ticks_or_terminal!();
-            let mut now_us = qpc_ticks_to_us_or_terminal!(now_ticks);
             let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
 
             if !focus_ok {
-                focus_restore_started_us = None;
+                focus_restore_started_ticks = None;
                 if !clock_state.has_pause_reason("focus") {
                     if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
                         force_full_cleanup = true;
@@ -1662,8 +1774,16 @@ fn run_worker(
                     try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
-                let restored_at = *focus_restore_started_us.get_or_insert(now_us);
-                if now_us.saturating_sub(restored_at) >= config.focus_restore_grace_us {
+                let restored_at = *focus_restore_started_ticks.get_or_insert(now_ticks);
+                let focus_grace_elapsed = match now_ticks.checked_duration_since(restored_at) {
+                    Ok(elapsed) => elapsed,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("focus grace clock failure: {error}"));
+                        break;
+                    }
+                };
+                if focus_grace_elapsed >= focus_restore_grace_ticks {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
                     if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
@@ -1681,7 +1801,7 @@ fn run_worker(
                         terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                    focus_restore_started_us = None;
+                    focus_restore_started_ticks = None;
                     publish_backend_metrics(
                         &backend,
                         &mut local_metrics,
@@ -1725,13 +1845,35 @@ fn run_worker(
             let paused = clock_state.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
-                let pause_target_us = lease_bounded_us(
-                    now_us.saturating_add(PAUSED_POLL_US),
-                    config.supervisor_lease_timeout_us,
-                    supervisor_heartbeat_us,
-                );
-                if let WaitOutcome::Failed(failure) =
-                    waiter.wait_until_us(pause_target_us, 0, interrupt)
+                let pause_target = match now_ticks.checked_add_duration(paused_poll_ticks) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error =
+                            Some(format!("pause deadline arithmetic failure: {error}"));
+                        break;
+                    }
+                };
+                let pause_target = match lease_bounded_ticks(
+                    pause_target,
+                    lease_timeout_ticks,
+                    supervisor_heartbeat_ticks,
+                ) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("pause lease deadline failure: {error:?}"));
+                        break;
+                    }
+                };
+                if let WaitOutcome::Failed(failure) = waiter
+                    .wait_until_ticks_with_metrics_typed(
+                        qpc_clock,
+                        pause_target,
+                        DurationTicks::ZERO,
+                        interrupt,
+                    )
+                    .outcome
                 {
                     local_metrics.wait_path_degraded = true;
                     if config.strict_timing || matches!(failure, WaitFailure::Clock) {
@@ -1744,7 +1886,7 @@ fn run_worker(
                 continue;
             }
 
-            if let Some((startup_scheduled_us, startup_lead_us)) = startup_gate {
+            if let Some((startup_scheduled_ticks, startup_lead_ticks)) = startup_gate {
                 let target_sample_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
@@ -1754,14 +1896,11 @@ fn run_worker(
                         break;
                     }
                 };
-                let target_sample_qpc_us = qpc_ticks_to_us_or_terminal!(target_sample_ticks);
-                let target_qpc = match anchored_dispatch_target_ticks(
-                    qpc_clock,
+                let target_qpc = match anchored_dispatch_target_ticks_typed(
                     target_sample_ticks,
-                    target_sample_qpc_us,
-                    qpc_ticks_to_us_or_terminal!(clock_state.epoch),
-                    startup_scheduled_us,
-                    startup_lead_us,
+                    clock_state.epoch,
+                    startup_scheduled_ticks,
+                    startup_lead_ticks,
                 ) {
                     Ok(target) => target,
                     Err(error) => {
@@ -1772,10 +1911,9 @@ fn run_worker(
                 };
                 if target_sample_ticks < target_qpc {
                     let bounded_target_qpc = match lease_bounded_ticks(
-                        qpc_clock,
                         target_qpc,
-                        config.supervisor_lease_timeout_us,
-                        supervisor_heartbeat_us,
+                        lease_timeout_ticks,
+                        supervisor_heartbeat_ticks,
                     ) {
                         Ok(target) => target,
                         Err(error) => {
@@ -1784,9 +1922,10 @@ fn run_worker(
                             break;
                         }
                     };
-                    let wait_result = waiter.wait_until_ticks_with_metrics(
+                    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+                        qpc_clock,
                         bounded_target_qpc,
-                        effective_spin_threshold_us,
+                        effective_spin_threshold_ticks,
                         interrupt,
                     );
                     local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
@@ -1815,7 +1954,6 @@ fn run_worker(
                 // logical zero; later underflow remains terminal.
                 allow_pre_epoch_startup_dispatch = true;
                 now_ticks = qpc_ticks_or_terminal!();
-                now_us = qpc_ticks_to_us_or_terminal!(now_ticks);
             }
 
             let effective_now_ticks =
@@ -1836,7 +1974,18 @@ fn run_worker(
                 };
             let effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
             local_metrics.elapsed_us = effective_now_us;
-            let latency_class = classify_latency_class(last_send_qpc_us, now_us);
+            let latency_class = match classify_latency_class(
+                last_send_qpc_ticks,
+                now_ticks,
+                cold_threshold_ticks,
+            ) {
+                Ok(class) => class,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC ordering failure: {error}"));
+                    break;
+                }
+            };
 
             let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
                 let (lead_us, saturated) = if config.dispatch_lead_us > 0 {
@@ -1939,20 +2088,7 @@ fn run_worker(
                     }
                 };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                last_send_qpc_us = Some(result.send_completed_us);
-                let retry_backoff_ticks = match RELEASE_RETRY_BACKOFF_US
-                    .map(|delay| qpc_clock.duration_from_us(delay))
-                    .into_iter()
-                    .collect::<Result<Vec<_>, _>>()
-                {
-                    Ok(backoff) => backoff,
-                    Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
-                            Some(format!("retry backoff conversion failure: {error:?}"));
-                        break;
-                    }
-                };
+                last_send_qpc_ticks = Some(completed_qpc_ticks);
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
                     &result.sent,
@@ -2448,7 +2584,7 @@ fn run_worker(
                             terminal_error = Some(format!("playback clock failure: {error}"));
                             break;
                         }
-                        focus_restore_started_us = None;
+                        focus_restore_started_ticks = None;
                         telemetry.push(|| {
                             let scan_codes: SmallVec<[u16; 15]> =
                                 scan_batch.as_slice().iter().copied().collect();
@@ -2823,7 +2959,7 @@ fn run_worker(
                         };
                         let completed_effective =
                             qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                        last_send_qpc_us = Some(result_completed_us);
+                        last_send_qpc_ticks = Some(completed_qpc_ticks);
                         // Activate sent downs via the compact path.
                         if let Err(error) = coordinator.activate_sent_downs_compact_ticks(
                             coordinator.cursor - 1,
@@ -3252,9 +3388,12 @@ fn run_worker(
                     if config.enable_adaptive_spin
                         && config.enable_spin_reprobe
                         && remaining_us >= 30_000
-                        && now_us.saturating_sub(last_spin_probe_us) >= 30_000_000
+                        && now_ticks
+                            .checked_duration_since(last_spin_probe_ticks)
+                            .is_ok_and(|elapsed| elapsed >= spin_reprobe_interval_ticks)
                     {
-                        if let Some(stats) = waiter.probe_wake_error_stats(interrupt, 8) {
+                        if let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 8)
+                        {
                             publish_wake_error_stats(stats, &mut local_metrics);
                             let candidate =
                                 derive_spin_threshold_us(stats.robust_us, config.spin_floor_us);
@@ -3263,8 +3402,19 @@ fn run_worker(
                             if adjusted != effective_spin_threshold_us {
                                 effective_spin_threshold_us = adjusted;
                                 local_metrics.effective_spin_threshold_us = adjusted;
+                                effective_spin_threshold_ticks =
+                                    match qpc_clock.duration_from_us(adjusted) {
+                                        Ok(ticks) => ticks,
+                                        Err(error) => {
+                                            force_full_cleanup = true;
+                                            terminal_error = Some(format!(
+                                                "spin threshold conversion failed: {error:?}"
+                                            ));
+                                            break;
+                                        }
+                                    };
                             }
-                            last_spin_probe_us = qpc_us_or_terminal!();
+                            last_spin_probe_ticks = qpc_ticks_or_terminal!();
                         }
                         continue;
                     }
@@ -3279,20 +3429,43 @@ fn run_worker(
                             break;
                         }
                     };
-                    let target_sample_qpc_us = qpc_ticks_to_us_or_terminal!(target_sample_ticks);
-                    let cold_warmup_us = if last_send_qpc_us.is_none_or(|last| {
-                        target_sample_qpc_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US
-                    }) {
-                        config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US)
-                    } else {
-                        0
+                    let cold_warmup_ticks = match last_send_qpc_ticks {
+                        None => core_warmup_ticks,
+                        Some(last_send_ticks) => {
+                            let gap = match target_sample_ticks
+                                .checked_duration_since(last_send_ticks)
+                            {
+                                Ok(gap) => gap,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error =
+                                        Some(format!("cold classification clock failure: {error}"));
+                                    break;
+                                }
+                            };
+                            if gap > cold_threshold_ticks {
+                                core_warmup_ticks
+                            } else {
+                                DurationTicks::ZERO
+                            }
+                        }
                     };
-                    let wait_result = waiter.wait_until_ticks_with_metrics(
+                    let wait_spin_threshold_ticks =
+                        match effective_spin_threshold_ticks.checked_add(cold_warmup_ticks) {
+                            Ok(threshold) => threshold,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("spin threshold arithmetic failure: {error}"));
+                                break;
+                            }
+                        };
+                    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+                        qpc_clock,
                         match lease_bounded_ticks(
-                            qpc_clock,
                             target_qpc,
-                            config.supervisor_lease_timeout_us,
-                            supervisor_heartbeat_us,
+                            lease_timeout_ticks,
+                            supervisor_heartbeat_ticks,
                         ) {
                             Ok(target) => target,
                             Err(error) => {
@@ -3301,7 +3474,7 @@ fn run_worker(
                                 break;
                             }
                         },
-                        effective_spin_threshold_us.saturating_add(cold_warmup_us),
+                        wait_spin_threshold_ticks,
                         interrupt,
                     );
                     local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
@@ -3506,45 +3679,40 @@ fn run_worker(
     }
 }
 
-fn supervisor_lease_expired(
-    timeout_us: u64,
-    heartbeat_us: &AtomicU64,
-) -> Result<bool, sky_dispatch_win32::clock::QpcError> {
-    let now = sky_dispatch_win32::clock::qpc_now_us_checked()?;
-    Ok(timeout_us > 0 && now.saturating_sub(heartbeat_us.load(Ordering::Acquire)) > timeout_us)
-}
-
-fn lease_bounded_us(target_us: u64, timeout_us: u64, heartbeat_us: &AtomicU64) -> u64 {
-    if timeout_us == 0 {
-        return target_us;
-    }
-    let heartbeat = heartbeat_us.load(Ordering::Acquire);
-    if heartbeat == 0 {
-        return target_us;
-    }
-    target_us.min(heartbeat.saturating_add(timeout_us))
-}
-
 fn lease_bounded_ticks(
-    qpc_clock: QpcClock,
     target: QpcTicks,
-    timeout_us: u64,
-    heartbeat_us: &AtomicU64,
+    timeout_ticks: DurationTicks,
+    heartbeat_ticks: &AtomicU64,
 ) -> Result<QpcTicks, QpcError> {
-    if timeout_us == 0 {
+    if timeout_ticks == DurationTicks::ZERO {
         return Ok(target);
     }
-    let heartbeat = heartbeat_us.load(Ordering::Acquire);
+    let heartbeat = heartbeat_ticks.load(Ordering::Acquire);
     if heartbeat == 0 {
         return Ok(target);
     }
-    let lease_deadline_us = heartbeat
-        .checked_add(timeout_us)
-        .ok_or(QpcError::DeadlineOverflow)?;
-    let lease_deadline = qpc_clock
-        .timeline_from_us(lease_deadline_us)
+    let lease_deadline = QpcTicks::from_raw(heartbeat)
+        .checked_add_duration(timeout_ticks)
         .map_err(|_| QpcError::DeadlineOverflow)?;
-    Ok(target.min(QpcTicks::from_raw(lease_deadline.as_u64())))
+    Ok(target.min(lease_deadline))
+}
+
+fn supervisor_lease_expired(
+    now_ticks: QpcTicks,
+    timeout_ticks: DurationTicks,
+    heartbeat_ticks: &AtomicU64,
+) -> Result<bool, QpcError> {
+    if timeout_ticks == DurationTicks::ZERO {
+        return Ok(false);
+    }
+    let heartbeat = heartbeat_ticks.load(Ordering::Acquire);
+    if heartbeat == 0 {
+        return Ok(false);
+    }
+    let elapsed = now_ticks
+        .checked_duration_since(QpcTicks::from_raw(heartbeat))
+        .map_err(|_| QpcError::CounterUnavailable)?;
+    Ok(elapsed > timeout_ticks)
 }
 
 fn drain_commands(
@@ -3792,17 +3960,42 @@ fn signed_timeline_delta_us(
     Ok(if negative { -magnitude } else { magnitude })
 }
 
-fn classify_latency_class(last_send_qpc_us: Option<u64>, now_qpc_us: u64) -> LatencyClass {
-    if last_send_qpc_us.is_none_or(|last| now_qpc_us.saturating_sub(last) > SEND_COLD_THRESHOLD_US)
-    {
+fn classify_latency_class(
+    last_send_qpc_ticks: Option<QpcTicks>,
+    now_qpc_ticks: QpcTicks,
+    cold_threshold_ticks: DurationTicks,
+) -> Result<LatencyClass, TimeArithmeticError> {
+    let Some(last) = last_send_qpc_ticks else {
+        return Ok(LatencyClass::Cold);
+    };
+    let gap = now_qpc_ticks.checked_duration_since(last)?;
+    Ok(if gap > cold_threshold_ticks {
         LatencyClass::Cold
     } else {
         LatencyClass::Hot
-    }
+    })
+}
+
+fn anchored_dispatch_target_ticks_typed(
+    now_ticks: QpcTicks,
+    anchor_ticks: QpcTicks,
+    scheduled_ticks: TimelineTicks,
+    lead_ticks: DurationTicks,
+) -> Result<QpcTicks, QpcError> {
+    let authored_target = anchor_ticks
+        .checked_add_duration(DurationTicks::from_raw(scheduled_ticks.as_u64()))
+        .map_err(|_| QpcError::DeadlineOverflow)?;
+    let target = authored_target
+        .as_u64()
+        .checked_sub(lead_ticks.as_u64())
+        .map(QpcTicks::from_raw)
+        .ok_or(QpcError::DeadlineOverflow)?;
+    Ok(target.max(now_ticks))
 }
 
 /// Map an authored timestamp minus lead, including the negative interval that
 /// is intentionally needed for a first note at authored t=0.
+#[cfg(test)]
 #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn anchored_dispatch_target_ticks(
     qpc_clock: QpcClock,
@@ -3978,7 +4171,7 @@ mod tests {
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::ActionKind;
     use sky_dispatch_win32::clock::{
-        QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
+        DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
     };
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -4017,15 +4210,26 @@ mod tests {
 
     #[test]
     fn cold_classification_uses_physical_gap_after_logical_pause() {
+        let last = QpcTicks::from_raw(qpc_us_to_ticks(100_000).unwrap());
+        let threshold =
+            DurationTicks::from_raw(qpc_us_to_ticks(super::SEND_COLD_THRESHOLD_US).unwrap());
+        let hot_now = last
+            .checked_add_duration(threshold)
+            .expect("test timestamp");
+        let cold_now = QpcTicks::from_raw(hot_now.as_u64() + 1);
         assert_eq!(
-            classify_latency_class(Some(100_000), 120_000),
+            classify_latency_class(Some(last), hot_now, threshold).unwrap(),
             LatencyClass::Hot
         );
         assert_eq!(
-            classify_latency_class(Some(100_000), 120_001 + super::SEND_COLD_THRESHOLD_US),
+            classify_latency_class(Some(last), cold_now, threshold).unwrap(),
             LatencyClass::Cold
         );
-        assert_eq!(classify_latency_class(None, 0), LatencyClass::Cold);
+        assert_eq!(
+            classify_latency_class(None, QpcTicks::ZERO, threshold).unwrap(),
+            LatencyClass::Cold
+        );
+        assert!(classify_latency_class(Some(cold_now), last, threshold).is_err());
     }
 
     #[test]
