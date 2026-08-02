@@ -17,7 +17,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 4
+NATIVE_TELEMETRY_SCHEMA_VERSION = 5
 
 
 def _optional_int(value: Any) -> int | None:
@@ -53,6 +53,9 @@ _CSV_FIELDS: list[str] = [
     "send_started_ticks",
     "send_completed_ticks",
     "completion_error_ticks",
+    "native_requested_count",
+    "native_sent_count",
+    "native_skipped_count",
     "applied_lead_ticks",
     "win32_error",
     "dispatch_id",
@@ -121,6 +124,9 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_started_ticks",
         "send_completed_ticks",
         "completion_error_ticks",
+        "native_requested_count",
+        "native_sent_count",
+        "native_skipped_count",
         "applied_lead_ticks",
         "win32_error",
         "wake_timeline_us",
@@ -191,6 +197,9 @@ class TelemetryRecord:
         "lateness_us",
         "lead_components",
         "native_polyphony",
+        "native_requested_count",
+        "native_sent_count",
+        "native_skipped_count",
         "packet_id",
         "pre_send_spin_us",
         "reason",
@@ -284,6 +293,9 @@ class TelemetryRecord:
         applied_lead_ticks: int = 0,
         win32_error: int = 0,
         native_polyphony: int | None = None,
+        native_requested_count: int | None = None,
+        native_sent_count: int | None = None,
+        native_skipped_count: int | None = None,
     ) -> None:
         self._dict = None
         self.authored_ticks = authored_ticks
@@ -298,6 +310,9 @@ class TelemetryRecord:
         # not part of the legacy CSV schema.  Keep it only as a consumer-side
         # derived value for acceptance reports; never infer it from scan codes.
         self.native_polyphony = native_polyphony
+        self.native_requested_count = native_requested_count
+        self.native_sent_count = native_sent_count
+        self.native_skipped_count = native_skipped_count
         self.song_name = song_name
         self.event_index = event_index
         self.kind = kind
@@ -390,6 +405,9 @@ class TelemetryRecord:
                 "send_started_ticks": self.send_started_ticks,
                 "send_completed_ticks": self.send_completed_ticks,
                 "completion_error_ticks": self.completion_error_ticks,
+                "native_requested_count": self.native_requested_count,
+                "native_sent_count": self.native_sent_count,
+                "native_skipped_count": self.native_skipped_count,
                 "applied_lead_ticks": self.applied_lead_ticks,
                 "win32_error": self.win32_error,
                 "dispatch_id": self.event_index
@@ -554,6 +572,24 @@ def materialize_native_trace(
             row.get("applied_lead_ticks"), "applied_lead_ticks"
         )
         win32_error = _required_nonnegative_int(row.get("win32_error"), "win32_error")
+        requested_count = _required_nonnegative_int(
+            row.get("requested_count"), "requested_count"
+        )
+        sent_count = _required_nonnegative_int(row.get("sent_count"), "sent_count")
+        skipped_count = _required_nonnegative_int(
+            row.get("skipped_count"), "skipped_count"
+        )
+        send_attempts = _required_nonnegative_int(
+            row.get("send_attempts"), "send_attempts"
+        )
+        if (
+            send_attempts > 255
+            or requested_count > polyphony
+            or sent_count > requested_count
+            or skipped_count > requested_count
+            or sent_count + skipped_count > requested_count
+        ):
+            raise ValueError("native telemetry record has invalid delivery counts")
 
         authored_us = ticks_to_us(authored_ticks, "authored_ticks")
         effective_us = ticks_to_us(effective_ticks, "effective_deadline_ticks")
@@ -597,6 +633,7 @@ def materialize_native_trace(
                 dispatch_lateness_us=completion_lateness_us,
                 first_win32_error=win32_error or None,
                 last_win32_error=win32_error or None,
+                send_attempts=send_attempts,
                 packet_id=event_index,
                 authored_us=authored_us,
                 scheduled_timeline_us=effective_us,
@@ -616,6 +653,9 @@ def materialize_native_trace(
                 applied_lead_ticks=lead_ticks,
                 win32_error=win32_error,
                 native_polyphony=polyphony,
+                native_requested_count=requested_count,
+                native_sent_count=sent_count,
+                native_skipped_count=skipped_count,
             )
         )
     return materialized
@@ -1085,18 +1125,33 @@ class TelemetryLogger:
             # Records were already persisted (save()) or never recorded: serve the cache.
             return self._last_summary
 
+        def _scan_count(record: dict, field: str) -> int:
+            return len([sc for sc in str(record.get(field, "")).split(";") if sc])
+
+        def _record_count(record: dict, identity_field: str, native_field: str) -> int:
+            native_value = record.get(native_field)
+            if isinstance(native_value, int) and not isinstance(native_value, bool):
+                return native_value
+            return _scan_count(record, identity_field)
+
         # dispatch_records includes zero-insertion SendInput attempts. Native
         # records expose send_attempts explicitly; the sent-code fallback keeps
         # compatibility with older Python/native records that predate it.
         dispatch_records = [
             r
             for r in rows
-            if r.get("sent_scan_codes") or int(r.get("send_attempts", 0) or 0) > 0
+            if r.get("sent_scan_codes")
+            or int(r.get("send_attempts", 0) or 0) > 0
+            or (
+                isinstance(r.get("native_requested_count"), int)
+                and r.get("native_requested_count", 0) > 0
+            )
         ]
         noop_skipped_count = sum(
-            1
+            _record_count(r, "skipped_scan_codes", "native_skipped_count")
             for r in rows
-            if not r.get("sent_scan_codes") and r.get("skipped_scan_codes")
+            if not r.get("sent_scan_codes")
+            and _record_count(r, "skipped_scan_codes", "native_skipped_count") > 0
         )
         scheduler_dispatch_records = [
             r
@@ -1134,7 +1189,8 @@ class TelemetryLogger:
         sent_down_records = [
             record
             for record in dispatch_records
-            if record["kind"] == "down" and record.get("sent_scan_codes", "")
+            if record["kind"] == "down"
+            and _record_count(record, "sent_scan_codes", "native_sent_count") > 0
         ]
         down_timeline_drift_us = (
             sent_down_records[-1]["lateness_us"] - sent_down_records[0]["lateness_us"]
@@ -1247,9 +1303,6 @@ class TelemetryLogger:
                 )
             return res
 
-        def _scan_count(record: dict, field: str) -> int:
-            return len([sc for sc in str(record.get(field, "")).split(";") if sc])
-
         backend_info: dict = {
             "panic_release_failures": 0,
             "failed_release_keys_final": [],
@@ -1291,22 +1344,34 @@ class TelemetryLogger:
             else self.min_hold_us
         )
         intended_down_count = sum(
-            _scan_count(r, "scan_codes") for r in rows if r["kind"] == "down"
+            _record_count(r, "scan_codes", "native_requested_count")
+            for r in rows
+            if r["kind"] == "down"
         )
         intended_up_count = sum(
-            _scan_count(r, "scan_codes") for r in rows if r["kind"] == "up"
+            _record_count(r, "scan_codes", "native_requested_count")
+            for r in rows
+            if r["kind"] == "up"
         )
         sent_down_count = sum(
-            _scan_count(r, "sent_scan_codes") for r in rows if r["kind"] == "down"
+            _record_count(r, "sent_scan_codes", "native_sent_count")
+            for r in rows
+            if r["kind"] == "down"
         )
         sent_up_count = sum(
-            _scan_count(r, "sent_scan_codes") for r in rows if r["kind"] == "up"
+            _record_count(r, "sent_scan_codes", "native_sent_count")
+            for r in rows
+            if r["kind"] == "up"
         )
         backend_skipped_down_count = sum(
-            _scan_count(r, "skipped_scan_codes") for r in rows if r["kind"] == "down"
+            _record_count(r, "skipped_scan_codes", "native_skipped_count")
+            for r in rows
+            if r["kind"] == "down"
         )
         backend_skipped_up_count = sum(
-            _scan_count(r, "skipped_scan_codes") for r in rows if r["kind"] == "up"
+            _record_count(r, "skipped_scan_codes", "native_skipped_count")
+            for r in rows
+            if r["kind"] == "up"
         )
         runtime_conflict_dropped_down_count = sum(
             _scan_count(r, "scan_codes")
@@ -1321,12 +1386,18 @@ class TelemetryLogger:
         runtime_backend_dropped_down_count = sum(
             max(
                 0,
-                _scan_count(r, "scan_codes") - _scan_count(r, "sent_scan_codes"),
+                _record_count(r, "scan_codes", "native_requested_count")
+                - _record_count(r, "sent_scan_codes", "native_sent_count"),
             )
             for r in rows
             if r["kind"] == "down"
+            and r.get("runtime_outcome") != "blocked_unfocused"
             and r.get("runtime_outcome")
             not in {"dropped_conflict", "dropped_expired", "suppressed_stale_up"}
+            and (
+                not isinstance(r.get("native_requested_count"), int)
+                or r.get("native_requested_count", 0) > 0
+            )
         )
         before_send_missing_down_count = (
             runtime_conflict_dropped_down_count
@@ -1474,7 +1545,9 @@ class TelemetryLogger:
             "attempted_dispatches": len(dispatch_records),
             "noop_skipped_count": noop_skipped_count,
             "successful_dispatches": sum(
-                1 for r in dispatch_records if r.get("sent_scan_codes")
+                1
+                for r in dispatch_records
+                if _record_count(r, "sent_scan_codes", "native_sent_count") > 0
             ),
             "sent_down_count": sent_down_count,
             "sent_up_count": sent_up_count,

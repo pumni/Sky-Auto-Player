@@ -357,9 +357,13 @@ pub struct RtTraceRecord {
     pub completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
     pub win32_error: u32,
+    pub requested_count: u8,
+    pub sent_count: u8,
+    pub skipped_count: u8,
+    pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 4;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 5;
 
 const TRACE_KIND_DOWN: u8 = 0;
 const TRACE_KIND_UP: u8 = 1;
@@ -367,6 +371,82 @@ const TRACE_FLAG_SENT_FULL: u8 = 1 << 0;
 const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
 const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
 const TRACE_FLAG_ANOMALY: u8 = 1 << 3;
+
+#[derive(Debug, Clone, Copy)]
+struct TraceTiming {
+    authored_ticks: TimelineTicks,
+    effective_deadline_ticks: TimelineTicks,
+    wake_ticks: TimelineTicks,
+    send_started_ticks: Option<QpcTicks>,
+    send_completed_ticks: Option<QpcTicks>,
+    completion_error_ticks: i64,
+    applied_lead_ticks: DurationTicks,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TraceDelivery {
+    requested: usize,
+    sent: usize,
+    skipped: usize,
+    send_attempts: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TraceContext {
+    event_index: u32,
+    kind: u8,
+    outcome: u8,
+    polyphony: usize,
+    flags: u8,
+    win32_error: u32,
+}
+
+impl RtTraceRecord {
+    fn dispatched(
+        context: TraceContext,
+        timing: TraceTiming,
+        delivery: TraceDelivery,
+    ) -> Result<Self, TimeArithmeticError> {
+        if delivery.sent > delivery.requested
+            || delivery.skipped > delivery.requested
+            || delivery.sent.saturating_add(delivery.skipped) > delivery.requested
+            || delivery.requested > context.polyphony
+        {
+            return Err(TimeArithmeticError::Overflow);
+        }
+        let polyphony =
+            u8::try_from(context.polyphony).map_err(|_| TimeArithmeticError::Overflow)?;
+        let requested_count =
+            u8::try_from(delivery.requested).map_err(|_| TimeArithmeticError::Overflow)?;
+        let sent_count = u8::try_from(delivery.sent).map_err(|_| TimeArithmeticError::Overflow)?;
+        let skipped_count =
+            u8::try_from(delivery.skipped).map_err(|_| TimeArithmeticError::Overflow)?;
+        let send_attempts =
+            u8::try_from(delivery.send_attempts).map_err(|_| TimeArithmeticError::Overflow)?;
+        let applied_lead_ticks = u32::try_from(timing.applied_lead_ticks.as_u64())
+            .map_err(|_| TimeArithmeticError::Overflow)?;
+
+        Ok(Self {
+            event_index: context.event_index,
+            kind: context.kind,
+            outcome: context.outcome,
+            polyphony,
+            flags: context.flags,
+            authored_ticks: timing.authored_ticks.as_u64(),
+            effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
+            wake_ticks: timing.wake_ticks.as_u64(),
+            send_started_ticks: timing.send_started_ticks.map_or(0, QpcTicks::as_u64),
+            send_completed_ticks: timing.send_completed_ticks.map_or(0, QpcTicks::as_u64),
+            completion_error_ticks: timing.completion_error_ticks,
+            applied_lead_ticks,
+            win32_error: context.win32_error,
+            requested_count,
+            sent_count,
+            skipped_count,
+            send_attempts,
+        })
+    }
+}
 
 fn trace_outcome_code(outcome: &str) -> u8 {
     match outcome {
@@ -435,17 +515,13 @@ impl NativeTelemetrySummary {
         }
         self.requested_key_count = self
             .requested_key_count
-            .saturating_add(u64::from(record.polyphony));
-        if record.flags & TRACE_FLAG_SENT_FULL != 0 {
-            self.sent_key_count = self
-                .sent_key_count
-                .saturating_add(u64::from(record.polyphony));
-        }
-        if record.flags & TRACE_FLAG_SENT_FULL == 0 {
-            self.skipped_key_count = self
-                .skipped_key_count
-                .saturating_add(u64::from(record.polyphony));
-        }
+            .saturating_add(u64::from(record.requested_count));
+        self.sent_key_count = self
+            .sent_key_count
+            .saturating_add(u64::from(record.sent_count));
+        self.skipped_key_count = self
+            .skipped_key_count
+            .saturating_add(u64::from(record.skipped_count));
     }
 }
 
@@ -2438,23 +2514,39 @@ fn run_worker(
                 if release_outcome != "sent" {
                     trace_flags |= TRACE_FLAG_ANOMALY;
                 }
-                telemetry.push(|| RtTraceRecord {
-                    event_index: first.source_action_index,
-                    kind: TRACE_KIND_UP,
-                    outcome: trace_outcome_code(release_outcome),
-                    polyphony: scan_codes.len() as u8,
-                    flags: trace_flags,
-                    authored_ticks: scheduled_ticks.as_u64(),
-                    effective_deadline_ticks: effective_deadline_ticks.as_u64(),
-                    wake_ticks: actual_ticks.as_u64(),
-                    send_started_ticks: result.send_started_ticks.map_or(0, |ticks| ticks.as_u64()),
-                    send_completed_ticks: result
-                        .send_completed_ticks
-                        .map_or(0, |ticks| ticks.as_u64()),
-                    completion_error_ticks: up_completion_error_ticks,
-                    applied_lead_ticks: lead_up_ticks.as_u64() as u32,
-                    win32_error: result.last_win32_error.unwrap_or(0),
-                });
+                let trace_record = match RtTraceRecord::dispatched(
+                    TraceContext {
+                        event_index: first.source_action_index,
+                        kind: TRACE_KIND_UP,
+                        outcome: trace_outcome_code(release_outcome),
+                        polyphony: scan_codes.len(),
+                        flags: trace_flags,
+                        win32_error: result.last_win32_error.unwrap_or(0),
+                    },
+                    TraceTiming {
+                        authored_ticks: scheduled_ticks,
+                        effective_deadline_ticks,
+                        wake_ticks: actual_ticks,
+                        send_started_ticks: result.send_started_ticks,
+                        send_completed_ticks: result.send_completed_ticks,
+                        completion_error_ticks: up_completion_error_ticks,
+                        applied_lead_ticks: lead_up_ticks,
+                    },
+                    TraceDelivery {
+                        requested: scan_codes.len(),
+                        sent: result.sent.len(),
+                        skipped: result.skipped_duplicates.len(),
+                        send_attempts: usize::from(result.send_attempts),
+                    },
+                ) {
+                    Ok(record) => record,
+                    Err(error) => {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("native telemetry record overflow: {error}"));
+                        break;
+                    }
+                };
+                telemetry.push(|| trace_record);
                 if config.enable_adaptive_lead
                     && pending_plan
                         .as_ref()
@@ -2646,21 +2738,40 @@ fn run_worker(
                             break;
                         }
                         focus_restore_started_ticks = None;
-                        telemetry.push(|| RtTraceRecord {
-                            event_index: batch_source_action_index,
-                            kind: TRACE_KIND_DOWN,
-                            outcome: trace_outcome_code("blocked_unfocused"),
-                            polyphony: scan_batch.len() as u8,
-                            flags: TRACE_FLAG_ANOMALY,
-                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
-                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
-                            wake_ticks: effective_now_ticks.as_u64(),
-                            send_started_ticks: 0,
-                            send_completed_ticks: 0,
-                            completion_error_ticks: 0,
-                            applied_lead_ticks: lead_down_ticks.as_u64() as u32,
-                            win32_error: 0,
-                        });
+                        let trace_record = match RtTraceRecord::dispatched(
+                            TraceContext {
+                                event_index: batch_source_action_index,
+                                kind: TRACE_KIND_DOWN,
+                                outcome: trace_outcome_code("blocked_unfocused"),
+                                polyphony: batch_intent_count,
+                                flags: TRACE_FLAG_ANOMALY,
+                                win32_error: 0,
+                            },
+                            TraceTiming {
+                                authored_ticks: authored_batch_scheduled_ticks,
+                                effective_deadline_ticks: batch_scheduled_ticks,
+                                wake_ticks: effective_now_ticks,
+                                send_started_ticks: None,
+                                send_completed_ticks: None,
+                                completion_error_ticks: 0,
+                                applied_lead_ticks: lead_down_ticks,
+                            },
+                            TraceDelivery {
+                                requested: batch_intent_count,
+                                sent: 0,
+                                skipped: 0,
+                                send_attempts: 0,
+                            },
+                        ) {
+                            Ok(record) => record,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("native telemetry record overflow: {error}"));
+                                break;
+                            }
+                        };
+                        telemetry.push(|| trace_record);
                         publish_backend_metrics(
                             &backend,
                             &mut local_metrics,
@@ -2977,23 +3088,40 @@ fn run_worker(
                         if down_outcome != "sent" {
                             trace_flags |= TRACE_FLAG_ANOMALY;
                         }
-                        telemetry.push(|| RtTraceRecord {
-                            event_index: batch_source_action_index,
-                            kind: TRACE_KIND_DOWN,
-                            outcome: trace_outcome_code(down_outcome),
-                            polyphony: batch_intent_count as u8,
-                            flags: trace_flags,
-                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
-                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
-                            wake_ticks: actual_ticks.as_u64(),
-                            send_started_ticks: result_started_ticks
-                                .map_or(0, |ticks| ticks.as_u64()),
-                            send_completed_ticks: result_completed_ticks
-                                .map_or(0, |ticks| ticks.as_u64()),
-                            completion_error_ticks: completion_error_ticks_value,
-                            applied_lead_ticks: lead_down_ticks.as_u64() as u32,
-                            win32_error: result_last_win32_error.unwrap_or(0),
-                        });
+                        let trace_record = match RtTraceRecord::dispatched(
+                            TraceContext {
+                                event_index: batch_source_action_index,
+                                kind: TRACE_KIND_DOWN,
+                                outcome: trace_outcome_code(down_outcome),
+                                polyphony: batch_intent_count,
+                                flags: trace_flags,
+                                win32_error: result_last_win32_error.unwrap_or(0),
+                            },
+                            TraceTiming {
+                                authored_ticks: authored_batch_scheduled_ticks,
+                                effective_deadline_ticks: batch_scheduled_ticks,
+                                wake_ticks: actual_ticks,
+                                send_started_ticks: result_started_ticks,
+                                send_completed_ticks: result_completed_ticks,
+                                completion_error_ticks: completion_error_ticks_value,
+                                applied_lead_ticks: lead_down_ticks,
+                            },
+                            TraceDelivery {
+                                requested: batch_intent_count,
+                                sent: result_sent.len(),
+                                skipped: result_skipped_duplicates.len(),
+                                send_attempts: usize::from(result_send_attempts),
+                            },
+                        ) {
+                            Ok(record) => record,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("native telemetry record overflow: {error}"));
+                                break;
+                            }
+                        };
+                        telemetry.push(|| trace_record);
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
                                 &mut local_metrics.lead_saturation_count_down,
@@ -3128,21 +3256,40 @@ fn run_worker(
                         }
                     };
                     if !suppressed.is_empty() {
-                        telemetry.push(|| RtTraceRecord {
-                            event_index: batch_source_action_index,
-                            kind: TRACE_KIND_UP,
-                            outcome: trace_outcome_code("suppressed_stale_up"),
-                            polyphony: suppressed.len() as u8,
-                            flags: TRACE_FLAG_ANOMALY,
-                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
-                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
-                            wake_ticks: effective_now_ticks.as_u64(),
-                            send_started_ticks: 0,
-                            send_completed_ticks: 0,
-                            completion_error_ticks: 0,
-                            applied_lead_ticks: lead_up_ticks.as_u64() as u32,
-                            win32_error: 0,
-                        });
+                        let trace_record = match RtTraceRecord::dispatched(
+                            TraceContext {
+                                event_index: batch_source_action_index,
+                                kind: TRACE_KIND_UP,
+                                outcome: trace_outcome_code("suppressed_stale_up"),
+                                polyphony: suppressed.len(),
+                                flags: TRACE_FLAG_ANOMALY,
+                                win32_error: 0,
+                            },
+                            TraceTiming {
+                                authored_ticks: authored_batch_scheduled_ticks,
+                                effective_deadline_ticks: batch_scheduled_ticks,
+                                wake_ticks: effective_now_ticks,
+                                send_started_ticks: None,
+                                send_completed_ticks: None,
+                                completion_error_ticks: 0,
+                                applied_lead_ticks: lead_up_ticks,
+                            },
+                            TraceDelivery {
+                                requested: suppressed.len(),
+                                sent: 0,
+                                skipped: 0,
+                                send_attempts: 0,
+                            },
+                        ) {
+                            Ok(record) => record,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("native telemetry record overflow: {error}"));
+                                break;
+                            }
+                        };
+                        telemetry.push(|| trace_record);
                     }
                 }
                 publish_backend_metrics(
@@ -4064,11 +4211,13 @@ fn publish_backend_metrics(
 mod tests {
     use super::{
         FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
-        NativeDispatchSession, TelemetryMode, WakeErrorStats, adjust_spin_threshold,
+        NativeDispatchSession, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TelemetryMode,
+        TraceContext, TraceDelivery, TraceTiming, WakeErrorStats, adjust_spin_threshold,
         anchored_dispatch_target_ticks, classify_latency_class, completion_error_ticks,
         deadline_target_ticks, derive_spin_threshold_us, exact_sender_durations,
         focus_gate_matches, record_input_path_health, record_termination_error,
-        release_runtime_outcome, supervisor_lease_expired, update_estimator_after_send,
+        release_runtime_outcome, supervisor_lease_expired, trace_outcome_code,
+        update_estimator_after_send,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4221,6 +4370,80 @@ mod tests {
             ),
             Ok(i64::MIN)
         );
+    }
+
+    #[test]
+    fn native_trace_counts_are_semantic_and_summary_uses_them() {
+        let record = RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 7,
+                kind: TRACE_KIND_DOWN,
+                outcome: trace_outcome_code("sent"),
+                polyphony: 3,
+                flags: TRACE_FLAG_SENT_FULL,
+                win32_error: 0,
+            },
+            TraceTiming {
+                authored_ticks: TimelineTicks::from_raw(10),
+                effective_deadline_ticks: TimelineTicks::from_raw(12),
+                wake_ticks: TimelineTicks::from_raw(13),
+                send_started_ticks: Some(QpcTicks::from_raw(20)),
+                send_completed_ticks: Some(QpcTicks::from_raw(25)),
+                completion_error_ticks: 1,
+                applied_lead_ticks: DurationTicks::from_raw(2),
+            },
+            TraceDelivery {
+                requested: 3,
+                sent: 2,
+                skipped: 1,
+                send_attempts: 2,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(record.requested_count, 3);
+        assert_eq!(record.sent_count, 2);
+        assert_eq!(record.skipped_count, 1);
+        assert_eq!(record.send_attempts, 2);
+
+        let mut summary = super::NativeTelemetrySummary::default();
+        summary.observe(&record);
+        assert_eq!(summary.requested_key_count, 3);
+        assert_eq!(summary.sent_key_count, 2);
+        assert_eq!(summary.skipped_key_count, 1);
+    }
+
+    #[test]
+    fn native_trace_constructor_rejects_inconsistent_counts() {
+        let result = RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 0,
+                kind: TRACE_KIND_DOWN,
+                outcome: trace_outcome_code("sent"),
+                polyphony: 1,
+                flags: 0,
+                win32_error: 0,
+            },
+            TraceTiming {
+                authored_ticks: TimelineTicks::ZERO,
+                effective_deadline_ticks: TimelineTicks::ZERO,
+                wake_ticks: TimelineTicks::ZERO,
+                send_started_ticks: None,
+                send_completed_ticks: None,
+                completion_error_ticks: 0,
+                applied_lead_ticks: DurationTicks::ZERO,
+            },
+            TraceDelivery {
+                requested: 1,
+                sent: 2,
+                skipped: 0,
+                send_attempts: 1,
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(sky_dispatch_core::time::TimeArithmeticError::Overflow)
+        ));
     }
 
     #[test]

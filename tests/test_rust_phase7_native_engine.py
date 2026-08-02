@@ -365,6 +365,10 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
         "completion_error_ticks",
         "applied_lead_ticks",
         "win32_error",
+        "requested_count",
+        "sent_count",
+        "skipped_count",
+        "send_attempts",
     }
     with pytest.raises(RuntimeError):
         session.take_telemetry_json()
@@ -557,7 +561,7 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
             return json.dumps(
                 {
                     "records": [{"outcome": 2}],
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "qpc_frequency_hz": 10_000_000,
                 }
             )
