@@ -269,9 +269,7 @@ impl FaultInjectionScript {
     }
 }
 
-/// Kept for backward-compatibility with existing call sites that imported this name.
-/// New code should use `FaultInjectionScript` directly.
-#[allow(dead_code)]
+/// Public snapshot shape returned by [`NativeDispatchSession::snapshot`].
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub elapsed_us: u64,
@@ -355,6 +353,7 @@ pub struct RtTraceRecord {
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
     pub completion_error_ticks: i64,
+    pub authored_completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
     pub win32_error: u32,
     pub requested_count: u8,
@@ -363,7 +362,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 5;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 6;
 
 const TRACE_KIND_DOWN: u8 = 0;
 const TRACE_KIND_UP: u8 = 1;
@@ -380,6 +379,7 @@ struct TraceTiming {
     send_started_ticks: Option<QpcTicks>,
     send_completed_ticks: Option<QpcTicks>,
     completion_error_ticks: i64,
+    authored_completion_error_ticks: i64,
     applied_lead_ticks: DurationTicks,
 }
 
@@ -438,6 +438,7 @@ impl RtTraceRecord {
             send_started_ticks: timing.send_started_ticks.map_or(0, QpcTicks::as_u64),
             send_completed_ticks: timing.send_completed_ticks.map_or(0, QpcTicks::as_u64),
             completion_error_ticks: timing.completion_error_ticks,
+            authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks,
             win32_error: context.win32_error,
             requested_count,
@@ -507,6 +508,11 @@ impl Default for TimingSemantics {
 
 impl NativeTelemetrySummary {
     fn observe(&mut self, record: &RtTraceRecord) {
+        let backend_dispatch =
+            record.send_attempts > 0 || record.sent_count > 0 || record.skipped_count > 0;
+        if !backend_dispatch {
+            return;
+        }
         self.dispatch_count = self.dispatch_count.saturating_add(1);
         match record.kind {
             TRACE_KIND_DOWN => self.down_count = self.down_count.saturating_add(1),
@@ -2431,7 +2437,7 @@ fn run_worker(
                 let up_completion_lateness_ticks = completed_effective_ticks
                     .checked_duration_since(scheduled_ticks)
                     .ok();
-                let up_completion_error_ticks = match completion_error_ticks(
+                let up_completion_error_ticks = match signed_timeline_delta_ticks(
                     completed_effective_ticks,
                     effective_deadline_ticks,
                 ) {
@@ -2443,6 +2449,17 @@ fn run_worker(
                         break;
                     }
                 };
+                let up_authored_completion_error_ticks =
+                    match signed_timeline_delta_ticks(completed_effective_ticks, scheduled_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "note-off authored timing conversion failure: {error}"
+                            ));
+                            break;
+                        }
+                    };
                 let up_completion_error_us =
                     match signed_ticks_to_us(qpc_clock, up_completion_error_ticks) {
                         Ok(value) => value,
@@ -2530,6 +2547,7 @@ fn run_worker(
                         send_started_ticks: result.send_started_ticks,
                         send_completed_ticks: result.send_completed_ticks,
                         completion_error_ticks: up_completion_error_ticks,
+                        authored_completion_error_ticks: up_authored_completion_error_ticks,
                         applied_lead_ticks: lead_up_ticks,
                     },
                     TraceDelivery {
@@ -2754,10 +2772,11 @@ fn run_worker(
                                 send_started_ticks: None,
                                 send_completed_ticks: None,
                                 completion_error_ticks: 0,
+                                authored_completion_error_ticks: 0,
                                 applied_lead_ticks: lead_down_ticks,
                             },
                             TraceDelivery {
-                                requested: batch_intent_count,
+                                requested: 0,
                                 sent: 0,
                                 skipped: 0,
                                 send_attempts: 0,
@@ -3001,7 +3020,7 @@ fn run_worker(
                         let completion_lateness_ticks = completed_effective_ticks
                             .checked_duration_since(batch_scheduled_ticks)
                             .ok();
-                        let completion_error_ticks_value = match completion_error_ticks(
+                        let completion_error_ticks_value = match signed_timeline_delta_ticks(
                             completed_effective_ticks,
                             batch_scheduled_ticks,
                         ) {
@@ -3013,6 +3032,20 @@ fn run_worker(
                                 break;
                             }
                         };
+                        let authored_completion_error_ticks_value =
+                            match signed_timeline_delta_ticks(
+                                completed_effective_ticks,
+                                authored_batch_scheduled_ticks,
+                            ) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error = Some(format!(
+                                        "note-on authored timing conversion failure: {error}"
+                                    ));
+                                    break;
+                                }
+                            };
                         let completion_error_us =
                             match signed_ticks_to_us(qpc_clock, completion_error_ticks_value) {
                                 Ok(value) => value,
@@ -3104,6 +3137,8 @@ fn run_worker(
                                 send_started_ticks: result_started_ticks,
                                 send_completed_ticks: result_completed_ticks,
                                 completion_error_ticks: completion_error_ticks_value,
+                                authored_completion_error_ticks:
+                                    authored_completion_error_ticks_value,
                                 applied_lead_ticks: lead_down_ticks,
                             },
                             TraceDelivery {
@@ -3272,10 +3307,11 @@ fn run_worker(
                                 send_started_ticks: None,
                                 send_completed_ticks: None,
                                 completion_error_ticks: 0,
+                                authored_completion_error_ticks: 0,
                                 applied_lead_ticks: lead_up_ticks,
                             },
                             TraceDelivery {
-                                requested: suppressed.len(),
+                                requested: 0,
                                 sent: 0,
                                 skipped: 0,
                                 send_attempts: 0,
@@ -3945,7 +3981,7 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
-fn completion_error_ticks(
+fn signed_timeline_delta_ticks(
     completed: TimelineTicks,
     deadline: TimelineTicks,
 ) -> Result<i64, TimeArithmeticError> {
@@ -4213,10 +4249,10 @@ mod tests {
         FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
         NativeDispatchSession, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TelemetryMode,
         TraceContext, TraceDelivery, TraceTiming, WakeErrorStats, adjust_spin_threshold,
-        anchored_dispatch_target_ticks, classify_latency_class, completion_error_ticks,
-        deadline_target_ticks, derive_spin_threshold_us, exact_sender_durations,
-        focus_gate_matches, record_input_path_health, record_termination_error,
-        release_runtime_outcome, supervisor_lease_expired, trace_outcome_code,
+        anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
+        derive_spin_threshold_us, exact_sender_durations, focus_gate_matches,
+        record_input_path_health, record_termination_error, release_runtime_outcome,
+        signed_timeline_delta_ticks, supervisor_lease_expired, trace_outcome_code,
         update_estimator_after_send,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -4345,11 +4381,11 @@ mod tests {
     #[test]
     fn completion_error_ticks_preserves_signed_timeline_delta() {
         assert_eq!(
-            completion_error_ticks(TimelineTicks::from_raw(120), TimelineTicks::from_raw(100)),
+            signed_timeline_delta_ticks(TimelineTicks::from_raw(120), TimelineTicks::from_raw(100),),
             Ok(20)
         );
         assert_eq!(
-            completion_error_ticks(TimelineTicks::from_raw(100), TimelineTicks::from_raw(120)),
+            signed_timeline_delta_ticks(TimelineTicks::from_raw(100), TimelineTicks::from_raw(120),),
             Ok(-20)
         );
     }
@@ -4357,18 +4393,34 @@ mod tests {
     #[test]
     fn completion_error_ticks_rejects_unrepresentable_signed_delta() {
         assert_eq!(
-            completion_error_ticks(
+            signed_timeline_delta_ticks(
                 TimelineTicks::from_raw(u64::MAX),
                 TimelineTicks::from_raw(0),
             ),
             Err(sky_dispatch_core::time::TimeArithmeticError::Overflow)
         );
         assert_eq!(
-            completion_error_ticks(
+            signed_timeline_delta_ticks(
                 TimelineTicks::from_raw(0),
                 TimelineTicks::from_raw((i64::MAX as u64) + 1),
             ),
             Ok(i64::MIN)
+        );
+    }
+
+    #[test]
+    fn completion_residuals_keep_authored_and_effective_deadlines_distinct() {
+        let completed = TimelineTicks::from_raw(950);
+        let effective_deadline = TimelineTicks::from_raw(900);
+        let authored_deadline = TimelineTicks::from_raw(1_000);
+
+        assert_eq!(
+            signed_timeline_delta_ticks(completed, effective_deadline),
+            Ok(50)
+        );
+        assert_eq!(
+            signed_timeline_delta_ticks(completed, authored_deadline),
+            Ok(-50)
         );
     }
 
@@ -4390,6 +4442,7 @@ mod tests {
                 send_started_ticks: Some(QpcTicks::from_raw(20)),
                 send_completed_ticks: Some(QpcTicks::from_raw(25)),
                 completion_error_ticks: 1,
+                authored_completion_error_ticks: 2,
                 applied_lead_ticks: DurationTicks::from_raw(2),
             },
             TraceDelivery {
@@ -4431,6 +4484,7 @@ mod tests {
                 send_started_ticks: None,
                 send_completed_ticks: None,
                 completion_error_ticks: 0,
+                authored_completion_error_ticks: 0,
                 applied_lead_ticks: DurationTicks::ZERO,
             },
             TraceDelivery {
@@ -4444,6 +4498,43 @@ mod tests {
             result,
             Err(sky_dispatch_core::time::TimeArithmeticError::Overflow)
         ));
+    }
+
+    #[test]
+    fn native_summary_ignores_non_backend_trace() {
+        let record = RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 0,
+                kind: TRACE_KIND_DOWN,
+                outcome: trace_outcome_code("blocked_unfocused"),
+                polyphony: 3,
+                flags: 0,
+                win32_error: 0,
+            },
+            TraceTiming {
+                authored_ticks: TimelineTicks::ZERO,
+                effective_deadline_ticks: TimelineTicks::ZERO,
+                wake_ticks: TimelineTicks::ZERO,
+                send_started_ticks: None,
+                send_completed_ticks: None,
+                completion_error_ticks: 0,
+                authored_completion_error_ticks: 0,
+                applied_lead_ticks: DurationTicks::ZERO,
+            },
+            TraceDelivery {
+                requested: 0,
+                sent: 0,
+                skipped: 0,
+                send_attempts: 0,
+            },
+        )
+        .unwrap();
+        let mut summary = super::NativeTelemetrySummary::default();
+
+        summary.observe(&record);
+
+        assert_eq!(summary.dispatch_count, 0);
+        assert_eq!(summary.requested_key_count, 0);
     }
 
     #[test]

@@ -105,6 +105,7 @@
   "lateness_us.p95_us",
   "lateness_us.p99_us",
   "noop_skipped_count",
+  "noop_skipped_key_count",
   "note_hold_duration_us",
   "note_hold_duration_us.avg_us",
   "note_hold_duration_us.max_us",

@@ -363,6 +363,7 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
         "send_started_ticks",
         "send_completed_ticks",
         "completion_error_ticks",
+        "authored_completion_error_ticks",
         "applied_lead_ticks",
         "win32_error",
         "requested_count",
@@ -561,7 +562,7 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
             return json.dumps(
                 {
                     "records": [{"outcome": 2}],
-                    "schema_version": 5,
+                    "schema_version": 6,
                     "qpc_frequency_hz": 10_000_000,
                 }
             )

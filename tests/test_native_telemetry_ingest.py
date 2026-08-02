@@ -10,7 +10,8 @@ from sky_music.orchestration.telemetry import TelemetryLogger, materialize_nativ
 def _compact_output(
     *,
     completion_error_ticks: int = 250,
-    schema_version: int = 5,
+    authored_completion_error_ticks: int = 250,
+    schema_version: int = 6,
     requested_count: int = 1,
     sent_count: int = 1,
     skipped_count: int = 0,
@@ -36,6 +37,7 @@ def _compact_output(
                 "send_started_ticks": 10_110,
                 "send_completed_ticks": 10_180,
                 "completion_error_ticks": completion_error_ticks,
+                "authored_completion_error_ticks": authored_completion_error_ticks,
                 "applied_lead_ticks": 1_000,
                 "win32_error": 1460,
                 "requested_count": requested_count,
@@ -81,6 +83,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["sender_completed_us"] == 1_018
     assert row["sender_completion_error_us"] == 25
     assert row["completion_error_ticks"] == 250
+    assert row["authored_completion_error_ticks"] == 250
     assert row["send_operation_duration_us"] == 7
     assert row["sendinput_call_duration_us"] == 7
     assert row["bookkeeping_duration_us"] == 0
@@ -95,11 +98,29 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
 
 
 def test_native_trace_materializer_preserves_negative_completion_error() -> None:
-    record = materialize_native_trace(_compact_output(completion_error_ticks=-250))[0]
+    record = materialize_native_trace(
+        _compact_output(
+            completion_error_ticks=-250,
+            authored_completion_error_ticks=-250,
+        )
+    )[0]
 
     assert record.sender_completion_error_us == -25
     assert record.visible_lateness_us == -25
     assert record.dispatch_lateness_us == -25
+
+
+def test_native_trace_keeps_authored_and_effective_completion_residuals_distinct() -> None:
+    record = materialize_native_trace(
+        _compact_output(
+            completion_error_ticks=500,
+            authored_completion_error_ticks=-500,
+        )
+    )[0]
+
+    assert record.sender_completion_error_us == 50
+    assert record.visible_lateness_us == -50
+    assert record.dispatch_lateness_us == -50
 
 
 @pytest.mark.parametrize(
@@ -110,6 +131,12 @@ def test_native_trace_materializer_preserves_negative_completion_error() -> None
         ),
         lambda output: output["records"][0].__setitem__(
             "completion_error_ticks", -(1 << 63) - 1
+        ),
+        lambda output: output["records"][0].__setitem__(
+            "authored_completion_error_ticks", 1 << 63
+        ),
+        lambda output: output["records"][0].__setitem__(
+            "authored_completion_error_ticks", -(1 << 63) - 1
         ),
     ],
 )
@@ -142,7 +169,7 @@ def test_native_trace_materializer_rejects_invalid_delivery_counts(
         materialize_native_trace(output)
 
 
-@pytest.mark.parametrize("schema_version", [3, 4])
+@pytest.mark.parametrize("schema_version", [3, 4, 5])
 def test_native_trace_materializer_rejects_legacy_schema(schema_version: int) -> None:
     with pytest.raises(ValueError, match="schema version"):
         materialize_native_trace(_compact_output(schema_version=schema_version))
@@ -152,7 +179,7 @@ def test_native_records_are_included_in_summary_with_semantic_counts() -> None:
     logger = TelemetryLogger("native", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 5,
+            "schema_version": 6,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 2,
             "accepted": 2,
@@ -163,6 +190,7 @@ def test_native_records_are_included_in_summary_with_semantic_counts() -> None:
                 {
                     **_compact_output(
                         completion_error_ticks=-250,
+                        authored_completion_error_ticks=250,
                         requested_count=3,
                         sent_count=2,
                         skipped_count=1,
@@ -184,7 +212,7 @@ def test_native_records_are_included_in_summary_with_semantic_counts() -> None:
     assert summary["sent_up_count"] == 2
     assert summary["backend_skipped_up_count"] == 1
     assert summary["send_duration_us"]["p50_us"] > 0
-    assert summary["visible_lateness_us"]["p50_us"] == -25.0
+    assert summary["visible_lateness_us"]["p50_us"] == 25.0
 
 
 @pytest.mark.parametrize(
@@ -197,7 +225,7 @@ def test_native_zero_or_partial_send_is_counted_without_fake_scan_codes(
     logger = TelemetryLogger("native", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 5,
+            "schema_version": 6,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 1,
             "accepted": 1,
@@ -219,6 +247,96 @@ def test_native_zero_or_partial_send_is_counted_without_fake_scan_codes(
     assert summary["intended_down_count"] == requested_count
     assert summary["sent_down_count"] == sent_count
     assert summary["backend_skipped_down_count"] == skipped_count
+
+
+def test_focus_blocked_trace_is_not_counted_as_backend_dispatch() -> None:
+    blocked = _compact_output(
+        authored_completion_error_ticks=0,
+        requested_count=0,
+        sent_count=0,
+        skipped_count=0,
+        send_attempts=0,
+    )["records"][0]
+    blocked.update({"outcome": 3, "polyphony": 1, "flags": 8})
+    sent = _compact_output()["records"][0]
+    sent["event_index"] = 1
+
+    logger = TelemetryLogger("focus", enabled=True, retain_records_after_save=True)
+    logger.ingest_native_output(
+        {
+            "schema_version": 6,
+            "qpc_frequency_hz": 10_000_000,
+            "attempted": 2,
+            "accepted": 2,
+            "dropped": 0,
+            "truncated": False,
+            "records": [blocked, sent],
+        }
+    )
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["attempted_dispatches"] == 1
+    assert summary["intended_down_count"] == 1
+    assert summary["sent_down_count"] == 1
+    assert summary["sender_clean"] is True
+    assert summary["send_duration_us"]["p50_us"] > 0
+
+
+def test_suppressed_stale_up_is_not_counted_as_backend_dispatch() -> None:
+    suppressed = _compact_output(
+        authored_completion_error_ticks=0,
+        requested_count=0,
+        sent_count=0,
+        skipped_count=0,
+        send_attempts=0,
+    )["records"][0]
+    suppressed.update({"kind": 1, "outcome": 4, "polyphony": 1, "flags": 8})
+    sent = _compact_output()["records"][0]
+    sent["event_index"] = 1
+
+    logger = TelemetryLogger("stale-up", enabled=True, retain_records_after_save=True)
+    logger.ingest_native_output(
+        {
+            "schema_version": 6,
+            "qpc_frequency_hz": 10_000_000,
+            "attempted": 2,
+            "accepted": 2,
+            "dropped": 0,
+            "truncated": False,
+            "records": [suppressed, sent],
+        }
+    )
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["attempted_dispatches"] == 1
+
+
+@pytest.mark.parametrize(
+    ("sent_count", "skipped_count", "expected_events", "expected_keys"),
+    [(2, 1, 0, 0), (0, 1, 1, 1), (0, 3, 1, 3)],
+)
+def test_noop_skipped_count_has_event_semantics(
+    sent_count: int,
+    skipped_count: int,
+    expected_events: int,
+    expected_keys: int,
+) -> None:
+    output = _compact_output(
+        requested_count=max(3, sent_count + skipped_count),
+        sent_count=sent_count,
+        skipped_count=skipped_count,
+        send_attempts=1,
+    )
+    output["records"][0]["polyphony"] = 3
+    logger = TelemetryLogger("noop", enabled=True, retain_records_after_save=True)
+    logger.ingest_native_output(output)
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["noop_skipped_count"] == expected_events
+    assert summary["noop_skipped_key_count"] == expected_keys
 
 
 def test_native_terminal_counters_replace_python_placeholders() -> None:

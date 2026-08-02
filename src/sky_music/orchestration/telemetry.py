@@ -6,6 +6,7 @@ import math
 import random
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -17,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 5
+NATIVE_TELEMETRY_SCHEMA_VERSION = 6
 
 
 def _optional_int(value: Any) -> int | None:
@@ -53,6 +54,7 @@ _CSV_FIELDS: list[str] = [
     "send_started_ticks",
     "send_completed_ticks",
     "completion_error_ticks",
+    "authored_completion_error_ticks",
     "native_requested_count",
     "native_sent_count",
     "native_skipped_count",
@@ -124,6 +126,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "send_started_ticks",
         "send_completed_ticks",
         "completion_error_ticks",
+        "authored_completion_error_ticks",
         "native_requested_count",
         "native_sent_count",
         "native_skipped_count",
@@ -172,6 +175,7 @@ class TelemetryRecord:
         "actual_us",
         "applied_lead_ticks",
         "applied_lead_us",
+        "authored_completion_error_ticks",
         "authored_ticks",
         "authored_us",
         "bookkeeping_duration_us",
@@ -296,6 +300,7 @@ class TelemetryRecord:
         native_requested_count: int | None = None,
         native_sent_count: int | None = None,
         native_skipped_count: int | None = None,
+        authored_completion_error_ticks: int = 0,
     ) -> None:
         self._dict = None
         self.authored_ticks = authored_ticks
@@ -304,6 +309,7 @@ class TelemetryRecord:
         self.send_started_ticks = send_started_ticks
         self.send_completed_ticks = send_completed_ticks
         self.completion_error_ticks = completion_error_ticks
+        self.authored_completion_error_ticks = authored_completion_error_ticks
         self.applied_lead_ticks = applied_lead_ticks
         self.win32_error = win32_error
         # Native compact telemetry carries polyphony, but it intentionally is
@@ -405,6 +411,7 @@ class TelemetryRecord:
                 "send_started_ticks": self.send_started_ticks,
                 "send_completed_ticks": self.send_completed_ticks,
                 "completion_error_ticks": self.completion_error_ticks,
+                "authored_completion_error_ticks": self.authored_completion_error_ticks,
                 "native_requested_count": self.native_requested_count,
                 "native_sent_count": self.native_sent_count,
                 "native_skipped_count": self.native_skipped_count,
@@ -568,6 +575,10 @@ def materialize_native_trace(
         completion_error_ticks = _required_signed_int64(
             row.get("completion_error_ticks"), "completion_error_ticks"
         )
+        authored_completion_error_ticks = _required_signed_int64(
+            row.get("authored_completion_error_ticks"),
+            "authored_completion_error_ticks",
+        )
         lead_ticks = _required_nonnegative_int(
             row.get("applied_lead_ticks"), "applied_lead_ticks"
         )
@@ -603,10 +614,10 @@ def materialize_native_trace(
             else wake_us
         )
         sender_completion_error_us = signed_ticks_to_us(completion_error_ticks)
+        authored_completion_error_us = signed_ticks_to_us(authored_completion_error_ticks)
         send_duration_us = (
             max(0, completed_us - started_us) if started_us is not None else 0
         )
-        completion_lateness_us = sender_completion_error_us
         materialized.append(
             TelemetryRecord(
                 song_name=song_name,
@@ -627,10 +638,10 @@ def materialize_native_trace(
                 deferred_by_us=0,
                 pre_send_spin_us=0,
                 idle_gap_us=0,
-                visible_lateness_us=completion_lateness_us,
+                visible_lateness_us=authored_completion_error_us,
                 applied_lead_us=ticks_to_us(lead_ticks, "applied_lead_ticks"),
                 send_duration_pure_us=send_duration_us,
-                dispatch_lateness_us=completion_lateness_us,
+                dispatch_lateness_us=authored_completion_error_us,
                 first_win32_error=win32_error or None,
                 last_win32_error=win32_error or None,
                 send_attempts=send_attempts,
@@ -650,6 +661,7 @@ def materialize_native_trace(
                 send_started_ticks=started_ticks,
                 send_completed_ticks=completed_ticks,
                 completion_error_ticks=completion_error_ticks,
+                authored_completion_error_ticks=authored_completion_error_ticks,
                 applied_lead_ticks=lead_ticks,
                 win32_error=win32_error,
                 native_polyphony=polyphony,
@@ -777,6 +789,7 @@ class TelemetryLogger:
         send_started_us: int | None = None,
         send_completed_us: int | None = None,
         sender_completion_error_us: int | None = None,
+        authored_completion_error_ticks: int = 0,
         send_operation_duration_us: int | None = None,
         delivery_first_us: int | None = None,
         delivery_last_us: int | None = None,
@@ -824,6 +837,9 @@ class TelemetryLogger:
             send_completed_us = getattr(result, "send_completed_us", None)
             sender_completion_error_us = getattr(
                 result, "sender_completion_error_us", None
+            )
+            authored_completion_error_ticks = getattr(
+                result, "authored_completion_error_ticks", 0
             )
             send_operation_duration_us = getattr(
                 result, "send_operation_duration_us", None
@@ -898,6 +914,7 @@ class TelemetryLogger:
                 intra_chord_delivery_spread_us,
                 lead_components,
                 send_operation_duration_us=send_operation_duration_us,
+                authored_completion_error_ticks=authored_completion_error_ticks,
             )
         )
         self._accepted_record_count += 1
@@ -1125,33 +1142,50 @@ class TelemetryLogger:
             # Records were already persisted (save()) or never recorded: serve the cache.
             return self._last_summary
 
-        def _scan_count(record: dict, field: str) -> int:
+        def _scan_count(record: Mapping[str, object], field: str) -> int:
             return len([sc for sc in str(record.get(field, "")).split(";") if sc])
 
-        def _record_count(record: dict, identity_field: str, native_field: str) -> int:
+        def _record_count(
+            record: Mapping[str, object], identity_field: str, native_field: str
+        ) -> int:
             native_value = record.get(native_field)
             if isinstance(native_value, int) and not isinstance(native_value, bool):
                 return native_value
             return _scan_count(record, identity_field)
 
-        # dispatch_records includes zero-insertion SendInput attempts. Native
-        # records expose send_attempts explicitly; the sent-code fallback keeps
-        # compatibility with older Python/native records that predate it.
-        dispatch_records = [
-            r
-            for r in rows
-            if r.get("sent_scan_codes")
-            or int(r.get("send_attempts", 0) or 0) > 0
-            or (
-                isinstance(r.get("native_requested_count"), int)
-                and r.get("native_requested_count", 0) > 0
+        def _semantic_send_attempts(record: Mapping[str, object]) -> int:
+            value = record.get("send_attempts", 0)
+            return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+        def _is_backend_dispatch(record: Mapping[str, object]) -> bool:
+            return (
+                _semantic_send_attempts(record) > 0
+                or _record_count(record, "sent_scan_codes", "native_sent_count") > 0
+                or _record_count(record, "skipped_scan_codes", "native_skipped_count")
+                > 0
             )
-        ]
-        noop_skipped_count = sum(
-            _record_count(r, "skipped_scan_codes", "native_skipped_count")
-            for r in rows
-            if not r.get("sent_scan_codes")
+
+        def _authored_request_count(
+            record: Mapping[str, object], identity_field: str, native_field: str
+        ) -> int:
+            if record.get("runtime_outcome") in {
+                "blocked_unfocused",
+                "suppressed_stale_up",
+            }:
+                return 0
+            return _record_count(record, identity_field, native_field)
+
+        dispatch_records = [r for r in rows if _is_backend_dispatch(r)]
+        noop_skipped_records = [
+            r
+            for r in dispatch_records
+            if _record_count(r, "sent_scan_codes", "native_sent_count") == 0
             and _record_count(r, "skipped_scan_codes", "native_skipped_count") > 0
+        ]
+        noop_skipped_count = len(noop_skipped_records)
+        noop_skipped_key_count = sum(
+            _record_count(r, "skipped_scan_codes", "native_skipped_count")
+            for r in noop_skipped_records
         )
         scheduler_dispatch_records = [
             r
@@ -1344,12 +1378,12 @@ class TelemetryLogger:
             else self.min_hold_us
         )
         intended_down_count = sum(
-            _record_count(r, "scan_codes", "native_requested_count")
+            _authored_request_count(r, "scan_codes", "native_requested_count")
             for r in rows
             if r["kind"] == "down"
         )
         intended_up_count = sum(
-            _record_count(r, "scan_codes", "native_requested_count")
+            _authored_request_count(r, "scan_codes", "native_requested_count")
             for r in rows
             if r["kind"] == "up"
         )
@@ -1544,6 +1578,7 @@ class TelemetryLogger:
             ),
             "attempted_dispatches": len(dispatch_records),
             "noop_skipped_count": noop_skipped_count,
+            "noop_skipped_key_count": noop_skipped_key_count,
             "successful_dispatches": sum(
                 1
                 for r in dispatch_records
