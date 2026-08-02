@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -33,7 +34,7 @@ from sky_music.orchestration.core.ports import (
 from sky_music.orchestration.native_provenance import native_source_fingerprint
 
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
-SUPERVISOR_LEASE_TIMEOUT_US = 500_000
+SUPERVISOR_LEASE_TIMEOUT_US = 3_000_000
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -400,11 +401,33 @@ def reset_native_dispatch_availability_cache() -> None:
     _NATIVE_PROBE_KEY = None
 
 
+class NativeHeartbeatThread(threading.Thread):
+    def __init__(self, session: Any, interval_s: float = 0.1) -> None:
+        super().__init__(name="NativeHeartbeat", daemon=True)
+        self._session = session
+        self._interval_s = interval_s
+        self._stop_event = threading.Event()
+        self.error: BaseException | None = None
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self) -> None:
+        try:
+            heartbeat = getattr(self._session, "heartbeat", None)
+            if not callable(heartbeat):
+                return
+            while not self._stop_event.wait(self._interval_s):
+                heartbeat()
+        except BaseException as exc:
+            self.error = exc
+            self._stop_event.set()
+
+
 class RustDispatchRuntime:
     """Supervisor-side adapter; never participates in the real-time hot path."""
 
     __slots__ = (
-        "_actions",
         "_controls",
         "_focus_guard",
         "_has_played",
@@ -458,7 +481,7 @@ class RustDispatchRuntime:
             )
         import sky_player_rs  # type: ignore[import-not-found]
 
-        native_actions = [
+        native_actions = (
             (
                 index,
                 str(action.kind),
@@ -467,7 +490,7 @@ class RustDispatchRuntime:
                 action.reason,
             )
             for index, action in enumerate(actions)
-        ]
+        )
         self._session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             native_actions,
             list(SKY_15_SCAN_CODES),
@@ -497,7 +520,6 @@ class RustDispatchRuntime:
             strict_up_completion_late_us=strict_up_completion_late_us,
             supervisor_lease_timeout_us=SUPERVISOR_LEASE_TIMEOUT_US,
         )
-        self._actions = actions
         self._song_name = song_name
         self._min_hold_us = min_hold_us
         self._require_focus = require_focus
@@ -593,11 +615,6 @@ class RustDispatchRuntime:
             self._set_initial_target()
         return None
 
-    def _heartbeat(self) -> None:
-        heartbeat = getattr(self._session, "heartbeat", None)
-        if callable(heartbeat):
-            heartbeat()
-
     def _join_owned(self) -> bool:
         """Join the worker, escalating once if the first bounded wait expires."""
         joined = bool(self._session.join(timeout_ms=5_000))
@@ -637,6 +654,7 @@ class RustDispatchRuntime:
 
         started = False
         joined = False
+        heartbeat_thread = None
         requested_outcome: str | None = None
         latest: dict[str, Any] = {}
         try:
@@ -644,11 +662,18 @@ class RustDispatchRuntime:
             self._publish_focus()
             self._session.start()
             started = True
-            self._heartbeat()
+            
+            heartbeat_thread = NativeHeartbeatThread(self._session)
+            heartbeat_thread.start()
+            
             latest = self._session.snapshot()
 
             while not latest["is_finished"]:
-                self._heartbeat()
+                if heartbeat_thread.error is not None:
+                    error = heartbeat_thread.error
+                    raise RuntimeError(
+                        f"native heartbeat failed: {type(error).__name__}: {error}"
+                    ) from error
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
                 self._publish_focus()
@@ -692,6 +717,11 @@ class RustDispatchRuntime:
                 time.sleep(self._sleep_s)
 
             joined = self._join_owned()
+            if heartbeat_thread.error is not None:
+                error = heartbeat_thread.error
+                raise RuntimeError(
+                    f"native heartbeat failed: {type(error).__name__}: {error}"
+                ) from error
             latest = self._session.snapshot()
             if not joined:
                 outcome = PLAYBACK_SHUTDOWN_TIMEOUT
@@ -740,6 +770,13 @@ class RustDispatchRuntime:
                         joined = self._join_owned()
             raise
         finally:
+            if heartbeat_thread is not None:
+                heartbeat_thread.stop()
+                heartbeat_thread.join(timeout=1.0)
+                if heartbeat_thread.is_alive() and started and not joined:
+                    with contextlib.suppress(Exception):
+                        self._session.panic_release()
+            
             if started and not joined:
                 with contextlib.suppress(Exception):
                     self._session.quit()

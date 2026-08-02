@@ -2,7 +2,9 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod calibration;
 pub mod clock;
+pub mod cpu;
 pub mod event;
 pub mod focus;
 pub mod input;
@@ -30,8 +32,11 @@ mod tests {
         PlatformSendResult {
             requested: scan_codes.len() as u32,
             inserted: scan_codes.len() as u32,
-            completed_us: clock::qpc_now_us(),
+            started_ticks: clock::QpcTicks::ZERO,
+            completed_ticks: Some(clock::QpcTicks::ZERO),
+            completed_us: clock::qpc_now_us().expect("test QPC clock"),
             win32_error: 0,
+            timing_error: None,
         }
     }
 
@@ -41,8 +46,11 @@ mod tests {
         assert_eq!(state.active_mask, 0);
 
         let res_down = state.key_down(&[0x15, 0x16]);
-        assert!(res_down.success);
-        assert_eq!(res_down.sent.as_slice(), &[0x15, 0x16]);
+        if let input::DownSendOutcome::Complete { sent, .. } = res_down {
+            assert_eq!(sent.as_slice(), &[0x15, 0x16]);
+        } else {
+            panic!("Expected Complete");
+        }
         assert_eq!(state.active_mask.count_ones(), 2);
 
         let res_up = state.key_up(&[0x15]);
@@ -56,10 +64,10 @@ mod tests {
 
     #[test]
     fn test_hybrid_sleeper() {
-        let now = clock::qpc_now_us();
+        let now = clock::qpc_now_us().expect("test QPC clock");
         let target = now + 1_000; // 1 ms in future
-        let overshoot = sleeper::sleep_until_us(target, 200);
-        let end_time = clock::qpc_now_us();
+        let overshoot = sleeper::sleep_until_us(target, 200).expect("QPC");
+        let end_time = clock::qpc_now_us().expect("test QPC clock");
         assert!(end_time >= target);
         assert!((end_time - target).abs_diff(overshoot) <= 100);
     }
@@ -75,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_measure_spin_overhead() {
-        let overhead = sleeper::measure_spin_overhead_us();
+        let overhead = sleeper::measure_spin_overhead_us().expect("QPC");
         assert!(overhead >= 1);
     }
 }

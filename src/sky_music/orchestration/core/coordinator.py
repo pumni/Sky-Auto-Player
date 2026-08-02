@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -91,20 +90,29 @@ class PendingRelease:
 def compile_runtime_intents(actions: tuple[KeyAction, ...]) -> RuntimeSchedule:
     """Attach stable per-key generations to an already-built scheduler timeline."""
     next_generation_id = 0
-    unmatched_downs: dict[int, deque[int]] = defaultdict(deque)
+    open_generation_by_slot: dict[int, tuple[int, int, int]] = {}
     batches: list[RuntimeActionBatch] = []
 
     for source_action_index, action in enumerate(actions):
         intents: list[RuntimeKeyIntent] = []
-        for scan_code in action.scan_codes:
+        for scan_code in sorted(action.scan_codes):
             generation_id: int | None
             if action.kind == "down":
+                if scan_code in open_generation_by_slot:
+                    prev_index, prev_time, _ = open_generation_by_slot[scan_code]
+                    raise ValueError(
+                        f"overlapping same-key down actions on scan code {scan_code}: "
+                        f"first down at index {prev_index} (scheduled_us={prev_time}), "
+                        f"second down at index {source_action_index} (scheduled_us={int(action.at_us)})"
+                    )
                 generation_id = next_generation_id
                 next_generation_id += 1
-                unmatched_downs[scan_code].append(generation_id)
+                open_generation_by_slot[scan_code] = (source_action_index, int(action.at_us), generation_id)
             else:
-                queue = unmatched_downs[scan_code]
-                generation_id = queue.popleft() if queue else None
+                if scan_code in open_generation_by_slot:
+                    _, _, generation_id = open_generation_by_slot.pop(scan_code)
+                else:
+                    generation_id = None
 
             intents.append(
                 RuntimeKeyIntent(

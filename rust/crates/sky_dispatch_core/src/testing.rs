@@ -59,7 +59,15 @@ pub fn simulate_schedule(
     send_latency_us: u64,
 ) -> Result<SimulationResult, crate::compile::CompileError> {
     let schedule = crate::compile::compile_runtime_intents(actions, allowed_scan_codes)?;
-    let mut coordinator = RuntimeDispatchCoordinator::new(schedule, min_hold_us);
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        min_hold_us,
+        crate::time::DurationTicks::from_raw(min_hold_us),
+        0,
+        crate::time::DurationTicks::ZERO,
+        |microseconds| Ok(crate::time::TimelineTicks::from_raw(microseconds)),
+    )
+    .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
     let mut events = Vec::new();
     let mut step: u32 = 0;
@@ -71,19 +79,45 @@ pub fn simulate_schedule(
     };
 
     while !coordinator.is_finished() {
-        if let Some(dl) = coordinator.next_deadline_us(0, 0) {
-            now_us = now_us.max(dl);
+        let pending_deadline = coordinator
+            .next_pending_release_ticks(crate::time::DurationTicks::ZERO)
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+        let pending_plan = pending_deadline.map(|deadline_ticks| PendingDispatchPlan {
+            deadline_ticks,
+            lead_ticks: crate::time::DurationTicks::ZERO,
+            polyphony: 1,
+            lead_saturated: false,
+        });
+        if let Some(dl) = coordinator
+            .next_deadline_ticks(crate::time::DurationTicks::ZERO, pending_plan.as_ref())
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
+        {
+            now_us = now_us.max(dl.as_u64());
         }
 
         // 1. Drain pending releases due
-        let due_pending = coordinator.pop_due_pending(now_us, 0);
+        let plan = PendingDispatchPlan {
+            deadline_ticks: crate::time::TimelineTicks::from_raw(now_us),
+            lead_ticks: crate::time::DurationTicks::ZERO,
+            polyphony: 1,
+            lead_saturated: false,
+        };
+        let due_pending = coordinator
+            .pop_due_pending_ticks(crate::time::TimelineTicks::from_raw(now_us), &plan)
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
         if !due_pending.is_empty() {
             let scan_codes: Vec<u16> = due_pending.iter().map(|p| p.scan_code).collect();
             let gen_ids: Vec<Option<u64>> =
                 due_pending.iter().map(|p| Some(p.generation_id)).collect();
-            let completed_us = now_us + send_latency_us;
+            let completed_us = now_us.checked_add(send_latency_us).ok_or_else(|| {
+                crate::compile::CompileError::Simulation(
+                    "simulation timestamp overflow".to_string(),
+                )
+            })?;
 
-            coordinator.complete_releases(&due_pending, &scan_codes, &[]);
+            coordinator
+                .complete_releases(&due_pending, &scan_codes, &[])
+                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
             events.push(TraceEvent {
                 step,
@@ -101,22 +135,45 @@ pub fn simulate_schedule(
         }
 
         // 2. Drain authored batch
-        if let Some((batch, _lead)) = coordinator.pop_next_due_authored(now_us, 0) {
+        if let Some((batch_index, _lead)) = coordinator
+            .pop_next_due_authored_ticks(
+                crate::time::TimelineTicks::from_raw(now_us),
+                crate::time::DurationTicks::ZERO,
+            )
+            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
+        {
+            let batch = coordinator
+                .schedule
+                .try_materialize_batch_authored(batch_index)
+                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
             match batch.kind {
                 ActionKind::Down => {
-                    let (playable, conflicts) = coordinator.split_down_intents(&batch.intents);
+                    let (playable, conflicts) = coordinator
+                        .split_down_intents(&batch.intents)
+                        .map_err(|error| {
+                            crate::compile::CompileError::Simulation(error.to_string())
+                        })?;
                     if !playable.is_empty() {
                         let scan_codes: Vec<u16> = playable.iter().map(|i| i.scan_code).collect();
                         let gen_ids: Vec<Option<u64>> =
                             playable.iter().map(|i| i.generation_id).collect();
-                        let completed_us = now_us + send_latency_us;
+                        let completed_us =
+                            now_us.checked_add(send_latency_us).ok_or_else(|| {
+                                crate::compile::CompileError::Simulation(
+                                    "simulation timestamp overflow".to_string(),
+                                )
+                            })?;
 
-                        coordinator.activate_sent_downs(
-                            &playable,
-                            &scan_codes,
-                            now_us,
-                            completed_us,
-                        );
+                        coordinator
+                            .activate_sent_downs_ticks(
+                                &playable,
+                                &scan_codes,
+                                crate::time::TimelineTicks::from_raw(now_us),
+                                crate::time::TimelineTicks::from_raw(completed_us),
+                            )
+                            .map_err(|error| {
+                                crate::compile::CompileError::Simulation(error.to_string())
+                            })?;
 
                         events.push(TraceEvent {
                             step,
@@ -149,7 +206,11 @@ pub fn simulate_schedule(
                     }
                 }
                 ActionKind::Up => {
-                    let (requested, suppressed) = coordinator.request_releases(&batch.intents);
+                    let (requested, suppressed) = coordinator
+                        .request_releases(&batch.intents)
+                        .map_err(|error| {
+                            crate::compile::CompileError::Simulation(error.to_string())
+                        })?;
                     if !suppressed.is_empty() {
                         let scan_codes: Vec<u16> = suppressed.iter().map(|i| i.scan_code).collect();
                         let gen_ids: Vec<Option<u64>> =
@@ -171,7 +232,11 @@ pub fn simulate_schedule(
             }
         } else {
             // Advance time if nothing moved
-            now_us += 100;
+            now_us = now_us.checked_add(100).ok_or_else(|| {
+                crate::compile::CompileError::Simulation(
+                    "simulation timestamp overflow".to_string(),
+                )
+            })?;
         }
     }
 
@@ -195,15 +260,15 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1],
-                reason: "note".to_string(),
+                scan_codes: vec![1].into(),
+                reason: "note".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 1100,
-                scan_codes: vec![1],
-                reason: "note".to_string(),
+                scan_codes: vec![1].into(),
+                reason: "note".into(),
             },
         ];
 

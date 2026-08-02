@@ -1,6 +1,7 @@
 //! Generation compiler for turning authored KeyAction sequences into RuntimeSchedule.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use crate::model::*;
@@ -38,6 +39,18 @@ pub enum CompileError {
     TooManyReasons,
     #[error("generation identifier overflow")]
     GenerationOverflow,
+    #[error(
+        "overlapping same-key down actions on scan code {scan_code}: first down at index {first_down_action_index} (scheduled_us={first_scheduled_us}), second down at index {second_down_action_index} (scheduled_us={second_scheduled_us})"
+    )]
+    OverlappingSameKeyDown {
+        scan_code: u16,
+        first_down_action_index: u32,
+        second_down_action_index: u32,
+        first_scheduled_us: u64,
+        second_scheduled_us: u64,
+    },
+    #[error("runtime simulation failed: {0}")]
+    Simulation(String),
 }
 
 pub fn compile_runtime_intents(
@@ -58,8 +71,15 @@ pub fn compile_runtime_intents(
 
     let key_registry = KeyRegistry::new(allowed_scan_codes);
     let mut next_generation_id: GenerationId = 0;
-    let mut unmatched_downs: [VecDeque<GenerationId>; MAX_KEYS] =
-        std::array::from_fn(|_| VecDeque::new());
+
+    #[derive(Clone, Copy, Debug)]
+    struct OpenGeneration {
+        generation_id: GenerationId,
+        down_action_index: u32,
+        down_scheduled_us: u64,
+    }
+    let mut open_generation_by_slot: [Option<OpenGeneration>; MAX_KEYS] = [None; MAX_KEYS];
+
     let mut reason_table: Vec<String> = Vec::new();
     let mut reason_map: HashMap<String, ReasonId> = HashMap::new();
     let intent_capacity = actions
@@ -75,8 +95,8 @@ pub fn compile_runtime_intents(
         } else {
             let id =
                 ReasonId::try_from(reason_table.len()).map_err(|_| CompileError::TooManyReasons)?;
-            reason_table.push(reason.to_string());
-            reason_map.insert(reason.to_string(), id);
+            reason_table.push(reason.into());
+            reason_map.insert(reason.into(), id);
             Ok(id)
         }
     };
@@ -84,6 +104,7 @@ pub fn compile_runtime_intents(
     let mut previous_source_index: Option<u32> = None;
     let mut previous_scheduled_us: Option<u64> = None;
     let mut same_timestamp_down_seen = false;
+    let mut next_packet_id: PacketId = 0;
 
     for action in actions {
         if let Some(previous) = previous_source_index
@@ -104,6 +125,7 @@ pub fn compile_runtime_intents(
         }
         if previous_scheduled_us != Some(action.scheduled_us) {
             same_timestamp_down_seen = false;
+            next_packet_id = next_packet_id.saturating_add(1);
         }
         if action.kind == ActionKind::Down && same_timestamp_down_seen {
             return Err(CompileError::SameTimestampDownBatch {
@@ -147,7 +169,10 @@ pub fn compile_runtime_intents(
         let reason_id = get_or_insert_reason(&action.reason)?;
         let intent_start =
             u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
-        for &scan_code in &action.scan_codes {
+        let mut sorted_scan_codes = action.scan_codes.clone();
+        sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
+
+        for &scan_code in &sorted_scan_codes {
             let key_slot =
                 key_registry
                     .slot_for(scan_code)
@@ -160,14 +185,32 @@ pub fn compile_runtime_intents(
                     if next_generation_id > MAX_COMPACT_GENERATION_ID {
                         return Err(CompileError::GenerationOverflow);
                     }
+                    if let Some(open) = open_generation_by_slot[key_slot as usize] {
+                        return Err(CompileError::OverlappingSameKeyDown {
+                            scan_code,
+                            first_down_action_index: open.down_action_index,
+                            second_down_action_index: action.source_action_index,
+                            first_scheduled_us: open.down_scheduled_us,
+                            second_scheduled_us: action.scheduled_us,
+                        });
+                    }
                     let gen_id = next_generation_id;
                     next_generation_id = next_generation_id
                         .checked_add(1)
                         .ok_or(CompileError::GenerationOverflow)?;
-                    unmatched_downs[key_slot as usize].push_back(gen_id);
+                    open_generation_by_slot[key_slot as usize] = Some(OpenGeneration {
+                        generation_id: gen_id,
+                        down_action_index: action.source_action_index,
+                        down_scheduled_us: action.scheduled_us,
+                    });
                     Some(gen_id)
                 }
-                ActionKind::Up => unmatched_downs[key_slot as usize].pop_front(),
+                ActionKind::Up => {
+                    let gen_id =
+                        open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
+                    open_generation_by_slot[key_slot as usize] = None;
+                    gen_id
+                }
             };
 
             intents.push(CompactIntent::new(
@@ -184,7 +227,7 @@ pub fn compile_runtime_intents(
             intent_start,
             intent_len: u8::try_from(action.scan_codes.len())
                 .expect("validated batch length is at most MAX_KEYS"),
-            packet_id: 0,
+            packet_id: next_packet_id,
         });
     }
 
@@ -209,22 +252,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 1000,
-                scan_codes: vec![1, 2],
-                reason: "chord".to_string(),
+                scan_codes: smallvec::smallvec![1, 2],
+                reason: "chord".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 2000,
-                scan_codes: vec![1],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
                 scheduled_us: 2100,
-                scan_codes: vec![2],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![2],
+                reason: "release".into(),
             },
         ];
 
@@ -252,8 +295,8 @@ mod tests {
             source_action_index: 0,
             kind: ActionKind::Up,
             scheduled_us: 1000,
-            scan_codes: vec![1],
-            reason: "stale".to_string(),
+            scan_codes: smallvec::smallvec![1],
+            reason: "stale".into(),
         }];
 
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
@@ -268,22 +311,22 @@ mod tests {
                 source_action_index: 0,
                 kind: ActionKind::Down,
                 scheduled_us: 100,
-                scan_codes: vec![1],
-                reason: "left".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "left".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 100,
-                scan_codes: vec![1],
-                reason: "release".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 100,
-                scan_codes: vec![2],
-                reason: "right".to_string(),
+                scan_codes: smallvec::smallvec![2],
+                reason: "right".into(),
             },
         ];
         assert!(matches!(
@@ -300,15 +343,15 @@ mod tests {
                 source_action_index: 1,
                 kind: ActionKind::Down,
                 scheduled_us: 2,
-                scan_codes: vec![1],
-                reason: "first".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "first".into(),
             },
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Up,
                 scheduled_us: 1,
-                scan_codes: vec![1],
-                reason: "second".to_string(),
+                scan_codes: smallvec::smallvec![1],
+                reason: "second".into(),
             },
         ];
         assert!(matches!(
@@ -320,8 +363,8 @@ mod tests {
             source_action_index: 0,
             kind: ActionKind::Down,
             scheduled_us: 0,
-            scan_codes: vec![2],
-            reason: "invalid".to_string(),
+            scan_codes: smallvec::smallvec![2],
+            reason: "invalid".into(),
         }];
         assert!(matches!(
             compile_runtime_intents(&outside_allowlist, &allowed),
@@ -337,15 +380,15 @@ mod tests {
                     source_action_index: 0,
                     kind: ActionKind::Down,
                     scheduled_us: 10,
-                    scan_codes: vec![1],
-                    reason: "single".to_string(),
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "single".into(),
                 },
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Down,
                     scheduled_us: 20,
-                    scan_codes: vec![2, 3],
-                    reason: "chord".to_string(),
+                    scan_codes: smallvec::smallvec![2, 3],
+                    reason: "chord".into(),
                 },
             ],
             &[1, 2, 3],
@@ -356,5 +399,122 @@ mod tests {
         assert_eq!(schedule.batches[1].intent_len, 2);
         assert!(std::mem::size_of::<CompiledBatch>() <= 32);
         assert_eq!(std::mem::size_of::<CompactIntent>(), 8);
+    }
+
+    #[test]
+    fn test_reject_overlapping_same_key_down() {
+        let allowed = vec![1];
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "first down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 2000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "overlapping down".into(),
+            },
+        ];
+        let err = compile_runtime_intents(&actions, &allowed).unwrap_err();
+        assert!(matches!(
+            err,
+            CompileError::OverlappingSameKeyDown {
+                scan_code: 1,
+                first_down_action_index: 0,
+                second_down_action_index: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_allow_down_down_different_keys() {
+        let allowed = vec![1, 2];
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "down 1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 2000,
+                scan_codes: smallvec::smallvec![2],
+                reason: "down 2".into(),
+            },
+        ];
+        let sched = compile_runtime_intents(&actions, &allowed).unwrap();
+        assert_eq!(sched.generation_count, 2);
+    }
+
+    #[test]
+    fn test_reject_chord_overlapping_active_key() {
+        let allowed = vec![1, 2, 3];
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1000,
+                scan_codes: smallvec::smallvec![1, 2],
+                reason: "chord 1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1500,
+                scan_codes: smallvec::smallvec![1],
+                reason: "release 1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2000,
+                scan_codes: smallvec::smallvec![2, 3],
+                reason: "chord 2".into(),
+            },
+        ];
+        let err = compile_runtime_intents(&actions, &allowed).unwrap_err();
+        assert!(matches!(
+            err,
+            CompileError::OverlappingSameKeyDown { scan_code: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn test_reused_key_after_up_allowed() {
+        let allowed = vec![1];
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "first down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1500,
+                scan_codes: smallvec::smallvec![1],
+                reason: "release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "second down".into(),
+            },
+        ];
+        let sched = compile_runtime_intents(&actions, &allowed).unwrap();
+        assert_eq!(sched.generation_count, 2);
     }
 }

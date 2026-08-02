@@ -23,7 +23,11 @@ When resolving conflicts, the following hierarchy applies:
 ---
 
 ## 1. Core Terms
-All timing values are expressed in microseconds ($\mu\text{s}$).
+Authored schedules, profile configuration, estimator values, and human-readable reports use
+microseconds ($\mu\text{s}$). In the native production worker, scheduling and state decisions
+use typed QPC-derived `QpcTicks`, `TimelineTicks`, and `DurationTicks`; conversion occurs once at
+the API/configuration boundary and again only when publishing telemetry. The worker does not use
+ticks → microseconds → ticks as a control-path intermediary.
 
 | Term | Meaning |
 | :--- | :--- |
@@ -52,7 +56,10 @@ The optional Windows calibration cache is evidence of kind
 through `SendInput`, and the harness correlates its `WM_INPUT` receipt with the native-call
 completion timestamp. This is a host delivery proxy only; it does not observe Sky polling, render
 frames, or audio onset. Its UTC `sampled_at` and evidence label are diagnostic metadata, and the
-loader applies no freshness TTL until repeated measurements establish a conservative policy.
+loader applies no freshness TTL until repeated measurements establish a conservative policy. Warm-up
+injections are excluded from both measured classes; Hot uses a short gap and Cold uses an explicit
+idle gap. Down/Up and polyphony channels remain independent. Partial injection and uncertain
+cleanup invalidate a run rather than becoming zero-latency evidence.
 
 ### FPS Assumption vs Real Game FPS
 The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
@@ -81,9 +88,11 @@ If the authored interval is smaller than `min_hold_us`:
 ## 3. The Completion-Anchor Contract
 To enforce the sender-side minimum-hold floor despite measured OS dispatch latency, key releases are scheduled relative to down-dispatch completion rather than down-dispatch start. This does not prove when the game sampled the key.
 
-The runtime visibility contract implemented in [RuntimeDispatchCoordinator](../src/sky_music/orchestration/runtime_dispatch.py#L133) is:
+The authored/API representation of the runtime visibility contract is:
 $$\text{release\_not\_before\_us} = \text{down\_dispatch\_completed\_us} + \text{min\_hold\_us}$$
 $$\text{effective\_release\_us} = \max(\text{scheduled\_release\_us}, \text{release\_not\_before\_us})$$
+The native implementation evaluates the same contract in checked tick arithmetic, using the
+exact SendInput completion boundary and a precomputed `DurationTicks` hold floor.
 
 ### Rationale
 The sender-side completion-to-completion proxy preserves the intended hold floor: measuring from down-dispatch start would subtract the down injection latency from the sender timeline. For `local_precise` at 144 FPS (6.94 ms hold), this avoided the previously observed sender-side shortfall. Completion-anchoring does not establish a game-observed hold, because game sampling and kernel delivery are not instrumented here. The constant `min_hold_margin_us` models residual sender-to-device delivery latency; it is a margin, not game-onset evidence.

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from sky_music.domain import Song
 from sky_music.domain.scheduler_types import (
     ActionKind,
@@ -28,7 +30,6 @@ from sky_music.orchestration.dispatch_loop import (
     PlaybackState,
 )
 from sky_music.orchestration.engine import (
-    PLAYBACK_FINISHED,
     PlaybackEngine,
     SendLatencyEstimator,
 )
@@ -390,36 +391,14 @@ def test_estimator_not_updated_on_empty_sent() -> None:
         _action(5_000, "down", 21),  # duplicate while still held (no up yet)
         _action(20_000, "up", 21),
     )
-    loop = _build_loop(
-        clock=clock,
-        backend=backend,
-        actions=actions,
-        require_focus=False,
-        estimator=est,
-    )
-    loop._runtime_focus_signal = ActiveFocusSignal()
-    state = PlaybackState(start_perf=0)
-
-    # Dispatch first down for real.
-    b0 = loop.coordinator.schedule.batches[0]
-    clock.time_us = 0
-    r0 = loop._dispatch_down_batch(b0, state, lead_down=0, now_us=0)
-    assert r0 is not None
-    assert r0.sent_scan_codes == (21,)
-
-    lead_after_first = est.get_lead_us(ActionKind.DOWN, n_keys=1)
-
-    # Second down: same key still active → sent empty (coordinator may drop as conflict,
-    # or backend skips). Either way estimator must not be pulled toward 0.
-    b1 = loop.coordinator.schedule.batches[1]
-    clock.time_us = 5_000
-    r1 = loop._dispatch_down_batch(b1, state, lead_down=0, now_us=5_000)
-    # Conflict drop returns None without estimator update; or noop send with empty sent.
-    if r1 is not None:
-        assert r1.sent_scan_codes == ()
-
-    lead_after = est.get_lead_us(ActionKind.DOWN, n_keys=1)
-    assert lead_after == lead_after_first
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        _build_loop(
+            clock=clock,
+            backend=backend,
+            actions=actions,
+            require_focus=False,
+            estimator=est,
+        )
 
 
 def test_noop_duplicate_down_via_engine_leaves_lead_stable() -> None:
@@ -438,29 +417,19 @@ def test_noop_duplicate_down_via_engine_leaves_lead_stable() -> None:
         _action(40_000, "up", 21),
     )
     backend = DryRunBackend()
-    engine = PlaybackEngine(
-        song=Song(name="noop-est", notes=()),
-        actions=actions,
-        backend=backend,
-        controls=_NullControls(),
-        telemetry_enabled=False,
-        require_focus=False,
-        clock=clock,
-        sleeper=FakeSleeper(clock),
-        sleep_policy=SleepPolicy(spin_threshold_us=-1),
-        min_hold_us=10_000,
-        use_dispatch_thread=False,
-        dispatch_lead_us=0,
-        enable_adaptive_lead=True,
-    )
-    est = engine.estimator
-    for _ in range(5):
-        est.update(ActionKind.DOWN, 900, n_keys=1)
-    lead_before = est.get_lead_us(ActionKind.DOWN, n_keys=1)
-
-    assert engine.play() == PLAYBACK_FINISHED
-    lead_after = est.get_lead_us(ActionKind.DOWN, n_keys=1)
-    # Lead may refine from the first real send, but must not collapse to 0 from no-ops.
-    assert lead_after > 0
-    # The no-op path must not have applied a pure-duration-0 EMA pull that halves lead.
-    assert lead_after >= lead_before * 0.3
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        PlaybackEngine(
+            song=Song(name="noop-est", notes=()),
+            actions=actions,
+            backend=backend,
+            controls=_NullControls(),
+            telemetry_enabled=False,
+            require_focus=False,
+            clock=clock,
+            sleeper=FakeSleeper(clock),
+            sleep_policy=SleepPolicy(spin_threshold_us=-1),
+            min_hold_us=10_000,
+            use_dispatch_thread=False,
+            dispatch_lead_us=0,
+            enable_adaptive_lead=True,
+        )

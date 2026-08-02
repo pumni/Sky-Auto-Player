@@ -1,0 +1,98 @@
+{
+  "corpus": "songs\\Arthur Warrell - We Wish You A Merry Christmas.json",
+  "notes": 180,
+  "actions": 168,
+  "duration_us": 36517500,
+  "profile": "balanced",
+  "fps": 60,
+  "repeats": 5,
+  "backend": "mock",
+  "rust": {
+    "wall_us": {
+      "n": 5,
+      "p50": 36552511,
+      "p95": 36553342,
+      "p99": 36553342,
+      "max": 36553342
+    },
+    "process_cpu_us": {
+      "n": 5,
+      "p50": 0,
+      "p95": 15625,
+      "p99": 15625,
+      "max": 15625
+    },
+    "send_duration_us": {
+      "n": 840,
+      "p50": 4,
+      "p95": 8,
+      "p99": 17,
+      "max": 54
+    },
+    "visible_lateness_us": {
+      "n": 840,
+      "p50": 32513,
+      "p95": 33310,
+      "p99": 34106,
+      "max": 42467
+    },
+    "idle_wake_count": {
+      "n": 5,
+      "p50": 252,
+      "p95": 252,
+      "p99": 252,
+      "max": 252
+    },
+    "keys_dropped": 0,
+    "stuck_key_count": 0,
+    "possibly_active_count": 0,
+    "failed_release_count": 0,
+    "outcomes": [
+      "finished"
+    ]
+  },
+  "python": {
+    "wall_us": {
+      "n": 5,
+      "p50": 36556836,
+      "p95": 36567419,
+      "p99": 36567419,
+      "max": 36567419
+    },
+    "process_cpu_us": {
+      "n": 5,
+      "p50": 1218750,
+      "p95": 2890625,
+      "p99": 2890625,
+      "max": 2890625
+    },
+    "send_duration_us": {
+      "n": 840,
+      "p50": 26,
+      "p95": 52,
+      "p99": 67,
+      "max": 159
+    },
+    "visible_lateness_us": {
+      "n": 840,
+      "p50": 32587,
+      "p95": 32790,
+      "p99": 33846,
+      "max": 39669
+    },
+    "idle_wake_count": {
+      "n": 5,
+      "p50": 306170,
+      "p95": 355623,
+      "p99": 355623,
+      "max": 355623
+    },
+    "keys_dropped": 0,
+    "stuck_key_count": 0,
+    "possibly_active_count": 0,
+    "failed_release_count": 0,
+    "outcomes": [
+      "finished"
+    ]
+  }
+}

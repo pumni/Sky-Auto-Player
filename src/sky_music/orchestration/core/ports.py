@@ -65,7 +65,7 @@ from sky_music.infrastructure.wait_strategy import (
     WaitStrategy as WaitStrategy,
 )
 
-RUST_DISPATCH_SCHEMA_VERSION = 1
+RUST_DISPATCH_SCHEMA_VERSION = 2
 
 # Playback outcome strings — the loop's ``run()`` return contract.
 PLAYBACK_FINISHED = "finished"

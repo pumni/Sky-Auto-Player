@@ -1,28 +1,32 @@
 //! Single-interval pause model for playback timing.
 
+use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct PlaybackClockState {
-    pub start_perf: u64,
-    pub pause_time_us: u64,
+    pub start_perf: QpcTicks,
+    pub pause_time: DurationTicks,
     pub pause_reasons: HashSet<String>,
-    pub pause_interval_started_us: Option<u64>,
+    pub pause_interval_started: Option<QpcTicks>,
     pub pause_open_reason: Option<String>,
-    pub epoch_us: u64,
+    pub epoch: QpcTicks,
 }
 
 impl PlaybackClockState {
-    pub fn new(start_perf: u64, pause_time_us: u64) -> Self {
-        let epoch_us = start_perf + pause_time_us;
-        Self {
+    pub fn new(
+        start_perf: QpcTicks,
+        pause_time: DurationTicks,
+    ) -> Result<Self, TimeArithmeticError> {
+        let epoch = start_perf.checked_add_duration(pause_time)?;
+        Ok(Self {
             start_perf,
-            pause_time_us,
+            pause_time,
             pause_reasons: HashSet::new(),
-            pause_interval_started_us: None,
+            pause_interval_started: None,
             pause_open_reason: None,
-            epoch_us,
-        }
+            epoch,
+        })
     }
 
     pub fn is_paused(&self) -> bool {
@@ -33,57 +37,91 @@ impl PlaybackClockState {
         self.pause_reasons.contains(reason)
     }
 
-    pub fn enter_pause(&mut self, reason: &str, now_us: u64) -> bool {
+    pub fn enter_pause(
+        &mut self,
+        reason: &str,
+        now: QpcTicks,
+    ) -> Result<bool, TimeArithmeticError> {
         if self.pause_reasons.contains(reason) {
-            return false;
+            return Ok(false);
         }
         let was_empty = self.pause_reasons.is_empty();
         self.pause_reasons.insert(reason.to_string());
         if was_empty {
-            self.pause_interval_started_us = Some(now_us);
+            self.pause_interval_started = Some(now);
             self.pause_open_reason = Some(reason.to_string());
         }
-        was_empty
+        Ok(was_empty)
     }
 
-    pub fn exit_pause(&mut self, reason: &str, now_us: u64) -> Option<(u64, String)> {
+    pub fn exit_pause(
+        &mut self,
+        reason: &str,
+        now: QpcTicks,
+    ) -> Result<Option<(DurationTicks, String)>, TimeArithmeticError> {
         if !self.pause_reasons.contains(reason) {
-            return None;
+            return Ok(None);
         }
         self.pause_reasons.remove(reason);
         if !self.pause_reasons.is_empty() {
-            return None;
+            return Ok(None);
         }
-        let started_us = self
-            .pause_interval_started_us
-            .expect("pause anchor must exist when exiting last reason");
-        let duration_us = now_us.saturating_sub(started_us);
+        let started = self
+            .pause_interval_started
+            .ok_or(TimeArithmeticError::NegativeOrder)?;
+        let duration = now.checked_duration_since(started)?;
         let attribution = self
             .pause_open_reason
             .take()
             .unwrap_or_else(|| reason.to_string());
-        self.pause_interval_started_us = None;
-        self.update_pause_time(duration_us);
-        Some((duration_us, attribution))
+        self.pause_interval_started = None;
+        self.update_pause_time(duration)?;
+        Ok(Some((duration, attribution)))
     }
 
-    pub fn update_pause_time(&mut self, duration_us: u64) {
-        self.pause_time_us += duration_us;
-        self.epoch_us = self.start_perf + self.pause_time_us;
+    pub fn update_pause_time(
+        &mut self,
+        duration: DurationTicks,
+    ) -> Result<(), TimeArithmeticError> {
+        let pause_time = self.pause_time.checked_add(duration)?;
+        let epoch = self.start_perf.checked_add_duration(pause_time)?;
+        self.pause_time = pause_time;
+        self.epoch = epoch;
+        Ok(())
     }
 
-    pub fn rebase_epoch(&mut self, now_us: u64) -> u64 {
+    pub fn rebase_epoch(&mut self, now: QpcTicks) -> Result<DurationTicks, TimeArithmeticError> {
         let old_start = self.start_perf;
-        self.start_perf = now_us;
-        self.epoch_us = self.start_perf + self.pause_time_us;
-        now_us.saturating_sub(old_start)
+        self.start_perf = now;
+        self.epoch = self.start_perf.checked_add_duration(self.pause_time)?;
+        now.checked_duration_since(old_start)
     }
 
-    pub fn get_elapsed_us(&self, now_us: u64) -> u64 {
-        if let Some(started_us) = self.pause_interval_started_us {
-            started_us.saturating_sub(self.epoch_us)
+    pub fn get_elapsed(&self, now: QpcTicks) -> Result<TimelineTicks, TimeArithmeticError> {
+        if let Some(started) = self.pause_interval_started {
+            Ok(TimelineTicks::from_raw(
+                started.checked_duration_since(self.epoch)?.as_u64(),
+            ))
         } else {
-            now_us.saturating_sub(self.epoch_us)
+            Ok(TimelineTicks::from_raw(
+                now.checked_duration_since(self.epoch)?.as_u64(),
+            ))
+        }
+    }
+
+    /// Return logical elapsed time for the one intentional startup interval
+    /// where lead may place the first dispatch before the future epoch.
+    /// Ordinary callers must use [`Self::get_elapsed`], which rejects
+    /// timestamp underflow.
+    pub fn get_elapsed_allow_pre_epoch(
+        &self,
+        now: QpcTicks,
+        allow_pre_epoch: bool,
+    ) -> Result<TimelineTicks, TimeArithmeticError> {
+        if allow_pre_epoch && now < self.epoch {
+            Ok(TimelineTicks::ZERO)
+        } else {
+            self.get_elapsed(now)
         }
     }
 }
@@ -94,27 +132,64 @@ mod tests {
 
     #[test]
     fn test_pause_single_interval_overlap() {
-        let mut clock = PlaybackClockState::new(1000, 0);
-        assert_eq!(clock.get_elapsed_us(1100), 100);
+        let mut clock =
+            PlaybackClockState::new(QpcTicks::from_raw(1000), DurationTicks::ZERO).unwrap();
+        assert_eq!(
+            clock.get_elapsed(QpcTicks::from_raw(1100)).unwrap(),
+            TimelineTicks::from_raw(100)
+        );
 
         // Enter manual pause at 1100
-        assert!(clock.enter_pause("manual", 1100));
+        assert!(
+            clock
+                .enter_pause("manual", QpcTicks::from_raw(1100))
+                .unwrap()
+        );
         assert!(clock.is_paused());
 
         // Focus pause enters at 1200 while manual is active -> does not open new interval
-        assert!(!clock.enter_pause("focus", 1200));
+        assert!(
+            !clock
+                .enter_pause("focus", QpcTicks::from_raw(1200))
+                .unwrap()
+        );
 
         // Manual exits at 1300 -> interval still open by focus
-        assert_eq!(clock.exit_pause("manual", 1300), None);
+        assert_eq!(
+            clock
+                .exit_pause("manual", QpcTicks::from_raw(1300))
+                .unwrap(),
+            None
+        );
         assert!(clock.is_paused());
 
         // Focus exits at 1500 -> interval closes, total duration = 1500 - 1100 = 400 us, attributed to manual
-        let (duration, open_reason) = clock.exit_pause("focus", 1500).unwrap();
-        assert_eq!(duration, 400);
+        let (duration, open_reason) = clock
+            .exit_pause("focus", QpcTicks::from_raw(1500))
+            .unwrap()
+            .unwrap();
+        assert_eq!(duration, DurationTicks::from_raw(400));
         assert_eq!(open_reason, "manual");
         assert!(!clock.is_paused());
 
         // Elapsed at 1600 should be (1600 - (1000 + 400)) = 200 us
-        assert_eq!(clock.get_elapsed_us(1600), 200);
+        assert_eq!(
+            clock.get_elapsed(QpcTicks::from_raw(1600)).unwrap(),
+            TimelineTicks::from_raw(200)
+        );
+    }
+
+    #[test]
+    fn pause_can_begin_before_a_future_physical_epoch() {
+        let mut clock =
+            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
+        assert!(clock.enter_pause("focus", QpcTicks::from_raw(900)).unwrap());
+        assert_eq!(
+            clock
+                .exit_pause("focus", QpcTicks::from_raw(1_100))
+                .unwrap(),
+            Some((DurationTicks::from_raw(200), "focus".to_string()))
+        );
+        assert_eq!(clock.epoch, QpcTicks::from_raw(1_200));
     }
 }

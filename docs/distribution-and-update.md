@@ -21,6 +21,11 @@ Our CI pipeline (defined in `.github/workflows/release.yml`) builds exactly thre
 
 **Crucial Invariant:** The Git tag version must perfectly match the version specified in `pyproject.toml`. The release workflow enforces this and will fail the build if they diverge.
 
+Release provenance is fail-closed: production packaging requires a clean Git
+worktree, `MANIFEST.json` records `git_head`, `dirty_worktree: false`, the
+native build commit, and the native source fingerprint. Native calibration and
+acceptance evidence must carry the same clean-worktree and commit contract.
+
 ## 3. Updater Behaviour
 
 The external updater (`updater.bat` delegating to `installer/updater.ps1`) enforces a strict lifecycle to protect user data and ensure successful upgrades:

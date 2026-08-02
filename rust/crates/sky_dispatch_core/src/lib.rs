@@ -9,8 +9,9 @@ pub mod coordinator;
 pub mod estimator;
 pub mod model;
 pub mod testing;
+pub mod time;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -23,6 +24,6 @@ mod tests {
     #[test]
     fn test_core_version() {
         assert_eq!(core_version(), "0.1.0");
-        assert_eq!(SCHEMA_VERSION, 1);
+        assert_eq!(SCHEMA_VERSION, 2);
     }
 }

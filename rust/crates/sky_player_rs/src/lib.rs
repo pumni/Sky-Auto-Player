@@ -1,6 +1,7 @@
+pub mod calibration;
 pub mod engine;
 
-use engine::{ChordConflictPolicy, MockFailureMode, NativeDispatchSession};
+use engine::{ChordConflictPolicy, FaultInjectionScript, NativeDispatchSession};
 use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -70,7 +71,7 @@ fn strict_scan_codes(
     value: &Bound<'_, PyAny>,
     field: &str,
     allowed: Option<&[u16]>,
-) -> PyResult<Vec<u16>> {
+) -> PyResult<smallvec::SmallVec<[u16; 4]>> {
     let items = strict_sequence(value, field)?;
     if items.is_empty() || items.len() > sky_dispatch_core::model::MAX_KEYS {
         return Err(PyValueError::new_err(format!(
@@ -79,8 +80,8 @@ fn strict_scan_codes(
         )));
     }
 
-    let mut result = Vec::with_capacity(items.len());
-    let mut seen: Vec<u16> = Vec::with_capacity(items.len());
+    let mut result = smallvec::SmallVec::with_capacity(items.len());
+    let mut seen = smallvec::SmallVec::<[u16; 15]>::new();
     for (index, item) in items.iter().enumerate() {
         let item_field = format!("{field}[{index}]");
         let integer = strict_integer(item, &item_field)?;
@@ -110,22 +111,28 @@ fn parse_allowed_scan_codes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
         "allowed_scan_codes",
         Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
     )
+    .map(|v| v.into_vec())
 }
 
 fn parse_actions(
     value: &Bound<'_, PyAny>,
     allowed_scan_codes: &[u16],
 ) -> PyResult<Vec<KeyActionInput>> {
-    let items = strict_sequence(value, "actions")?;
-    if items.len() > sky_dispatch_core::compile::MAX_ACTIONS {
-        return Err(PyValueError::new_err(format!(
-            "actions exceeds the configured cap of {}",
-            sky_dispatch_core::compile::MAX_ACTIONS
-        )));
-    }
-    let mut actions = Vec::with_capacity(items.len());
+    let iter = value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("actions must be an iterable"))?;
 
-    for (position, item) in items.iter().enumerate() {
+    let mut actions = Vec::new();
+    let mut reason_interns = std::collections::HashMap::<String, Arc<str>>::new();
+
+    for (position, item_res) in iter.enumerate() {
+        if position >= sky_dispatch_core::compile::MAX_ACTIONS {
+            return Err(PyValueError::new_err(format!(
+                "actions exceeds the configured cap of {}",
+                sky_dispatch_core::compile::MAX_ACTIONS
+            )));
+        }
+        let item = item_res?;
         let tuple = item.cast::<PyTuple>().map_err(|_| {
             PyTypeError::new_err(format!(
                 "actions[{position}] must be a 5-item tuple \
@@ -172,12 +179,17 @@ fn parse_actions(
             )));
         }
 
+        let interned_reason = reason_interns
+            .entry(reason.clone())
+            .or_insert_with(|| Arc::from(reason))
+            .clone();
+
         actions.push(KeyActionInput {
             source_action_index,
             kind,
             scheduled_us,
             scan_codes,
-            reason,
+            reason: interned_reason,
         });
     }
     Ok(actions)
@@ -194,12 +206,55 @@ impl RustInputBackend {
     #[pyo3(signature = (mock = false))]
     fn new(mock: bool) -> Self {
         let state = if mock {
-            sky_dispatch_win32::input::TrackedKeyState::with_emitter(|scan_codes, _key_up| {
-                sky_dispatch_win32::input::PlatformSendResult {
-                    requested: scan_codes.len() as u32,
-                    inserted: scan_codes.len() as u32,
-                    completed_us: sky_dispatch_win32::clock::qpc_now_us(),
-                    win32_error: 0,
+            let clock = sky_dispatch_win32::clock::QpcClock::initialize().ok();
+            sky_dispatch_win32::input::TrackedKeyState::with_emitter(move |scan_codes, _key_up| {
+                let Some(clock) = clock else {
+                    return sky_dispatch_win32::input::PlatformSendResult {
+                        requested: scan_codes.len() as u32,
+                        inserted: 0,
+                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+                        completed_ticks: None,
+                        completed_us: 0,
+                        win32_error: 0,
+                        timing_error: Some(
+                            sky_dispatch_win32::clock::QpcError::FrequencyUnavailable,
+                        ),
+                    };
+                };
+                match clock.now() {
+                    Ok(ticks) => match clock.duration_to_us(
+                        sky_dispatch_win32::clock::DurationTicks::from_raw(ticks.as_u64()),
+                    ) {
+                        Ok(completed_us) => sky_dispatch_win32::input::PlatformSendResult {
+                            requested: scan_codes.len() as u32,
+                            inserted: scan_codes.len() as u32,
+                            started_ticks: ticks,
+                            completed_ticks: Some(ticks),
+                            completed_us,
+                            win32_error: 0,
+                            timing_error: None,
+                        },
+                        Err(_) => sky_dispatch_win32::input::PlatformSendResult {
+                            requested: scan_codes.len() as u32,
+                            inserted: 0,
+                            started_ticks: ticks,
+                            completed_ticks: None,
+                            completed_us: 0,
+                            win32_error: 0,
+                            timing_error: Some(
+                                sky_dispatch_win32::clock::QpcError::ConversionOverflow,
+                            ),
+                        },
+                    },
+                    Err(error) => sky_dispatch_win32::input::PlatformSendResult {
+                        requested: scan_codes.len() as u32,
+                        inserted: 0,
+                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+                        completed_ticks: None,
+                        completed_us: 0,
+                        win32_error: 0,
+                        timing_error: Some(error),
+                    },
                 }
             })
         } else {
@@ -222,28 +277,91 @@ impl RustInputBackend {
         )?;
         let res = self.state.lock().key_down(&scan_codes);
         let dict = PyDict::new(py);
-        dict.set_item("sent", res.sent.to_vec())?;
-        dict.set_item("skipped_duplicates", res.skipped_duplicates.to_vec())?;
-        dict.set_item("success", res.success)?;
-        dict.set_item("error", res.error)?;
-        dict.set_item("send_completed_us", res.send_completed_us)?;
-        dict.set_item("first_win32_error", res.first_win32_error)?;
-        dict.set_item("last_win32_error", res.last_win32_error)?;
-        dict.set_item("send_attempts", res.send_attempts)?;
-        dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
-        dict.set_item("first_inserted", res.first_inserted)?;
-        dict.set_item("partial_progress", res.partial_progress)?;
-        dict.set_item(
-            "retried_after_zero_progress",
-            res.retried_after_zero_progress,
-        )?;
-        dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
-        dict.set_item(
-            "keys_inserted_before_failure",
-            res.keys_inserted_before_failure,
-        )?;
-        dict.set_item("keys_rolled_back", res.keys_rolled_back)?;
-        dict.set_item("rollback_residue_keys", res.rollback_residue_keys)?;
+        match res {
+            sky_dispatch_win32::input::DownSendOutcome::Complete {
+                completed_us,
+                sent,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+                retried_after_zero_progress,
+                ..
+            } => {
+                dict.set_item("sent", sent.to_vec())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", true)?;
+                dict.set_item("error", None::<String>)?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", None::<u32>)?;
+                dict.set_item("last_win32_error", None::<u32>)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", false)?;
+                dict.set_item("retried_after_zero_progress", retried_after_zero_progress)?;
+                dict.set_item("chord_integrity_lost", false)?;
+                dict.set_item("keys_inserted_before_failure", 0)?;
+                dict.set_item("keys_rolled_back", 0)?;
+                dict.set_item("rollback_residue_keys", 0)?;
+            }
+            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
+                error,
+                completed_us,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+                first_error,
+                last_error,
+                ..
+            } => {
+                dict.set_item("sent", Vec::<u16>::new())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", false)?;
+                dict.set_item("error", error.map(|e| e.to_string()))?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", first_error)?;
+                dict.set_item("last_win32_error", last_error)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", false)?;
+                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
+                dict.set_item("chord_integrity_lost", false)?;
+                dict.set_item("keys_inserted_before_failure", 0)?;
+                dict.set_item("keys_rolled_back", 0)?;
+                dict.set_item("rollback_residue_keys", 0)?;
+            }
+            sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
+                inserted_prefix,
+                rolled_back,
+                rollback_residue,
+                first_error,
+                last_error,
+                completed_us,
+                sent,
+                skipped_duplicates,
+                send_attempts,
+                zero_progress_retries,
+                ..
+            } => {
+                dict.set_item("sent", sent.to_vec())?;
+                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
+                dict.set_item("success", false)?;
+                dict.set_item("error", last_error.or(first_error).map(|e| e.to_string()))?;
+                dict.set_item("send_completed_us", completed_us)?;
+                dict.set_item("first_win32_error", first_error)?;
+                dict.set_item("last_win32_error", last_error)?;
+                dict.set_item("send_attempts", send_attempts)?;
+                dict.set_item("zero_progress_retries", zero_progress_retries)?;
+                dict.set_item("first_inserted", 0)?;
+                dict.set_item("partial_progress", true)?;
+                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
+                dict.set_item("chord_integrity_lost", true)?;
+                dict.set_item("keys_inserted_before_failure", inserted_prefix)?;
+                dict.set_item("keys_rolled_back", rolled_back)?;
+                dict.set_item("rollback_residue_keys", rollback_residue)?;
+            }
+        }
         Ok(dict)
     }
 
@@ -350,8 +468,40 @@ struct NativeDispatchSessionPy {
 #[pymethods]
 impl NativeDispatchSessionPy {
     #[new]
+    #[pyo3(signature = (
+        py_actions,
+        allowed_scan_codes,
+        min_hold_us = StrictU64(50000),
+        max_lead_us = StrictU64(2000),
+        dispatch_lead_us = StrictU64(0),
+        mock_backend = true,
+        require_focus = false,
+        focus_restore_grace_us = StrictU64(100000),
+        spin_threshold_us = StrictU64(150),
+        core_warmup_budget_us = StrictU64(200),
+        late_pulse_drop_threshold_us = None,
+        same_key_conflict_policy = "drop_chord",
+        telemetry_enabled = false,
+        telemetry_mode = None,
+        telemetry_capacity = StrictU64(200000),
+        rt_priority_mode = "auto",
+        enable_waitable_timer = true,
+        enable_event_wait = true,
+        enable_adaptive_spin = false,
+        enable_spin_reprobe = false,
+        spin_floor_us = StrictU64(700),
+        estimator_state_json = None,
+        enable_adaptive_lead = false,
+        input_path_warn_us = StrictU64(300),
+        strict_timing = false,
+        strict_down_completion_late_us = StrictU64(2000),
+        strict_up_completion_late_us = StrictU64(2000),
+        supervisor_lease_timeout_us = StrictU64(0),
+        mock_failure_mode = "none",
+        mock_latency_base_us = StrictU64(0),
+        mock_latency_per_key_us = StrictU64(0)
+    ))]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (py_actions, allowed_scan_codes, min_hold_us = StrictU64(50000), max_lead_us = StrictU64(2000), dispatch_lead_us = StrictU64(0), mock_backend = true, require_focus = false, focus_restore_grace_us = StrictU64(100000), spin_threshold_us = StrictU64(150), core_warmup_budget_us = StrictU64(200), late_pulse_drop_threshold_us = None, same_key_conflict_policy = "drop_chord", telemetry_enabled = false, telemetry_capacity = StrictU64(200000), rt_priority_mode = "auto", enable_waitable_timer = true, enable_event_wait = true, enable_adaptive_spin = false, enable_spin_reprobe = false, spin_floor_us = StrictU64(700), estimator_state_json = None, enable_adaptive_lead = false, input_path_warn_us = StrictU64(300), strict_timing = false, strict_down_completion_late_us = StrictU64(2000), strict_up_completion_late_us = StrictU64(2000), supervisor_lease_timeout_us = StrictU64(0), mock_failure_mode = "none", mock_latency_base_us = StrictU64(0), mock_latency_per_key_us = StrictU64(0)))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
@@ -366,6 +516,7 @@ impl NativeDispatchSessionPy {
         late_pulse_drop_threshold_us: Option<StrictU64>,
         same_key_conflict_policy: &str,
         telemetry_enabled: bool,
+        telemetry_mode: Option<&str>,
         telemetry_capacity: StrictU64,
         rt_priority_mode: &str,
         enable_waitable_timer: bool,
@@ -395,16 +546,36 @@ impl NativeDispatchSessionPy {
         let late_pulse_drop_threshold_us = late_pulse_drop_threshold_us.map(|value| value.0);
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
+        let parsed_telemetry_mode = match telemetry_mode {
+            Some("off") => crate::engine::TelemetryMode::Off,
+            Some("summary") => crate::engine::TelemetryMode::Summary,
+            Some("ring") => crate::engine::TelemetryMode::Ring,
+            Some("full_trace") => crate::engine::TelemetryMode::FullTrace,
+            Some(_) => {
+                return Err(PyValueError::new_err(
+                    "telemetry_mode must be 'off', 'summary', 'ring', or 'full_trace'",
+                ));
+            }
+            None => {
+                if telemetry_enabled {
+                    crate::engine::TelemetryMode::FullTrace
+                } else {
+                    crate::engine::TelemetryMode::Off
+                }
+            }
+        };
         let spin_floor_us = spin_floor_us.0;
         let input_path_warn_us = input_path_warn_us.0;
         let strict_down_completion_late_us = strict_down_completion_late_us.0;
         let strict_up_completion_late_us = strict_up_completion_late_us.0;
         let supervisor_lease_timeout_us = supervisor_lease_timeout_us.0;
-        let mock_failure_mode = match mock_failure_mode {
-            "none" => MockFailureMode::None,
-            "transient_release" if mock_backend => MockFailureMode::TransientRelease,
-            "persistent_release" if mock_backend => MockFailureMode::PersistentRelease,
-            "zero_progress_down_once" if mock_backend => MockFailureMode::ZeroProgressDownOnce,
+        let fault_script = match mock_failure_mode {
+            "none" => FaultInjectionScript::none(),
+            "transient_release" if mock_backend => FaultInjectionScript::transient_release(),
+            "persistent_release" if mock_backend => FaultInjectionScript::persistent_release(),
+            "zero_progress_down_once" if mock_backend => {
+                FaultInjectionScript::zero_progress_down_once()
+            }
             "transient_release" | "persistent_release" | "zero_progress_down_once" => {
                 return Err(PyValueError::new_err(
                     "mock_failure_mode requires mock_backend=True",
@@ -526,13 +697,27 @@ impl NativeDispatchSessionPy {
         let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
         if let Some(raw) = estimator_state_json {
             let mut validator =
-                SendLatencyEstimator::new(0.2, max_lead_us, allowed_scan_codes.len());
+                SendLatencyEstimator::try_new(0.2, max_lead_us, allowed_scan_codes.len())
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
             validator.import_state(raw).map_err(PyValueError::new_err)?;
         }
         let actions = parse_actions(py_actions, &allowed_scan_codes)?;
         let schedule =
             sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let schedule_end_us = schedule
+            .batches
+            .last()
+            .map_or(0, |batch| batch.scheduled_us);
+        schedule_end_us
+            .checked_add(min_hold_us)
+            .and_then(|value| value.checked_add(max_lead_us))
+            .and_then(|value| value.checked_add(dispatch_lead_us))
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "schedule and timing configuration exceed supported timestamp range",
+                )
+            })?;
         let session = NativeDispatchSession::new(
             schedule,
             min_hold_us,
@@ -542,14 +727,14 @@ impl NativeDispatchSessionPy {
             mock_backend,
             mock_latency_base_us,
             mock_latency_per_key_us,
-            mock_failure_mode,
+            fault_script,
             require_focus,
             focus_restore_grace_us,
             spin_threshold_us,
             core_warmup_budget_us,
             late_pulse_drop_threshold_us,
             chord_conflict_policy,
-            telemetry_enabled,
+            parsed_telemetry_mode,
             telemetry_capacity,
             priority_mode,
             enable_waitable_timer,
@@ -598,8 +783,8 @@ impl NativeDispatchSessionPy {
             .map_err(PyRuntimeError::new_err)
     }
 
-    fn heartbeat(&self) {
-        self.session.heartbeat();
+    fn heartbeat(&self) -> PyResult<()> {
+        self.session.heartbeat().map_err(PyRuntimeError::new_err)
     }
 
     fn send_command(&self, command: &str) -> PyResult<bool> {
@@ -643,6 +828,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("version", 1)?;
         dict.set_item("native_build_version", env!("CARGO_PKG_VERSION"))?;
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
+        dict.set_item(
+            "dirty_worktree",
+            env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
+        )?;
         dict.set_item(
             "native_source_fingerprint",
             env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
@@ -707,6 +896,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("wake_error_p99_us", snap.wake_error_p99_us)?;
         dict.set_item("wake_error_max_us", snap.wake_error_max_us)?;
         dict.set_item("spin_time_us", snap.spin_time_us)?;
+        dict.set_item("playback_wall_time_us", snap.playback_wall_time_us)?;
+        dict.set_item("spin_duty_cycle_ppm", snap.spin_duty_cycle_ppm)?;
+        dict.set_item("worker_cpu_time_us", snap.worker_cpu_time_us)?;
+        dict.set_item("process_cpu_time_us", snap.process_cpu_time_us)?;
         dict.set_item("wait_strategy_acquired", snap.wait_strategy_acquired)?;
         dict.set_item("power_throttling_disabled", snap.power_throttling_disabled)?;
         dict.set_item("input_path_degraded", snap.input_path_degraded)?;
@@ -716,6 +909,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("wait_target_error_us", snap.wait_target_error_us)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
+        dict.set_item("secondary_errors", snap.secondary_errors)?;
         dict.set_item("generation_count", snap.generation_count)?;
         dict.set_item("generation_status_counts", snap.generation_status_counts)?;
         dict.set_item("abort_counts_by_reason", snap.abort_counts_by_reason)?;
@@ -783,7 +977,17 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("native_schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("pyo3_version", "0.29.0")?;
     dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
+    dict.set_item(
+        "qpc_frequency_hz",
+        sky_dispatch_win32::clock::qpc_frequency_checked().map_err(|error| {
+            PyRuntimeError::new_err(format!("QPC frequency unavailable: {error:?}"))
+        })?,
+    )?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
+    dict.set_item(
+        "dirty_worktree",
+        env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
+    )?;
     dict.set_item(
         "native_source_fingerprint",
         env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
@@ -818,18 +1022,21 @@ fn simulate_schedule_rs(
 }
 
 #[pyfunction]
-fn sleep_until_rs(target_us: StrictU64, spin_margin_us: StrictU64) -> u64 {
+fn sleep_until_rs(target_us: StrictU64, spin_margin_us: StrictU64) -> PyResult<u64> {
     sky_dispatch_win32::sleeper::sleep_until_us(target_us.0, spin_margin_us.0)
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 #[pyfunction]
-fn measure_spin_overhead_rs() -> u64 {
+fn measure_spin_overhead_rs() -> PyResult<u64> {
     sky_dispatch_win32::sleeper::measure_spin_overhead_us()
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 #[pyfunction]
-fn qpc_now_rs() -> u64 {
-    sky_dispatch_win32::clock::qpc_now_us()
+fn qpc_now_rs() -> PyResult<u64> {
+    sky_dispatch_win32::clock::qpc_now_us_checked()
+        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
 }
 
 /// Free-threaded PyO3 extension module for Sky Auto Player dispatch engine.
@@ -844,5 +1051,6 @@ fn sky_player_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sleep_until_rs, m)?)?;
     m.add_function(wrap_pyfunction!(measure_spin_overhead_rs, m)?)?;
     m.add_function(wrap_pyfunction!(qpc_now_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
     Ok(())
 }

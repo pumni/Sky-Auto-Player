@@ -50,7 +50,7 @@ def create_synthetic_csv(path: Path, actual_times_sec: list[float]) -> None:
         for idx, t in enumerate(actual_times_sec):
             writer.writerow([
                 "test", idx, idx, "down", int(t * 1_000_000), int(t * 1_000_000),
-                int(t * 1_000_000), "sendinput_side", 0, 0,
+                int(t * 1_000_000), "sender_completion", 0, 0,
                 "21", "21", "", "0", "sent", 0, 0, 0, "test"
             ])
 

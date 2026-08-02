@@ -481,6 +481,7 @@ def test_pre_down_focus_gate_blocks_after_first_down():
             action(0, "down", 21),        # fires at t=0 (focus active)
             action(25_000, "down", 22),   # gate fires after t=15_000 (focus flipped False)
             action(50_000, "up", 21),
+            action(50_000, "up", 22),
             # down_22 was DROPPED by the gate; later action pairs make the song terminate.
             # Real key 22 plays a single recovery down after the focus window reopens.
             action(120_000, "down", 22),
@@ -532,6 +533,7 @@ def test_polled_focus_gate_pauses_without_blocked_unfocused():
             action(0, "down", 21),
             action(25_000, "down", 22),
             action(40_000, "up", 21),
+            action(40_000, "up", 22),
             action(120_000, "down", 22),
             action(130_000, "up", 22),
         ),

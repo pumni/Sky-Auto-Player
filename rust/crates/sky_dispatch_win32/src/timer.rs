@@ -48,8 +48,11 @@ impl WaitableTimer {
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::Threading::{
-                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_ALL_ACCESS,
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_MODIFY_STATE,
             };
+            // Win32 SYNCHRONIZE (0x0010_0000) is not exported by this
+            // windows-sys version; it is the minimum right required to wait.
+            const TIMER_WAIT_ACCESS: u32 = TIMER_MODIFY_STATE | 0x0010_0000;
 
             // SAFETY: null security attributes and name request an unnamed timer
             // owned solely by this wrapper. Drop closes the returned handle once.
@@ -58,7 +61,7 @@ impl WaitableTimer {
                     std::ptr::null(),
                     std::ptr::null(),
                     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-                    TIMER_ALL_ACCESS,
+                    TIMER_WAIT_ACCESS,
                 )
             };
             if !handle.is_null() {

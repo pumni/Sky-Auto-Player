@@ -23,7 +23,6 @@ from sky_music.infrastructure.backend import (
 from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.engine import (
     PLAYBACK_FINISHED,
-    PLAYBACK_QUIT,
     PlaybackEngine,
 )
 from sky_music.orchestration.runtime_dispatch import (
@@ -223,20 +222,15 @@ def play(
 
 
 def test_runtime_compiler_pairs_overlapping_same_key_generations_fifo():
-    schedule = compile_runtime_intents(
-        (
-            action(0, "down", 21),
-            action(5, "down", 21),
-            action(10, "up", 21),
-            action(15, "up", 21),
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        compile_runtime_intents(
+            (
+                action(0, "down", 21),
+                action(5, "down", 21),
+                action(10, "up", 21),
+                action(15, "up", 21),
+            )
         )
-    )
-
-    generation_ids = [
-        batch.intents[0].generation_id
-        for batch in schedule.batches
-    ]
-    assert generation_ids == [0, 1, 0, 1]
 
 
 def test_runtime_compiler_preserves_action_batches_and_timestamps():
@@ -490,107 +484,78 @@ def test_deferred_release_does_not_delay_unrelated_down():
 
 
 def test_dropped_generation_up_cannot_release_later_generation():
-    backend, engine = play(
-        (
-            action(0, "down", 21),
-            action(5, "down", 21),
-            action(10, "up", 21),
-            action(15, "down", 21),
-            action(20, "up", 21),
-            action(25, "up", 21),
-        ),
-        min_hold_us=10,
-    )
-
-    assert [(call.kind, call.started_us) for call in backend.calls] == [
-        ("down", 0),
-        ("up", 10),
-        ("down", 15),
-        ("up", 25),
-    ]
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    assert summary["runtime_conflict_dropped_down_count"] == 1
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        play(
+            (
+                action(0, "down", 21),
+                action(5, "down", 21),
+                action(10, "up", 21),
+                action(15, "down", 21),
+                action(20, "up", 21),
+                action(25, "up", 21),
+            ),
+            min_hold_us=10,
+        )
 
 
 def test_mixed_chord_conflict_drops_whole_chord_by_default():
-    backend, engine = play(
-        (
-            action(0, "down", 21),
-            action(5, "down", 21, 22),
-            action(10, "up", 21),
-            action(15, "up", 21, 22),
-        ),
-        min_hold_us=10,
-    )
-
-    assert not any(call.kind == "down" and call.scan_codes == (22,) for call in backend.calls)
-    assert not any(call.kind == "down" and call.scan_codes == (21, 22) for call in backend.calls)
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    assert summary["runtime_conflict_dropped_down_count"] == 1
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        play(
+            (
+                action(0, "down", 21),
+                action(5, "down", 21, 22),
+                action(10, "up", 21),
+                action(15, "up", 21, 22),
+            ),
+            min_hold_us=10,
+        )
 
 
 def test_generation_status_counts_surface_released_conflict_and_cancelled_run():
     clock = FakeClock()
     backend = TimedBackend(clock)
-    engine = PlaybackEngine(
-        song=Song(name="generation-status", notes=()),
-        actions=(
-            action(0, "down", 21),
-            action(1_000, "up", 21),
-            action(2_000, "down", 22),
-            action(2_100, "down", 22),
-            action(10_000, "up", 22),
-        ),
-        backend=backend,
-        controls=TimeCommandControls(clock, ((3_000, "pause"), (3_100, "quit"))),
-        telemetry_enabled=True,
-        require_focus=False,
-        clock=clock,
-        sleeper=FakeSleeper(clock),
-        sleep_policy=SleepPolicy(spin_threshold_us=-1),
-        min_hold_us=1_000,
-    )
-
-    assert engine.play() == PLAYBACK_QUIT
-    # Verifies via the persisted telemetry snapshot rather than the live coordinator, since the
-    # engine now releases its coordinator and runtime_schedule once play() returns so the UI can
-    # drop RSS after F9 / song end without waiting for natural ref-count collection.
-    summary = engine.telemetry.get_summary()
-    assert summary is not None
-    assert summary["released_count"] == 1
-    assert summary["dropped_conflict_count"] == 1
-    assert summary["cancelled_generation_count"] == 1
-    assert summary["dropped_backend_count"] == 0
-    assert summary["dropped_conflict_count"] == summary["runtime_conflict_dropped_down_count"]
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        PlaybackEngine(
+            song=Song(name="generation-status", notes=()),
+            actions=(
+                action(0, "down", 21),
+                action(1_000, "up", 21),
+                action(2_000, "down", 22),
+                action(2_100, "down", 22),
+                action(10_000, "up", 22),
+            ),
+            backend=backend,
+            controls=TimeCommandControls(clock, ((3_000, "pause"), (3_100, "quit"))),
+            telemetry_enabled=True,
+            require_focus=False,
+            clock=clock,
+            sleeper=FakeSleeper(clock),
+            sleep_policy=SleepPolicy(spin_threshold_us=-1),
+            min_hold_us=1_000,
+        )
 
 
 def test_strict_runtime_conflict_stops_cleanly_and_releases_active_key():
     clock = FakeClock()
     backend = TimedBackend(clock, send_duration_us=300)
-    engine = PlaybackEngine(
-        song=Song(name="strict", notes=()),
-        # interval 500 < min_hold 1000 => genuinely infeasible repeat (scheduler flags this as an
-        # impossible_repeat); strict runtime policy must abort rather than overlap the keys.
-        actions=(
-            action(0, "down", 21),
-            action(500, "down", 21),
-            action(1_000, "up", 21),
-            action(1_500, "up", 21),
-        ),
-        backend=backend,
-        telemetry_enabled=True,
-        require_focus=False,
-        clock=clock,
-        sleeper=FakeSleeper(clock),
-        sleep_policy=SleepPolicy(spin_threshold_us=-1),
-        min_hold_us=1_000,
-        same_key_conflict_policy="strict",
-    )
-
-    assert engine.play() == PLAYBACK_QUIT
-    assert backend.active == set()
+    with pytest.raises(ValueError, match="overlapping same-key down actions"):
+        PlaybackEngine(
+            song=Song(name="strict", notes=()),
+            actions=(
+                action(0, "down", 21),
+                action(500, "down", 21),
+                action(1_000, "up", 21),
+                action(1_500, "up", 21),
+            ),
+            backend=backend,
+            telemetry_enabled=True,
+            require_focus=False,
+            clock=clock,
+            sleeper=FakeSleeper(clock),
+            sleep_policy=SleepPolicy(spin_threshold_us=-1),
+            min_hold_us=1_000,
+            same_key_conflict_policy="strict",
+        )
 
 
 def test_non_dispatch_records_do_not_pollute_lateness_statistics():
@@ -806,7 +771,7 @@ def test_telemetry_evidence_boundaries_flag_before_send_missing_downs():
     assert summary["expired_dropped_down_count"] == 1
     assert summary["before_send_missing_down_count"] == 2
     assert summary["sender_clean"] is False
-    assert summary["evidence_boundaries"]["sendinput_side"]["sender_clean"] is False
+    assert summary["evidence_boundaries"]["sender_completion"]["sender_clean"] is False
 
 
 def test_telemetry_reports_down_timeline_drift_and_pause_causes():
@@ -1108,7 +1073,9 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     assert "song" in record
     # Four structured native SendInput diagnostics are part of the retained
     # telemetry record: first/last Win32 error and retry counters.
-    assert len(record) == 28
+    # Phase 5 fields plus the explicit native timing-boundary fields are part
+    # of the retained telemetry record, including logical operation duration.
+    assert len(record) == 50
 
     # Assert keys/items/values are correct
     assert "song" in record

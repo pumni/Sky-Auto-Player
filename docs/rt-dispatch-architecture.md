@@ -83,6 +83,22 @@ already says active. In direct mode the gate's `DirectFocusSignal` already wraps
 
 ## 3. Timing semantics
 
+**Native control-path clock contract.** `QpcTicks`, `TimelineTicks`, and `DurationTicks` are the
+source of truth for production scheduling. Deadline mapping, minimum hold, pause/rebase,
+focus recovery, retry/recovery offsets, supervisor leases, cold classification, and wait/spin
+targets stay in checked tick arithmetic. Microseconds are accepted or emitted only at the
+Python/configuration, estimator, JSON, and human-readable telemetry boundaries; the worker does
+not round-trip ticks through microseconds during a control-path decision. SendInput outcomes
+retain their exact start/completion QPC ticks until telemetry serialization.
+
+**Resumable suspension.** Focus loss and manual pause release and verify physical keys, then use
+`cancel_live_generations()`: `Active` and `ReleasePending` become cancelled while future
+`Scheduled` generations remain intact. Authored Up events belonging to cancelled generations are
+suppressed as stale. Terminal `cancel_all()` is used only when the session cannot resume, such as
+quit, skip, panic, supervisor lease expiry, timing/input-integrity error, or final termination.
+Both paths validate coordinator invariants and cleanup state; cleanup cannot turn a pre-existing
+ledger/mask mismatch into a successful result.
+
 - **Onset = dispatch completion.** The adaptive lead uses a bounded rolling p95 of
   `send_duration_us` for each Down/Up polyphony bucket, with a monotonic envelope across chord
   sizes. Five samples warm a bucket; cold buckets use a conservative static prior plus the last
@@ -157,11 +173,38 @@ its execution context before creating the playback anchor. A probe failure prese
 threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
 floor/cap, and the existing kill switch remain unchanged.
 
-**Calibration evidence boundary.** The latency calibration cache is an
-`injected_raw_input_delivery_proxy`: the app injects through Windows `SendInput` into an app-owned
-window and observes its `WM_INPUT` delivery. It does not measure Sky process polling, render-frame
-timing, or audio onset. `sampled_at` is UTC metadata and `evidence_kind` identifies this boundary;
-no freshness TTL is applied by the loader.
+**Calibration evidence boundary.** The latency calibration cache is schema version 6,
+measurement protocol 3. Measured bucket admission uses the actual QPC idle gap from the
+immediately previous exact SendInput completion to the current exact SendInput entry; a
+requested sleep overshoot is a class mismatch and is rejected from timing quantiles. It is an
+`injected_raw_input_delivery_proxy`: a dedicated native calibration process injects through
+Windows `SendInput` into an app-owned window and observes its `WM_INPUT` delivery. The player
+process never changes its own Raw Input registration for calibration. It does not measure Sky
+process polling, render-frame timing, or audio onset. `sampled_at` is UTC metadata and
+`evidence_kind` identifies this boundary; no freshness TTL is applied by the loader. Warm-up
+injections are tracked separately and excluded from measured classes. Only complete,
+anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
+receipts remain diagnostic counters. The calibration process snapshots/restores its registration
+and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
+an error, not successful calibration. Full calibration is a sequential 24-bucket run split into
+1,000-sample native chunks. A cold chunk has a 100-second idle-gap floor and a 180-second
+per-process timeout; prior chunks are atomically checkpointed with a SHA-256 before the next
+physical-input chunk starts. Raw sample evidence is retained so chunk quantiles are merged
+exactly. Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
+clean-worktree state, toolchain, host fingerprint, schema/protocol, or full configuration.
+Diagnostic runs are single-bucket, progress-reporting, and always emit an ineligible artifact or
+failure report containing the exact bucket/sample/phase/error/Win32/cleanup context. Only the
+finalizer may write trusted cache evidence, and it requires all 24 known buckets, 5,000 samples
+per bucket, exact aggregate totals, identical provenance, and successful cleanup. A dirty,
+diagnostic, incomplete, or SHA-mismatched artifact is not release evidence. The sender telemetry
+stream instead uses `evidence_kind = "sender_completion"` and never claims Raw Input or
+game-observed delivery.
+
+**Clock failure policy.** QPC is the sole real-time clock domain after native preparation. A failed
+runtime QPC query, including a query immediately after a successful `SendInput`, is terminal: the
+worker records the timing-integrity error, stops authored dispatch, performs bounded full-instrument
+cleanup, and publishes an error outcome. It must not substitute timestamp zero or continue with a
+microsecond round-trip.
 
 ## 4. Wait strategy
 

@@ -23,12 +23,16 @@ import argparse
 import json
 import math
 import os
+import platform
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from sky_music.layouts import SKY_15_SCAN_CODES
+from sky_music.orchestration.native_provenance import native_source_fingerprint
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
@@ -68,6 +72,77 @@ def _stats(values: list[int]) -> dict[str, int]:
     }
 
 
+def _required_stats(values: list[int], name: str) -> dict[str, int]:
+    if not values:
+        raise RuntimeError(f"required metric {name} has no measurements")
+    return _stats(values)
+
+
+def _git_provenance() -> dict[str, Any]:
+    try:
+        sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"could not read Git provenance: {exc}") from exc
+    sha = sha_result.stdout.strip()
+    if not sha:
+        raise RuntimeError("Git HEAD is empty")
+    dirty = bool(status_result.stdout.strip())
+    if dirty:
+        raise RuntimeError("acceptance evidence requires a clean worktree")
+    return {"git_sha": sha, "dirty_worktree": False}
+
+
+def _native_provenance() -> dict[str, Any]:
+    import sky_player_rs
+
+    info = dict(sky_player_rs.build_info())
+    required = (
+        "native_build_commit",
+        "dirty_worktree",
+        "native_source_fingerprint",
+        "rustc_version",
+        "schema_version",
+        "native_abi",
+        "qpc_frequency_hz",
+    )
+    for name in required:
+        value = info.get(name)
+        if value in (None, "", "unknown"):
+            raise RuntimeError(f"native build provenance is missing {name}")
+    if info["dirty_worktree"] is not False:
+        raise RuntimeError("native build provenance is dirty")
+    expected_fingerprint = native_source_fingerprint(REPOSITORY_ROOT, str(info["native_abi"]))
+    if info["native_source_fingerprint"] != expected_fingerprint:
+        raise RuntimeError(
+            "native source fingerprint does not match the current checkout: "
+            f"native={info['native_source_fingerprint']} expected={expected_fingerprint}"
+        )
+    return info
+
+
+def _host_fingerprint(native_info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "windows_build": platform.version(),
+        "qpc_frequency_hz": int(native_info["qpc_frequency_hz"]),
+    }
+
+
 def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Return signed, absolute, early and late error distributions.
 
@@ -78,22 +153,33 @@ def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     """
 
     def values_for(rows: list[dict[str, Any]]) -> list[int]:
-        return [int(row["visible_lateness_us"]) for row in rows]
+        values: list[int] = []
+        for row in rows:
+            value = row.get("sender_completion_error_us")
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise RuntimeError(
+                    "sender telemetry is missing exact sender_completion_error_us"
+                )
+            values.append(value)
+        return values
 
-    def report_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not records:
+        raise RuntimeError("required sender telemetry has no records")
+
+    def report_for(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
         signed = values_for(rows)
         return {
-            "signed": _stats(signed),
-            "absolute": _stats([abs(value) for value in signed]),
-            "late": _stats([max(value, 0) for value in signed]),
-            "early": _stats([max(-value, 0) for value in signed]),
+            "signed": _required_stats(signed, f"{name}.signed"),
+            "absolute": _required_stats([abs(value) for value in signed], f"{name}.absolute"),
+            "late": _required_stats([max(value, 0) for value in signed], f"{name}.late"),
+            "early": _required_stats([max(-value, 0) for value in signed], f"{name}.early"),
         }
 
     by_kind = {
-        kind: report_for([row for row in records if row.get("kind") == kind])
+        kind: report_for([row for row in records if row.get("kind") == kind], kind)
         for kind in ("down", "up")
     }
-    result = report_for(records)
+    result = report_for(records, "all")
     result["by_kind"] = by_kind
     return result
 
@@ -129,6 +215,7 @@ def _new_session(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> Any:
     import sky_player_rs
 
@@ -143,7 +230,7 @@ def _new_session(
         require_focus=False,
         telemetry_enabled=True,
         telemetry_capacity=max(1_024, len(actions) + 16),
-        rt_priority_mode="off",
+        rt_priority_mode=rt_priority_mode,
         enable_waitable_timer=True,
         enable_event_wait=True,
         enable_adaptive_spin=adaptive_spin,
@@ -160,6 +247,7 @@ def _run_dispatch(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -167,6 +255,7 @@ def _run_dispatch(
         mock_base_latency_us=mock_base_latency_us,
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
     )
     started_ns = time.perf_counter_ns()
     session.start()
@@ -176,7 +265,20 @@ def _run_dispatch(
     snapshot = dict(session.snapshot())
     telemetry = json.loads(session.take_telemetry_json())
     records = telemetry.get("records", [])
-    sender_errors = [int(record["visible_lateness_us"]) for record in records]
+    if len(records) != len(actions):
+        raise RuntimeError(
+            f"required sender telemetry expected {len(actions)} records, got {len(records)}"
+        )
+    sender_errors = [
+        value
+        for value in (
+            record.get("sender_completion_error_us")
+            for record in records
+        )
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    if len(sender_errors) != len(records):
+        raise RuntimeError("required sender telemetry has missing exact completion errors")
     lead_by_polyphony = {
         str(len(record.get("scan_codes", []))): int(record.get("applied_lead_us", 0))
         for record in records
@@ -188,9 +290,13 @@ def _run_dispatch(
         "wall_us": wall_us,
         "_sender_error_values": sender_errors,
         "_records": records,
-        "sender_completion_error_us": _stats(sender_errors),
+        "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
         "completion_error_us": _completion_error_report(records),
         "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
+        "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
+        "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
+        "playback_wall_time_us": int(snapshot.get("playback_wall_time_us", 0)),
+        "spin_duty_cycle_ppm": int(snapshot.get("spin_duty_cycle_ppm", 0)),
         "peak_rss_bytes": peak_rss,
         "keys_dropped": int(snapshot.get("keys_dropped", 0)),
         "failed_release_count": int(snapshot.get("failed_release_count", 0)),
@@ -217,6 +323,7 @@ def _measure_command_interrupt(
     mock_base_latency_us: int,
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
+    rt_priority_mode: str,
 ) -> int:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
@@ -227,12 +334,21 @@ def _measure_command_interrupt(
         mock_base_latency_us=mock_base_latency_us,
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
+        rt_priority_mode=rt_priority_mode,
     )
     session.start()
     deadline = time.perf_counter() + 2.0
     while not bool(dict(session.snapshot()).get("is_running")):
         if time.perf_counter() >= deadline:
             raise RuntimeError("native worker did not enter running state")
+        time.sleep(0.001)
+
+    # The lifecycle flag is published before the worker finishes its bounded
+    # wake-probe/admission setup. Do not charge that startup work to the
+    # command interrupt measurement.
+    while dict(session.snapshot()).get("rt_priority_acquired") == "pending":
+        if time.perf_counter() >= deadline:
+            raise RuntimeError("native worker did not finish startup admission")
         time.sleep(0.001)
 
     started_ns = time.perf_counter_ns()
@@ -272,12 +388,28 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="required with --backend sendinput; keys may reach the foreground window",
     )
-    parser.add_argument("--mock-base-latency-us", type=int, default=80)
-    parser.add_argument("--mock-per-key-latency-us", type=int, default=40)
+    parser.add_argument(
+        "--mock-base-latency-us",
+        type=int,
+        default=None,
+        help="mock backend base latency in microseconds (default: 80; mock only)",
+    )
+    parser.add_argument(
+        "--mock-per-key-latency-us",
+        type=int,
+        default=None,
+        help="mock backend per-key latency in microseconds (default: 40; mock only)",
+    )
     parser.add_argument(
         "--no-adaptive-spin",
         action="store_true",
         help="disable adaptive wait probing; adaptive lead remains enabled",
+    )
+    parser.add_argument(
+        "--rt-priority-mode",
+        choices=("auto", "mmcss", "time_critical", "highest", "off"),
+        default="off",
+        help="real-time priority policy (default: off)",
     )
     parser.add_argument(
         "--baseline",
@@ -297,6 +429,30 @@ def _parse_polyphony(raw: str) -> list[int]:
     if any(value < 1 or value > len(SKY_15_SCAN_CODES) for value in values):
         raise SystemExit(f"--polyphony values must be in 1..{len(SKY_15_SCAN_CODES)}")
     return values
+
+
+def _resolve_mock_latency_values(
+    *,
+    backend: str,
+    mock_base_latency_us: int | None,
+    mock_per_key_latency_us: int | None,
+) -> tuple[int, int]:
+    if backend == "sendinput" and (
+        mock_base_latency_us is not None or mock_per_key_latency_us is not None
+    ):
+        raise SystemExit("mock latency values are only valid with --backend mock")
+
+    base_latency_us = (
+        80 if mock_base_latency_us is None else mock_base_latency_us
+    )
+    per_key_latency_us = (
+        40 if mock_per_key_latency_us is None else mock_per_key_latency_us
+    )
+    if base_latency_us < 0 or per_key_latency_us < 0:
+        raise SystemExit("mock latency values must be non-negative")
+    if backend == "sendinput":
+        return 0, 0
+    return base_latency_us, per_key_latency_us
 
 
 def _assert_correctness(run: dict[str, Any]) -> None:
@@ -387,12 +543,20 @@ def main() -> int:
         raise SystemExit("--actions and --repeats must be positive")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
-    if args.mock_base_latency_us < 0 or args.mock_per_key_latency_us < 0:
-        raise SystemExit("mock latency values must be non-negative")
-    if args.backend == "sendinput" and (
-        args.mock_base_latency_us or args.mock_per_key_latency_us
-    ):
-        raise SystemExit("mock latency values are only valid with --backend mock")
+    mock_base_latency_us, mock_per_key_latency_us = _resolve_mock_latency_values(
+        backend=args.backend,
+        mock_base_latency_us=args.mock_base_latency_us,
+        mock_per_key_latency_us=args.mock_per_key_latency_us,
+    )
+
+    git_info = _git_provenance()
+    native_info = _native_provenance()
+    if native_info["native_build_commit"] != git_info["git_sha"]:
+        raise RuntimeError(
+            "native build provenance does not match Git HEAD: "
+            f"native={native_info['native_build_commit']} git={git_info['git_sha']}"
+        )
+    host_info = _host_fingerprint(native_info)
 
     polyphonies = _parse_polyphony(args.polyphony)
     dispatch_runs: list[dict[str, Any]] = []
@@ -404,9 +568,10 @@ def main() -> int:
                 actions,
                 polyphony,
                 backend=args.backend,
-                mock_base_latency_us=args.mock_base_latency_us,
-                mock_per_key_latency_us=args.mock_per_key_latency_us,
+                mock_base_latency_us=mock_base_latency_us,
+                mock_per_key_latency_us=mock_per_key_latency_us,
                 adaptive_spin=not args.no_adaptive_spin,
+                rt_priority_mode=args.rt_priority_mode,
             )
             for _ in range(args.repeats)
         ]
@@ -423,8 +588,13 @@ def main() -> int:
                 [record for run in runs for record in run["_records"]]
             ),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
-            "peak_rss_bytes": _stats(
-                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
+            "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
+            "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
+            "playback_wall_time_us": _stats([run["playback_wall_time_us"] for run in runs]),
+            "spin_duty_cycle_ppm": _stats([run["spin_duty_cycle_ppm"] for run in runs]),
+            "peak_rss_bytes": _required_stats(
+                [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None],
+                "peak_rss_bytes",
             ),
             "keys_dropped": sum(run["keys_dropped"] for run in runs),
             "failed_release_count": sum(run["failed_release_count"] for run in runs),
@@ -451,9 +621,10 @@ def main() -> int:
     interrupt_runs = [
         _measure_command_interrupt(
             backend=args.backend,
-            mock_base_latency_us=args.mock_base_latency_us,
-            mock_per_key_latency_us=args.mock_per_key_latency_us,
+            mock_base_latency_us=mock_base_latency_us,
+            mock_per_key_latency_us=mock_per_key_latency_us,
             adaptive_spin=not args.no_adaptive_spin,
+            rt_priority_mode=args.rt_priority_mode,
         )
         for _ in range(args.repeats)
     ]
@@ -476,8 +647,9 @@ def main() -> int:
             [record for run in dispatch_runs for record in run["_records"]]
         ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
-        "peak_rss_bytes": _stats(
-            [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None]
+        "peak_rss_bytes": _required_stats(
+            [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None],
+            "peak_rss_bytes",
         ),
         "command_interrupt_latency_us": _stats(interrupt_runs),
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
@@ -494,17 +666,24 @@ def main() -> int:
         ),
         "outcomes": sorted({run["outcome"] for run in dispatch_runs}),
         "mock_latency_model": {
-            "base_us": args.mock_base_latency_us,
-            "per_key_us": args.mock_per_key_latency_us,
+            "base_us": mock_base_latency_us,
+            "per_key_us": mock_per_key_latency_us,
         }
         if args.backend == "mock"
         else None,
         "by_polyphony": by_polyphony,
-        "evidence_scope": (
-            "sender_side_polyphony_latency_model"
-            if args.backend == "mock"
-            else "sender_side_real_sendinput_fixed_host"
-        ),
+        "evidence_scope": "sender_completion",
+        "git_sha": git_info["git_sha"],
+        "native_build_commit": native_info["native_build_commit"],
+        "native_source_fingerprint": native_info["native_source_fingerprint"],
+        "rustc_version": native_info["rustc_version"],
+        "schema_version": native_info["schema_version"],
+        "backend_evidence": "real_sendinput_sender_completion"
+        if args.backend == "sendinput"
+        else "deterministic_coordinator_delivery_simulation",
+        "host_fingerprint": host_info,
+        "dirty_worktree": git_info["dirty_worktree"],
+        "command_line": list(os.sys.argv),
     }
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
