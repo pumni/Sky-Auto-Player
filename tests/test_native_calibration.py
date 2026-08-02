@@ -777,6 +777,42 @@ def test_full_orchestration_configuration_preserves_exact_budget() -> None:
     }
 
 
+def test_current_native_metadata_accepts_the_current_gap_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provenance = {
+        "source_git_sha": "test-sha",
+        "native_build_id": "test-sha",
+        "native_source_fingerprint": "test-fingerprint",
+        "dirty_worktree": False,
+        "rustc_version": "rustc test",
+        "host_fingerprint": {"qpc_frequency_hz": 10, "win32_build": "test"},
+    }
+    monkeypatch.setattr(native_calibration, "_current_worktree_provenance", lambda: provenance)
+    monkeypatch.setattr(
+        native_calibration,
+        "_native_metadata",
+        lambda _binary: {
+            "version": 8,
+            "measurement_protocol_version": 3,
+            "source_git_sha": "test-sha",
+            "native_build_id": "test-sha",
+            "native_source_fingerprint": "test-fingerprint",
+            "dirty_worktree": False,
+            "rustc_version": "rustc test",
+            "host_fingerprint": {"qpc_frequency_hz": 10, "win32_build": "test"},
+            "configuration": {
+                "hot_gap_target_us": 5_000,
+                "cold_threshold_us": 20_000,
+                "cold_idle_gap_us": 25_000,
+            },
+        },
+    )
+    monkeypatch.setattr(native_calibration, "_rustc_version", lambda: "rustc test")
+
+    assert native_calibration._current_full_provenance(tmp_path / "native.exe") == provenance
+
+
 def test_full_run_resume_requires_the_same_exact_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -39,7 +39,7 @@ def main() -> int:
         type=float,
         default=None,
         help=(
-            "hard native measurement budget in seconds (1..120); defaults to "
+            "hard native measurement budget in seconds (6..120); defaults to "
             f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s"
         ),
     )

@@ -1242,7 +1242,6 @@ def _current_full_provenance(binary: Path) -> dict[str, Any]:
         native.get("configuration"), "configuration"
     )
     for name, expected in (
-        ("receipt_timeout_ms", NATIVE_RECEIPT_TIMEOUT_MS),
         ("hot_gap_target_us", HOT_GAP_TARGET_US),
         ("cold_threshold_us", COLD_THRESHOLD_US),
         ("cold_idle_gap_us", FULL_COLD_IDLE_GAP_US),
@@ -1665,7 +1664,7 @@ def run_diagnostic_calibration(
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
     if float(timeout_seconds) > MAX_CALIBRATION_BUDGET_SECONDS:
         raise NativeCalibrationError(
-            "timeout_seconds must be between 1 and 120 seconds"
+            "timeout_seconds must be between 6 and 120 seconds"
         )
     if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
         raise NativeCalibrationError(
@@ -1779,7 +1778,7 @@ def run_full_calibration(
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
     if float(timeout_seconds) > MAX_CALIBRATION_BUDGET_SECONDS:
         raise NativeCalibrationError(
-            "timeout_seconds must be between 1 and 120 seconds"
+            "timeout_seconds must be between 6 and 120 seconds"
         )
     if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
         raise NativeCalibrationError(
@@ -2294,7 +2293,7 @@ def run_native_calibration(
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
     if float(timeout_seconds) > MAX_CALIBRATION_BUDGET_SECONDS:
         raise NativeCalibrationError(
-            "timeout_seconds must be between 1 and 120 seconds"
+            "timeout_seconds must be between 6 and 120 seconds"
         )
     if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
         raise NativeCalibrationError(
