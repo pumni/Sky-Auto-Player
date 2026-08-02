@@ -283,7 +283,8 @@ def test_native_dispatch_focus_cycles_preserve_future_generations() -> None:
     final = cast(dict[str, Any], session.snapshot())
     assert final["status"] == "error"
     assert final["outcome"] == "error"
-    assert final["terminal_error"] is None
+    assert "clean completion contract failed" in str(final["terminal_error"])
+    assert final["terminal_error"] is not None
     assert final["generation_status_counts"]["cancelled"] == 1
     assert final["generation_status_counts"]["released"] == 1
 

@@ -486,6 +486,10 @@ def materialize_native_trace(
         value = _required_nonnegative_int(ticks, field)
         return (value * 1_000_000) // frequency
 
+    def signed_ticks_to_us(ticks: int) -> int:
+        sign = -1 if ticks < 0 else 1
+        return sign * ((abs(ticks) * 1_000_000) // frequency)
+
     materialized: list[TelemetryRecord] = []
     for row in records:
         if not isinstance(row, dict):
@@ -526,8 +530,22 @@ def materialize_native_trace(
             if completed_ticks
             else wake_us
         )
+        sender_completion_error_us = None
+        if started_ticks and completed_ticks:
+            # Authored/effective/wake fields are elapsed timeline ticks from
+            # the playback epoch; SendInput boundaries are absolute QPC ticks.
+            # Reconstruct the signed completion error from same-epoch deltas,
+            # avoiding an invalid absolute-QPC minus logical-timeline result.
+            sender_completion_error_us = signed_ticks_to_us(
+                (completed_ticks - started_ticks) + (wake_ticks - effective_ticks)
+            )
         send_duration_us = (
             max(0, completed_us - started_us) if started_us is not None else 0
+        )
+        completion_lateness_us = (
+            sender_completion_error_us
+            if sender_completion_error_us is not None
+            else wake_us - effective_us
         )
         sent_codes = tuple(range(polyphony)) if flags & 1 else ()
         skipped_codes = () if flags & 1 else tuple(range(polyphony))
@@ -551,10 +569,10 @@ def materialize_native_trace(
                 deferred_by_us=0,
                 pre_send_spin_us=0,
                 idle_gap_us=0,
-                visible_lateness_us=completed_us - effective_us,
+                visible_lateness_us=completion_lateness_us,
                 applied_lead_us=ticks_to_us(lead_ticks, "applied_lead_ticks"),
                 send_duration_pure_us=send_duration_us,
-                dispatch_lateness_us=completed_us - effective_us,
+                dispatch_lateness_us=completion_lateness_us,
                 first_win32_error=win32_error or None,
                 last_win32_error=win32_error or None,
                 packet_id=event_index,
@@ -564,7 +582,7 @@ def materialize_native_trace(
                 wake_timeline_us=wake_us,
                 send_started_us=started_us,
                 send_completed_us=completed_us,
-                sender_completion_error_us=completed_us - effective_us,
+                sender_completion_error_us=sender_completion_error_us,
                 send_operation_duration_us=send_duration_us,
                 sendinput_call_duration_us=send_duration_us,
                 authored_ticks=authored_ticks,

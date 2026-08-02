@@ -37,7 +37,7 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.kind == "down"
     assert record.runtime_outcome == "sent"
     assert record.native_polyphony == 1
-    assert record.sender_completion_error_us == 18
+    assert record.sender_completion_error_us == 17
     assert record.applied_lead_us == 100
 
 
@@ -54,7 +54,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["wake_timeline_us"] == 1_010
     assert row["sender_started_us"] == 1_011
     assert row["sender_completed_us"] == 1_018
-    assert row["sender_completion_error_us"] == 18
+    assert row["sender_completion_error_us"] == 17
     assert row["send_operation_duration_us"] == 7
     assert row["sendinput_call_duration_us"] == 7
     assert row["bookkeeping_duration_us"] == 0

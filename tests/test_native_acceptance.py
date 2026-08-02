@@ -23,7 +23,7 @@ ACCEPTANCE = _load_acceptance_module()
 
 def test_native_calibration_schema_version_is_exposed_by_the_current_wheel() -> None:
     assert sky_player_rs.calibration_schema_version() == 8  # type: ignore[attr-defined]
-    build_info = getattr(sky_player_rs, "build_info")
+    build_info = sky_player_rs.build_info  # type: ignore[attr-defined]
     assert build_info()["calibration_schema_version"] == 8
 
 
