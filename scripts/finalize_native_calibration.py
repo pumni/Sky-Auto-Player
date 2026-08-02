@@ -29,7 +29,7 @@ def main() -> int:
         return 1
     print(
         f"finalized {result['measured_attempted']} measured samples from "
-        f"{len(result['configuration']['polyphonies']) * 4} buckets; "
+        f"{len(result['orchestration_configuration']['polyphonies']) * 4} buckets; "
         f"trusted cache={args.cache}"
     )
     return 0

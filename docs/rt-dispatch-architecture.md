@@ -95,7 +95,9 @@ focus recovery, retry/recovery offsets, supervisor leases, cold classification, 
 targets stay in checked tick arithmetic. Microseconds are accepted or emitted only at the
 Python/configuration, estimator, JSON, and human-readable telemetry boundaries; the worker does
 not round-trip ticks through microseconds during a control-path decision. SendInput outcomes
-retain their exact start/completion QPC ticks until telemetry serialization.
+retain their exact start/completion QPC ticks until telemetry serialization. Native trace records
+also emit the signed completion delta in timeline ticks, computed from the completed effective
+timestamp and effective deadline; Python only converts that producer value to microseconds.
 
 **Resumable suspension.** Focus loss and manual pause release and verify physical keys, then use
 `cancel_live_generations()`: `Active` and `ReleasePending` become cancelled while future
@@ -169,7 +171,7 @@ its execution context before creating the playback anchor. A probe failure prese
 threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
   floor/cap remain unchanged.
 
-**Calibration evidence boundary.** The native calibration output is schema version 7,
+**Calibration evidence boundary.** The native calibration output is schema version 8,
 measurement protocol 3. Measured bucket admission uses the actual QPC idle gap from the
 immediately previous exact SendInput completion to the current exact SendInput entry; a
 requested sleep overshoot is a class mismatch and is rejected from timing quantiles. It is an
@@ -185,7 +187,10 @@ and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a faile
 an error, not successful calibration. Quick calibration uses the 12-bucket anchor matrix
 1/5/15 × Down/Up × Hot/Cold with 20 clean samples and four warmups per bucket. This 12-bucket
 matrix is the only acceptance matrix. Each bucket is bounded by the native QPC budget and
-performs cleanup before its artifact is accepted. Artifacts contain aggregate counters/quantiles,
+performs cleanup before its artifact is accepted. The runner enforces one absolute 120-second
+budget with a five-second cleanup/publication reserve; each child receives only the remaining
+measurement time. Artifacts keep runner-owned orchestration configuration separate from the exact
+native configuration returned by that child. Artifacts contain aggregate counters/quantiles,
 the worst 16 samples, and every anomalous sample; the complete raw stream is never serialized.
 Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
 clean-worktree state, toolchain, host fingerprint, schema/protocol, or configuration.

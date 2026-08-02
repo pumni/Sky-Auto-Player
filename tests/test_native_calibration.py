@@ -12,7 +12,9 @@ import pytest
 from sky_music.platform.win32 import native_calibration
 
 
-def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str, object]:
+def _native_result(
+    *, clean: int = 64, cleanup_success: bool = True
+) -> dict[str, object]:
     def bucket() -> dict[str, object]:
         return {
             "attempted": clean,
@@ -54,6 +56,7 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
             "hot_gap_target_us": 5_000,
             "cold_idle_gap_us": 25_000,
             "cold_threshold_us": 20_000,
+            "budget_seconds": 120,
         },
         "warmup_attempted": warmup_attempted,
         "measured_attempted": measured,
@@ -82,12 +85,18 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
 
 
 def _native_bucket_result(
-    *, kind: str, class_name: str, polyphony: int, samples: int = 20
+    *,
+    kind: str,
+    class_name: str,
+    polyphony: int,
+    samples: int = 20,
+    warmup_samples: int = 4,
+    budget_seconds: int = 120,
 ) -> dict[str, object]:
     base = _native_result(clean=samples)
     base_bucket = base["buckets"]["down"]["1"]["hot"]  # type: ignore[index]
     assert isinstance(base_bucket, dict)
-    setup = samples + 4 if kind == "up" else 0
+    setup = samples + warmup_samples if kind == "up" else 0
     sample = {
         "clean": True,
         "call_duration_us": 1,
@@ -124,11 +133,12 @@ def _native_bucket_result(
             "polyphonies": [polyphony],
             "samples_per_hot_bucket": samples,
             "samples_per_cold_bucket": samples,
-            "warmup_samples": 4,
+            "warmup_samples": warmup_samples,
             "receipt_timeout_ms": 200,
             "hot_gap_target_us": 5_000,
             "cold_idle_gap_us": 25_000,
             "cold_threshold_us": 20_000,
+            "budget_seconds": budget_seconds,
         },
         "kind": kind,
         "class": class_name,
@@ -137,10 +147,10 @@ def _native_bucket_result(
         "setup_attempted": setup,
         "setup_anomalous": 0,
         "setup_timed_out": 0,
-        "warmup_attempted": 4,
+        "warmup_attempted": warmup_samples,
         "warmup_anomalous": 0,
         "warmup_timed_out": 0,
-        "total_attempted": samples + setup + 4,
+        "total_attempted": samples + setup + warmup_samples,
         "total_anomalous": 0,
         "total_timed_out": 0,
         "bucket": base_bucket,
@@ -213,11 +223,14 @@ def test_native_bucket_uses_immutable_gap_configuration(
     assert captured["timeout"] == 120.0
 
 
+@pytest.mark.parametrize("native_output", [None, "partial"])
 def test_native_bucket_timeout_does_not_wait_for_a_newline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_output: str | None
 ) -> None:
     def run(command, **kwargs):  # type: ignore[no-untyped-def]
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"], output="partial")
+        raise subprocess.TimeoutExpired(
+            command, kwargs["timeout"], output=native_output
+        )
 
     monkeypatch.setattr(native_calibration.subprocess, "run", run)
     with pytest.raises(native_calibration.NativeCalibrationError, match="timed out"):
@@ -234,11 +247,66 @@ def test_native_bucket_timeout_does_not_wait_for_a_newline(
         )
 
 
+@pytest.mark.parametrize("remaining", [5.0, 5.1, 5.9])
+def test_child_measurement_budget_reserves_cleanup_time(remaining: float) -> None:
+    with pytest.raises(
+        native_calibration.NativeCalibrationError, match="cleanup reserve"
+    ):
+        native_calibration._child_measurement_budget(100.0, 100.0 - remaining)
+
+
+def test_child_measurement_budget_uses_floor_and_float_timeout() -> None:
+    budget, timeout = native_calibration._child_measurement_budget(100.0, 94.0)
+    assert budget == 1
+    assert timeout == 1.0
+
+    budget, timeout = native_calibration._child_measurement_budget(100.0, 93.9)
+    assert budget == 1
+    assert timeout == pytest.approx(1.1)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["warmup_samples", "receipt_timeout_ms", "budget_seconds"],
+)
+def test_native_bucket_rejects_configuration_provenance_mismatch(field: str) -> None:
+    result = _native_bucket_result(
+        kind="down",
+        class_name="hot",
+        polyphony=1,
+        samples=20,
+        warmup_samples=1,
+        budget_seconds=7,
+    )
+    configuration = result["configuration"]
+    assert isinstance(configuration, dict)
+    configuration[field] = {
+        "warmup_samples": 2,
+        "receipt_timeout_ms": 100,
+        "budget_seconds": 8,
+    }[field]
+
+    with pytest.raises(
+        native_calibration.NativeCalibrationError, match="configuration"
+    ):
+        native_calibration._validate_bucket_result(
+            result,
+            kind="down",
+            class_name="hot",
+            polyphony=1,
+            samples=20,
+            warmup_samples=1,
+            budget_seconds=7,
+        )
+
+
 def test_native_calibration_writes_cache_only_after_valid_clean_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = _native_result()
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     _FakePopen.result = result
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
 
@@ -268,7 +336,9 @@ def test_native_calibration_uses_mode_specific_default_timeout(
     mode: str,
     expected_timeout: float,
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     _FakePopen.result = _native_result()
     _FakePopen.wait_timeouts = []
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
@@ -289,7 +359,9 @@ def test_native_calibration_full_timeout_is_not_quick_timeout() -> None:
 def test_native_calibration_timeout_override_is_forwarded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     _FakePopen.result = _native_result()
     _FakePopen.wait_timeouts = []
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
@@ -307,7 +379,9 @@ def test_calibration_cli_forwards_timeout_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     script_path = Path(__file__).parents[1] / "scripts" / "run_native_calibration.py"
-    spec = importlib.util.spec_from_file_location("run_native_calibration_cli_under_test", script_path)
+    spec = importlib.util.spec_from_file_location(
+        "run_native_calibration_cli_under_test", script_path
+    )
     assert spec is not None
     assert spec.loader is not None
     calibration_cli: ModuleType = importlib.util.module_from_spec(spec)
@@ -324,7 +398,9 @@ def test_calibration_cli_forwards_timeout_override(
             "measured_anomalous": 0,
         }
 
-    monkeypatch.setattr(calibration_cli, "run_native_calibration", fake_run_native_calibration)
+    monkeypatch.setattr(
+        calibration_cli, "run_native_calibration", fake_run_native_calibration
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -367,7 +443,9 @@ def test_native_calibration_timeout_kills_and_reaps_without_writing_evidence(
         process_instances.append(process)
         return process
 
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     monkeypatch.setattr(native_calibration.subprocess, "Popen", popen_factory)
     artifact = tmp_path / "raw.json"
     cache = tmp_path / "input_latency.json"
@@ -400,7 +478,9 @@ def test_native_calibration_rejects_untrusted_result_without_mutating_cache(
     monkeypatch: pytest.MonkeyPatch,
     result: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     _FakePopen.result = result
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
     cache = tmp_path / "input_latency.json"
@@ -417,7 +497,10 @@ def test_native_calibration_rejects_untrusted_result_without_mutating_cache(
 def test_native_calibration_nonzero_process_exit_is_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
+
     class _FailedPopen(_FakePopen):
         return_code = 7
 
@@ -435,8 +518,12 @@ def test_native_calibration_nonzero_process_exit_is_failure(
 @pytest.mark.parametrize(
     "timeout", [float("nan"), float("inf"), float("-inf"), 0, -1, True, False]
 )
-def test_native_calibration_rejects_nonfinite_or_nonpositive_timeout(timeout: object) -> None:
-    with pytest.raises(native_calibration.NativeCalibrationError, match="finite positive"):
+def test_native_calibration_rejects_nonfinite_or_nonpositive_timeout(
+    timeout: object,
+) -> None:
+    with pytest.raises(
+        native_calibration.NativeCalibrationError, match="finite positive"
+    ):
         native_calibration.run_native_calibration(timeout_seconds=timeout)  # pyright: ignore[reportArgumentType]
 
 
@@ -446,7 +533,9 @@ def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
     result = _native_result()
     result["version"] = 4
     _FakePopen.result = result
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
     cache = tmp_path / "input_latency.json"
     cache.write_text("sentinel\n", encoding="utf-8")
@@ -505,7 +594,9 @@ def test_native_calibration_accepts_complete_matrix() -> None:
 def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     monkeypatch.setattr(
         native_calibration,
         "_execute_native_bucket",
@@ -514,6 +605,8 @@ def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
             class_name=kwargs["class_name"],
             polyphony=kwargs["polyphony"],
             samples=kwargs["samples"],
+            warmup_samples=kwargs["warmup_samples"],
+            budget_seconds=kwargs["budget_seconds"],
         ),
     )
     cache = tmp_path / "input_latency.json"
@@ -526,14 +619,23 @@ def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
         output_path=tmp_path / "diagnostic.json",
     )
     assert artifact["acceptance_eligible"] is False
-    assert json.loads((tmp_path / "diagnostic.json").read_text(encoding="utf-8")) == artifact
+    assert artifact["native_configuration"]["warmup_samples"] == 1
+    assert artifact["native_configuration"]["budget_seconds"] == 120
+    assert artifact["orchestration_configuration"]["cleanup_reserve_seconds"] == 5.0
+    assert "configuration" not in artifact
+    assert (
+        json.loads((tmp_path / "diagnostic.json").read_text(encoding="utf-8"))
+        == artifact
+    )
     assert cache.read_text(encoding="utf-8") == "sentinel\n"
 
 
 def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
     monkeypatch.setattr(
         native_calibration,
         "_current_full_provenance",
@@ -557,6 +659,8 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
             class_name=kwargs["class_name"],
             polyphony=kwargs["polyphony"],
             samples=kwargs["samples"],
+            warmup_samples=kwargs["warmup_samples"],
+            budget_seconds=kwargs["budget_seconds"],
         ),
     )
     checkpoint = tmp_path / "checkpoint"
@@ -566,8 +670,14 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
     assert len(manifest["buckets"]) == 12
     assert len(manifest["chunks"]) == 12
+    assert "orchestration_configuration" in manifest
+    assert "configuration" not in manifest
     assert all(
-        len(json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))["worst_samples"])
+        len(
+            json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))[
+                "worst_samples"
+            ]
+        )
         <= 16
         for entry in manifest["chunks"]
     )
@@ -576,6 +686,14 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
             "acceptance_eligible"
         ]
         for entry in manifest["buckets"]
+    )
+    first_bucket = json.loads(
+        (checkpoint / manifest["buckets"][0]["artifact"]).read_text(encoding="utf-8")
+    )
+    assert first_bucket["native_configuration"]["budget_seconds"] < 120
+    assert (
+        first_bucket["orchestration_configuration"]
+        == manifest["orchestration_configuration"]
     )
     monkeypatch.setattr(
         native_calibration,
@@ -595,3 +713,10 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     assert final["acceptance_eligible"] is True
     assert final["measured_attempted"] == 12 * 20
     assert (tmp_path / "trusted-cache.json").is_file()
+
+    manifest["orchestration_configuration"]["global_budget_seconds"] = 119
+    (checkpoint / "checkpoint.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(
+        native_calibration.NativeCalibrationError, match="orchestration configuration"
+    ):
+        native_calibration.run_full_calibration(checkpoint_dir=checkpoint, resume=True)
