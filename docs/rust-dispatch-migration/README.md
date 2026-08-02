@@ -66,3 +66,9 @@ Dedicated Rust dispatch worker
 - Note-off/panic: ưu tiên giải phóng đầy đủ, được retry có giới hạn.
 - Mốc hold là completion-to-completion, không phải call-entry.
 - Rust worker là owner duy nhất của backend, timer handle, active key state và coordinator trong lúc chạy.
+
+## V3.0.0 release status
+
+- Rust is the production-default dispatch implementation; Python remains available only through the explicit diagnostic switch `SKY_USE_PYTHON_DISPATCH=1`.
+- The v3.0.0 acceptance packet is the authority for Windows soak, rollback, packaging, and exact-SHA sign-off. Any item without recorded evidence remains pending.
+- Sender telemetry remains bounded and ends at `SendInput` completion; `game_observed.available=false` is intentional.

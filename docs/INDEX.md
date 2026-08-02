@@ -20,7 +20,8 @@ These files represent the current system state and contracts:
 * [architecture.md](architecture.md) — Explains the 4-layer DDD codebase design, playback dispatch pipeline (MMCSS + waitable timer + timer-guard), and input hardening.
 * [timing-profile-frame-model.md](timing-profile-frame-model.md) — Pure frame-relative formulas and default profiles (`local_precise`, `balanced`, `audience_safe`).
 * [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
-* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Auto Player (tracks the `pyproject.toml` `[project].version`, currently 2.4.5).
+* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Auto Player (tracks the `pyproject.toml` `[project].version`, currently 3.0.0).
+* [releases/v3.0.0-acceptance.md](releases/v3.0.0-acceptance.md) — Exact-SHA acceptance evidence for the v3.0.0 release candidate.
 
 ---
 
@@ -41,7 +42,7 @@ These files represent the current system state and contracts:
 * [archive/main-path-cleanup-and-build-quality-plan.md](archive/main-path-cleanup-and-build-quality-plan.md) — Proposed plan: make the GIL switch-interval knob self-aware on free-threaded 3.14, externalize env tuning as forker presets, and tighten build quality (assert audit + `--optimize`, excludes). Hygiene/build only — NOT send-path perf (that is proven optimal).
 * [archive/2026-06_wasapi-loopback-measurement-plan.md](archive/2026-06_wasapi-loopback-measurement-plan.md) — After-send WASAPI loopback measurement (validation companion to Phase 6 of the SendInput lifecycle plan).
 * [2026-07_core-dispatch-refactor-and-isolation-plan.md](2026-07_core-dispatch-refactor-and-isolation-plan.md) — **Implemented (Phases 0–6).** Phased refactor from the 2026-07-16 core review. Phase 0 harness + Phase 1 correctness (A1/A2/A6a/A6b) + Phase 2 hot-path (A3/A4/unfocused hook) + Phase 3 CPU floors (A5) + Phase 4 structural isolation (`orchestration/core/` package + boundary test) + Phase 5 Rust-plan alignment + Phase 6 docs. See plan §12 for the as-built table and divergence notes.
-* [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md) — **Rust default cutover implemented; Windows soak/sign-off and Python rollback remain required.** Complete guide and architecture for the Rust real-time core and Win32 SendInput backend via PyO3 0.29 on CPython 3.14t. Use `SKY_USE_PYTHON_DISPATCH=1` only for explicit diagnostic rollback; Rust is fail-closed by default.
+* [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md) — **Rust default cutover implemented; v3.0.0 acceptance owns Windows soak/sign-off and Python rollback evidence.** Complete guide and architecture for the Rust real-time core and Win32 SendInput backend via PyO3 0.29 on CPython 3.14t. Use `SKY_USE_PYTHON_DISPATCH=1` only for explicit diagnostic rollback; Rust is fail-closed by default.
 * [rust-migration-plan.md](rust-migration-plan.md) — **Superseded proposal.** Replaced by [rust-dispatch-migration/README.md](rust-dispatch-migration/README.md). Preserved as historical reference.
 * [timing-experiments.md](timing-experiments.md) — Holds only open infrastructure investigation items:
   * **O10.5:** Global sleep policy benchmark (`spin_threshold_us`).

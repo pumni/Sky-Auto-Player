@@ -4,6 +4,58 @@ All notable changes to Sky Auto Player are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-08-03
+
+### Changed
+
+- Rust dispatch worker is the production default; Python retains the UI and orchestration boundary.
+- The deadline-to-`SendInput` path no longer calls Python.
+- Timing remains in the QPC tick domain until the serialization boundary.
+- Native telemetry schema remains `6`; calibration final artifact schema is `5`.
+
+### Added
+
+- `sender_clean_known` distinguishes complete sender evidence from a clean result.
+- Release CI and tagged release workflows run the native sender-side acceptance benchmark before packaging.
+- V3 migration and acceptance documentation for the frozen Windows application and updater.
+
+### Fixed
+
+- Authored completion residual is separate from effective completion residual.
+- Focus-blocked diagnostics are no longer counted as backend dispatches.
+- Suppressed stale Up events no longer distort dispatch counts.
+- Partial native sends are no longer classified as no-op events.
+- Quick calibration validates the exact requested configuration.
+- Full calibration rejects an impossible budget before side effects.
+- Fabricated host timestamps are no longer emitted.
+- Truncated telemetry can no longer report clean evidence: `sender_clean_known` and `sender_clean` are both false.
+
+### Performance
+
+- Dedicated Rust dispatch worker with preallocated bounded telemetry.
+- No Python callback runs on the real-time worker.
+- Native sender-side acceptance and regression benchmark is a release gate.
+
+### Compatibility
+
+- Supported packaged platform: Windows 10/11 x64.
+- Source development uses CPython 3.14 free-threaded; packaged releases include their own runtime.
+- Existing `2.4.5` installations update directly through `updater.bat`.
+- Pre-2.4.2 installations that never ran the rename bridge still require manual reinstall.
+- `config.json`, `.env`, `songs/`, and `logs/` are preserved during updates.
+
+### Migration
+
+- Native telemetry schema 5 artifacts are rejected by the schema 6 consumer; old native telemetry is diagnostic history, not V3 release evidence.
+- Calibration schema 4 checkpoints are rejected by the schema 5 loader; run calibration again for V3.
+- The legacy latency cache remains accepted only when it matches loader contract version 1 and its strict sample/value bounds; otherwise the loader uses its default fallback.
+- Emergency diagnostic rollback is selected with `SKY_USE_PYTHON_DISPATCH=1`; it is not the production recommendation.
+
+### Known limitations
+
+- `game_observed.available = false`; telemetry stops at the sender completion boundary.
+- This release does not claim that the game receives input at the same time, absolute audio onset, universal sub-millisecond timing, or zero jitter on every machine.
+
 ## [2.4.5] - 2026-07-29
 
 ### Removed

@@ -18,7 +18,7 @@ export const homeEn: HomeContent = {
     kicker: 'Music automation for Sky · Windows 10/11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
-      'Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — aligned to the game\'s frames, not just sequenced.',
+      "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — aligned to the game's frames, not just sequenced.",
     primaryCta: 'Download for Windows',
     secondaryCta: 'See how it works',
     metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'PORTABLE', 'NO INSTALLER'],
@@ -59,8 +59,14 @@ export const homeEn: HomeContent = {
       { macro: 'Fixed delays', player: 'Timing follows the sheet and tempo' },
       { macro: 'Tap-focused playback', player: 'Notes, chords and holds' },
       { macro: 'One global setup', player: 'Per-song timing profiles' },
-      { macro: 'Fixed delay, one-size-fits-all', player: 'Learns your machine delay and compensates' },
-      { macro: 'HUD stutters when busy', player: 'Note firing and display run on separate threads' },
+      {
+        macro: 'Fixed delay, one-size-fits-all',
+        player: 'Learns your machine delay and compensates',
+      },
+      {
+        macro: 'HUD stutters when busy',
+        player: 'Note firing and display run on separate threads',
+      },
     ],
   },
   product: {
