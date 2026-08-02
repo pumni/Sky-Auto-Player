@@ -57,9 +57,9 @@ def test_native_dispatch_session_lifecycle() -> None:
     ]
     allowed = [0x15, 0x16, 0x17]
 
-    session = sky_player_rs.NativeDispatchSessionPy(
+    session = sky_player_rs.NativeDispatchSessionPy(  # pyright: ignore[reportAttributeAccessIssue]
         actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True
-    )  # type: ignore[attr-defined]
+    )
 
     snap0 = cast(dict[str, Any], session.snapshot())
     assert snap0["is_running"] is False
@@ -105,9 +105,9 @@ def test_native_dispatch_session_quit() -> None:
     ]
     allowed = [0x15]
 
-    session = sky_player_rs.NativeDispatchSessionPy(
+    session = sky_player_rs.NativeDispatchSessionPy(  # pyright: ignore[reportAttributeAccessIssue]
         actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True
-    )  # type: ignore[attr-defined]
+    )
     session.start()
     time.sleep(0.005)
 

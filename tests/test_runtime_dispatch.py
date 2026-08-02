@@ -1075,7 +1075,7 @@ def test_telemetry_lazy_dict_materialization_and_compatibility() -> None:
     # telemetry record: first/last Win32 error and retry counters.
     # Phase 5 fields plus the explicit native timing-boundary fields are part
     # of the retained telemetry record, including logical operation duration.
-    assert len(record) == 58
+    assert len(record) == 59
 
     # Assert keys/items/values are correct
     assert "song" in record
