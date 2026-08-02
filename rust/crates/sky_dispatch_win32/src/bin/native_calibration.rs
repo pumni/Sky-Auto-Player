@@ -6,8 +6,8 @@
 //! process terminates unexpectedly.
 
 use sky_dispatch_win32::calibration::{
-    CalibrationConfig, CalibrationFailureReport, PacketKind, SampleClass,
-    run_calibration_bucket_json, run_calibration_json,
+    CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationFailureReport, PacketKind,
+    SampleClass, run_calibration_bucket_json, run_calibration_json,
 };
 
 fn parse_u8(value: Option<String>, name: &str) -> Result<u8, String> {
@@ -15,6 +15,13 @@ fn parse_u8(value: Option<String>, name: &str) -> Result<u8, String> {
         .ok_or_else(|| format!("{name} requires a value"))?
         .parse::<u8>()
         .map_err(|_| format!("{name} must be an integer"))
+}
+
+fn parse_u64(value: Option<String>, name: &str) -> Result<u64, String> {
+    value
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .parse::<u64>()
+        .map_err(|_| format!("{name} must be a non-negative integer"))
 }
 
 fn parse_kind(value: &str) -> Result<PacketKind, String> {
@@ -41,6 +48,9 @@ fn main() -> Result<(), String> {
     let mut samples = None;
     let mut warmup_samples = 50u32;
     let mut budget_seconds = 120u64;
+    let mut hot_gap_target_us = None;
+    let mut cold_threshold_us = None;
+    let mut cold_idle_gap_us = None;
     let mut metadata = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -92,10 +102,19 @@ fn main() -> Result<(), String> {
                     return Err("--budget-seconds must be between 1 and 120".to_string());
                 }
             }
+            "--hot-gap-target-us" => {
+                hot_gap_target_us = Some(parse_u64(args.next(), "--hot-gap-target-us")?);
+            }
+            "--cold-threshold-us" => {
+                cold_threshold_us = Some(parse_u64(args.next(), "--cold-threshold-us")?);
+            }
+            "--cold-idle-gap-us" => {
+                cold_idle_gap_us = Some(parse_u64(args.next(), "--cold-idle-gap-us")?);
+            }
             "--metadata" => metadata = true,
             "--help" => {
                 println!(
-                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--budget-seconds 1..120]"
+                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--hot-gap-target-us N] [--cold-threshold-us N] [--cold-idle-gap-us N] [--budget-seconds 1..120]"
                 );
                 return Ok(());
             }
@@ -109,7 +128,8 @@ fn main() -> Result<(), String> {
         println!(
             "{}",
             serde_json::json!({
-                "version": 7,
+                "version": CALIBRATION_SCHEMA_VERSION,
+                "calibration_schema_version": CALIBRATION_SCHEMA_VERSION,
                 "measurement_protocol_version": 3,
                 "source_git_sha": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_build_id": env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -117,6 +137,11 @@ fn main() -> Result<(), String> {
                 "dirty_worktree": env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
                 "rustc_version": env!("SKY_RUSTC_VERSION"),
                 "host_fingerprint": host,
+                "configuration": {
+                    "hot_gap_target_us": CalibrationConfig::default().hot_gap_target_us,
+                    "cold_threshold_us": CalibrationConfig::default().cold_threshold_us,
+                    "cold_idle_gap_us": CalibrationConfig::default().cold_idle_gap_us,
+                },
             })
         );
         return Ok(());
@@ -138,6 +163,15 @@ fn main() -> Result<(), String> {
         config.samples_per_cold_bucket = sample_count;
         config.warmup_samples = warmup_samples;
         config.budget_seconds = budget_seconds;
+        if let Some(value) = hot_gap_target_us {
+            config.hot_gap_target_us = value;
+        }
+        if let Some(value) = cold_threshold_us {
+            config.cold_threshold_us = value;
+        }
+        if let Some(value) = cold_idle_gap_us {
+            config.cold_idle_gap_us = value;
+        }
         let result = run_calibration_bucket_json(&config, kind, class);
         match result {
             Ok(output) => {
@@ -176,6 +210,15 @@ fn main() -> Result<(), String> {
         let output = {
             let mut config = CalibrationConfig::quick();
             config.budget_seconds = budget_seconds;
+            if let Some(value) = hot_gap_target_us {
+                config.hot_gap_target_us = value;
+            }
+            if let Some(value) = cold_threshold_us {
+                config.cold_threshold_us = value;
+            }
+            if let Some(value) = cold_idle_gap_us {
+                config.cold_idle_gap_us = value;
+            }
             run_calibration_json(&config).map_err(|error| error.to_string())?
         };
         println!("{output}");

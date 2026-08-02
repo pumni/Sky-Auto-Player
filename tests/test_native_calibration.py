@@ -175,6 +175,65 @@ class _FakePopen:
         self.return_code = -9
 
 
+def test_native_bucket_uses_immutable_gap_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    result = _native_bucket_result(kind="down", class_name="hot", polyphony=5)
+
+    def run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, json.dumps(result))
+
+    monkeypatch.setattr(native_calibration.subprocess, "run", run)
+    parsed = native_calibration._execute_native_bucket(
+        tmp_path / "native.exe",
+        kind="down",
+        class_name="hot",
+        polyphony=5,
+        samples=20,
+        warmup_samples=4,
+        budget_seconds=120,
+        timeout_seconds=120.0,
+        progress=False,
+    )
+
+    assert parsed == result
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[-6:] == [
+        "--hot-gap-target-us",
+        "5000",
+        "--cold-threshold-us",
+        "20000",
+        "--cold-idle-gap-us",
+        "25000",
+    ]
+    assert captured["timeout"] == 120.0
+
+
+def test_native_bucket_timeout_does_not_wait_for_a_newline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(command, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"], output="partial")
+
+    monkeypatch.setattr(native_calibration.subprocess, "run", run)
+    with pytest.raises(native_calibration.NativeCalibrationError, match="timed out"):
+        native_calibration._execute_native_bucket(
+            tmp_path / "native.exe",
+            kind="down",
+            class_name="hot",
+            polyphony=1,
+            samples=20,
+            warmup_samples=4,
+            budget_seconds=1,
+            timeout_seconds=0.1,
+            progress=False,
+        )
+
+
 def test_native_calibration_writes_cache_only_after_valid_clean_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -391,6 +391,7 @@ pub enum PacketKind {
 }
 
 pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 3;
+pub const CALIBRATION_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CalibrationStep {
@@ -469,7 +470,7 @@ impl Default for CalibrationConfig {
             warmup_samples: 20,
             receipt_timeout_ms: 200,
             hot_gap_target_us: 5_000,
-            cold_idle_gap_us: 100_000,
+            cold_idle_gap_us: 25_000,
             cold_threshold_us: SEND_COLD_THRESHOLD_US,
             budget_seconds: 120,
         }
@@ -2006,7 +2007,7 @@ mod platform {
         }
 
         Ok(CalibrationOutput {
-            version: 8,
+            version: CALIBRATION_SCHEMA_VERSION,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -2417,7 +2418,7 @@ mod platform {
             .saturating_add(bucket.timeout_count);
 
         Ok(CalibrationBucketOutput {
-            version: 8,
+            version: CALIBRATION_SCHEMA_VERSION,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -2791,6 +2792,15 @@ mod tests {
     fn default_config_polyphonies() {
         let cfg = CalibrationConfig::default();
         assert_eq!(cfg.polyphonies, vec![1, 2, 3, 5, 8, 15]);
+    }
+
+    #[test]
+    fn calibration_schema_and_gap_defaults_are_single_contract() {
+        let cfg = CalibrationConfig::quick();
+        assert_eq!(CALIBRATION_SCHEMA_VERSION, 8);
+        assert_eq!(cfg.hot_gap_target_us, 5_000);
+        assert_eq!(cfg.cold_threshold_us, 20_000);
+        assert_eq!(cfg.cold_idle_gap_us, 25_000);
     }
 
     #[test]

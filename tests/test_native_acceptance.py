@@ -5,6 +5,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
 
 def _load_acceptance_module() -> ModuleType:
@@ -18,6 +19,12 @@ def _load_acceptance_module() -> ModuleType:
 
 
 ACCEPTANCE = _load_acceptance_module()
+
+
+def test_native_calibration_schema_version_is_exposed_by_the_current_wheel() -> None:
+    assert sky_player_rs.calibration_schema_version() == 8  # type: ignore[attr-defined]
+    build_info = getattr(sky_player_rs, "build_info")
+    assert build_info()["calibration_schema_version"] == 8
 
 
 def test_real_backend_without_mock_options_uses_zero_mock_latency() -> None:

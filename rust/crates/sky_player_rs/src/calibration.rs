@@ -13,7 +13,14 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_calibration_json};
+use sky_dispatch_win32::calibration::{
+    CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, run_calibration_json,
+};
+
+#[pyfunction]
+pub fn calibration_schema_version() -> u32 {
+    CALIBRATION_SCHEMA_VERSION
+}
 
 /// Run the native chord-aware calibration harness.
 ///

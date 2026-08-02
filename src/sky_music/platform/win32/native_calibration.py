@@ -27,6 +27,8 @@ SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 2
 FULL_POLYPHONIES = (1, 5, 15)
 FULL_SAMPLE_COUNT = 20
+HOT_GAP_TARGET_US = 5_000
+COLD_THRESHOLD_US = 20_000
 FULL_COLD_IDLE_GAP_US = 25_000
 FULL_WARMUP_SAMPLES = 4
 FULL_CHUNK_SAMPLES = 20
@@ -153,6 +155,12 @@ def _validate_configuration(result: dict[str, Any]) -> tuple[tuple[int, ...], in
         raise NativeCalibrationError("hot gap target must be shorter than cold threshold")
     if cold_idle < cold_threshold:
         raise NativeCalibrationError("cold idle gap is shorter than cold threshold")
+    if hot_target != HOT_GAP_TARGET_US:
+        raise NativeCalibrationError("native calibration changed the hot gap contract")
+    if cold_threshold != COLD_THRESHOLD_US:
+        raise NativeCalibrationError("native calibration changed the cold threshold contract")
+    if cold_idle != FULL_COLD_IDLE_GAP_US:
+        raise NativeCalibrationError("native calibration changed the cold idle gap contract")
     hot_samples = _positive_int(
         configuration.get("samples_per_hot_bucket"),
         "configuration.samples_per_hot_bucket",
@@ -450,9 +458,9 @@ def full_calibration_configuration() -> dict[str, Any]:
         "warmup_samples": FULL_WARMUP_SAMPLES,
         "chunk_samples": FULL_CHUNK_SAMPLES,
         "receipt_timeout_ms": 200,
-        "hot_gap_target_us": 5_000,
+        "hot_gap_target_us": HOT_GAP_TARGET_US,
         "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
-        "cold_threshold_us": 20_000,
+        "cold_threshold_us": COLD_THRESHOLD_US,
         "budget_seconds": 120,
     }
 
@@ -526,8 +534,14 @@ def _validate_bucket_result(
     )
     if selected_samples != samples:
         raise NativeCalibrationError("native bucket configuration has the wrong sample count")
-    if configuration.get("cold_idle_gap_us") != FULL_COLD_IDLE_GAP_US:
-        raise NativeCalibrationError("native bucket changed the cold idle gap contract")
+    expected_gaps = {
+        "hot_gap_target_us": HOT_GAP_TARGET_US,
+        "cold_threshold_us": COLD_THRESHOLD_US,
+        "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
+    }
+    for name, expected in expected_gaps.items():
+        if configuration.get(name) != expected:
+            raise NativeCalibrationError(f"native bucket changed the {name} contract")
 
     bucket = _require_mapping(data.get("bucket"), "bucket")
     fields = (
@@ -681,18 +695,39 @@ def _execute_native_bucket(
         str(warmup_samples),
         "--budget-seconds",
         str(budget_seconds),
+        "--hot-gap-target-us",
+        str(HOT_GAP_TARGET_US),
+        "--cold-threshold-us",
+        str(COLD_THRESHOLD_US),
+        "--cold-idle-gap-us",
+        str(FULL_COLD_IDLE_GAP_US),
     ]
     try:
-        process = subprocess.Popen(
+        completed = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             # The native process emits progress on stderr and its final JSON
-            # on stdout.  Merging the streams lets this single owner surface
-            # progress without creating another Python thread in the platform
-            # boundary.
+            # on stdout.  Merging the streams keeps parsing bounded and lets
+            # subprocess.run own timeout kill/reap; no blocking readline is
+            # allowed on the timeout path.
             stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
             shell=False,
         )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.output or ""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        report = _native_failure_report(
+            kind=kind,
+            class_name=class_name,
+            polyphony=polyphony,
+            exact_error="native calibration timed out",
+            native_stderr=str(output),
+        )
+        raise NativeCalibrationError("native calibration timed out", failure_report=report) from exc
     except OSError as exc:
         report = _native_failure_report(
             kind=kind,
@@ -702,42 +737,14 @@ def _execute_native_bucket(
         )
         raise NativeCalibrationError(str(exc), failure_report=report) from exc
 
-    output_lines: list[str] = []
-    started = time.monotonic()
-    timed_out = False
-    while process.poll() is None:
-        stream = process.stdout
-        line = stream.readline() if stream is not None else b""
-        if line:
-            text_line = line.decode("utf-8", errors="replace").rstrip()
-            output_lines.append(text_line)
-            if progress and text_line.startswith("[calibration]"):
+    stderr = completed.stdout or ""
+    if progress:
+        for text_line in stderr.splitlines():
+            if text_line.startswith("[calibration]"):
                 print(text_line, flush=True)
-        if time.monotonic() - started >= timeout_seconds:
-            timed_out = True
-            process.kill()
-            process.wait()
-            break
-    if process.stdout is not None:
-        tail = process.stdout.read()
-        if tail:
-            for text_line in tail.decode("utf-8", errors="replace").splitlines():
-                output_lines.append(text_line)
-                if progress and text_line.startswith("[calibration]"):
-                    print(text_line, flush=True)
-    stderr = "\n".join(output_lines)
-    if timed_out:
-        report = _native_failure_report(
-            kind=kind,
-            class_name=class_name,
-            polyphony=polyphony,
-            exact_error="native calibration timed out",
-            native_stderr=stderr,
-        )
-        raise NativeCalibrationError("native calibration timed out", failure_report=report)
     if len(stderr.encode("utf-8")) > MAX_NATIVE_CALIBRATION_STDOUT_BYTES:
         raise NativeCalibrationError("native calibration stdout exceeded the size limit")
-    return_code = process.returncode
+    return_code = completed.returncode
     if return_code != 0:
         detail = stderr.strip() or "native calibration exited without diagnostics"
         report = _native_failure_report(
@@ -750,11 +757,8 @@ def _execute_native_bucket(
         raise NativeCalibrationError(
             f"native calibration failed ({return_code}): {detail}", failure_report=report
         )
-    json_start = next(
-        (index for index, line in enumerate(output_lines) if line.strip() == "{"),
-        None,
-    )
-    json_text = "\n".join(output_lines[json_start:]) if json_start is not None else ""
+    json_start = stderr.find("{")
+    json_text = stderr[json_start:] if json_start >= 0 else ""
     try:
         parsed = json.loads(json_text)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1078,6 +1082,16 @@ def _current_full_provenance(binary: Path) -> dict[str, Any]:
         raise NativeCalibrationError("native build schema version does not match the runner")
     if native.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
         raise NativeCalibrationError("native build measurement protocol does not match the runner")
+    metadata_configuration = _require_mapping(native.get("configuration"), "configuration")
+    for name, expected in (
+        ("hot_gap_target_us", HOT_GAP_TARGET_US),
+        ("cold_threshold_us", COLD_THRESHOLD_US),
+        ("cold_idle_gap_us", FULL_COLD_IDLE_GAP_US),
+    ):
+        if metadata_configuration.get(name) != expected:
+            raise NativeCalibrationError(
+                f"native build metadata changed the {name} contract"
+            )
     if native.get("dirty_worktree") is not False:
         raise NativeCalibrationError("native build was produced from a dirty worktree")
     for field in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
@@ -1401,6 +1415,12 @@ def run_diagnostic_calibration(
         "1",
         "--budget-seconds",
         str(budget_seconds),
+        "--hot-gap-target-us",
+        str(HOT_GAP_TARGET_US),
+        "--cold-threshold-us",
+        str(COLD_THRESHOLD_US),
+        "--cold-idle-gap-us",
+        str(FULL_COLD_IDLE_GAP_US),
     ]
     try:
         binary = _find_binary()
@@ -1431,9 +1451,9 @@ def run_diagnostic_calibration(
             "samples_per_cold_bucket": samples,
             "warmup_samples": 0,
             "receipt_timeout_ms": 200,
-            "hot_gap_target_us": 5_000,
+            "hot_gap_target_us": HOT_GAP_TARGET_US,
             "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
-            "cold_threshold_us": 20_000,
+            "cold_threshold_us": COLD_THRESHOLD_US,
         }
         artifact = _bucket_artifact(
             result,
@@ -1547,6 +1567,12 @@ def run_full_calibration(
                 str(FULL_WARMUP_SAMPLES),
                 "--budget-seconds",
                 str(child_budget_seconds),
+                "--hot-gap-target-us",
+                str(HOT_GAP_TARGET_US),
+                "--cold-threshold-us",
+                str(COLD_THRESHOLD_US),
+                "--cold-idle-gap-us",
+                str(FULL_COLD_IDLE_GAP_US),
             ]
             try:
                 raw = _execute_native_bucket(
@@ -1900,7 +1926,19 @@ def run_native_calibration(
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
             process = subprocess.Popen(
-                [str(binary), "--mode", mode, "--budget-seconds", str(budget_seconds)],
+                [
+                    str(binary),
+                    "--mode",
+                    mode,
+                    "--budget-seconds",
+                    str(budget_seconds),
+                    "--hot-gap-target-us",
+                    str(HOT_GAP_TARGET_US),
+                    "--cold-threshold-us",
+                    str(COLD_THRESHOLD_US),
+                    "--cold-idle-gap-us",
+                    str(FULL_COLD_IDLE_GAP_US),
+                ],
                 stdout=stdout_file,
                 stderr=stderr_file,
                 shell=False,

@@ -965,6 +965,10 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
     dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("native_schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
+    dict.set_item(
+        "calibration_schema_version",
+        sky_dispatch_win32::calibration::CALIBRATION_SCHEMA_VERSION,
+    )?;
     dict.set_item("pyo3_version", "0.29.0")?;
     dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
     dict.set_item(
@@ -1043,5 +1047,9 @@ fn sky_player_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(measure_spin_overhead_rs, m)?)?;
     m.add_function(wrap_pyfunction!(qpc_now_rs, m)?)?;
     m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        calibration::calibration_schema_version,
+        m
+    )?)?;
     Ok(())
 }
