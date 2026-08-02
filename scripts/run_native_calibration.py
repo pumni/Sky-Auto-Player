@@ -39,7 +39,8 @@ def main() -> int:
         type=float,
         default=None,
         help=(
-            "hard native measurement budget in seconds (6..120); defaults to "
+            "native child budget is 6..120 seconds; full orchestration also "
+            "requires at least 11 seconds; defaults to "
             f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s"
         ),
     )

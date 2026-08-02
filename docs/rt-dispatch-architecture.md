@@ -96,8 +96,9 @@ targets stay in checked tick arithmetic. Microseconds are accepted or emitted on
 Python/configuration, estimator, JSON, and human-readable telemetry boundaries; the worker does
 not round-trip ticks through microseconds during a control-path decision. SendInput outcomes
 retain their exact start/completion QPC ticks until telemetry serialization. Native trace records
-also emit the signed completion delta in timeline ticks, computed from the completed effective
-timestamp and effective deadline; Python only converts that producer value to microseconds.
+emit two signed completion residuals in timeline ticks: completion minus the effective deadline
+for sender timing and completion minus the authored deadline for visible/authored timing. Python
+only converts those producer values to microseconds.
 
 **Resumable suspension.** Focus loss and manual pause release and verify physical keys, then use
 `cancel_live_generations()`: `Active` and `ReleasePending` become cancelled while future
@@ -178,8 +179,10 @@ requested sleep overshoot is a class mismatch and is rejected from timing quanti
 `injected_raw_input_delivery_proxy`: a dedicated native calibration process injects through
 Windows `SendInput` into an app-owned window and observes its `WM_INPUT` delivery. The player
 process never changes its own Raw Input registration for calibration. It does not measure Sky
-process polling, render-frame timing, or audio onset. `sampled_at` is UTC metadata and
-`evidence_kind` identifies this boundary; no freshness TTL is applied by the loader. Warm-up
+process polling, render-frame timing, or audio onset. `evidence_kind` identifies this boundary;
+stable artifact provenance keeps only host identity (QPC frequency and Windows build), while
+observation timestamps are not fabricated or used as identity. No freshness TTL is applied by
+the loader. Warm-up
 injections are tracked separately and excluded from measured classes. Only complete,
 anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
 receipts remain diagnostic counters. The calibration process snapshots/restores its registration
@@ -191,7 +194,7 @@ performs cleanup before its artifact is accepted. The runner enforces one absolu
 budget with a five-second publication reserve; each native child also retains its own five-second
 cleanup reserve and must receive at least one second of measurement time. Artifacts keep runner-owned
 orchestration configuration separate from the exact
-native configuration returned by that child. Artifacts contain aggregate counters/quantiles,
+native configuration returned by that child (artifact schema 5). Artifacts contain aggregate counters/quantiles,
 the worst 16 samples, and every anomalous sample; the complete raw stream is never serialized.
 Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
 clean-worktree state, toolchain, host fingerprint, schema/protocol, or configuration.

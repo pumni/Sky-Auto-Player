@@ -125,8 +125,8 @@ must carry the exact Git SHA, native build SHA, native source fingerprint, toolc
 provenance, and verified cleanup result.
 Each native child is bounded by a total QPC budget in the inclusive range 6–120 seconds; five
 seconds are reserved for native cleanup, leaving at least one second for measurement. Full
-orchestration separately reserves five seconds for publication and uses an absolute global
-deadline. The only acceptance matrix is 1/5/15 × Down/Up × Hot/Cold, with 20 clean samples and
+orchestration separately reserves five seconds for publication, rejects a requested budget below
+11 seconds before preflight side effects, and uses an absolute global deadline. The only acceptance matrix is 1/5/15 × Down/Up × Hot/Cold, with 20 clean samples and
 four warmups per bucket. Every bucket is isolated, cleanup-verified, and bounded. Stable-window
 early stopping is not yet an acceptance claim; the current runner records the configured bounded
 sample set.
@@ -147,4 +147,6 @@ identical provenance, and successful cleanup everywhere before writing the trust
 
 A timeout kills and reaps only the current native chunk process and preserves prior checkpoint
 artifacts. `--timeout-seconds` is an explicit, finite positive override for controlled runs and
-can never exceed the 120-second process budget.
+can never exceed the 120-second process budget. Full orchestration requires at least 11 seconds
+for the publication reserve plus one minimally measurable native child; that lower bound does not
+guarantee completion of the full matrix.

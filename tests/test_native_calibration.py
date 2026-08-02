@@ -167,6 +167,40 @@ def _native_bucket_result(
     }
 
 
+def _native_quick_result(*, budget_seconds: int = 120) -> dict[str, object]:
+    result = _native_result(clean=20)
+    configuration = result["configuration"]
+    assert isinstance(configuration, dict)
+    configuration.update(
+        {
+            "polyphonies": [1, 5, 15],
+            "warmup_samples": 4,
+            "budget_seconds": budget_seconds,
+        }
+    )
+    base_buckets = result["buckets"]
+    assert isinstance(base_buckets, dict)
+    base_down = base_buckets["down"]["1"]
+    base_up = base_buckets["up"]["1"]
+    assert isinstance(base_down, dict)
+    assert isinstance(base_up, dict)
+    result["buckets"] = {
+        kind: {
+            str(polyphony): {
+                "hot": json.loads(json.dumps(source["hot"])),
+                "cold": json.loads(json.dumps(source["cold"])),
+            }
+            for polyphony in (1, 5, 15)
+        }
+        for kind, source in (("down", base_down), ("up", base_up))
+    }
+    result["warmup_attempted"] = 24
+    result["measured_attempted"] = 240
+    result["setup_attempted"] = 20
+    result["total_attempted"] = 284
+    return result
+
+
 class _FakePopen:
     def __init__(self, _args, *, stdout, stderr, **_kwargs):
         stdout.write(json.dumps(self.result).encode("utf-8"))
@@ -248,23 +282,23 @@ def test_native_bucket_timeout_does_not_wait_for_a_newline(
 
 
 @pytest.mark.parametrize("remaining", [10.9])
-def test_child_measurement_budget_reserves_cleanup_time(remaining: float) -> None:
+def test_native_child_budget_reserves_cleanup_time(remaining: float) -> None:
     with pytest.raises(
         native_calibration.NativeCalibrationError, match="cleanup reserve"
     ):
-        native_calibration._child_measurement_budget(100.0, 100.0 - remaining)
+        native_calibration._native_child_budget(100.0, 100.0 - remaining)
 
 
-def test_child_measurement_budget_uses_floor_and_float_timeout() -> None:
-    budget, timeout = native_calibration._child_measurement_budget(100.0, 89.0)
+def test_native_child_budget_uses_floor_and_float_timeout() -> None:
+    budget, timeout = native_calibration._native_child_budget(100.0, 89.0)
     assert budget == 6
     assert timeout == 6.0
 
-    budget, timeout = native_calibration._child_measurement_budget(100.0, 88.1)
+    budget, timeout = native_calibration._native_child_budget(100.0, 88.1)
     assert budget == 6
     assert timeout == pytest.approx(6.9)
 
-    budget, timeout = native_calibration._child_measurement_budget(100.0, 88.0)
+    budget, timeout = native_calibration._native_child_budget(100.0, 88.0)
     assert budget == 7
     assert timeout == 7.0
 
@@ -307,7 +341,7 @@ def test_native_bucket_rejects_configuration_provenance_mismatch(field: str) -> 
 def test_native_calibration_writes_cache_only_after_valid_clean_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = _native_result()
+    result = _native_quick_result()
     monkeypatch.setattr(
         native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
     )
@@ -324,7 +358,7 @@ def test_native_calibration_writes_cache_only_after_valid_clean_result(
     assert json.loads(artifact.read_text(encoding="utf-8")) == result
     legacy = json.loads(cache.read_text(encoding="utf-8"))
     assert legacy["evidence_kind"] == result["evidence_kind"]
-    assert legacy["n"] == 64
+    assert legacy["n"] == 20
     assert legacy["down_us"] == {"p50": 10, "p90": 20, "p99": 40}
 
 
@@ -343,7 +377,7 @@ def test_native_calibration_uses_mode_specific_default_timeout(
     monkeypatch.setattr(
         native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
     )
-    _FakePopen.result = _native_result()
+    _FakePopen.result = _native_quick_result()
     _FakePopen.wait_timeouts = []
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
 
@@ -366,7 +400,7 @@ def test_native_calibration_timeout_override_is_forwarded(
     monkeypatch.setattr(
         native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
     )
-    _FakePopen.result = _native_result()
+    _FakePopen.result = _native_quick_result(budget_seconds=12)
     _FakePopen.wait_timeouts = []
     monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
 
@@ -377,6 +411,60 @@ def test_native_calibration_timeout_override_is_forwarded(
     )
 
     assert _FakePopen.wait_timeouts == [12.5]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "budget_seconds",
+        "receipt_timeout_ms",
+        "warmup_samples",
+        "samples_per_hot_bucket",
+        "samples_per_cold_bucket",
+        "polyphonies",
+        "hot_gap_target_us",
+        "cold_threshold_us",
+        "cold_idle_gap_us",
+    ],
+)
+def test_quick_calibration_rejects_exact_configuration_mismatch_before_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    result = _native_quick_result(budget_seconds=12)
+    configuration = result["configuration"]
+    assert isinstance(configuration, dict)
+    configuration[field] = {
+        "budget_seconds": 11,
+        "receipt_timeout_ms": 201,
+        "warmup_samples": 3,
+        "samples_per_hot_bucket": 19,
+        "samples_per_cold_bucket": 19,
+        "polyphonies": [1, 5],
+        "hot_gap_target_us": 4_999,
+        "cold_threshold_us": 19_999,
+        "cold_idle_gap_us": 24_999,
+    }[field]
+    _FakePopen.result = result
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
+    monkeypatch.setattr(native_calibration.subprocess, "Popen", _FakePopen)
+    output = tmp_path / "quick.json"
+    cache = tmp_path / "cache.json"
+    output.write_text("output sentinel\n", encoding="utf-8")
+    cache.write_text("cache sentinel\n", encoding="utf-8")
+
+    with pytest.raises(native_calibration.NativeCalibrationError, match=field):
+        native_calibration.run_native_calibration(
+            output_path=output,
+            cache_path=cache,
+            timeout_seconds=12.5,
+        )
+
+    assert output.read_text(encoding="utf-8") == "output sentinel\n"
+    assert cache.read_text(encoding="utf-8") == "cache sentinel\n"
 
 
 def test_calibration_cli_forwards_timeout_override(
@@ -553,7 +641,7 @@ def test_native_calibration_rejects_nonfinite_or_nonpositive_timeout(
 def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = _native_result()
+    result = _native_quick_result()
     result["version"] = 4
     _FakePopen.result = result
     monkeypatch.setattr(
@@ -583,7 +671,6 @@ def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
         ),
         lambda result: result.__setitem__("dirty_worktree", True),
         lambda result: result.__setitem__("native_build_id", "other-sha"),
-        lambda result: result["host_fingerprint"].pop("sampled_at_us"),
         lambda result: result["host_fingerprint"].__setitem__("win32_build", ""),
     ],
     ids=[
@@ -596,14 +683,13 @@ def test_native_calibration_rejects_legacy_schema_without_mutating_cache(
         "sample-count-mismatch",
         "dirty-artifact",
         "source-build-sha-mismatch",
-        "missing-host-sample-time",
         "missing-windows-build",
     ],
 )
 def test_native_calibration_rejects_incomplete_or_untrusted_evidence(
     mutate,
 ) -> None:
-    result = _native_result()
+    result = _native_quick_result()
     mutate(result)
     with pytest.raises(native_calibration.NativeCalibrationError):
         native_calibration._validate_result(result)
@@ -745,6 +831,9 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     )
     assert final["acceptance_eligible"] is True
     assert final["measured_attempted"] == 12 * 20
+    assert "sampled_at_us" not in final["host_fingerprint"]
+    legacy = json.loads((tmp_path / "trusted-cache.json").read_text(encoding="utf-8"))
+    assert "sampled_at_us" not in legacy["host_fingerprint"]
     assert (tmp_path / "trusted-cache.json").is_file()
 
     manifest["orchestration_configuration"]["global_budget_seconds"] = 119
@@ -775,6 +864,70 @@ def test_full_orchestration_configuration_preserves_exact_budget() -> None:
         "publication_reserve_seconds": 5.0,
         "chunk_samples": 20,
     }
+
+
+@pytest.mark.parametrize("timeout_seconds", [10.9, 10.0, 6.0])
+def test_full_calibration_rejects_impossible_timeout_before_preflight_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float,
+) -> None:
+    monkeypatch.setattr(
+        native_calibration,
+        "_find_binary",
+        lambda: pytest.fail("binary lookup must not run for an impossible full budget"),
+    )
+    checkpoint = tmp_path / "checkpoint"
+
+    with pytest.raises(
+        native_calibration.NativeCalibrationError,
+        match="minimum full orchestration budget of 11",
+    ):
+        native_calibration.run_full_calibration(
+            checkpoint_dir=checkpoint,
+            timeout_seconds=timeout_seconds,
+        )
+
+    assert not checkpoint.exists()
+
+
+def test_full_calibration_timeout_11_seconds_passes_initial_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        native_calibration,
+        "_find_binary",
+        lambda: calls.append("find") or tmp_path / "native.exe",
+    )
+    monkeypatch.setattr(
+        native_calibration,
+        "_current_full_provenance",
+        lambda _binary: {
+            "source_git_sha": "test-sha",
+            "native_build_id": "test-sha",
+            "native_source_fingerprint": "test-fingerprint",
+            "dirty_worktree": False,
+            "rustc_version": "rustc 1.97.1",
+            "host_fingerprint": {
+                "qpc_frequency_hz": 10_000_000,
+                "win32_build": "Windows 11 test build",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        native_calibration,
+        "_native_child_budget",
+        lambda *_args: pytest.fail("preflight may pass, but the child budget must be checked before spawn"),
+    )
+
+    with pytest.raises(pytest.fail.Exception):
+        native_calibration.run_full_calibration(
+            checkpoint_dir=tmp_path / "checkpoint",
+            timeout_seconds=11.0,
+        )
+
+    assert calls == ["find"]
 
 
 def test_current_native_metadata_accepts_the_current_gap_contract(

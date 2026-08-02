@@ -24,13 +24,16 @@ from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_C
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 8
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 4
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 5
 MAX_CALIBRATION_BUDGET_SECONDS = 120
 PUBLICATION_RESERVE_SECONDS = 5.0
 NATIVE_CLEANUP_RESERVE_SECONDS = 5
 MIN_NATIVE_MEASUREMENT_SECONDS = 1
 MIN_NATIVE_TOTAL_BUDGET_SECONDS = (
     NATIVE_CLEANUP_RESERVE_SECONDS + MIN_NATIVE_MEASUREMENT_SECONDS
+)
+MIN_FULL_CALIBRATION_TIMEOUT_SECONDS = (
+    PUBLICATION_RESERVE_SECONDS + MIN_NATIVE_TOTAL_BUDGET_SECONDS
 )
 FULL_POLYPHONIES = (1, 5, 15)
 FULL_SAMPLE_COUNT = 20
@@ -65,9 +68,9 @@ def _ensure_before_deadline(deadline: float, phase: str) -> None:
         )
 
 
-def _child_measurement_budget(run_deadline: float, now: float) -> tuple[int, float]:
-    remaining_measurement = run_deadline - now - PUBLICATION_RESERVE_SECONDS
-    child_budget_seconds = math.floor(remaining_measurement)
+def _native_child_budget(run_deadline: float, now: float) -> tuple[int, float]:
+    remaining_child_window = run_deadline - now - PUBLICATION_RESERVE_SECONDS
+    child_budget_seconds = math.floor(remaining_child_window)
     if child_budget_seconds < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
         raise NativeCalibrationError(
             "global calibration budget cannot provide a native child with "
@@ -76,7 +79,7 @@ def _child_measurement_budget(run_deadline: float, now: float) -> tuple[int, flo
         )
     return (
         min(MAX_CALIBRATION_BUDGET_SECONDS, child_budget_seconds),
-        remaining_measurement,
+        remaining_child_window,
     )
 
 
@@ -202,14 +205,19 @@ def _validate_configuration(result: dict[str, Any]) -> tuple[tuple[int, ...], in
     if cold_idle < cold_threshold:
         raise NativeCalibrationError("cold idle gap is shorter than cold threshold")
     if hot_target != HOT_GAP_TARGET_US:
-        raise NativeCalibrationError("native calibration changed the hot gap contract")
+        raise NativeCalibrationError(
+            "native calibration configuration hot_gap_target_us mismatch: "
+            f"expected {HOT_GAP_TARGET_US}, got {hot_target}"
+        )
     if cold_threshold != COLD_THRESHOLD_US:
         raise NativeCalibrationError(
-            "native calibration changed the cold threshold contract"
+            "native calibration configuration cold_threshold_us mismatch: "
+            f"expected {COLD_THRESHOLD_US}, got {cold_threshold}"
         )
     if cold_idle != FULL_COLD_IDLE_GAP_US:
         raise NativeCalibrationError(
-            "native calibration changed the cold idle gap contract"
+            "native calibration configuration cold_idle_gap_us mismatch: "
+            f"expected {FULL_COLD_IDLE_GAP_US}, got {cold_idle}"
         )
     hot_samples = _positive_int(
         configuration.get("samples_per_hot_bucket"),
@@ -224,7 +232,9 @@ def _validate_configuration(result: dict[str, Any]) -> tuple[tuple[int, ...], in
     )
     if configuration.get("receipt_timeout_ms") != NATIVE_RECEIPT_TIMEOUT_MS:
         raise NativeCalibrationError(
-            "native calibration changed the receipt timeout contract"
+            "native calibration configuration receipt_timeout_ms mismatch: "
+            f"expected {NATIVE_RECEIPT_TIMEOUT_MS}, got "
+            f"{configuration.get('receipt_timeout_ms')}"
         )
     budget_seconds = _positive_int(
         configuration.get("budget_seconds"), "configuration.budget_seconds"
@@ -232,6 +242,10 @@ def _validate_configuration(result: dict[str, Any]) -> tuple[tuple[int, ...], in
     if budget_seconds > MAX_CALIBRATION_BUDGET_SECONDS:
         raise NativeCalibrationError(
             "native calibration budget exceeds the global limit"
+        )
+    if budget_seconds < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+        raise NativeCalibrationError(
+            "native calibration budget does not leave one second for measurement"
         )
     return tuple(polyphonies), hot_samples, cold_samples
 
@@ -278,7 +292,12 @@ def _validate_bucket(
     return bucket
 
 
-def _validate_result(result: object) -> dict[str, Any]:
+def _validate_result(
+    result: object,
+    *,
+    expected_budget_seconds: int | None = None,
+    expected_mode: str | None = None,
+) -> dict[str, Any]:
     data = _require_mapping(result, "root")
     if data.get("version") != SUPPORTED_NATIVE_CALIBRATION_VERSION:
         raise NativeCalibrationError("unsupported native calibration schema version")
@@ -310,6 +329,40 @@ def _validate_result(result: object) -> dict[str, Any]:
         raise NativeCalibrationError("native calibration source/build SHA mismatch")
 
     polyphonies, hot_attempts, cold_attempts = _validate_configuration(data)
+    configuration = _require_mapping(data.get("configuration"), "configuration")
+    if (
+        expected_budget_seconds is not None
+        and configuration.get("budget_seconds") != expected_budget_seconds
+    ):
+        raise NativeCalibrationError(
+            "native calibration configuration budget_seconds mismatch: "
+            f"expected {expected_budget_seconds}, got "
+            f"{configuration.get('budget_seconds')}"
+        )
+    if expected_mode is not None:
+        if expected_mode != "quick":
+            raise NativeCalibrationError(
+                f"unsupported expected native calibration mode {expected_mode!r}"
+            )
+        expected_quick_configuration = {
+            "polyphonies": list(FULL_POLYPHONIES),
+            "samples_per_hot_bucket": FULL_SAMPLE_COUNT,
+            "samples_per_cold_bucket": FULL_SAMPLE_COUNT,
+            "warmup_samples": FULL_WARMUP_SAMPLES,
+            "receipt_timeout_ms": NATIVE_RECEIPT_TIMEOUT_MS,
+            "hot_gap_target_us": HOT_GAP_TARGET_US,
+            "cold_threshold_us": COLD_THRESHOLD_US,
+            "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
+        }
+        if expected_budget_seconds is not None:
+            expected_quick_configuration["budget_seconds"] = expected_budget_seconds
+        for field, expected in expected_quick_configuration.items():
+            actual = configuration.get(field)
+            if actual != expected:
+                raise NativeCalibrationError(
+                    f"quick calibration configuration {field} mismatch: "
+                    f"expected {expected!r}, got {actual!r}"
+                )
 
     if getattr(sys, "frozen", False):
         try:
@@ -350,16 +403,6 @@ def _validate_result(result: object) -> dict[str, Any]:
         raise NativeCalibrationError(
             "native calibration has incomplete Windows host fingerprint"
         )
-    sampled_at_us = host.get("sampled_at_us")
-    if (
-        not isinstance(sampled_at_us, int)
-        or isinstance(sampled_at_us, bool)
-        or sampled_at_us <= 0
-    ):
-        raise NativeCalibrationError(
-            "native calibration has invalid host sample timestamp"
-        )
-
     cleanup = _require_mapping(data.get("cleanup"), "cleanup")
     if cleanup.get("cleanup_success") is not True:
         raise NativeCalibrationError("native calibration cleanup did not succeed")
@@ -499,7 +542,7 @@ def _legacy_cache(result: dict[str, Any]) -> dict[str, Any]:
         "source_git_sha": result.get("source_git_sha"),
         "native_build_id": result.get("native_build_id"),
         "dirty_worktree": result.get("dirty_worktree"),
-        "host_fingerprint": result.get("host_fingerprint"),
+        "host_fingerprint": _stable_host_fingerprint(result.get("host_fingerprint")),
         "anomaly_counts": {
             "warmup": result.get("warmup_anomalous"),
             "measured": result.get("measured_anomalous"),
@@ -1039,50 +1082,6 @@ def _bucket_artifact(
         "worst_samples": result["worst_samples"],
         "anomalous_samples": result["anomalous_samples"],
         "cleanup": result["cleanup"],
-    }
-
-
-def _quantile_stats_u64(values: list[int]) -> dict[str, int]:
-    if not values:
-        return dict.fromkeys(("min", "p50", "p90", "p95", "p99", "max", "mean"), 0)
-    ordered = sorted(values)
-    count = len(ordered)
-
-    def percentile(percent: int) -> int:
-        index = min(((count * percent + 99) // 100) - 1, count - 1)
-        return ordered[index]
-
-    return {
-        "min": ordered[0],
-        "p50": percentile(50),
-        "p90": percentile(90),
-        "p95": percentile(95),
-        "p99": percentile(99),
-        "max": ordered[-1],
-        "mean": sum(ordered) // count,
-    }
-
-
-def _quantile_stats_i64(values: list[int]) -> dict[str, int]:
-    if not values:
-        return dict.fromkeys(("min", "p50", "p90", "p95", "p99", "max", "mean"), 0)
-    ordered = sorted(values)
-    count = len(ordered)
-
-    def percentile(percent: int) -> int:
-        index = min(((count * percent + 99) // 100) - 1, count - 1)
-        return ordered[index]
-
-    total = sum(ordered)
-    mean = total // count if total >= 0 else -((-total) // count)
-    return {
-        "min": ordered[0],
-        "p50": percentile(50),
-        "p90": percentile(90),
-        "p95": percentile(95),
-        "p99": percentile(99),
-        "max": ordered[-1],
-        "mean": mean,
     }
 
 
@@ -1778,23 +1777,29 @@ def run_full_calibration(
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
     if float(timeout_seconds) > MAX_CALIBRATION_BUDGET_SECONDS:
         raise NativeCalibrationError(
-            "timeout_seconds must be between 6 and 120 seconds"
+            "timeout_seconds must be between 11 and 120 seconds for full calibration"
         )
-    if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+    if float(timeout_seconds) < MIN_FULL_CALIBRATION_TIMEOUT_SECONDS:
         raise NativeCalibrationError(
-            "timeout_seconds must provide at least "
-            f"{MIN_NATIVE_TOTAL_BUDGET_SECONDS}s for the native child budget"
+            "full calibration requires a minimum full orchestration budget of "
+            f"{MIN_FULL_CALIBRATION_TIMEOUT_SECONDS:.0f}s "
+            f"({PUBLICATION_RESERVE_SECONDS:.0f}s publication reserve + "
+            f"{MIN_NATIVE_TOTAL_BUDGET_SECONDS}s native child budget); "
+            "this does not guarantee the full matrix will complete"
         )
     timeout = float(timeout_seconds)
     orchestration_configuration = full_orchestration_configuration(
         global_budget_seconds=timeout
     )
+    run_started = time.monotonic()
+    run_deadline = run_started + timeout
+    _ensure_before_deadline(run_deadline, "native calibration preflight")
     checkpoint = Path(checkpoint_dir)
     manifest_path = _checkpoint_path(checkpoint)
     binary = _find_binary()
+    _ensure_before_deadline(run_deadline, "native calibration binary lookup")
     provenance = _current_full_provenance(binary)
-    run_started = time.monotonic()
-    run_deadline = run_started + timeout
+    _ensure_before_deadline(run_deadline, "native calibration provenance lookup")
     if resume:
         if not manifest_path.is_file():
             raise NativeCalibrationError(
@@ -1832,7 +1837,7 @@ def run_full_calibration(
                 bucket_chunks.append(completed_chunks[chunk_key])
                 continue
 
-            child_budget_seconds, child_timeout_seconds = _child_measurement_budget(
+            child_budget_seconds, child_timeout_seconds = _native_child_budget(
                 run_deadline, time.monotonic()
             )
             # The child receives the remaining total native budget and owns its
@@ -2142,7 +2147,7 @@ def _finalizer_artifact(
         "native_source_fingerprint": provenance["native_source_fingerprint"],
         "dirty_worktree": provenance["dirty_worktree"],
         "rustc_version": provenance["rustc_version"],
-        "host_fingerprint": {**provenance["host_fingerprint"], "sampled_at_us": 1},
+        "host_fingerprint": dict(provenance["host_fingerprint"]),
         "orchestration_configuration": orchestration_configuration,
         "native_configuration": native_configurations,
         "buckets": nested,
@@ -2362,7 +2367,11 @@ def run_native_calibration(
         # Diagnostics are allowed on stderr, but stdout must remain JSON-only.
         pass
     try:
-        result = _validate_result(json.loads(stdout))
+        result = _validate_result(
+            json.loads(stdout),
+            expected_budget_seconds=budget_seconds,
+            expected_mode="quick",
+        )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise NativeCalibrationError(
             "native calibration stdout was not valid JSON"
