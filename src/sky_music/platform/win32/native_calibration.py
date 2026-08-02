@@ -22,18 +22,19 @@ from typing import Any
 
 from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 6
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 7
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 1
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 2
 FULL_POLYPHONIES = (1, 2, 3, 5, 8, 15)
 FULL_SAMPLE_COUNT = 5_000
 FULL_COLD_IDLE_GAP_US = 100_000
 FULL_WARMUP_SAMPLES = 50
+FULL_CHUNK_SAMPLES = 1_000
 CALIBRATION_KINDS = ("down", "up")
 CALIBRATION_CLASSES = ("hot", "cold")
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
 QUICK_CALIBRATION_TIMEOUT_SECONDS = 1_800.0
-FULL_CALIBRATION_TIMEOUT_SECONDS = 14_400.0
+FULL_CALIBRATION_TIMEOUT_SECONDS = 180.0
 
 
 class NativeCalibrationError(RuntimeError):
@@ -446,6 +447,7 @@ def full_calibration_configuration() -> dict[str, Any]:
         "samples_per_hot_bucket": FULL_SAMPLE_COUNT,
         "samples_per_cold_bucket": FULL_SAMPLE_COUNT,
         "warmup_samples": FULL_WARMUP_SAMPLES,
+        "chunk_samples": FULL_CHUNK_SAMPLES,
         "receipt_timeout_ms": 200,
         "hot_gap_target_us": 5_000,
         "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
@@ -558,7 +560,53 @@ def _validate_bucket_result(
     ):
         if not isinstance(cleanup.get(field), bool):
             raise NativeCalibrationError(f"cleanup.{field} must be boolean")
+
+    raw_samples = data.get("samples")
+    if not isinstance(raw_samples, list) or len(raw_samples) != samples:
+        raise NativeCalibrationError("native bucket sample evidence count is inconsistent")
+    for index, raw_sample in enumerate(raw_samples, start=1):
+        _validate_sample_evidence(raw_sample, f"samples[{index}]")
     return data
+
+
+def _validate_sample_evidence(value: object, name: str) -> None:
+    sample = _require_mapping(value, name)
+    clean = sample.get("clean")
+    if not isinstance(clean, bool):
+        raise NativeCalibrationError(f"{name}.clean must be boolean")
+    for field in ("call_duration_us", "receipt_count", "expected_receipt_count"):
+        _nonnegative_int(sample.get(field), f"{name}.{field}")
+    receipt_count = int(sample["receipt_count"])
+    expected_receipt_count = int(sample["expected_receipt_count"])
+    if receipt_count > expected_receipt_count:
+        raise NativeCalibrationError(f"{name}.receipt_count exceeds expected count")
+    for field in ("first_receipt_us", "last_receipt_us"):
+        value = sample.get(field)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise NativeCalibrationError(f"{name}.{field} must be an integer or null")
+    spread = sample.get("intra_chord_spread_us")
+    if spread is not None:
+        _nonnegative_int(spread, f"{name}.intra_chord_spread_us")
+    win32_error = sample.get("win32_error")
+    if win32_error is not None:
+        _nonnegative_int(win32_error, f"{name}.win32_error")
+    anomalies = _require_mapping(sample.get("anomalies"), f"{name}.anomalies")
+    anomaly_values: list[bool] = []
+    for field in (
+        "duplicate_receipt",
+        "reordered_receipt",
+        "unexpected_scan_code",
+        "timeout",
+        "partial_send",
+        "class_mismatch",
+    ):
+        value = anomalies.get(field)
+        if not isinstance(value, bool):
+            raise NativeCalibrationError(f"{name}.anomalies.{field} must be boolean")
+        anomaly_values.append(value)
+    expected_clean = receipt_count == expected_receipt_count and not any(anomaly_values)
+    if clean != expected_clean:
+        raise NativeCalibrationError(f"{name}.clean is inconsistent with receipt/anomaly state")
 
 
 def _native_failure_report(
@@ -791,7 +839,191 @@ def _bucket_artifact(
         "total_anomalous": result["total_anomalous"],
         "total_timed_out": result["total_timed_out"],
         "bucket": result["bucket"],
+        "samples": result["samples"],
         "cleanup": result["cleanup"],
+    }
+
+
+def _quantile_stats_u64(values: list[int]) -> dict[str, int]:
+    if not values:
+        return dict.fromkeys(("min", "p50", "p90", "p95", "p99", "max", "mean"), 0)
+    ordered = sorted(values)
+    count = len(ordered)
+
+    def percentile(percent: int) -> int:
+        index = min(((count * percent + 99) // 100) - 1, count - 1)
+        return ordered[index]
+
+    return {
+        "min": ordered[0],
+        "p50": percentile(50),
+        "p90": percentile(90),
+        "p95": percentile(95),
+        "p99": percentile(99),
+        "max": ordered[-1],
+        "mean": sum(ordered) // count,
+    }
+
+
+def _quantile_stats_i64(values: list[int]) -> dict[str, int]:
+    if not values:
+        return dict.fromkeys(("min", "p50", "p90", "p95", "p99", "max", "mean"), 0)
+    ordered = sorted(values)
+    count = len(ordered)
+
+    def percentile(percent: int) -> int:
+        index = min(((count * percent + 99) // 100) - 1, count - 1)
+        return ordered[index]
+
+    total = sum(ordered)
+    mean = total // count if total >= 0 else -((-total) // count)
+    return {
+        "min": ordered[0],
+        "p50": percentile(50),
+        "p90": percentile(90),
+        "p95": percentile(95),
+        "p99": percentile(99),
+        "max": ordered[-1],
+        "mean": mean,
+    }
+
+
+def _merge_bucket_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    clean_samples = [sample for sample in samples if sample["clean"]]
+    anomalies = [sample["anomalies"] for sample in samples]
+
+    def values(field: str, source: list[dict[str, Any]]) -> list[int]:
+        return [int(sample[field]) for sample in source if sample[field] is not None]
+
+    return {
+        "attempted": len(samples),
+        "clean": len(clean_samples),
+        "clean_sample_count": len(clean_samples),
+        "rejected": len(samples) - len(clean_samples),
+        "partial_send": sum(bool(value["partial_send"]) for value in anomalies),
+        "sample_count": len(samples),
+        "error_count": len(samples) - len(clean_samples),
+        "timeout_count": sum(bool(value["timeout"]) for value in anomalies),
+        "anomaly_count": sum(any(value.values()) for value in anomalies),
+        "class_mismatch_count": sum(bool(value["class_mismatch"]) for value in anomalies),
+        "call_duration_us": _quantile_stats_u64(values("call_duration_us", clean_samples)),
+        "first_receipt_us": (
+            _quantile_stats_i64(values("first_receipt_us", clean_samples))
+            if any(sample["first_receipt_us"] is not None for sample in clean_samples)
+            else None
+        ),
+        "last_receipt_us": (
+            _quantile_stats_i64(values("last_receipt_us", clean_samples))
+            if any(sample["last_receipt_us"] is not None for sample in clean_samples)
+            else None
+        ),
+        "intra_chord_spread_us": (
+            _quantile_stats_u64(values("intra_chord_spread_us", clean_samples))
+            if any(sample["intra_chord_spread_us"] is not None for sample in clean_samples)
+            else None
+        ),
+    }
+
+
+def _chunk_artifact(
+    result: dict[str, Any],
+    *,
+    configuration: dict[str, Any],
+    kind: str,
+    class_name: str,
+    polyphony: int,
+    chunk_index: int,
+    sample_offset: int,
+    chunk_count: int,
+) -> dict[str, Any]:
+    artifact = _bucket_artifact(
+        result,
+        configuration=configuration,
+        kind=kind,
+        class_name=class_name,
+        polyphony=polyphony,
+        acceptance_eligible=True,
+    )
+    artifact.update(
+        {
+            "artifact_type": "native_calibration_chunk",
+            "chunk_index": chunk_index,
+            "sample_offset": sample_offset,
+            "chunk_count": chunk_count,
+        }
+    )
+    return artifact
+
+
+def _combine_bucket_chunks(
+    chunks: list[dict[str, Any]],
+    *,
+    configuration: dict[str, Any],
+    kind: str,
+    class_name: str,
+    polyphony: int,
+) -> dict[str, Any]:
+    if not chunks:
+        raise NativeCalibrationError("cannot combine an empty calibration bucket")
+    ordered = sorted(chunks, key=lambda chunk: int(chunk["chunk_index"]))
+    samples = [sample for chunk in ordered for sample in chunk["samples"]]
+    if len(samples) != FULL_SAMPLE_COUNT:
+        raise NativeCalibrationError("combined calibration bucket does not contain 5000 samples")
+    first = ordered[0]
+    totals = {
+        field: sum(int(chunk[field]) for chunk in ordered)
+        for field in (
+            "setup_attempted",
+            "setup_anomalous",
+            "setup_timed_out",
+            "warmup_attempted",
+            "warmup_anomalous",
+            "warmup_timed_out",
+            "total_attempted",
+            "total_anomalous",
+            "total_timed_out",
+        )
+    }
+    cleanup_stuck_keys = [
+        key for chunk in ordered for key in chunk["cleanup"]["cleanup_stuck_keys"]
+    ]
+    return {
+        "artifact_type": "native_calibration_bucket",
+        "schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
+        "native_schema_version": first["native_schema_version"],
+        "measurement_protocol_version": first["measurement_protocol_version"],
+        "acceptance_eligible": True,
+        "source_git_sha": first["source_git_sha"],
+        "native_build_id": first["native_build_id"],
+        "native_source_fingerprint": first["native_source_fingerprint"],
+        "dirty_worktree": first["dirty_worktree"],
+        "rustc_version": first["rustc_version"],
+        "host_fingerprint": first["host_fingerprint"],
+        "configuration": configuration,
+        "kind": kind,
+        "class": class_name,
+        "polyphony": polyphony,
+        "attempted": FULL_SAMPLE_COUNT,
+        **totals,
+        "bucket": _merge_bucket_samples(samples),
+        "samples": samples,
+        "chunk_count": len(ordered),
+        "cleanup": {
+            "cleanup_attempted": True,
+            "cleanup_success": all(
+                chunk["cleanup"]["cleanup_success"] for chunk in ordered
+            ),
+            "cleanup_stuck_keys": cleanup_stuck_keys,
+            "cleanup_verification_inconclusive": any(
+                chunk["cleanup"]["cleanup_verification_inconclusive"] for chunk in ordered
+            ),
+            "raw_input_restore_failed": any(
+                chunk["cleanup"]["raw_input_restore_failed"] for chunk in ordered
+            ),
+            "pump_thread_failed": any(
+                chunk["cleanup"]["pump_thread_failed"] for chunk in ordered
+            ),
+        },
     }
 
 
@@ -826,6 +1058,12 @@ def _current_full_provenance(binary: Path) -> dict[str, Any]:
     if worktree["dirty_worktree"]:
         raise NativeCalibrationError("full calibration requires a clean worktree")
     native = _native_metadata(binary)
+    if native.get("version") != SUPPORTED_NATIVE_CALIBRATION_VERSION:
+        raise NativeCalibrationError("native build schema version does not match the runner")
+    if native.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
+        raise NativeCalibrationError("native build measurement protocol does not match the runner")
+    if native.get("dirty_worktree") is not False:
+        raise NativeCalibrationError("native build was produced from a dirty worktree")
     for field in ("source_git_sha", "native_build_id", "native_source_fingerprint", "rustc_version"):
         if not isinstance(native.get(field), str) or not native[field].strip():
             raise NativeCalibrationError(f"native build metadata is missing {field}")
@@ -868,6 +1106,7 @@ def _checkpoint_manifest(configuration: dict[str, Any]) -> dict[str, Any]:
         "acceptance_eligible": False,
         "configuration": configuration,
         "provenance": None,
+        "chunks": [],
         "buckets": [],
     }
 
@@ -886,13 +1125,142 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     return value
 
 
+def _expected_chunk_specs() -> list[tuple[str, int, int, int]]:
+    chunk_count = math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES)
+    specs: list[tuple[str, int, int, int]] = []
+    for kind, polyphony, class_name in calibration_bucket_keys():
+        key = _bucket_key(kind, polyphony, class_name)
+        for chunk_index in range(chunk_count):
+            offset = chunk_index * FULL_CHUNK_SAMPLES
+            count = min(FULL_CHUNK_SAMPLES, FULL_SAMPLE_COUNT - offset)
+            specs.append((key, chunk_index, offset, count))
+    return specs
+
+
+def _read_hashed_artifact(
+    checkpoint_dir: Path, relative: object, digest: object
+) -> dict[str, Any]:
+    if (
+        not isinstance(relative, str)
+        or Path(relative).is_absolute()
+        or ".." in Path(relative).parts
+    ):
+        raise NativeCalibrationError("checkpoint artifact path is unsafe")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise NativeCalibrationError("checkpoint artifact SHA-256 is invalid")
+    artifact_path = checkpoint_dir / relative
+    if not artifact_path.is_file():
+        raise NativeCalibrationError(f"checkpoint artifact is missing: {relative}")
+    actual = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    if actual != digest:
+        raise NativeCalibrationError(f"checkpoint artifact SHA-256 mismatch: {relative}")
+    sha_path = artifact_path.with_suffix(artifact_path.suffix + ".sha256")
+    if not sha_path.is_file() or _read_sha256_sidecar(sha_path) != digest:
+        raise NativeCalibrationError(f"checkpoint artifact SHA-256 sidecar mismatch: {relative}")
+    return _load_json_file(artifact_path)
+
+
+def _validate_common_checkpoint_artifact(
+    artifact: dict[str, Any],
+    *,
+    configuration: dict[str, Any],
+    provenance: dict[str, Any],
+    key: str,
+) -> None:
+    if artifact.get("schema_version") != CALIBRATION_ARTIFACT_SCHEMA_VERSION:
+        raise NativeCalibrationError(f"checkpoint artifact {key} schema mismatch")
+    if artifact.get("measurement_protocol_version") != SUPPORTED_MEASUREMENT_PROTOCOL_VERSION:
+        raise NativeCalibrationError(f"checkpoint artifact {key} protocol mismatch")
+    if artifact.get("acceptance_eligible") is not True:
+        raise NativeCalibrationError(f"checkpoint artifact {key} is not acceptance eligible")
+    if artifact.get("configuration") != configuration:
+        raise NativeCalibrationError(f"checkpoint artifact {key} configuration mismatch")
+    if _artifact_provenance(artifact) != provenance:
+        raise NativeCalibrationError(f"checkpoint artifact {key} provenance mismatch")
+    kind, polyphony_text, class_name = key.split("/")
+    if (
+        artifact.get("kind"),
+        artifact.get("polyphony"),
+        artifact.get("class"),
+    ) != (kind, int(polyphony_text), class_name):
+        raise NativeCalibrationError(f"checkpoint artifact {key} identity mismatch")
+
+
+def _validate_chunk_artifact(
+    artifact: dict[str, Any],
+    *,
+    key: str,
+    chunk_index: int,
+    sample_offset: int,
+    sample_count: int,
+    configuration: dict[str, Any],
+    provenance: dict[str, Any],
+) -> None:
+    _validate_common_checkpoint_artifact(
+        artifact, configuration=configuration, provenance=provenance, key=key
+    )
+    if artifact.get("artifact_type") != "native_calibration_chunk":
+        raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} has the wrong type")
+    if artifact.get("chunk_index") != chunk_index or artifact.get("sample_offset") != sample_offset:
+        raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} position mismatch")
+    if artifact.get("chunk_count") != math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES):
+        raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} count mismatch")
+    if artifact.get("attempted") != sample_count:
+        raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} sample count mismatch")
+    _validate_sample_list(artifact, sample_count, f"{key}/{chunk_index}")
+    _validate_successful_cleanup(artifact, f"{key}/{chunk_index}")
+
+
+def _validate_sample_list(artifact: dict[str, Any], expected: int, name: str) -> None:
+    samples = artifact.get("samples")
+    if not isinstance(samples, list) or len(samples) != expected:
+        raise NativeCalibrationError(f"{name} has an invalid raw sample list")
+    for index, sample in enumerate(samples, start=1):
+        _validate_sample_evidence(sample, f"{name}.samples[{index}]")
+
+
+def _validate_successful_cleanup(artifact: dict[str, Any], name: str) -> None:
+    cleanup = _require_mapping(artifact.get("cleanup"), f"{name}.cleanup")
+    if (
+        cleanup.get("cleanup_success") is not True
+        or cleanup.get("cleanup_verification_inconclusive") is not False
+        or cleanup.get("raw_input_restore_failed") is not False
+        or cleanup.get("pump_thread_failed") is not False
+        or cleanup.get("cleanup_stuck_keys") != []
+    ):
+        raise NativeCalibrationError(f"{name} cleanup was not successful")
+
+
+def _validate_bucket_artifact(
+    artifact: dict[str, Any],
+    *,
+    key: str,
+    configuration: dict[str, Any],
+    provenance: dict[str, Any],
+) -> None:
+    _validate_common_checkpoint_artifact(
+        artifact, configuration=configuration, provenance=provenance, key=key
+    )
+    if artifact.get("artifact_type") != "native_calibration_bucket":
+        raise NativeCalibrationError(f"checkpoint bucket {key} has the wrong type")
+    if artifact.get("attempted") != FULL_SAMPLE_COUNT:
+        raise NativeCalibrationError(f"checkpoint bucket {key} does not contain 5000 samples")
+    if artifact.get("chunk_count") != math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES):
+        raise NativeCalibrationError(f"checkpoint bucket {key} has an invalid chunk count")
+    _validate_sample_list(artifact, FULL_SAMPLE_COUNT, key)
+    merged = _merge_bucket_samples(artifact["samples"])
+    if artifact.get("bucket") != merged:
+        raise NativeCalibrationError(f"checkpoint bucket {key} aggregate mismatch")
+    _validate_successful_cleanup(artifact, key)
+
+
 def _validate_checkpoint_manifest(
     manifest: dict[str, Any],
     *,
     checkpoint_dir: Path,
     configuration: dict[str, Any],
     provenance: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, int], dict[str, Any]]]:
     if manifest.get("artifact_type") != "native_calibration_checkpoint":
         raise NativeCalibrationError("checkpoint manifest has the wrong artifact type")
     if manifest.get("schema_version") != CALIBRATION_ARTIFACT_SCHEMA_VERSION:
@@ -903,51 +1271,63 @@ def _validate_checkpoint_manifest(
         raise NativeCalibrationError("checkpoint configuration mismatch")
     if manifest.get("provenance") != provenance:
         raise NativeCalibrationError("checkpoint provenance mismatch")
-    entries = manifest.get("buckets")
-    if not isinstance(entries, list):
+    bucket_entries = manifest.get("buckets")
+    chunk_entries = manifest.get("chunks")
+    if not isinstance(bucket_entries, list) or not isinstance(chunk_entries, list):
         raise NativeCalibrationError("checkpoint bucket list is invalid")
-    expected = {_bucket_key(*key) for key in calibration_bucket_keys()}
-    found: dict[str, dict[str, Any]] = {}
-    for entry in entries:
+    expected_buckets = {_bucket_key(*key) for key in calibration_bucket_keys()}
+    expected_chunks = {
+        (key, chunk_index): (offset, count)
+        for key, chunk_index, offset, count in _expected_chunk_specs()
+    }
+    found_buckets: dict[str, dict[str, Any]] = {}
+    for entry in bucket_entries:
         if not isinstance(entry, dict):
             raise NativeCalibrationError("checkpoint contains a non-object bucket entry")
         key = entry.get("key")
-        if not isinstance(key, str) or key not in expected or key in found:
+        if not isinstance(key, str) or key not in expected_buckets or key in found_buckets:
             raise NativeCalibrationError("checkpoint contains a duplicate or unknown bucket")
-        relative = entry.get("artifact")
-        digest = entry.get("sha256")
-        if not isinstance(relative, str) or Path(relative).is_absolute() or ".." in Path(relative).parts:
-            raise NativeCalibrationError("checkpoint artifact path is unsafe")
-        if not isinstance(digest, str) or len(digest) != 64:
-            raise NativeCalibrationError("checkpoint artifact SHA-256 is invalid")
-        artifact_path = checkpoint_dir / relative
-        if not artifact_path.is_file():
-            raise NativeCalibrationError(f"checkpoint artifact is missing: {relative}")
-        actual = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-        if actual != digest:
-            raise NativeCalibrationError(f"checkpoint artifact SHA-256 mismatch: {relative}")
-        sha_path = artifact_path.with_suffix(artifact_path.suffix + ".sha256")
-        if not sha_path.is_file() or _read_sha256_sidecar(sha_path) != digest:
-            raise NativeCalibrationError(f"checkpoint artifact SHA-256 sidecar mismatch: {relative}")
-        artifact = _load_json_file(artifact_path)
-        kind, polyphony_text, class_name = key.split("/")
-        polyphony = int(polyphony_text)
-        if artifact.get("artifact_type") != "native_calibration_bucket":
-            raise NativeCalibrationError(f"checkpoint artifact {key} has the wrong type")
-        if artifact.get("acceptance_eligible") is not True:
-            raise NativeCalibrationError(f"checkpoint artifact {key} is not acceptance eligible")
+        artifact = _read_hashed_artifact(checkpoint_dir, entry.get("artifact"), entry.get("sha256"))
+        _validate_bucket_artifact(
+            artifact, key=key, configuration=configuration, provenance=provenance
+        )
+        found_buckets[key] = artifact
+
+    found_chunks: dict[tuple[str, int], dict[str, Any]] = {}
+    for entry in chunk_entries:
+        if not isinstance(entry, dict):
+            raise NativeCalibrationError("checkpoint contains a non-object chunk entry")
+        key = entry.get("key")
+        chunk_index = entry.get("chunk_index")
         if (
-            artifact.get("kind"),
-            artifact.get("polyphony"),
-            artifact.get("class"),
-        ) != (kind, polyphony, class_name):
-            raise NativeCalibrationError(f"checkpoint artifact {key} identity mismatch")
-        if artifact.get("configuration") != configuration:
-            raise NativeCalibrationError(f"checkpoint artifact {key} configuration mismatch")
-        if _artifact_provenance(artifact) != provenance:
-            raise NativeCalibrationError(f"checkpoint artifact {key} provenance mismatch")
-        found[key] = artifact
-    return found
+            not isinstance(key, str)
+            or not isinstance(chunk_index, int)
+            or isinstance(chunk_index, bool)
+            or (key, chunk_index) not in expected_chunks
+            or (key, chunk_index) in found_chunks
+        ):
+            raise NativeCalibrationError("checkpoint contains a duplicate or unknown chunk")
+        offset, count = expected_chunks[(key, chunk_index)]
+        artifact = _read_hashed_artifact(checkpoint_dir, entry.get("artifact"), entry.get("sha256"))
+        _validate_chunk_artifact(
+            artifact,
+            key=key,
+            chunk_index=chunk_index,
+            sample_offset=offset,
+            sample_count=count,
+            configuration=configuration,
+            provenance=provenance,
+        )
+        found_chunks[(key, chunk_index)] = artifact
+    for key in found_buckets:
+        expected_for_bucket = {
+            (chunk_key, chunk_index)
+            for chunk_key, chunk_index, _offset, _count in _expected_chunk_specs()
+            if chunk_key == key
+        }
+        if not expected_for_bucket.issubset(found_chunks):
+            raise NativeCalibrationError(f"checkpoint bucket {key} is missing chunk evidence")
+    return found_buckets, found_chunks
 
 
 def run_diagnostic_calibration(
@@ -1071,7 +1451,7 @@ def run_full_calibration(
         if not manifest_path.is_file():
             raise NativeCalibrationError("--resume requested but checkpoint manifest is missing")
         manifest = _load_json_file(manifest_path)
-        completed = _validate_checkpoint_manifest(
+        completed, completed_chunks = _validate_checkpoint_manifest(
             manifest,
             checkpoint_dir=checkpoint,
             configuration=configuration,
@@ -1086,85 +1466,154 @@ def run_full_calibration(
         manifest = _checkpoint_manifest(configuration)
         manifest["provenance"] = provenance
         completed = {}
+        completed_chunks = {}
         _write_json_atomically(manifest_path, manifest)
 
     for kind, polyphony, class_name in calibration_bucket_keys():
         key = _bucket_key(kind, polyphony, class_name)
         if key in completed:
             continue
-        failure_path = checkpoint / "failures" / f"{kind}-{polyphony}-{class_name}.json"
-        command = [
-            str(binary),
-            "--mode",
-            "bucket",
-            "--kind",
-            kind,
-            "--class",
-            class_name,
-            "--polyphony",
-            str(polyphony),
-            "--samples",
-            str(FULL_SAMPLE_COUNT),
-            "--warmup-samples",
-            str(FULL_WARMUP_SAMPLES),
-        ]
-        try:
-            raw = _execute_native_bucket(
-                binary,
-                kind=kind,
-                class_name=class_name,
-                polyphony=polyphony,
-                samples=FULL_SAMPLE_COUNT,
-                warmup_samples=FULL_WARMUP_SAMPLES,
-                timeout_seconds=float(timeout_seconds),
-                progress=False,
-            )
-            _validate_bucket_result(
-                raw,
-                kind=kind,
-                class_name=class_name,
-                polyphony=polyphony,
-                samples=FULL_SAMPLE_COUNT,
-            )
-            artifact = _bucket_artifact(
-                raw,
-                configuration=configuration,
-                kind=kind,
-                class_name=class_name,
-                polyphony=polyphony,
-                acceptance_eligible=True,
-            )
-            artifact_path = checkpoint / "buckets" / f"{kind}-{polyphony}-{class_name}.json"
-            _write_json_atomically(artifact_path, artifact)
-            digest = _write_sha256(artifact_path)
-        except NativeCalibrationError as exc:
-            report = exc.failure_report or _native_failure_report(
-                kind=kind,
-                class_name=class_name,
-                polyphony=polyphony,
-                exact_error=str(exc),
-            )
-            _write_failure_report(failure_path, report, command=command)
-            raise
+        bucket_chunks: list[dict[str, Any]] = []
+        specs = [spec for spec in _expected_chunk_specs() if spec[0] == key]
+        chunk_count = len(specs)
+        for _key, chunk_index, sample_offset, sample_count in specs:
+            chunk_key = (key, chunk_index)
+            if chunk_key in completed_chunks:
+                bucket_chunks.append(completed_chunks[chunk_key])
+                continue
 
+            failure_path = (
+                checkpoint
+                / "failures"
+                / f"{kind}-{polyphony}-{class_name}-chunk-{chunk_index}.json"
+            )
+            command = [
+                str(binary),
+                "--mode",
+                "bucket",
+                "--kind",
+                kind,
+                "--class",
+                class_name,
+                "--polyphony",
+                str(polyphony),
+                "--samples",
+                str(sample_count),
+                "--warmup-samples",
+                str(FULL_WARMUP_SAMPLES),
+            ]
+            try:
+                raw = _execute_native_bucket(
+                    binary,
+                    kind=kind,
+                    class_name=class_name,
+                    polyphony=polyphony,
+                    samples=sample_count,
+                    warmup_samples=FULL_WARMUP_SAMPLES,
+                    timeout_seconds=float(timeout_seconds),
+                    progress=True,
+                )
+                _validate_bucket_result(
+                    raw,
+                    kind=kind,
+                    class_name=class_name,
+                    polyphony=polyphony,
+                    samples=sample_count,
+                )
+                chunk = _chunk_artifact(
+                    raw,
+                    configuration=configuration,
+                    kind=kind,
+                    class_name=class_name,
+                    polyphony=polyphony,
+                    chunk_index=chunk_index,
+                    sample_offset=sample_offset,
+                    chunk_count=chunk_count,
+                )
+                chunk_path = (
+                    checkpoint
+                    / "chunks"
+                    / f"{kind}-{polyphony}-{class_name}-{chunk_index}.json"
+                )
+                _write_json_atomically(chunk_path, chunk)
+                digest = _write_sha256(chunk_path)
+            except NativeCalibrationError as exc:
+                report = exc.failure_report or _native_failure_report(
+                    kind=kind,
+                    class_name=class_name,
+                    polyphony=polyphony,
+                    exact_error=str(exc),
+                )
+                _write_failure_report(failure_path, report, command=command)
+                raise
+
+            manifest["provenance"] = provenance
+            chunk_entries = [
+                entry
+                for entry in manifest["chunks"]
+                if not (entry["key"] == key and entry["chunk_index"] == chunk_index)
+            ]
+            chunk_entries.append(
+                {
+                    "key": key,
+                    "chunk_index": chunk_index,
+                    "sample_offset": sample_offset,
+                    "sample_count": sample_count,
+                    "artifact": str(chunk_path.relative_to(checkpoint)).replace("\\", "/"),
+                    "sha256": digest,
+                }
+            )
+            manifest["chunks"] = chunk_entries
+            _write_json_atomically(manifest_path, manifest)
+            completed_chunks[chunk_key] = chunk
+            bucket_chunks.append(chunk)
+            print(
+                f"[calibration] checkpointed {key} chunk={chunk_index + 1}/{chunk_count} "
+                f"samples={sample_count}",
+                flush=True,
+            )
+
+        artifact = _combine_bucket_chunks(
+            bucket_chunks,
+            configuration=configuration,
+            kind=kind,
+            class_name=class_name,
+            polyphony=polyphony,
+        )
+        _validate_bucket_artifact(
+            artifact,
+            key=key,
+            configuration=configuration,
+            provenance=provenance,
+        )
+        artifact_path = checkpoint / "buckets" / f"{kind}-{polyphony}-{class_name}.json"
+        _write_json_atomically(artifact_path, artifact)
+        digest = _write_sha256(artifact_path)
         manifest["provenance"] = provenance
-        entries = [entry for entry in manifest["buckets"] if entry["key"] != key]
-        entries.append(
+        bucket_entries = [entry for entry in manifest["buckets"] if entry["key"] != key]
+        bucket_entries.append(
             {
                 "key": key,
                 "artifact": str(artifact_path.relative_to(checkpoint)).replace("\\", "/"),
                 "sha256": digest,
+                "chunk_count": chunk_count,
             }
         )
-        manifest["buckets"] = entries
+        manifest["buckets"] = bucket_entries
         _write_json_atomically(manifest_path, manifest)
         completed[key] = artifact
 
     return {
         "artifact_type": "native_calibration_checkpoint",
+        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "version": SUPPORTED_NATIVE_CALIBRATION_VERSION,
         "checkpoint_dir": str(checkpoint),
         "completed_buckets": len(completed),
         "total_buckets": len(calibration_bucket_keys()),
+        "measured_attempted": sum(int(artifact["attempted"]) for artifact in completed.values()),
+        "measured_anomalous": sum(
+            int(artifact["bucket"]["anomaly_count"]) for artifact in completed.values()
+        ),
         "acceptance_eligible": False,
     }
 
@@ -1205,7 +1654,14 @@ def _finalizer_artifact(
         provenance = provenance or _artifact_provenance(artifact)
         if artifact.get("dirty_worktree") is not False:
             raise NativeCalibrationError("finalizer rejects dirty provenance")
+        if artifact.get("artifact_type") != "native_calibration_bucket":
+            raise NativeCalibrationError(f"finalizer found a non-bucket artifact in {key}")
+        if artifact.get("chunk_count") != math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES):
+            raise NativeCalibrationError(f"finalizer has an invalid chunk count in {key}")
+        _validate_sample_list(artifact, FULL_SAMPLE_COUNT, key)
         bucket = _require_mapping(artifact.get("bucket"), f"{key}.bucket")
+        if bucket != _merge_bucket_samples(artifact["samples"]):
+            raise NativeCalibrationError(f"finalizer bucket aggregate mismatch in {key}")
         if bucket.get("attempted") != FULL_SAMPLE_COUNT or bucket.get("sample_count") != FULL_SAMPLE_COUNT:
             raise NativeCalibrationError(f"finalizer requires 5000 samples in {key}")
         if bucket.get("clean_sample_count", 0) < MIN_CALIBRATION_SAMPLE_COUNT:
@@ -1234,8 +1690,11 @@ def _finalizer_artifact(
         totals["total_timed_out"] += int(artifact["total_timed_out"])
 
     expected_measured = len(expected_keys) * FULL_SAMPLE_COUNT
-    expected_warmup = len(expected_keys) * FULL_WARMUP_SAMPLES
-    expected_setup = 2 * len(FULL_POLYPHONIES) * (FULL_SAMPLE_COUNT + FULL_WARMUP_SAMPLES)
+    chunk_count = math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES)
+    expected_warmup = len(expected_keys) * FULL_WARMUP_SAMPLES * chunk_count
+    expected_setup = 2 * len(FULL_POLYPHONIES) * (
+        FULL_SAMPLE_COUNT + FULL_WARMUP_SAMPLES * chunk_count
+    )
     if totals["measured_attempted"] != expected_measured:
         raise NativeCalibrationError("finalizer measured aggregate total mismatch")
     if totals["warmup_attempted"] != expected_warmup:
@@ -1319,6 +1778,15 @@ def finalize_native_calibration(
         artifacts[key] = _load_json_file(artifact_path)
     if set(artifacts) != expected_keys:
         raise NativeCalibrationError("finalizer bucket set is incomplete")
+    first_provenance = _artifact_provenance(next(iter(artifacts.values())))
+    validated_buckets, _validated_chunks = _validate_checkpoint_manifest(
+        manifest,
+        checkpoint_dir=checkpoint,
+        configuration=configuration,
+        provenance=first_provenance,
+    )
+    if set(validated_buckets) != expected_keys:
+        raise NativeCalibrationError("finalizer checkpoint bucket set is incomplete")
     final = _finalizer_artifact(manifest, artifacts)
     _write_json_atomically(Path(output_path), final)
     _write_json_atomically(Path(cache_path), _legacy_cache(final))

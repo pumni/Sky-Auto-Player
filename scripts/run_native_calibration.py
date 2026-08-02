@@ -38,9 +38,9 @@ def main() -> int:
         type=float,
         default=None,
         help=(
-            "native subprocess timeout in seconds; defaults to "
+            "native subprocess/chunk timeout in seconds; defaults to "
             f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s for quick and "
-            f"{FULL_CALIBRATION_TIMEOUT_SECONDS:g}s for full"
+            f"{FULL_CALIBRATION_TIMEOUT_SECONDS:g}s per chunk for full"
         ),
     )
     parser.add_argument("--output", type=Path, default=Path(".cache/calibration-native.json"))

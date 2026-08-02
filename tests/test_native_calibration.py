@@ -32,7 +32,7 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
     setup_attempted = 20
     warmup_attempted = 10
     return {
-        "version": 6,
+        "version": 7,
         "measurement_protocol_version": 3,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
@@ -87,9 +87,27 @@ def _native_bucket_result(
     base = _native_result(clean=samples)
     base_bucket = base["buckets"]["down"]["1"]["hot"]  # type: ignore[index]
     assert isinstance(base_bucket, dict)
-    setup = 5_050 if kind == "up" else 0
+    setup = samples + 50 if kind == "up" else 0
+    sample = {
+        "clean": True,
+        "call_duration_us": 1,
+        "first_receipt_us": 10,
+        "last_receipt_us": 10,
+        "intra_chord_spread_us": 0,
+        "receipt_count": polyphony,
+        "expected_receipt_count": polyphony,
+        "win32_error": None,
+        "anomalies": {
+            "duplicate_receipt": False,
+            "reordered_receipt": False,
+            "unexpected_scan_code": False,
+            "timeout": False,
+            "partial_send": False,
+            "class_mismatch": False,
+        },
+    }
     return {
-        "version": 6,
+        "version": 7,
         "measurement_protocol_version": 3,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
@@ -126,6 +144,7 @@ def _native_bucket_result(
         "total_anomalous": 0,
         "total_timed_out": 0,
         "bucket": base_bucket,
+        "samples": [sample.copy() for _ in range(samples)],
         "cleanup": {
             "cleanup_attempted": True,
             "cleanup_success": True,
@@ -477,6 +496,7 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
             kind=kwargs["kind"],
             class_name=kwargs["class_name"],
             polyphony=kwargs["polyphony"],
+            samples=kwargs["samples"],
         ),
     )
     checkpoint = tmp_path / "checkpoint"
@@ -485,12 +505,27 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     assert not (tmp_path / "trusted-cache.json").exists()
     manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
     assert len(manifest["buckets"]) == 24
+    assert len(manifest["chunks"]) == 24 * 5
+    assert all(
+        len(json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))["samples"])
+        == 1_000
+        for entry in manifest["chunks"]
+    )
     assert all(
         json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))[
             "acceptance_eligible"
         ]
         for entry in manifest["buckets"]
     )
+    monkeypatch.setattr(
+        native_calibration,
+        "_execute_native_bucket",
+        lambda *args, **kwargs: pytest.fail("resume reran a completed chunk"),
+    )
+    resumed = native_calibration.run_full_calibration(
+        checkpoint_dir=checkpoint, resume=True
+    )
+    assert resumed["completed_buckets"] == 24
 
     final = native_calibration.finalize_native_calibration(
         checkpoint_dir=checkpoint,

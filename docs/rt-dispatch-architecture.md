@@ -186,9 +186,11 @@ injections are tracked separately and excluded from measured classes. Only compl
 anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
 receipts remain diagnostic counters. The calibration process snapshots/restores its registration
 and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
-an error, not successful calibration. Full calibration is a sequential 24-process bucket run;
-each bucket is atomically checkpointed with a SHA-256 before the next physical-input bucket
-starts. Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
+an error, not successful calibration. Full calibration is a sequential 24-bucket run split into
+1,000-sample native chunks. A cold chunk has a 100-second idle-gap floor and a 180-second
+per-process timeout; prior chunks are atomically checkpointed with a SHA-256 before the next
+physical-input chunk starts. Raw sample evidence is retained so chunk quantiles are merged
+exactly. Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
 clean-worktree state, toolchain, host fingerprint, schema/protocol, or full configuration.
 Diagnostic runs are single-bucket, progress-reporting, and always emit an ineligible artifact or
 failure report containing the exact bucket/sample/phase/error/Win32/cleanup context. Only the

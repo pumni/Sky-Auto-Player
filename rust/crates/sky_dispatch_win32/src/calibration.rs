@@ -245,6 +245,26 @@ impl CalibrationSample {
     }
 }
 
+/// Serializable, tick-free evidence for one measured sample.
+///
+/// Chunked calibration processes cannot share their QPC clock state, so the
+/// native process converts each sample to the same microsecond values used by
+/// `aggregate_samples` before it exits. Keeping these observations in the
+/// chunk artifact lets the finalizer merge quantiles exactly instead of
+/// approximating a global quantile from per-chunk quantiles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationSampleEvidence {
+    pub clean: bool,
+    pub call_duration_us: u64,
+    pub first_receipt_us: Option<i64>,
+    pub last_receipt_us: Option<i64>,
+    pub intra_chord_spread_us: Option<u64>,
+    pub receipt_count: u8,
+    pub expected_receipt_count: u8,
+    pub win32_error: Option<u32>,
+    pub anomalies: SampleAnomalies,
+}
+
 /// Signed tick delta in microseconds: `later - earlier`.
 fn signed_delta_us(later: QpcTicks, earlier: QpcTicks) -> Result<i64, CalibrationError> {
     if later.as_u64() >= earlier.as_u64() {
@@ -278,7 +298,7 @@ pub fn classify_idle_gap(
     Ok((observed, gap))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SampleAnomalies {
     pub duplicate_receipt: bool,
     pub reordered_receipt: bool,
@@ -542,6 +562,8 @@ pub struct CalibrationBucketOutput {
     pub total_anomalous: u64,
     pub total_timed_out: u64,
     pub bucket: BucketStats,
+    /// Per-sample evidence used to merge independently timed chunks exactly.
+    pub samples: Vec<CalibrationSampleEvidence>,
     pub cleanup: CleanupOutcome,
 }
 
@@ -1858,7 +1880,7 @@ mod platform {
         }
 
         Ok(CalibrationOutput {
-            version: 6,
+            version: 7,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -2236,7 +2258,7 @@ mod platform {
             .saturating_add(bucket.timeout_count);
 
         Ok(CalibrationBucketOutput {
-            version: 6,
+            version: 7,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -2260,6 +2282,10 @@ mod platform {
             total_anomalous,
             total_timed_out,
             bucket,
+            samples: measured
+                .iter()
+                .map(sample_evidence)
+                .collect::<Result<Vec<_>, _>>()?,
             cleanup,
         })
     }
@@ -2301,6 +2327,22 @@ fn checked_increment(value: &mut u64) -> Result<(), CalibrationError> {
         .checked_add(1)
         .ok_or(CalibrationError::StatisticsOverflow)?;
     Ok(())
+}
+
+fn sample_evidence(
+    sample: &CalibrationSample,
+) -> Result<CalibrationSampleEvidence, CalibrationError> {
+    Ok(CalibrationSampleEvidence {
+        clean: sample.is_complete() && !sample.anomalies.any(),
+        call_duration_us: sample.call_duration_us()?,
+        first_receipt_us: sample.first_receipt_latency_us()?,
+        last_receipt_us: sample.last_receipt_latency_us()?,
+        intra_chord_spread_us: sample.intra_chord_spread_us()?,
+        receipt_count: sample.receipt_count,
+        expected_receipt_count: sample.expected_receipt_count,
+        win32_error: sample.win32_error,
+        anomalies: sample.anomalies.clone(),
+    })
 }
 
 fn aggregate_samples(samples: &[CalibrationSample]) -> Result<BucketStats, CalibrationError> {

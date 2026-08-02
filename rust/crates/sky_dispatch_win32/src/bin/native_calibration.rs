@@ -98,7 +98,7 @@ fn main() -> Result<(), String> {
         println!(
             "{}",
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "measurement_protocol_version": 3,
                 "source_git_sha": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_build_id": env!("SKY_NATIVE_BUILD_COMMIT"),

@@ -117,19 +117,20 @@ dedicated `native_calibration.exe` process creates the app-owned Win32 calibrati
 strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with native-call
 completion. The player process does not modify its own Raw Input registration. Only complete,
 anomaly-free samples contribute to quantiles; cleanup or process failures are unsuccessful
-calibration. The current output is schema version 6 / measurement protocol 3. Measured bucket
+calibration. The current output is schema version 7 / measurement protocol 3. Measured bucket
 admission is based on the actual QPC idle gap between the previous exact SendInput completion and
 the current exact SendInput entry; requested sleep duration is not evidence. Validated evidence
 is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_proxy` label and
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.
 Calibration execution is always bounded: quick mode defaults to a 1,800-second subprocess
-timeout and full mode to 14,400 seconds per bucket. Full mode is never a single 24-bucket
-process. The runner executes the deterministic sequence
+timeout and full mode to 180 seconds per native chunk. Full mode is never a single 24-bucket
+process or an unbounded 5,000-sample process. The runner executes the deterministic sequence
 `down/1/hot`, `down/1/cold`, `up/1/hot`, `up/1/cold`, through `up/15/cold`, one physical-input
-bucket at a time. After every bucket it verifies cleanup, atomically renames the JSON artifact,
-writes its SHA-256, and atomically advances a checkpoint manifest. No physical-input buckets
-run concurrently on one host.
+bucket at a time. Each bucket is measured as five sequential 1,000-sample chunks; after every
+chunk it verifies cleanup, atomically renames the chunk artifact, writes its SHA-256, and
+atomically advances a checkpoint manifest. After all five chunks, it writes the combined bucket
+artifact. No physical-input chunks run concurrently on one host.
 
 Full mode retains exactly 5,000 hot and 5,000 cold samples for each of the six polyphonies and
 keeps `cold_idle_gap_us = 100000`; these are immutable finalizer gates, not timeout or retry
@@ -145,6 +146,6 @@ The finalizer requires exactly 24 known buckets, exact aggregate totals, 5,000 a
 bucket, identical provenance, and successful cleanup everywhere before writing the trusted
 `.cache/input_latency.json`; the runner and checkpoint writer never write that cache.
 
-A timeout kills and reaps only the current native bucket process and preserves prior checkpoint
-artifacts. `--timeout-seconds` is an explicit, finite positive override for controlled runs; it
-does not change the full-mode sample contract.
+A timeout kills and reaps only the current native chunk process and preserves prior checkpoint
+artifacts. `--timeout-seconds` is an explicit, finite positive per-chunk override for controlled
+runs; it does not change the full-mode sample contract.
