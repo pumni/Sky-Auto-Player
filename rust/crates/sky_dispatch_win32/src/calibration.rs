@@ -392,6 +392,10 @@ pub enum PacketKind {
 
 pub const MEASUREMENT_PROTOCOL_VERSION: u32 = 3;
 pub const CALIBRATION_SCHEMA_VERSION: u32 = 8;
+pub const CALIBRATION_CLEANUP_RESERVE_SECONDS: u64 = 5;
+pub const CALIBRATION_MIN_MEASUREMENT_SECONDS: u64 = 1;
+pub const CALIBRATION_MIN_TOTAL_BUDGET_SECONDS: u64 =
+    CALIBRATION_CLEANUP_RESERVE_SECONDS + CALIBRATION_MIN_MEASUREMENT_SECONDS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CalibrationStep {
@@ -456,8 +460,9 @@ pub struct CalibrationConfig {
     pub cold_idle_gap_us: u64,
     /// Shared physical threshold used to classify measured packets.
     pub cold_threshold_us: u64,
-    /// Hard process budget. Five seconds are reserved for final cleanup and
-    /// artifact publication; callers must keep this in 1..=120 seconds.
+    /// Hard native child budget. The native process reserves
+    /// [`CALIBRATION_CLEANUP_RESERVE_SECONDS`] seconds for final cleanup;
+    /// callers must keep this in 6..=120 seconds.
     pub budget_seconds: u64,
 }
 
@@ -637,7 +642,7 @@ fn validate_calibration_config(config: &CalibrationConfig) -> Result<(), Calibra
     {
         return Err(CalibrationError::ZeroSamples);
     }
-    if !(1..=120).contains(&config.budget_seconds) {
+    if !(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS..=120).contains(&config.budget_seconds) {
         return Err(CalibrationError::BudgetExceeded);
     }
     if config.cold_threshold_us == 0 {
@@ -673,8 +678,6 @@ fn validate_calibration_config(config: &CalibrationConfig) -> Result<(), Calibra
 struct RawInputReceipt {
     arrived_ticks: QpcTicks,
     scan_code: u16,
-    #[allow(dead_code)] // retained for anomaly diagnostics / future use
-    key_up: bool,
     sequence_id: u32,
 }
 
@@ -857,9 +860,6 @@ mod platform {
                 }
                 let keyboard = unsafe { &raw.data.keyboard };
                 let scan_code = keyboard.MakeCode;
-                let flags = keyboard.Flags;
-                // RI_KEY_BREAK = 1 (key-up)
-                let key_up = (flags & 1) != 0;
                 let extra = keyboard.ExtraInformation as usize;
                 let Some(seq_id) = calibration_extra_info_sequence(extra) else {
                     // Not one of our injected packets — ignore.
@@ -869,7 +869,6 @@ mod platform {
                 let receipt = RawInputReceipt {
                     arrived_ticks: arrived,
                     scan_code,
-                    key_up,
                     sequence_id: seq_id,
                 };
 
@@ -1171,7 +1170,7 @@ mod platform {
             self.measurement_deadline = Some(deadline);
         }
 
-        /// Return a QPC deadline with a five-second cleanup reserve.
+        /// Return a QPC deadline after reserving time for final cleanup.
         pub fn measurement_deadline(
             &self,
             budget_seconds: u64,
@@ -1179,7 +1178,8 @@ mod platform {
             let budget_us = budget_seconds
                 .checked_mul(1_000_000)
                 .ok_or(CalibrationError::ClockFailure)?;
-            let measurement_us = budget_us.saturating_sub(5_000_000);
+            let cleanup_reserve_us = CALIBRATION_CLEANUP_RESERVE_SECONDS.saturating_mul(1_000_000);
+            let measurement_us = budget_us.saturating_sub(cleanup_reserve_us);
             let duration = self
                 .qpc_clock
                 .duration_from_us(measurement_us)
@@ -2798,9 +2798,23 @@ mod tests {
     fn calibration_schema_and_gap_defaults_are_single_contract() {
         let cfg = CalibrationConfig::quick();
         assert_eq!(CALIBRATION_SCHEMA_VERSION, 8);
+        assert_eq!(CALIBRATION_CLEANUP_RESERVE_SECONDS, 5);
+        assert_eq!(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, 6);
         assert_eq!(cfg.hot_gap_target_us, 5_000);
         assert_eq!(cfg.cold_threshold_us, 20_000);
         assert_eq!(cfg.cold_idle_gap_us, 25_000);
+    }
+
+    #[test]
+    fn calibration_budget_keeps_one_second_for_measurement() {
+        let config = CalibrationConfig {
+            budget_seconds: CALIBRATION_MIN_TOTAL_BUDGET_SECONDS - 1,
+            ..CalibrationConfig::default()
+        };
+        assert!(matches!(
+            validate_calibration_config(&config),
+            Err(CalibrationError::BudgetExceeded)
+        ));
     }
 
     #[test]

@@ -188,8 +188,9 @@ an error, not successful calibration. Quick calibration uses the 12-bucket ancho
 1/5/15 × Down/Up × Hot/Cold with 20 clean samples and four warmups per bucket. This 12-bucket
 matrix is the only acceptance matrix. Each bucket is bounded by the native QPC budget and
 performs cleanup before its artifact is accepted. The runner enforces one absolute 120-second
-budget with a five-second cleanup/publication reserve; each child receives only the remaining
-measurement time. Artifacts keep runner-owned orchestration configuration separate from the exact
+budget with a five-second publication reserve; each native child also retains its own five-second
+cleanup reserve and must receive at least one second of measurement time. Artifacts keep runner-owned
+orchestration configuration separate from the exact
 native configuration returned by that child. Artifacts contain aggregate counters/quantiles,
 the worst 16 samples, and every anomalous sample; the complete raw stream is never serialized.
 Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,

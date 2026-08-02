@@ -123,11 +123,13 @@ the current exact SendInput entry; requested sleep duration is not evidence. Val
 is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_proxy` label and
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.
-Calibration execution is always bounded by a native QPC budget in the inclusive range 1–120
-seconds; five seconds at the end are reserved for cleanup and artifact publication. The only
-acceptance matrix is 1/5/15 × Down/Up × Hot/Cold, with 20 clean samples and four warmups per
-bucket. Every bucket is isolated, cleanup-verified, and bounded. Stable-window early stopping is
-not yet an acceptance claim; the current runner records the configured bounded sample set.
+Each native child is bounded by a total QPC budget in the inclusive range 6–120 seconds; five
+seconds are reserved for native cleanup, leaving at least one second for measurement. Full
+orchestration separately reserves five seconds for publication and uses an absolute global
+deadline. The only acceptance matrix is 1/5/15 × Down/Up × Hot/Cold, with 20 clean samples and
+four warmups per bucket. Every bucket is isolated, cleanup-verified, and bounded. Stable-window
+early stopping is not yet an acceptance claim; the current runner records the configured bounded
+sample set.
 
 Calibration artifacts retain aggregate counters/quantiles, the worst 16 samples, and every
 anomalous sample. They never contain the complete raw sample stream. `--resume` accepts a bucket

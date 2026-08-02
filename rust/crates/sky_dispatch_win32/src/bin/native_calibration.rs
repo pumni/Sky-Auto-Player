@@ -6,8 +6,9 @@
 //! process terminates unexpectedly.
 
 use sky_dispatch_win32::calibration::{
-    CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationFailureReport, PacketKind,
-    SampleClass, run_calibration_bucket_json, run_calibration_json,
+    CALIBRATION_MIN_TOTAL_BUDGET_SECONDS, CALIBRATION_SCHEMA_VERSION, CalibrationConfig,
+    CalibrationFailureReport, MEASUREMENT_PROTOCOL_VERSION, PacketKind, SampleClass,
+    run_calibration_bucket_json, run_calibration_json,
 };
 
 fn parse_u8(value: Option<String>, name: &str) -> Result<u8, String> {
@@ -98,8 +99,8 @@ fn main() -> Result<(), String> {
                     .ok_or_else(|| "--budget-seconds requires a value".to_string())?
                     .parse::<u64>()
                     .map_err(|_| "--budget-seconds must be an integer".to_string())?;
-                if !(1..=120).contains(&budget_seconds) {
-                    return Err("--budget-seconds must be between 1 and 120".to_string());
+                if !(CALIBRATION_MIN_TOTAL_BUDGET_SECONDS..=120).contains(&budget_seconds) {
+                    return Err("--budget-seconds must be between 6 and 120".to_string());
                 }
             }
             "--hot-gap-target-us" => {
@@ -114,7 +115,7 @@ fn main() -> Result<(), String> {
             "--metadata" => metadata = true,
             "--help" => {
                 println!(
-                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--hot-gap-target-us N] [--cold-threshold-us N] [--cold-idle-gap-us N] [--budget-seconds 1..120]"
+                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--hot-gap-target-us N] [--cold-threshold-us N] [--cold-idle-gap-us N] [--budget-seconds 6..120]"
                 );
                 return Ok(());
             }
@@ -130,7 +131,7 @@ fn main() -> Result<(), String> {
             serde_json::json!({
                 "version": CALIBRATION_SCHEMA_VERSION,
                 "calibration_schema_version": CALIBRATION_SCHEMA_VERSION,
-                "measurement_protocol_version": 3,
+                "measurement_protocol_version": MEASUREMENT_PROTOCOL_VERSION,
                 "source_git_sha": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_build_id": env!("SKY_NATIVE_BUILD_COMMIT"),
                 "native_source_fingerprint": env!("SKY_NATIVE_SOURCE_FINGERPRINT"),

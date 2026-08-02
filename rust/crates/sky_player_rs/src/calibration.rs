@@ -43,7 +43,7 @@ pub fn calibration_schema_version() -> u32 {
 ///     Requested hot-gap microseconds between samples. Actual QPC time still
 ///     decides whether a sample is admitted to the hot bucket. Default: 5000.
 /// cold_idle_gap_us : int
-///     Idle interval before each cold sample. Default: 100000.
+///     Idle interval before each cold sample. Default: 25000.
 /// mode : str
 ///     "quick" (200 samples), "full" (5000 samples), or "custom" (use the
 ///     explicit parameters above). Default: "quick".
