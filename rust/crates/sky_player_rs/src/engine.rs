@@ -354,9 +354,12 @@ pub struct RtTraceRecord {
     pub wake_ticks: u64,
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
+    pub completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
     pub win32_error: u32,
 }
+
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 4;
 
 const TRACE_KIND_DOWN: u8 = 0;
 const TRACE_KIND_UP: u8 = 1;
@@ -462,7 +465,7 @@ pub struct NativeTelemetryOutput {
 impl NativeTelemetryOutput {
     fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
             qpc_frequency_hz: 0,
             records: if matches!(mode, TelemetryMode::Ring) {
                 // Reserve the complete bounded buffer before the worker
@@ -2352,10 +2355,9 @@ fn run_worker(
                 let up_completion_lateness_ticks = completed_effective_ticks
                     .checked_duration_since(scheduled_ticks)
                     .ok();
-                let up_completion_error_us = match signed_timeline_delta_us(
-                    qpc_clock,
+                let up_completion_error_ticks = match completion_error_ticks(
                     completed_effective_ticks,
-                    scheduled_ticks,
+                    effective_deadline_ticks,
                 ) {
                     Ok(value) => value,
                     Err(error) => {
@@ -2365,6 +2367,16 @@ fn run_worker(
                         break;
                     }
                 };
+                let up_completion_error_us =
+                    match signed_ticks_to_us(qpc_clock, up_completion_error_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("note-off timing conversion failure: {error}"));
+                            break;
+                        }
+                    };
                 let clean_up_sample = result.success
                     && result.sent.len() == scan_codes.len()
                     && result.skipped_duplicates.is_empty()
@@ -2439,6 +2451,7 @@ fn run_worker(
                     send_completed_ticks: result
                         .send_completed_ticks
                         .map_or(0, |ticks| ticks.as_u64()),
+                    completion_error_ticks: up_completion_error_ticks,
                     applied_lead_ticks: lead_up_ticks.as_u64() as u32,
                     win32_error: result.last_win32_error.unwrap_or(0),
                 });
@@ -2644,6 +2657,7 @@ fn run_worker(
                             wake_ticks: effective_now_ticks.as_u64(),
                             send_started_ticks: 0,
                             send_completed_ticks: 0,
+                            completion_error_ticks: 0,
                             applied_lead_ticks: lead_down_ticks.as_u64() as u32,
                             win32_error: 0,
                         });
@@ -2876,8 +2890,7 @@ fn run_worker(
                         let completion_lateness_ticks = completed_effective_ticks
                             .checked_duration_since(batch_scheduled_ticks)
                             .ok();
-                        let completion_error_us = match signed_timeline_delta_us(
-                            qpc_clock,
+                        let completion_error_ticks_value = match completion_error_ticks(
                             completed_effective_ticks,
                             batch_scheduled_ticks,
                         ) {
@@ -2889,6 +2902,16 @@ fn run_worker(
                                 break;
                             }
                         };
+                        let completion_error_us =
+                            match signed_ticks_to_us(qpc_clock, completion_error_ticks_value) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error =
+                                        Some(format!("note-on timing conversion failure: {error}"));
+                                    break;
+                                }
+                            };
                         let clean_down_sample = result_success
                             && result_sent.len() == batch_intent_count
                             && result_skipped_duplicates.is_empty()
@@ -2967,6 +2990,7 @@ fn run_worker(
                                 .map_or(0, |ticks| ticks.as_u64()),
                             send_completed_ticks: result_completed_ticks
                                 .map_or(0, |ticks| ticks.as_u64()),
+                            completion_error_ticks: completion_error_ticks_value,
                             applied_lead_ticks: lead_down_ticks.as_u64() as u32,
                             win32_error: result_last_win32_error.unwrap_or(0),
                         });
@@ -3115,6 +3139,7 @@ fn run_worker(
                             wake_ticks: effective_now_ticks.as_u64(),
                             send_started_ticks: 0,
                             send_completed_ticks: 0,
+                            completion_error_ticks: 0,
                             applied_lead_ticks: lead_up_ticks.as_u64() as u32,
                             win32_error: 0,
                         });
@@ -3773,23 +3798,37 @@ fn signed_delta(lhs: u64, rhs: u64) -> i64 {
     delta.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
-fn signed_timeline_delta_us(
-    qpc_clock: QpcClock,
-    lhs: TimelineTicks,
-    rhs: TimelineTicks,
-) -> Result<i64, String> {
-    let (negative, duration) = if lhs >= rhs {
-        (false, lhs.checked_duration_since(rhs))
+fn completion_error_ticks(
+    completed: TimelineTicks,
+    deadline: TimelineTicks,
+) -> Result<i64, TimeArithmeticError> {
+    let (negative, duration) = if completed >= deadline {
+        (false, completed.checked_duration_since(deadline)?)
     } else {
-        (true, rhs.checked_duration_since(lhs))
+        (true, deadline.checked_duration_since(completed)?)
     };
-    let duration = duration.map_err(|error| error.to_string())?;
+    let magnitude = duration.as_u64();
+    if magnitude <= i64::MAX as u64 {
+        let magnitude = i64::try_from(magnitude).map_err(|_| TimeArithmeticError::Overflow)?;
+        return Ok(if negative { -magnitude } else { magnitude });
+    }
+    if negative && magnitude == (i64::MAX as u64) + 1 {
+        return Ok(i64::MIN);
+    }
+    Err(TimeArithmeticError::Overflow)
+}
+
+fn signed_ticks_to_us(qpc_clock: QpcClock, delta_ticks: i64) -> Result<i64, String> {
+    let magnitude = delta_ticks.unsigned_abs();
     let microseconds = qpc_clock
-        .duration_to_us(duration)
+        .duration_to_us(DurationTicks::from_raw(magnitude))
         .map_err(|error| format!("{error:?}"))?;
-    let magnitude = i64::try_from(microseconds)
-        .map_err(|_| "signed timing delta exceeds i64 range".to_string())?;
-    Ok(if negative { -magnitude } else { magnitude })
+    let signed = if delta_ticks < 0 {
+        -i128::from(microseconds)
+    } else {
+        i128::from(microseconds)
+    };
+    i64::try_from(signed).map_err(|_| "signed timing delta exceeds i64 range".to_string())
 }
 
 /// Preserve the distinction between a logical operation and one SendInput
@@ -4026,13 +4065,14 @@ mod tests {
     use super::{
         FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
         NativeDispatchSession, TelemetryMode, WakeErrorStats, adjust_spin_threshold,
-        anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
-        derive_spin_threshold_us, exact_sender_durations, focus_gate_matches,
-        record_input_path_health, record_termination_error, release_runtime_outcome,
-        supervisor_lease_expired, update_estimator_after_send,
+        anchored_dispatch_target_ticks, classify_latency_class, completion_error_ticks,
+        deadline_target_ticks, derive_spin_threshold_us, exact_sender_durations,
+        focus_gate_matches, record_input_path_health, record_termination_error,
+        release_runtime_outcome, supervisor_lease_expired, update_estimator_after_send,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::TimelineTicks;
     use sky_dispatch_win32::clock::{
         DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
     };
@@ -4151,6 +4191,36 @@ mod tests {
             (Some(20), None)
         );
         assert!(exact_sender_durations(clock, None, Some(completed), 1, false).is_err());
+    }
+
+    #[test]
+    fn completion_error_ticks_preserves_signed_timeline_delta() {
+        assert_eq!(
+            completion_error_ticks(TimelineTicks::from_raw(120), TimelineTicks::from_raw(100)),
+            Ok(20)
+        );
+        assert_eq!(
+            completion_error_ticks(TimelineTicks::from_raw(100), TimelineTicks::from_raw(120)),
+            Ok(-20)
+        );
+    }
+
+    #[test]
+    fn completion_error_ticks_rejects_unrepresentable_signed_delta() {
+        assert_eq!(
+            completion_error_ticks(
+                TimelineTicks::from_raw(u64::MAX),
+                TimelineTicks::from_raw(0),
+            ),
+            Err(sky_dispatch_core::time::TimeArithmeticError::Overflow)
+        );
+        assert_eq!(
+            completion_error_ticks(
+                TimelineTicks::from_raw(0),
+                TimelineTicks::from_raw((i64::MAX as u64) + 1),
+            ),
+            Ok(i64::MIN)
+        );
     }
 
     #[test]

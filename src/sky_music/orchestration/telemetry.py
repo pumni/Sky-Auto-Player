@@ -17,7 +17,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 3
+NATIVE_TELEMETRY_SCHEMA_VERSION = 4
 
 
 def _optional_int(value: Any) -> int | None:
@@ -33,6 +33,17 @@ def _required_nonnegative_int(value: Any, field: str) -> int:
         raise ValueError(f"native telemetry field {field} is invalid")
     return value
 
+
+def _required_signed_int64(value: Any, field: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not -(1 << 63) <= value <= (1 << 63) - 1
+    ):
+        raise ValueError(f"native telemetry field {field} is invalid")
+    return value
+
+
 _CSV_FIELDS: list[str] = [
     "song",
     "event_index",
@@ -41,6 +52,7 @@ _CSV_FIELDS: list[str] = [
     "wake_ticks",
     "send_started_ticks",
     "send_completed_ticks",
+    "completion_error_ticks",
     "applied_lead_ticks",
     "win32_error",
     "dispatch_id",
@@ -108,6 +120,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "wake_ticks",
         "send_started_ticks",
         "send_completed_ticks",
+        "completion_error_ticks",
         "applied_lead_ticks",
         "win32_error",
         "wake_timeline_us",
@@ -157,6 +170,7 @@ class TelemetryRecord:
         "authored_us",
         "bookkeeping_duration_us",
         "bookkeeping_us",
+        "completion_error_ticks",
         "deferred_by_us",
         "delivery_first_us",
         "delivery_last_error_us",
@@ -266,6 +280,7 @@ class TelemetryRecord:
         wake_ticks: int = 0,
         send_started_ticks: int = 0,
         send_completed_ticks: int = 0,
+        completion_error_ticks: int = 0,
         applied_lead_ticks: int = 0,
         win32_error: int = 0,
         native_polyphony: int | None = None,
@@ -276,6 +291,7 @@ class TelemetryRecord:
         self.wake_ticks = wake_ticks
         self.send_started_ticks = send_started_ticks
         self.send_completed_ticks = send_completed_ticks
+        self.completion_error_ticks = completion_error_ticks
         self.applied_lead_ticks = applied_lead_ticks
         self.win32_error = win32_error
         # Native compact telemetry carries polyphony, but it intentionally is
@@ -320,11 +336,15 @@ class TelemetryRecord:
         self.wait_target_us = wait_target_us
         self.wake_us = wake_us
         self.wake_error_us = wake_error_us
-        self.wake_timeline_us = actual_us if wake_timeline_us is None else wake_timeline_us
+        self.wake_timeline_us = (
+            actual_us if wake_timeline_us is None else wake_timeline_us
+        )
         self.send_started_us = send_started_us
         self.send_completed_us = send_completed_us
         self.sender_completion_error_us = sender_completion_error_us
-        self.sender_started_us = send_started_us if sender_started_us is None else sender_started_us
+        self.sender_started_us = (
+            send_started_us if sender_started_us is None else sender_started_us
+        )
         self.sender_completed_us = (
             send_completed_us if sender_completed_us is None else sender_completed_us
         )
@@ -334,7 +354,9 @@ class TelemetryRecord:
             else sendinput_call_duration_us
         )
         self.bookkeeping_duration_us = (
-            bookkeeping_us if bookkeeping_duration_us is None else bookkeeping_duration_us
+            bookkeeping_us
+            if bookkeeping_duration_us is None
+            else bookkeeping_duration_us
         )
         self.send_operation_duration_us = send_operation_duration_us
         self.delivery_first_us = delivery_first_us
@@ -346,7 +368,11 @@ class TelemetryRecord:
     def _materialize(self) -> dict:
         if self._dict is None:
             scan_codes_str = ";".join(str(sc) for sc in self.scan_codes)
-            sent_scan_codes = self.scan_codes if self.sent_scan_codes is None else self.sent_scan_codes
+            sent_scan_codes = (
+                self.scan_codes
+                if self.sent_scan_codes is None
+                else self.sent_scan_codes
+            )
             visible_lat = self.visible_lateness_us
             if visible_lat is None:
                 completed_us = self.dispatch_completed_us
@@ -363,9 +389,12 @@ class TelemetryRecord:
                 "wake_ticks": self.wake_ticks,
                 "send_started_ticks": self.send_started_ticks,
                 "send_completed_ticks": self.send_completed_ticks,
+                "completion_error_ticks": self.completion_error_ticks,
                 "applied_lead_ticks": self.applied_lead_ticks,
                 "win32_error": self.win32_error,
-                "dispatch_id": self.event_index if self.dispatch_id is None else self.dispatch_id,
+                "dispatch_id": self.event_index
+                if self.dispatch_id is None
+                else self.dispatch_id,
                 "packet_id": 0 if self.packet_id is None else self.packet_id,
                 "evidence_scope": "sender_completion",
                 "kind": self.kind,
@@ -384,8 +413,12 @@ class TelemetryRecord:
                 "send_duration_us": self.send_duration_us,
                 "scan_codes": scan_codes_str,
                 "sent_scan_codes": ";".join(str(sc) for sc in sent_scan_codes),
-                "skipped_scan_codes": ";".join(str(sc) for sc in self.skipped_scan_codes),
-                "generation_ids": ";".join(str(generation_id) for generation_id in self.generation_ids),
+                "skipped_scan_codes": ";".join(
+                    str(sc) for sc in self.skipped_scan_codes
+                ),
+                "generation_ids": ";".join(
+                    str(generation_id) for generation_id in self.generation_ids
+                ),
                 "runtime_outcome": self.runtime_outcome,
                 "deferred_by_us": self.deferred_by_us,
                 "pre_send_spin_us": self.pre_send_spin_us,
@@ -475,11 +508,7 @@ def materialize_native_trace(
     if not isinstance(records, list):
         raise ValueError("invalid native telemetry envelope")
     frequency = output.get("qpc_frequency_hz")
-    if (
-        isinstance(frequency, bool)
-        or not isinstance(frequency, int)
-        or frequency <= 0
-    ):
+    if isinstance(frequency, bool) or not isinstance(frequency, int) or frequency <= 0:
         raise ValueError("native telemetry envelope is missing qpc_frequency_hz")
 
     def ticks_to_us(ticks: Any, field: str) -> int:
@@ -498,14 +527,16 @@ def materialize_native_trace(
         kind_code = _required_nonnegative_int(row.get("kind"), "kind")
         outcome_code = _required_nonnegative_int(row.get("outcome"), "outcome")
         polyphony = _required_nonnegative_int(row.get("polyphony"), "polyphony")
-        flags = _required_nonnegative_int(row.get("flags"), "flags")
+        _required_nonnegative_int(row.get("flags"), "flags")
         if kind_code not in (0, 1) or not 0 <= polyphony <= 15:
             raise ValueError("native telemetry record has invalid kind/polyphony")
         outcome = _NATIVE_TRACE_OUTCOMES.get(outcome_code)
         if outcome is None:
             raise ValueError("native telemetry record has unknown outcome code")
 
-        authored_ticks = _required_nonnegative_int(row.get("authored_ticks"), "authored_ticks")
+        authored_ticks = _required_nonnegative_int(
+            row.get("authored_ticks"), "authored_ticks"
+        )
         effective_ticks = _required_nonnegative_int(
             row.get("effective_deadline_ticks"), "effective_deadline_ticks"
         )
@@ -516,6 +547,9 @@ def materialize_native_trace(
         completed_ticks = _required_nonnegative_int(
             row.get("send_completed_ticks"), "send_completed_ticks"
         )
+        completion_error_ticks = _required_signed_int64(
+            row.get("completion_error_ticks"), "completion_error_ticks"
+        )
         lead_ticks = _required_nonnegative_int(
             row.get("applied_lead_ticks"), "applied_lead_ticks"
         )
@@ -524,31 +558,19 @@ def materialize_native_trace(
         authored_us = ticks_to_us(authored_ticks, "authored_ticks")
         effective_us = ticks_to_us(effective_ticks, "effective_deadline_ticks")
         wake_us = ticks_to_us(wake_ticks, "wake_ticks")
-        started_us = ticks_to_us(started_ticks, "send_started_ticks") if started_ticks else None
+        started_us = (
+            ticks_to_us(started_ticks, "send_started_ticks") if started_ticks else None
+        )
         completed_us = (
             ticks_to_us(completed_ticks, "send_completed_ticks")
             if completed_ticks
             else wake_us
         )
-        sender_completion_error_us = None
-        if started_ticks and completed_ticks:
-            # Authored/effective/wake fields are elapsed timeline ticks from
-            # the playback epoch; SendInput boundaries are absolute QPC ticks.
-            # Reconstruct the signed completion error from same-epoch deltas,
-            # avoiding an invalid absolute-QPC minus logical-timeline result.
-            sender_completion_error_us = signed_ticks_to_us(
-                (completed_ticks - started_ticks) + (wake_ticks - effective_ticks)
-            )
+        sender_completion_error_us = signed_ticks_to_us(completion_error_ticks)
         send_duration_us = (
             max(0, completed_us - started_us) if started_us is not None else 0
         )
-        completion_lateness_us = (
-            sender_completion_error_us
-            if sender_completion_error_us is not None
-            else wake_us - effective_us
-        )
-        sent_codes = tuple(range(polyphony)) if flags & 1 else ()
-        skipped_codes = () if flags & 1 else tuple(range(polyphony))
+        completion_lateness_us = sender_completion_error_us
         materialized.append(
             TelemetryRecord(
                 song_name=song_name,
@@ -558,12 +580,12 @@ def materialize_native_trace(
                 actual_us=wake_us,
                 lateness_us=wake_us - effective_us,
                 send_duration_us=send_duration_us,
-                scan_codes=tuple(range(polyphony)),
+                scan_codes=(),
                 reason="",
                 dispatch_id=event_index,
                 dispatch_completed_us=completed_us,
-                sent_scan_codes=sent_codes,
-                skipped_scan_codes=skipped_codes,
+                sent_scan_codes=(),
+                skipped_scan_codes=(),
                 generation_ids=(),
                 runtime_outcome=outcome,
                 deferred_by_us=0,
@@ -590,6 +612,7 @@ def materialize_native_trace(
                 wake_ticks=wake_ticks,
                 send_started_ticks=started_ticks,
                 send_completed_ticks=completed_ticks,
+                completion_error_ticks=completion_error_ticks,
                 applied_lead_ticks=lead_ticks,
                 win32_error=win32_error,
                 native_polyphony=polyphony,
@@ -597,8 +620,10 @@ def materialize_native_trace(
         )
     return materialized
 
+
 class TelemetryLogger:
     """Records precise microsecond timing metrics into clean CSV and companion summary JSON files for calibration."""
+
     last_picker_cleanup: dict | None = None
     last_thread_census: dict | None = None
 
@@ -664,10 +689,12 @@ class TelemetryLogger:
         self.abort_counts_by_reason: dict[str, int] = {}
         # Unique run ID generation
         if run_id is None:
-            self.run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
+            self.run_id = (
+                f"{time.strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
+            )
         else:
             self.run_id = run_id
-        
+
         if self.enabled:
             logs_dir = Path("logs")
             logs_dir.mkdir(parents=True, exist_ok=True)
@@ -745,7 +772,9 @@ class TelemetryLogger:
             bookkeeping_us = getattr(result, "bookkeeping_us", 0)
             dispatch_lateness_us = getattr(result, "dispatch_lateness_us", 0)
             head_of_line_delay_us = getattr(result, "head_of_line_delay_us", None)
-            same_timestamp_release_before_down = getattr(result, "same_timestamp_release_before_down", None)
+            same_timestamp_release_before_down = getattr(
+                result, "same_timestamp_release_before_down", None
+            )
             packet_id = getattr(result, "packet_id", None)
             authored_us = getattr(result, "authored_us", None)
             wait_target_us = getattr(result, "wait_target_us", None)
@@ -753,12 +782,18 @@ class TelemetryLogger:
             wake_error_us = getattr(result, "wake_error_us", None)
             send_started_us = getattr(result, "send_started_us", None)
             send_completed_us = getattr(result, "send_completed_us", None)
-            sender_completion_error_us = getattr(result, "sender_completion_error_us", None)
-            send_operation_duration_us = getattr(result, "send_operation_duration_us", None)
+            sender_completion_error_us = getattr(
+                result, "sender_completion_error_us", None
+            )
+            send_operation_duration_us = getattr(
+                result, "send_operation_duration_us", None
+            )
             delivery_first_us = getattr(result, "delivery_first_us", None)
             delivery_last_us = getattr(result, "delivery_last_us", None)
             delivery_last_error_us = getattr(result, "delivery_last_error_us", None)
-            intra_chord_delivery_spread_us = getattr(result, "intra_chord_delivery_spread_us", None)
+            intra_chord_delivery_spread_us = getattr(
+                result, "intra_chord_delivery_spread_us", None
+            )
             lead_components = getattr(result, "lead_components", None)
 
         assert event_index is not None
@@ -854,7 +889,9 @@ class TelemetryLogger:
                 continue
             self.records.append(record)
             self._accepted_record_count += 1
-        self._truncated = self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
+        self._truncated = (
+            self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
+        )
 
     def record_stats(self) -> dict[str, int]:
         """Return bounded session counters independent of the retained list.
@@ -870,6 +907,7 @@ class TelemetryLogger:
             "dropped": self._dropped_count,
             "retained": len(self.records),
         }
+
     def flush_if_large(self) -> bool:
         """Report a large buffer without mutating it on the dispatch thread.
 
@@ -887,7 +925,11 @@ class TelemetryLogger:
 
     def _ensure_csv_open(self) -> None:
         """Lazily open the CSV at the current log_filepath (allows test path reassignment)."""
-        if self._csv_writer is not None or not self.enabled or self.log_filepath is None:
+        if (
+            self._csv_writer is not None
+            or not self.enabled
+            or self.log_filepath is None
+        ):
             return
         self.log_filepath.parent.mkdir(parents=True, exist_ok=True)
         self._csv_file = self.log_filepath.open("w", newline="", encoding="utf-8")
@@ -992,8 +1034,7 @@ class TelemetryLogger:
     def record_abort_counts(self, counts: dict[str, int]) -> None:
         """Replace abort counters with a validated terminal native snapshot."""
         self.abort_counts_by_reason = {
-            str(reason): max(0, int(count))
-            for reason, count in counts.items()
+            str(reason): max(0, int(count)) for reason, count in counts.items()
         }
 
     def record_release_outcome(self, outcome) -> None:
@@ -1003,21 +1044,28 @@ class TelemetryLogger:
     def record_generation_status_counts(self, counts: dict[str, int]) -> None:
         """Stores final runtime generation status counts for playback summary diagnostics."""
         self.generation_status_counts = {
-            status: max(0, count)
-            for status, count in counts.items()
+            status: max(0, count) for status, count in counts.items()
         }
 
     def record_schedule_metadata(self, metadata) -> None:
         """Stores scheduler stress metrics for later calibration."""
         self.schedule_summary = {
             "compressed_holds": int(getattr(metadata, "compressed_holds", 0)),
-            "impossible_same_key_repeats": int(getattr(metadata, "impossible_same_key_repeats", 0)),
-            "risky_same_key_repeats": int(getattr(metadata, "risky_same_key_repeats", 0)),
-            "deduplicated_note_count": int(getattr(metadata, "deduplicated_note_count", 0)),
+            "impossible_same_key_repeats": int(
+                getattr(metadata, "impossible_same_key_repeats", 0)
+            ),
+            "risky_same_key_repeats": int(
+                getattr(metadata, "risky_same_key_repeats", 0)
+            ),
+            "deduplicated_note_count": int(
+                getattr(metadata, "deduplicated_note_count", 0)
+            ),
             "duplicate_note_count": int(getattr(metadata, "duplicate_note_count", 0)),
             "max_polyphony": int(getattr(metadata, "max_polyphony", 0)),
             "note_count": int(getattr(metadata, "note_count", 0)),
-            "shortest_same_key_interval_us": getattr(metadata, "shortest_same_key_interval_us", None),
+            "shortest_same_key_interval_us": getattr(
+                metadata, "shortest_same_key_interval_us", None
+            ),
             "min_same_key_up_gap_us": getattr(metadata, "min_same_key_up_gap_us", None),
             "sub_60fps_frame_notes": int(getattr(metadata, "sub_60fps_frame_notes", 0)),
         }
@@ -1046,28 +1094,40 @@ class TelemetryLogger:
             if r.get("sent_scan_codes") or int(r.get("send_attempts", 0) or 0) > 0
         ]
         noop_skipped_count = sum(
-            1 for r in rows
+            1
+            for r in rows
             if not r.get("sent_scan_codes") and r.get("skipped_scan_codes")
         )
         scheduler_dispatch_records = [
-            r for r in dispatch_records
+            r
+            for r in dispatch_records
             if r.get("runtime_outcome") != "deferred_release"
         ]
         latenesses = [r["lateness_us"] for r in scheduler_dispatch_records]
-        visible_latenesses = [r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records]
+        visible_latenesses = [
+            r.get("visible_lateness_us", 0) for r in scheduler_dispatch_records
+        ]
         send_durations = [r["send_duration_us"] for r in dispatch_records]
-        send_durations_pure = [r.get("send_duration_pure_us", 0) for r in dispatch_records]
+        send_durations_pure = [
+            r.get("send_duration_pure_us", 0) for r in dispatch_records
+        ]
         bookkeeping_durations = [r.get("bookkeeping_us", 0) for r in dispatch_records]
-        dispatch_latenesses = [r.get("dispatch_lateness_us", 0) for r in scheduler_dispatch_records]
+        dispatch_latenesses = [
+            r.get("dispatch_lateness_us", 0) for r in scheduler_dispatch_records
+        ]
         # Sender-warmup split: a send preceded by a long idle gap runs on a core that has likely
         # downclocked/parked, so we compare send_duration when "cold" vs "warm" to test whether
         # CPU coldness (caused by sleeping between notes) inflates send latency.
         SEND_COLD_THRESHOLD_US = 20_000
         cold_send_durations = [
-            r["send_duration_us"] for r in dispatch_records if r.get("idle_gap_us", 0) > SEND_COLD_THRESHOLD_US
+            r["send_duration_us"]
+            for r in dispatch_records
+            if r.get("idle_gap_us", 0) > SEND_COLD_THRESHOLD_US
         ]
         warm_send_durations = [
-            r["send_duration_us"] for r in dispatch_records if r.get("idle_gap_us", 0) <= SEND_COLD_THRESHOLD_US
+            r["send_duration_us"]
+            for r in dispatch_records
+            if r.get("idle_gap_us", 0) <= SEND_COLD_THRESHOLD_US
         ]
         idle_gaps = [r.get("idle_gap_us", 0) for r in dispatch_records]
         pre_send_spins = [r.get("pre_send_spin_us", 0) for r in dispatch_records]
@@ -1104,8 +1164,6 @@ class TelemetryLogger:
         if current_burst:
             catch_up_bursts.append(current_burst)
 
-
-
         hold_durations: list[int] = []
         confirmed_hold_lower_bounds: list[int] = []
         observed_holds: list[int] = []
@@ -1117,7 +1175,10 @@ class TelemetryLogger:
                 for sc in codes:
                     active_downs[sc] = (
                         int(r["actual_us"]),
-                        int(r.get("dispatch_completed_us") or (r["actual_us"] + r["send_duration_us"])),
+                        int(
+                            r.get("dispatch_completed_us")
+                            or (r["actual_us"] + r["send_duration_us"])
+                        ),
                     )
             elif r["kind"] == "up":
                 for sc in codes:
@@ -1125,19 +1186,25 @@ class TelemetryLogger:
                         down_started_us, _down_completed_us = active_downs[sc]
                         hold_durations.append(r["actual_us"] - down_started_us)
                         observed_holds.append(
-                            int(r.get(
-                                "dispatch_completed_us",
-                                r["actual_us"] + r["send_duration_us"],
-                            ) or 0)
+                            int(
+                                r.get(
+                                    "dispatch_completed_us",
+                                    r["actual_us"] + r["send_duration_us"],
+                                )
+                                or 0
+                            )
                             - _down_completed_us
                         )
                         # Compatibility metric from down dispatch start through up dispatch start;
                         # observed_hold_us is the completion-to-completion visibility metric.
                         confirmed_hold_lower_bounds.append(
-                            int(r.get(
-                                "dispatch_completed_us",
-                                r["actual_us"] + r["send_duration_us"],
-                            ) or 0)
+                            int(
+                                r.get(
+                                    "dispatch_completed_us",
+                                    r["actual_us"] + r["send_duration_us"],
+                                )
+                                or 0
+                            )
                             - down_started_us
                         )
                         del active_downs[sc]
@@ -1171,19 +1238,26 @@ class TelemetryLogger:
                 "avg_us": (sum(values) / len(values)),
             }
             if thresholds:
-                res.update({
-                    "over_2ms": sum(1 for v in values if v > 2000),
-                    "over_5ms": sum(1 for v in values if v > 5000),
-                    "over_10ms": sum(1 for v in values if v > 10000),
-                })
+                res.update(
+                    {
+                        "over_2ms": sum(1 for v in values if v > 2000),
+                        "over_5ms": sum(1 for v in values if v > 5000),
+                        "over_10ms": sum(1 for v in values if v > 10000),
+                    }
+                )
             return res
 
         def _scan_count(record: dict, field: str) -> int:
             return len([sc for sc in str(record.get(field, "")).split(";") if sc])
 
-        backend_info: dict = {"panic_release_failures": 0, "failed_release_keys_final": []}
+        backend_info: dict = {
+            "panic_release_failures": 0,
+            "failed_release_keys_final": [],
+        }
         if self.backend_health is not None:
-            backend_info["panic_release_failures"] = self.backend_health.failed_release_count
+            backend_info["panic_release_failures"] = (
+                self.backend_health.failed_release_count
+            )
             backend_info["keys_dropped"] = self.backend_health.keys_dropped
             backend_info["chord_split_events"] = self.backend_health.chord_split_events
             backend_info["sendinput_partial_events"] = (
@@ -1202,12 +1276,14 @@ class TelemetryLogger:
             backend_info["authored_keys_rejected"] = (
                 self.backend_health.authored_keys_rejected
             )
-            
+
         if self.release_outcome is not None:
             backend_info["release_attempted"] = self.release_outcome.attempted
             backend_info["release_success"] = self.release_outcome.released_successfully
             backend_info["release_stuck_keys"] = self.release_outcome.stuck_keys
-            backend_info["release_inconclusive"] = self.release_outcome.verification_inconclusive
+            backend_info["release_inconclusive"] = (
+                self.release_outcome.verification_inconclusive
+            )
 
         observed_hold_floor_us = (
             math.ceil(1_000_000 / self.fps)
@@ -1233,11 +1309,13 @@ class TelemetryLogger:
             _scan_count(r, "skipped_scan_codes") for r in rows if r["kind"] == "up"
         )
         runtime_conflict_dropped_down_count = sum(
-            _scan_count(r, "scan_codes") for r in rows
+            _scan_count(r, "scan_codes")
+            for r in rows
             if r.get("runtime_outcome") == "dropped_conflict"
         )
         expired_dropped_down_count = sum(
-            _scan_count(r, "scan_codes") for r in rows
+            _scan_count(r, "scan_codes")
+            for r in rows
             if r.get("runtime_outcome") == "dropped_expired"
         )
         runtime_backend_dropped_down_count = sum(
@@ -1305,14 +1383,46 @@ class TelemetryLogger:
                     "sent_up_count": sent_up_count,
                     "backend_skipped_down_count": backend_skipped_down_count,
                     "backend_skipped_up_count": backend_skipped_up_count,
-                    "keys_dropped": int(getattr(self.backend_health, "keys_dropped", 0)) if self.backend_health is not None else 0,
-                    "chord_split_events": int(getattr(self.backend_health, "chord_split_events", 0)) if self.backend_health is not None else 0,
-                    "sendinput_partial_events": int(getattr(self.backend_health, "sendinput_partial_events", 0)) if self.backend_health is not None else 0,
-                    "sendinput_zero_progress_failures": int(getattr(self.backend_health, "sendinput_zero_progress_failures", 0)) if self.backend_health is not None else 0,
-                    "chords_rejected": int(getattr(self.backend_health, "chords_rejected", 0)) if self.backend_health is not None else 0,
-                    "authored_conflict_events": int(getattr(self.backend_health, "authored_conflict_events", 0)) if self.backend_health is not None else 0,
-                    "authored_chords_rejected": int(getattr(self.backend_health, "authored_chords_rejected", 0)) if self.backend_health is not None else 0,
-                    "authored_keys_rejected": int(getattr(self.backend_health, "authored_keys_rejected", 0)) if self.backend_health is not None else 0,
+                    "keys_dropped": int(getattr(self.backend_health, "keys_dropped", 0))
+                    if self.backend_health is not None
+                    else 0,
+                    "chord_split_events": int(
+                        getattr(self.backend_health, "chord_split_events", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "sendinput_partial_events": int(
+                        getattr(self.backend_health, "sendinput_partial_events", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "sendinput_zero_progress_failures": int(
+                        getattr(
+                            self.backend_health, "sendinput_zero_progress_failures", 0
+                        )
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "chords_rejected": int(
+                        getattr(self.backend_health, "chords_rejected", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "authored_conflict_events": int(
+                        getattr(self.backend_health, "authored_conflict_events", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "authored_chords_rejected": int(
+                        getattr(self.backend_health, "authored_chords_rejected", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
+                    "authored_keys_rejected": int(
+                        getattr(self.backend_health, "authored_keys_rejected", 0)
+                    )
+                    if self.backend_health is not None
+                    else 0,
                     "sender_clean": sender_clean,
                 },
                 "game_observed": {
@@ -1416,9 +1526,11 @@ class TelemetryLogger:
             # ``chord_integrity_lost`` outcome; the Python fallback retains
             # ``partial_note_on`` for compatibility.
             "partial_note_on_count": sum(
-                1 for r in rows
+                1
+                for r in rows
                 if r.get("kind") == "down"
-                and r.get("runtime_outcome") in {"partial_note_on", "chord_integrity_lost"}
+                and r.get("runtime_outcome")
+                in {"partial_note_on", "chord_integrity_lost"}
             ),
             "backend": backend_info,
             "input_path_degraded": self.input_path_degraded,
@@ -1444,7 +1556,7 @@ class TelemetryLogger:
         # callers (engine._log_timing_summary → get_summary()) read the cache instead of None.
         self._last_summary = summary
         return summary
-        
+
     def release_summary(self) -> None:
         """Free the cached summary dict after all callers have read it.
 
@@ -1499,11 +1611,12 @@ class TelemetryLogger:
         TelemetryLogger.last_picker_cleanup = None
         TelemetryLogger.last_thread_census = None
 
+
 def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
     """Load and format a timing performance report from companion summary JSON telemetry files."""
     path = Path(target_path)
     summary_files = []
-    
+
     if path.is_file():
         if path.suffix == ".json":
             summary_files.append(path)
@@ -1511,23 +1624,29 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             summary_files.append(path.with_suffix(".summary.json"))
     elif path.is_dir():
         summary_files = list(path.glob("*.summary.json"))
-        
+
     summary_files = [f for f in summary_files if f.exists()]
     if not summary_files:
-        print(f"No valid telemetry summary files (.summary.json) found at {target_path}")
+        print(
+            f"No valid telemetry summary files (.summary.json) found at {target_path}"
+        )
         return
-        
+
     print("\n==================================================")
     print(f" AGGREGATE TELEMETRY TIMING REPORT ({len(summary_files)} run(s))")
     print("==================================================")
-    
+
     for f in summary_files:
         try:
             with f.open("r", encoding="utf-8") as file:
                 data = json.load(file)
-                
-            print(f"\nPlayback: {data.get('song', 'Unknown')} at {data.get('timestamp', 'Unknown')} [Run ID: {data.get('run_id', 'N/A')}]")
-            print(f"  Profile: {data.get('profile', 'balanced')} | Tempo Scale: {data.get('tempo_scale', 1.0)}")
+
+            print(
+                f"\nPlayback: {data.get('song', 'Unknown')} at {data.get('timestamp', 'Unknown')} [Run ID: {data.get('run_id', 'N/A')}]"
+            )
+            print(
+                f"  Profile: {data.get('profile', 'balanced')} | Tempo Scale: {data.get('tempo_scale', 1.0)}"
+            )
             print(f"  Total Event Count: {data.get('total_events', 0)}")
             print(
                 "  Evidence Boundary: "
@@ -1535,16 +1654,20 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 f"before_send_missing_downs={data.get('before_send_missing_down_count', 0)}, "
                 f"game_acceptance_unknown={data.get('game_acceptance_unknown', True)}"
             )
-            
+
             lat = data.get("lateness_us", {})
             print("  Loop Lateness:")
-            print(f"    * Average: {lat.get('avg_us', 0.0):.1f} us ({lat.get('avg_us', 0.0)/1000:.3f} ms)")
+            print(
+                f"    * Average: {lat.get('avg_us', 0.0):.1f} us ({lat.get('avg_us', 0.0) / 1000:.3f} ms)"
+            )
             print(f"    * Median (p50): {lat.get('p50_us', 0.0):.1f} us")
             print(f"    * 95th Percentile (p95): {lat.get('p95_us', 0.0):.1f} us")
             print(f"    * 99th Percentile (p99): {lat.get('p99_us', 0.0):.1f} us")
             print(f"    * Maximum: {lat.get('max_us', 0.0):.1f} us")
-            print(f"    * Lateness Counts: >2ms={lat.get('over_2ms', 0)}, >5ms={lat.get('over_5ms', 0)}, >10ms={lat.get('over_10ms', 0)}")
-            
+            print(
+                f"    * Lateness Counts: >2ms={lat.get('over_2ms', 0)}, >5ms={lat.get('over_5ms', 0)}, >10ms={lat.get('over_10ms', 0)}"
+            )
+
             dur = data.get("send_duration_us", {})
             print("  SendInput Execution Duration:")
             print(f"    * Average: {dur.get('avg_us', 0.0):.1f} us")
@@ -1564,37 +1687,46 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 f"conflict={data.get('runtime_conflict_dropped_down_count', 0)}, "
                 f"backend={data.get('runtime_backend_dropped_down_count', 0)}"
             )
-            
+
             hold = data.get("note_hold_duration_us", {})
             if hold:
                 print("  Note Hold Durations:")
-                print(f"    * Average: {hold.get('avg_us', 0.0):.1f} us ({hold.get('avg_us', 0.0)/1000:.1f} ms)")
+                print(
+                    f"    * Average: {hold.get('avg_us', 0.0):.1f} us ({hold.get('avg_us', 0.0) / 1000:.1f} ms)"
+                )
                 print(f"    * p50: {hold.get('p50_us', 0.0):.1f} us")
-                
+
             backend = data.get("backend", {})
             if backend.get("panic_release_failures", 0) > 0:
-                print(f"  [warning] Backend panic release failures count: {backend.get('panic_release_failures')}")
+                print(
+                    f"  [warning] Backend panic release failures count: {backend.get('panic_release_failures')}"
+                )
             keys_dropped = int(backend.get("keys_dropped", 0))
             chord_splits = int(backend.get("chord_split_events", 0))
             if keys_dropped > 0:
-                print(f"  [warning] Note-on drops: {keys_dropped} key(s) not injected ({chord_splits} chord split(s))")
-                
+                print(
+                    f"  [warning] Note-on drops: {keys_dropped} key(s) not injected ({chord_splits} chord split(s))"
+                )
+
             # Perform calibration recommendation if requested
             if recommend:
                 from sky_music.orchestration.calibration import (
                     calibrate_profile,
                     calibration_input_from_summary,
                 )
+
                 inp = calibration_input_from_summary(data)
                 rec = calibrate_profile(inp)
-                
+
                 print("\n  Calibration Recommendation:")
                 print(f"    * Suggested Profile : {rec.profile_name}")
                 print(f"    * Suggested Tempo   : {rec.tempo_scale:.2f}x")
-                print(f"    * Hold Duration (us): {rec.hold_us} ({rec.hold_us/1000:.1f} ms)")
+                print(
+                    f"    * Hold Duration (us): {rec.hold_us} ({rec.hold_us / 1000:.1f} ms)"
+                )
                 print(f"    * Severity Level    : {rec.severity.upper()}")
                 print(f"    * Reason            : {rec.reason}")
         except Exception as e:
             print(f"  [error] Failed to read summary file {f.name}: {e}")
-            
+
     print("\n==================================================")

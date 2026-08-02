@@ -57,7 +57,9 @@ def test_native_dispatch_session_lifecycle() -> None:
     ]
     allowed = [0x15, 0x16, 0x17]
 
-    session = sky_player_rs.NativeDispatchSessionPy(actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True)  # type: ignore[attr-defined]
+    session = sky_player_rs.NativeDispatchSessionPy(
+        actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True
+    )  # type: ignore[attr-defined]
 
     snap0 = cast(dict[str, Any], session.snapshot())
     assert snap0["is_running"] is False
@@ -85,9 +87,10 @@ def test_native_dispatch_session_lifecycle() -> None:
     # `finished`.
     assert snap_end["status"] == "error"
     assert snap_end["outcome"] == "error"
-    assert sum(snap_end["generation_status_counts"].values()) == snap_end[
-        "generation_count"
-    ]
+    assert (
+        sum(snap_end["generation_status_counts"].values())
+        == snap_end["generation_count"]
+    )
     assert snap_end["abort_counts_by_reason"] == {
         "error": 1,
         "manual_pause": 1,
@@ -102,7 +105,9 @@ def test_native_dispatch_session_quit() -> None:
     ]
     allowed = [0x15]
 
-    session = sky_player_rs.NativeDispatchSessionPy(actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True)  # type: ignore[attr-defined]
+    session = sky_player_rs.NativeDispatchSessionPy(
+        actions, allowed, min_hold_us=5000, max_lead_us=2000, mock_backend=True
+    )  # type: ignore[attr-defined]
     session.start()
     time.sleep(0.005)
 
@@ -357,6 +362,7 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
         "wake_ticks",
         "send_started_ticks",
         "send_completed_ticks",
+        "completion_error_ticks",
         "applied_lead_ticks",
         "win32_error",
     }
@@ -446,13 +452,11 @@ def test_native_worker_retries_transient_note_off_before_same_key_down() -> None
     assert snapshot["failed_release_count"] == 0
     assert any(_trace_outcome(row) == "failed_note_off" for row in records)
     assert any(
-        row["event_index"] == 1
-        and _trace_outcome(row) in {"sent", "deferred_release"}
+        row["event_index"] == 1 and _trace_outcome(row) in {"sent", "deferred_release"}
         for row in records
     )
     assert any(
-        row["event_index"] == 2 and _trace_outcome(row) == "sent"
-        for row in records
+        row["event_index"] == 2 and _trace_outcome(row) == "sent" for row in records
     )
 
 
@@ -553,7 +557,7 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
             return json.dumps(
                 {
                     "records": [{"outcome": 2}],
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "qpc_frequency_hz": 10_000_000,
                 }
             )
@@ -561,7 +565,9 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
         def estimator_state_json(self) -> str:
             return "{}"
 
-    monkeypatch.setitem(sys.modules, "sky_player_rs", SimpleNamespace(DispatchSession=_ErrorSession))
+    monkeypatch.setitem(
+        sys.modules, "sky_player_rs", SimpleNamespace(DispatchSession=_ErrorSession)
+    )
     runtime = RustDispatchRuntime(
         actions=(),
         song_name="controlled-error",
