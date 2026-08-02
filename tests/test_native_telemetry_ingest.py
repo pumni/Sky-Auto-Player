@@ -97,6 +97,130 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["zero_progress_retries"] == 0
 
 
+def test_native_truncated_clean_looking_records_fail_closed() -> None:
+    output = _compact_output()
+    output.update({"attempted": 2, "accepted": 1, "dropped": 1, "truncated": True})
+
+    logger = TelemetryLogger("truncated", enabled=True, retain_records_after_save=True)
+    logger.ingest_native_output(output)
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["telemetry_truncated"] is True
+    assert summary["telemetry_dropped_count"] >= 1
+    assert summary["sender_clean_known"] is False
+    assert summary["sender_clean"] is False
+    assert (
+        summary["evidence_boundaries"]["sender_completion"]["sender_clean_known"]
+        is False
+    )
+    assert summary["evidence_boundaries"]["sender_completion"]["sender_clean"] is False
+
+
+def test_native_nontruncated_clean_records_are_known_clean() -> None:
+    logger = TelemetryLogger("clean", enabled=True, retain_records_after_save=True)
+    logger.ingest_native_output(_compact_output())
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["sender_clean_known"] is True
+    assert summary["sender_clean"] is True
+    assert (
+        summary["evidence_boundaries"]["sender_completion"]["sender_clean_known"]
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda output: output.__setitem__("attempted", -1), "attempted"),
+        (lambda output: output.__setitem__("accepted", -1), "accepted"),
+        (lambda output: output.__setitem__("dropped", -1), "dropped"),
+        (lambda output: output.__setitem__("attempted", True), "attempted"),
+        (lambda output: output.__setitem__("accepted", True), "accepted"),
+        (lambda output: output.__setitem__("dropped", True), "dropped"),
+        (lambda output: output.__setitem__("accepted", 0), "accepted != len"),
+        (
+            lambda output: output.update({"attempted": 2, "accepted": 1, "dropped": 1}),
+            "dropped > 0",
+        ),
+        (lambda output: output.update({"attempted": 0, "accepted": 1}), "attempted < accepted"),
+    ],
+)
+def test_native_telemetry_ingest_rejects_invalid_envelope(mutate, message: str) -> None:
+    output = _compact_output()
+    mutate(output)
+
+    logger = TelemetryLogger("invalid", enabled=True)
+    with pytest.raises(ValueError, match=message):
+        logger.ingest_native_output(output)
+
+    assert logger.record_stats() == {
+        "attempted": 0,
+        "accepted": 0,
+        "written": 0,
+        "dropped": 0,
+        "retained": 0,
+    }
+
+
+def test_python_and_native_truncation_drop_counts_merge_without_double_counting() -> None:
+    logger = TelemetryLogger("merge", enabled=True, retain_records_after_save=True)
+    logger._telemetry_capacity = 2
+    for event_index in range(3):
+        logger.record(
+            event_index=event_index,
+            kind="down",
+            scheduled_us=event_index * 1_000,
+            actual_us=event_index * 1_000 + 10,
+            lateness_us=10,
+            send_duration_us=5,
+            scan_codes=(21 + event_index,),
+            sent_scan_codes=(21 + event_index,),
+            reason="merge",
+        )
+
+    native = _compact_output()
+    native.update(
+        {"attempted": 1, "accepted": 0, "dropped": 1, "truncated": True, "records": []}
+    )
+    logger.ingest_native_output(native)
+
+    stats = logger.record_stats()
+    assert stats["dropped"] == 2
+    assert stats["retained"] == 2
+    assert stats["accepted"] == 2
+    summary = logger.get_summary()
+    assert summary is not None
+    assert summary["telemetry_dropped_count"] == 2
+    assert summary["sender_clean_known"] is False
+    assert summary["sender_clean"] is False
+
+
+def test_long_telemetry_session_remains_bounded_and_fails_closed() -> None:
+    logger = TelemetryLogger("long", enabled=True, retain_records_after_save=True)
+    for event_index in range(2 * 1_024):
+        logger.record(
+            event_index=event_index,
+            kind="down" if event_index % 2 == 0 else "up",
+            scheduled_us=event_index * 1_000,
+            actual_us=event_index * 1_000 + 10,
+            lateness_us=10,
+            send_duration_us=5,
+            scan_codes=(21,),
+            sent_scan_codes=(21,),
+            reason="long-session",
+        )
+
+    summary = logger.get_summary()
+    assert summary is not None
+    assert len(logger.records) == 1_024
+    assert summary["telemetry_truncated"] is True
+    assert summary["sender_clean_known"] is False
+    assert summary["sender_clean"] is False
+
+
 def test_native_trace_materializer_preserves_negative_completion_error() -> None:
     record = materialize_native_trace(
         _compact_output(

@@ -63,6 +63,16 @@ jobs:
       - name: Pester — installer tests
         uses: ./.github/actions/run-pester
 
+      - name: Benchmark — native sender-side acceptance and regression gate
+        run: >
+          uv run --env-file .env python
+          scripts/bench_native_acceptance.py
+          --actions 256
+          --repeats 3
+          --polyphony 1,2,3,5,8,15
+          --baseline .github/native_acceptance_baseline.json
+          --label release
+
       - name: Assert tag version equals pyproject.toml
         id: verlock
         run: |

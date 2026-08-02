@@ -27,6 +27,8 @@ sends standard keystrokes through the public Windows `SendInput` API — the sam
 keyboard macro uses — and never reads game memory, injects code, hooks the process, attaches a
 debugger, or touches game files.
 
+**Current source release:** `v3.0.0`.
+
 ## Why it sounds right
 
 Sky Auto Player doesn't replay a fixed macro. It schedules every note like a small performance:
@@ -35,7 +37,7 @@ Sky Auto Player doesn't replay a fixed macro. It schedules every note like a sma
 - **Learns your machine's latency** — adaptive lead reduces sender-side completion error from measurements on the current machine; telemetry reports the measured result instead of promising a universal absolute threshold.
 - **Holds keep their full duration** — long notes don't get clipped short, even when the next note is close behind.
 - **Per-song timing profiles** — fast arpeggios and slow ballads get different timing, not one global setting.
-- **A separate timing thread** — the player and the on-screen display run on separate threads, so the HUD stays smooth while notes fire on beat.
+- **A dedicated Rust timing worker** — the player and the on-screen display stay on the Python UI/orchestration boundary while the real-time sender runs natively.
 
 This is what "in time" actually means here.
 

@@ -920,35 +920,63 @@ class TelemetryLogger:
         self._accepted_record_count += 1
 
     def ingest_native_output(self, output: dict[str, Any]) -> None:
-        """Ingest a terminal retain-first buffer produced by the Rust worker."""
+        """Ingest a terminal retain-first buffer produced by the Rust worker.
+
+        Cross-validates the native envelope counters before any record is accepted:
+
+        * ``attempted`` / ``accepted`` / ``dropped`` are non-negative integers;
+        * ``truncated`` is a bool;
+        * ``accepted == len(records)`` (the envelope's own self-report);
+        * ``attempted >= accepted``;
+        * ``dropped > 0`` implies ``truncated`` is True.
+
+        Any violation raises ``ValueError`` rather than silently trusting the
+        summary — the fail-closed seam: a truncated envelope cannot report a
+        clean session.
+        """
         if not self.enabled:
             return
         records = output.get("records")
         attempted = output.get("attempted")
+        accepted_in = output.get("accepted")
         dropped = output.get("dropped")
+        truncated = output.get("truncated")
+        if not isinstance(records, list):
+            raise ValueError("invalid native telemetry envelope: records is not a list")
+        if isinstance(attempted, bool) or not isinstance(attempted, int) or attempted < 0:
+            raise ValueError("invalid native telemetry envelope: attempted")
         if (
-            not isinstance(records, list)
-            or not isinstance(attempted, int)
-            or isinstance(attempted, bool)
-            or not isinstance(dropped, int)
-            or isinstance(dropped, bool)
-            or attempted < 0
-            or dropped < 0
+            isinstance(accepted_in, bool)
+            or not isinstance(accepted_in, int)
+            or accepted_in < 0
         ):
-            raise ValueError("invalid native telemetry envelope")
+            raise ValueError("invalid native telemetry envelope: accepted")
+        if isinstance(dropped, bool) or not isinstance(dropped, int) or dropped < 0:
+            raise ValueError("invalid native telemetry envelope: dropped")
+        if not isinstance(truncated, bool):
+            raise ValueError("invalid native telemetry envelope: truncated")
+        if accepted_in != len(records):
+            raise ValueError(
+                "invalid native telemetry envelope: accepted != len(records)"
+            )
+        if attempted < accepted_in:
+            raise ValueError("invalid native telemetry envelope: attempted < accepted")
+        if dropped > 0 and not truncated:
+            raise ValueError(
+                "invalid native telemetry envelope: dropped > 0 requires truncated"
+            )
 
         self._attempted_record_count += attempted
         self._dropped_count += dropped
+        native_truncated = truncated or dropped > 0
         for record in materialize_native_trace(output, song_name=self.song_name):
             if len(self.records) >= self._telemetry_capacity:
                 self._dropped_count += 1
-                self._truncated = True
+                native_truncated = True
                 continue
             self.records.append(record)
             self._accepted_record_count += 1
-        self._truncated = (
-            self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
-        )
+        self._truncated = self._truncated or native_truncated
 
     def record_stats(self) -> dict[str, int]:
         """Return bounded session counters independent of the retained list.
@@ -1438,8 +1466,10 @@ class TelemetryLogger:
             + expired_dropped_down_count
             + runtime_backend_dropped_down_count
         )
+        sender_clean_known = not self._truncated
         sender_clean = (
-            intended_down_count == sent_down_count
+            sender_clean_known
+            and intended_down_count == sent_down_count
             and before_send_missing_down_count == 0
             and backend_skipped_down_count == 0
             and int(getattr(self.backend_health, "keys_dropped", 0)) == 0
@@ -1529,6 +1559,7 @@ class TelemetryLogger:
                     if self.backend_health is not None
                     else 0,
                     "sender_clean": sender_clean,
+                    "sender_clean_known": sender_clean_known,
                 },
                 "game_observed": {
                     "available": False,
@@ -1545,6 +1576,7 @@ class TelemetryLogger:
             "intended_up_count": intended_up_count,
             "before_send_missing_down_count": before_send_missing_down_count,
             "sender_clean": sender_clean,
+            "sender_clean_known": sender_clean_known,
             "game_acceptance_unknown": True,
             "game_observed_onset_count": None,
             "after_send_missing_count": None,

@@ -59,7 +59,10 @@ export const homeVi: HomeContent = {
       { macro: 'Độ trễ cố định', player: 'Timing đi theo sheet và tempo' },
       { macro: 'Chủ yếu giả định bấm-thả', player: 'Hỗ trợ nốt, hợp âm và nốt ngân' },
       { macro: 'Một cấu hình dùng cho mọi bài', player: 'Profile timing riêng cho từng bài' },
-      { macro: 'Độ trễ cố định, một loại cho mọi máy', player: 'Tự học độ trễ máy bạn rồi bù trước' },
+      {
+        macro: 'Độ trễ cố định, một loại cho mọi máy',
+        player: 'Tự học độ trễ máy bạn rồi bù trước',
+      },
       { macro: 'HUD giật khi bận', player: 'Phát nốt và giao diện chạy trên hai luồng riêng' },
     ],
   },
