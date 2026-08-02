@@ -186,10 +186,17 @@ injections are tracked separately and excluded from measured classes. Only compl
 anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
 receipts remain diagnostic counters. The calibration process snapshots/restores its registration
 and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
-an error, not successful calibration. The JSON artifact is attributable to an exact Git SHA,
-native build/source fingerprint, toolchain, Windows build, and QPC frequency; a dirty or
-SHA-mismatched native artifact is not release evidence. The sender telemetry stream instead uses
-`evidence_kind = "sender_completion"` and never claims Raw Input or game-observed delivery.
+an error, not successful calibration. Full calibration is a sequential 24-process bucket run;
+each bucket is atomically checkpointed with a SHA-256 before the next physical-input bucket
+starts. Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
+clean-worktree state, toolchain, host fingerprint, schema/protocol, or full configuration.
+Diagnostic runs are single-bucket, progress-reporting, and always emit an ineligible artifact or
+failure report containing the exact bucket/sample/phase/error/Win32/cleanup context. Only the
+finalizer may write trusted cache evidence, and it requires all 24 known buckets, 5,000 samples
+per bucket, exact aggregate totals, identical provenance, and successful cleanup. A dirty,
+diagnostic, incomplete, or SHA-mismatched artifact is not release evidence. The sender telemetry
+stream instead uses `evidence_kind = "sender_completion"` and never claims Raw Input or
+game-observed delivery.
 
 **Clock failure policy.** QPC is the sole real-time clock domain after native preparation. A failed
 runtime QPC query, including a query immediately after a successful `SendInput`, is terminal: the

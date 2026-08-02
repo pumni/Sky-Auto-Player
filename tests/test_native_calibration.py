@@ -81,6 +81,62 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
     }
 
 
+def _native_bucket_result(
+    *, kind: str, class_name: str, polyphony: int, samples: int = 5_000
+) -> dict[str, object]:
+    base = _native_result(clean=samples)
+    base_bucket = base["buckets"]["down"]["1"]["hot"]  # type: ignore[index]
+    assert isinstance(base_bucket, dict)
+    setup = 5_050 if kind == "up" else 0
+    return {
+        "version": 6,
+        "measurement_protocol_version": 3,
+        "evidence_kind": "injected_raw_input_delivery_proxy",
+        "source_git_sha": "test-sha",
+        "native_build_id": "test-sha",
+        "dirty_worktree": False,
+        "native_source_fingerprint": "test-fingerprint",
+        "rustc_version": "rustc 1.97.1",
+        "host_fingerprint": {
+            "qpc_frequency_hz": 10_000_000,
+            "win32_build": "Windows 11 test build",
+            "sampled_at_us": 123_456,
+        },
+        "configuration": {
+            "polyphonies": [polyphony],
+            "samples_per_hot_bucket": samples,
+            "samples_per_cold_bucket": samples,
+            "warmup_samples": 50,
+            "receipt_timeout_ms": 200,
+            "hot_gap_target_us": 5_000,
+            "cold_idle_gap_us": 100_000,
+            "cold_threshold_us": 20_000,
+        },
+        "kind": kind,
+        "class": class_name,
+        "polyphony": polyphony,
+        "attempted": samples,
+        "setup_attempted": setup,
+        "setup_anomalous": 0,
+        "setup_timed_out": 0,
+        "warmup_attempted": 50,
+        "warmup_anomalous": 0,
+        "warmup_timed_out": 0,
+        "total_attempted": samples + setup + 50,
+        "total_anomalous": 0,
+        "total_timed_out": 0,
+        "bucket": base_bucket,
+        "cleanup": {
+            "cleanup_attempted": True,
+            "cleanup_success": True,
+            "cleanup_stuck_keys": [],
+            "cleanup_verification_inconclusive": False,
+            "raw_input_restore_failed": False,
+            "pump_thread_failed": False,
+        },
+    }
+
+
 class _FakePopen:
     def __init__(self, _args, *, stdout, stderr, **_kwargs):
         stdout.write(json.dumps(self.result).encode("utf-8"))
@@ -125,7 +181,6 @@ def test_native_calibration_writes_cache_only_after_valid_clean_result(
     ("mode", "expected_timeout"),
     [
         ("quick", native_calibration.QUICK_CALIBRATION_TIMEOUT_SECONDS),
-        ("full", native_calibration.FULL_CALIBRATION_TIMEOUT_SECONDS),
     ],
 )
 def test_native_calibration_uses_mode_specific_default_timeout(
@@ -366,3 +421,82 @@ def test_native_calibration_rejects_incomplete_or_untrusted_evidence(
 def test_native_calibration_accepts_complete_matrix() -> None:
     result = _native_result()
     assert native_calibration._validate_result(result) == result
+
+
+def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration,
+        "_execute_native_bucket",
+        lambda *args, **kwargs: _native_bucket_result(
+            kind=kwargs["kind"],
+            class_name=kwargs["class_name"],
+            polyphony=kwargs["polyphony"],
+            samples=kwargs["samples"],
+        ),
+    )
+    cache = tmp_path / "input_latency.json"
+    cache.write_text("sentinel\n", encoding="utf-8")
+    artifact = native_calibration.run_diagnostic_calibration(
+        kind="down",
+        class_name="cold",
+        polyphony=1,
+        samples=100,
+        output_path=tmp_path / "diagnostic.json",
+    )
+    assert artifact["acceptance_eligible"] is False
+    assert json.loads((tmp_path / "diagnostic.json").read_text(encoding="utf-8")) == artifact
+    assert cache.read_text(encoding="utf-8") == "sentinel\n"
+
+
+def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(native_calibration, "_find_binary", lambda: tmp_path / "native.exe")
+    monkeypatch.setattr(
+        native_calibration,
+        "_current_full_provenance",
+        lambda _binary: {
+            "source_git_sha": "test-sha",
+            "native_build_id": "test-sha",
+            "native_source_fingerprint": "test-fingerprint",
+            "dirty_worktree": False,
+            "rustc_version": "rustc 1.97.1",
+            "host_fingerprint": {
+                "qpc_frequency_hz": 10_000_000,
+                "win32_build": "Windows 11 test build",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        native_calibration,
+        "_execute_native_bucket",
+        lambda *args, **kwargs: _native_bucket_result(
+            kind=kwargs["kind"],
+            class_name=kwargs["class_name"],
+            polyphony=kwargs["polyphony"],
+        ),
+    )
+    checkpoint = tmp_path / "checkpoint"
+    result = native_calibration.run_full_calibration(checkpoint_dir=checkpoint)
+    assert result["completed_buckets"] == 24
+    assert not (tmp_path / "trusted-cache.json").exists()
+    manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
+    assert len(manifest["buckets"]) == 24
+    assert all(
+        json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))[
+            "acceptance_eligible"
+        ]
+        for entry in manifest["buckets"]
+    )
+
+    final = native_calibration.finalize_native_calibration(
+        checkpoint_dir=checkpoint,
+        output_path=tmp_path / "final.json",
+        cache_path=tmp_path / "trusted-cache.json",
+    )
+    assert final["acceptance_eligible"] is True
+    assert final["measured_attempted"] == 24 * 5_000
+    assert (tmp_path / "trusted-cache.json").is_file()

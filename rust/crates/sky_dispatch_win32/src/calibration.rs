@@ -107,10 +107,63 @@ pub enum CalibrationError {
         sequence_id: u32,
         expected: u8,
         received: u8,
+        win32_error: Option<u32>,
     },
 
     #[error("keyboard cleanup could not be verified; stuck keys: {stuck_keys:?}")]
     CleanupFailed { stuck_keys: Vec<u16> },
+
+    #[error("{report}")]
+    BucketFailed {
+        report: Box<CalibrationFailureReport>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationFailureReport {
+    pub kind: String,
+    pub class: String,
+    pub polyphony: u8,
+    pub sample_index: u32,
+    pub phase: String,
+    pub exact_error: String,
+    pub win32_error: Option<u32>,
+    pub cleanup_success: bool,
+    pub cleanup_stuck_keys: Vec<u16>,
+    pub cleanup_verification_inconclusive: bool,
+    pub raw_input_restore_failed: bool,
+    pub pump_thread_failed: bool,
+}
+
+impl std::fmt::Display for CalibrationFailureReport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "bucket {}/{}/{} sample {} phase {}: {}; win32_error={:?}; cleanup_success={}; stuck_keys={:?}; cleanup_verification_inconclusive={}; raw_input_restore_failed={}; pump_thread_failed={}",
+            self.kind,
+            self.class,
+            self.polyphony,
+            self.sample_index,
+            self.phase,
+            self.exact_error,
+            self.win32_error,
+            self.cleanup_success,
+            self.cleanup_stuck_keys,
+            self.cleanup_verification_inconclusive,
+            self.raw_input_restore_failed,
+            self.pump_thread_failed,
+        )
+    }
+}
+
+impl CalibrationError {
+    fn win32_error(&self) -> Option<u32> {
+        match self {
+            Self::PacketIntegrity { win32_error, .. } => *win32_error,
+            Self::BucketFailed { report } => report.win32_error,
+            _ => None,
+        }
+    }
 }
 
 // ─── Sample record ────────────────────────────────────────────────────────────
@@ -131,6 +184,7 @@ pub struct CalibrationSample {
     pub last_receipt_ticks: Option<QpcTicks>,
     pub receipt_count: u8,
     pub expected_receipt_count: u8,
+    pub win32_error: Option<u32>,
     /// Physical idle gap from the immediately previous SendInput completion
     /// to this packet's exact SendInput entry, when measured evidence exists.
     pub actual_idle_gap_ticks: Option<sky_dispatch_core::time::DurationTicks>,
@@ -456,6 +510,38 @@ pub struct CalibrationOutput {
     pub measured_class_mismatch: u64,
     /// Total samples that timed out completely.
     pub total_timed_out: u64,
+    pub cleanup: CleanupOutcome,
+}
+
+/// Output for exactly one physical calibration bucket.  The Python runner
+/// stores this as the durable checkpoint unit; no native process is allowed to
+/// produce the complete 24-bucket matrix in one run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationBucketOutput {
+    pub version: u32,
+    pub measurement_protocol_version: u32,
+    pub source_git_sha: &'static str,
+    pub native_build_id: &'static str,
+    pub dirty_worktree: bool,
+    pub native_source_fingerprint: &'static str,
+    pub rustc_version: &'static str,
+    pub evidence_kind: &'static str,
+    pub host_fingerprint: HostFingerprint,
+    pub configuration: CalibrationConfig,
+    pub kind: PacketKind,
+    pub class: SampleClass,
+    pub polyphony: u8,
+    pub attempted: u64,
+    pub setup_attempted: u64,
+    pub setup_anomalous: u64,
+    pub setup_timed_out: u64,
+    pub warmup_attempted: u64,
+    pub warmup_anomalous: u64,
+    pub warmup_timed_out: u64,
+    pub total_attempted: u64,
+    pub total_anomalous: u64,
+    pub total_timed_out: u64,
+    pub bucket: BucketStats,
     pub cleanup: CleanupOutcome,
 }
 
@@ -1194,6 +1280,7 @@ mod platform {
                 last_receipt_ticks: last,
                 receipt_count: count,
                 expected_receipt_count: expected,
+                win32_error: (psr.win32_error != 0).then_some(psr.win32_error),
                 actual_idle_gap_ticks: None,
                 observed_class: None,
                 anomalies: SampleAnomalies {
@@ -1241,6 +1328,7 @@ mod platform {
                 sequence_id: sample.sequence_id,
                 expected: sample.expected_receipt_count,
                 received: sample.receipt_count,
+                win32_error: sample.win32_error,
             })
         }
 
@@ -1797,6 +1885,384 @@ mod platform {
             cleanup,
         })
     }
+
+    struct BucketStepFailure {
+        sample_index: u32,
+        phase: &'static str,
+        source: CalibrationError,
+    }
+
+    fn failure_phase(source: &CalibrationError, fallback: &'static str) -> &'static str {
+        match source {
+            CalibrationError::PacketIntegrity { phase, .. } if phase.starts_with("cleanup") => {
+                "cleanup"
+            }
+            CalibrationError::PacketIntegrity {
+                win32_error: Some(_),
+                ..
+            } => fallback,
+            CalibrationError::PacketIntegrity { .. } => "receipt",
+            CalibrationError::CleanupFailed { .. } => "cleanup",
+            _ => fallback,
+        }
+    }
+
+    fn bucket_failure(
+        kind: PacketKind,
+        class: SampleClass,
+        polyphony: u8,
+        failure: BucketStepFailure,
+        cleanup: CleanupOutcome,
+    ) -> CalibrationError {
+        CalibrationError::BucketFailed {
+            report: Box::new(CalibrationFailureReport {
+                kind: format!("{kind:?}").to_lowercase(),
+                class: format!("{class:?}").to_lowercase(),
+                polyphony,
+                sample_index: failure.sample_index,
+                phase: failure.phase.to_string(),
+                exact_error: failure.source.to_string(),
+                win32_error: failure.source.win32_error(),
+                cleanup_success: cleanup.cleanup_success,
+                cleanup_stuck_keys: cleanup.cleanup_stuck_keys,
+                cleanup_verification_inconclusive: cleanup.cleanup_verification_inconclusive,
+                raw_input_restore_failed: cleanup.raw_input_restore_failed,
+                pump_thread_failed: cleanup.pump_thread_failed,
+            }),
+        }
+    }
+
+    /// Run exactly one `(kind, class, polyphony)` bucket.  This is intentionally
+    /// separate from `run_calibration`: the process boundary is part of the
+    /// evidence contract and makes a failed bucket unable to erase completed
+    /// buckets from the checkpoint.
+    pub fn run_calibration_bucket(
+        config: &CalibrationConfig,
+        kind: PacketKind,
+        class: SampleClass,
+    ) -> Result<CalibrationBucketOutput, CalibrationError> {
+        super::validate_calibration_config(config)?;
+        if config.polyphonies.len() != 1 {
+            return Err(CalibrationError::PolyphonyTooLarge(
+                config.polyphonies.len(),
+            ));
+        }
+
+        let polyphony = config.polyphonies[0];
+        let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
+        let mut session = CalibrationSession::open()?;
+        let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..polyphony as usize];
+        let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
+        let cold_threshold_ticks = session
+            .qpc_clock
+            .duration_from_us(config.cold_threshold_us)
+            .map_err(|_source| CalibrationError::BucketFailed {
+                report: Box::new(CalibrationFailureReport {
+                    kind: format!("{kind:?}").to_lowercase(),
+                    class: format!("{class:?}").to_lowercase(),
+                    polyphony,
+                    sample_index: 0,
+                    phase: "setup down".to_string(),
+                    exact_error: "QPC duration conversion failed".to_string(),
+                    win32_error: None,
+                    cleanup_success: false,
+                    cleanup_stuck_keys: Vec::new(),
+                    cleanup_verification_inconclusive: true,
+                    raw_input_restore_failed: true,
+                    pump_thread_failed: false,
+                }),
+            })?;
+
+        let hot_gap = Duration::from_micros(config.hot_gap_target_us);
+        let expected_samples = match class {
+            SampleClass::Hot => config.samples_per_hot_bucket,
+            SampleClass::Cold => config.samples_per_cold_bucket,
+        };
+        let mut measured = Vec::with_capacity(expected_samples as usize);
+        let mut warmup_attempted = 0u64;
+        let mut warmup_anomalous = 0u64;
+        let mut warmup_timed_out = 0u64;
+        let mut setup_attempted = 0u64;
+        let mut setup_anomalous = 0u64;
+        let mut setup_timed_out = 0u64;
+        let mut step_result: Result<(), BucketStepFailure> = Ok(());
+
+        let mut record = |sample: &CalibrationSample, warmup: bool, setup: bool| {
+            let attempted = if setup {
+                &mut setup_attempted
+            } else if warmup {
+                &mut warmup_attempted
+            } else {
+                // Measured attempts are represented by `measured` and the
+                // aggregate below, so no separate counter is needed here.
+                return;
+            };
+            *attempted = attempted.saturating_add(1);
+            let anomalous = if setup {
+                &mut setup_anomalous
+            } else {
+                &mut warmup_anomalous
+            };
+            if sample.anomalies.any() {
+                *anomalous = anomalous.saturating_add(1);
+            }
+            let timed_out = if setup {
+                &mut setup_timed_out
+            } else {
+                &mut warmup_timed_out
+            };
+            if sample.anomalies.timeout {
+                *timed_out = timed_out.saturating_add(1);
+            }
+        };
+
+        eprintln!(
+            "[calibration] bucket={}/{}/{} sample=0/{} phase=warmup",
+            format!("{kind:?}").to_lowercase(),
+            format!("{class:?}").to_lowercase(),
+            polyphony,
+            expected_samples
+        );
+        for sample_index in 1..=config.warmup_samples {
+            match kind {
+                PacketKind::Down => {
+                    let measured_down =
+                        match session.measure_packet(scan_codes, false, receipt_timeout) {
+                            Ok(sample) => sample,
+                            Err(source) => {
+                                step_result = Err(BucketStepFailure {
+                                    sample_index,
+                                    phase: failure_phase(&source, "measured send"),
+                                    source,
+                                });
+                                break;
+                            }
+                        };
+                    record(&measured_down, true, false);
+                    if let Err(source) = session.cleanup_keys_up(scan_codes, receipt_timeout) {
+                        step_result = Err(BucketStepFailure {
+                            sample_index,
+                            phase: failure_phase(&source, "cleanup"),
+                            source,
+                        });
+                        break;
+                    }
+                }
+                PacketKind::Up => {
+                    let setup = match session.prepare_keys_down(scan_codes, receipt_timeout) {
+                        Ok(sample) => sample,
+                        Err(source) => {
+                            step_result = Err(BucketStepFailure {
+                                sample_index,
+                                phase: failure_phase(&source, "setup down"),
+                                source,
+                            });
+                            break;
+                        }
+                    };
+                    record(&setup, true, true);
+                    let measured_up =
+                        match session.measure_packet(scan_codes, true, receipt_timeout) {
+                            Ok(sample) => sample,
+                            Err(source) => {
+                                step_result = Err(BucketStepFailure {
+                                    sample_index,
+                                    phase: failure_phase(&source, "measured send"),
+                                    source,
+                                });
+                                break;
+                            }
+                        };
+                    record(&measured_up, true, false);
+                }
+            }
+            if step_result.is_err() {
+                break;
+            }
+            if !hot_gap.is_zero() {
+                std::thread::sleep(hot_gap);
+            }
+        }
+
+        if step_result.is_ok() {
+            for sample_index in 1..=expected_samples {
+                eprintln!(
+                    "[calibration] bucket={}/{}/{} sample={}/{} phase=starting",
+                    format!("{kind:?}").to_lowercase(),
+                    format!("{class:?}").to_lowercase(),
+                    polyphony,
+                    sample_index,
+                    expected_samples
+                );
+
+                let protocol = calibration_protocol(kind, class);
+                if kind == PacketKind::Down {
+                    let previous = session.last_send_completed_ticks.ok_or(BucketStepFailure {
+                        sample_index,
+                        phase: "gap",
+                        source: CalibrationError::ClockFailure,
+                    });
+                    let Ok(previous) = previous else {
+                        step_result = previous.map(|_| ());
+                        break;
+                    };
+                    if class == SampleClass::Cold {
+                        if let Err(source) =
+                            session.wait_cold_gap_after(previous, config.cold_idle_gap_us)
+                        {
+                            step_result = Err(BucketStepFailure {
+                                sample_index,
+                                phase: "gap",
+                                source,
+                            });
+                            break;
+                        }
+                    } else if !hot_gap.is_zero() {
+                        std::thread::sleep(hot_gap);
+                    }
+                }
+
+                let sample = match kind {
+                    PacketKind::Down => session.measure_classified_packet(
+                        scan_codes,
+                        false,
+                        class,
+                        cold_threshold_ticks,
+                        receipt_timeout,
+                    ),
+                    PacketKind::Up => {
+                        let setup = session.prepare_keys_down(scan_codes, receipt_timeout);
+                        let setup = match setup {
+                            Ok(setup) => setup,
+                            Err(source) => {
+                                step_result = Err(BucketStepFailure {
+                                    sample_index,
+                                    phase: failure_phase(&source, "setup down"),
+                                    source,
+                                });
+                                break;
+                            }
+                        };
+                        record(&setup, false, true);
+                        if protocol.contains(&CalibrationStep::ColdGapAfterPrepare)
+                            && let Err(source) = session.wait_cold_gap_after(
+                                setup.call_completed_ticks,
+                                config.cold_idle_gap_us,
+                            )
+                        {
+                            step_result = Err(BucketStepFailure {
+                                sample_index,
+                                phase: "gap",
+                                source,
+                            });
+                            break;
+                        }
+                        session.measure_classified_packet(
+                            scan_codes,
+                            true,
+                            class,
+                            cold_threshold_ticks,
+                            receipt_timeout,
+                        )
+                    }
+                };
+                let sample = match sample {
+                    Ok(sample) => sample,
+                    Err(source) => {
+                        step_result = Err(BucketStepFailure {
+                            sample_index,
+                            phase: failure_phase(&source, "measured send"),
+                            source,
+                        });
+                        break;
+                    }
+                };
+                measured.push(sample);
+                if kind == PacketKind::Down
+                    && let Err(source) = session.cleanup_keys_up(scan_codes, receipt_timeout)
+                {
+                    step_result = Err(BucketStepFailure {
+                        sample_index,
+                        phase: failure_phase(&source, "cleanup"),
+                        source,
+                    });
+                    break;
+                }
+            }
+        }
+
+        let cleanup = session.close();
+        if let Err(failure) = step_result {
+            return Err(bucket_failure(kind, class, polyphony, failure, cleanup));
+        }
+        if measured.len() != expected_samples as usize {
+            return Err(bucket_failure(
+                kind,
+                class,
+                polyphony,
+                BucketStepFailure {
+                    sample_index: measured.len() as u32 + 1,
+                    phase: "measured send",
+                    source: CalibrationError::StatisticsOverflow,
+                },
+                cleanup,
+            ));
+        }
+        if !cleanup.cleanup_success || cleanup.cleanup_verification_inconclusive {
+            return Err(bucket_failure(
+                kind,
+                class,
+                polyphony,
+                BucketStepFailure {
+                    sample_index: expected_samples,
+                    phase: "cleanup",
+                    source: CalibrationError::CleanupFailed {
+                        stuck_keys: cleanup.cleanup_stuck_keys.clone(),
+                    },
+                },
+                cleanup,
+            ));
+        }
+
+        let bucket = aggregate_samples(&measured)?;
+        let total_attempted = warmup_attempted
+            .saturating_add(setup_attempted)
+            .saturating_add(measured.len() as u64);
+        let total_anomalous = warmup_anomalous
+            .saturating_add(setup_anomalous)
+            .saturating_add(bucket.anomaly_count);
+        let total_timed_out = warmup_timed_out
+            .saturating_add(setup_timed_out)
+            .saturating_add(bucket.timeout_count);
+
+        Ok(CalibrationBucketOutput {
+            version: 6,
+            measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
+            source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
+            native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
+            dirty_worktree: env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
+            native_source_fingerprint: env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
+            rustc_version: env!("SKY_RUSTC_VERSION"),
+            evidence_kind: "injected_raw_input_delivery_proxy",
+            host_fingerprint: build_host_fingerprint()?,
+            configuration: config.clone(),
+            kind,
+            class,
+            polyphony,
+            attempted: measured.len() as u64,
+            setup_attempted,
+            setup_anomalous,
+            setup_timed_out,
+            warmup_attempted,
+            warmup_anomalous,
+            warmup_timed_out,
+            total_attempted,
+            total_anomalous,
+            total_timed_out,
+            bucket,
+            cleanup,
+        })
+    }
 } // mod platform
 
 // ─── Non-Windows stub ─────────────────────────────────────────────────────────
@@ -1808,6 +2274,14 @@ mod platform {
     pub fn run_calibration(
         _config: &CalibrationConfig,
     ) -> Result<CalibrationOutput, CalibrationError> {
+        Err(CalibrationError::PlatformUnsupported)
+    }
+
+    pub fn run_calibration_bucket(
+        _config: &CalibrationConfig,
+        _kind: PacketKind,
+        _class: SampleClass,
+    ) -> Result<CalibrationBucketOutput, CalibrationError> {
         Err(CalibrationError::PlatformUnsupported)
     }
 
@@ -2012,6 +2486,16 @@ pub fn run_calibration_json(config: &CalibrationConfig) -> Result<String, Calibr
     })
 }
 
+pub fn run_calibration_bucket_json(
+    config: &CalibrationConfig,
+    kind: PacketKind,
+    class: SampleClass,
+) -> Result<String, CalibrationError> {
+    let output = platform::run_calibration_bucket(config, kind, class)?;
+    serde_json::to_string_pretty(&output)
+        .map_err(|_e| CalibrationError::WindowCreateFailed(u32::MAX))
+}
+
 pub use platform::build_host_fingerprint;
 
 // ─── Unit tests (non-Windows stubs and pure logic) ───────────────────────────
@@ -2138,6 +2622,7 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(300)),
             receipt_count: 3,
             expected_receipt_count: 3,
+            win32_error: None,
             actual_idle_gap_ticks: None,
             observed_class: None,
             anomalies: SampleAnomalies::default(),
@@ -2158,6 +2643,7 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(250)), // same tick → spread = 0 us
             receipt_count: 1,
             expected_receipt_count: 1,
+            win32_error: None,
             actual_idle_gap_ticks: None,
             observed_class: None,
             anomalies: SampleAnomalies::default(),
@@ -2176,6 +2662,7 @@ mod tests {
             last_receipt_ticks: Some(QpcTicks::from_raw(1_000_000_100)),
             receipt_count: 1,
             expected_receipt_count: 1,
+            win32_error: None,
             actual_idle_gap_ticks: None,
             observed_class: None,
             anomalies: SampleAnomalies::default(),
@@ -2188,6 +2675,7 @@ mod tests {
             last_receipt_ticks: None,
             receipt_count: 0,
             expected_receipt_count: 1,
+            win32_error: None,
             actual_idle_gap_ticks: None,
             observed_class: None,
             anomalies: SampleAnomalies {

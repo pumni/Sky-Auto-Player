@@ -124,9 +124,27 @@ is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_p
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.
 Calibration execution is always bounded: quick mode defaults to a 1,800-second subprocess
-timeout and full mode to 14,400 seconds. Full mode retains 5,000 hot and 5,000 cold samples for
-each configured packet kind and polyphony; its cold-wait lower bound is 6,000 seconds before
-warm-up, hot samples, receipts, setup, and cleanup, leaving 8,400 seconds for those remaining
-operations. A timeout kills and reaps the native process
-and writes neither raw evidence nor the trusted legacy cache. `--timeout-seconds` is an explicit,
-finite positive override for controlled runs; it does not change the full-mode sample contract.
+timeout and full mode to 14,400 seconds per bucket. Full mode is never a single 24-bucket
+process. The runner executes the deterministic sequence
+`down/1/hot`, `down/1/cold`, `up/1/hot`, `up/1/cold`, through `up/15/cold`, one physical-input
+bucket at a time. After every bucket it verifies cleanup, atomically renames the JSON artifact,
+writes its SHA-256, and atomically advances a checkpoint manifest. No physical-input buckets
+run concurrently on one host.
+
+Full mode retains exactly 5,000 hot and 5,000 cold samples for each of the six polyphonies and
+keeps `cold_idle_gap_us = 100000`; these are immutable finalizer gates, not timeout or retry
+budgets. `--resume` accepts a bucket only when the exact Git SHA, native build ID, native source
+fingerprint, clean-worktree state, Rust toolchain, host fingerprint, schema/protocol, and full
+configuration all match. A mismatch rejects the checkpoint; it is never silently reused.
+
+Diagnostic mode runs one requested bucket with a caller-selected sample count, prints native
+progress, and writes either an ineligible bucket artifact or an always-written failure report
+with kind, class, polyphony, sample index, phase, exact error, Win32 error, and cleanup state.
+Diagnostic artifacts have `acceptance_eligible = false` and cannot be consumed by the finalizer.
+The finalizer requires exactly 24 known buckets, exact aggregate totals, 5,000 attempts in every
+bucket, identical provenance, and successful cleanup everywhere before writing the trusted
+`.cache/input_latency.json`; the runner and checkpoint writer never write that cache.
+
+A timeout kills and reaps only the current native bucket process and preserves prior checkpoint
+artifacts. `--timeout-seconds` is an explicit, finite positive override for controlled runs; it
+does not change the full-mode sample contract.
