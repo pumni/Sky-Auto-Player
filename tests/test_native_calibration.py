@@ -247,7 +247,7 @@ def test_native_bucket_timeout_does_not_wait_for_a_newline(
         )
 
 
-@pytest.mark.parametrize("remaining", [5.0, 5.1, 5.9])
+@pytest.mark.parametrize("remaining", [10.9])
 def test_child_measurement_budget_reserves_cleanup_time(remaining: float) -> None:
     with pytest.raises(
         native_calibration.NativeCalibrationError, match="cleanup reserve"
@@ -256,13 +256,17 @@ def test_child_measurement_budget_reserves_cleanup_time(remaining: float) -> Non
 
 
 def test_child_measurement_budget_uses_floor_and_float_timeout() -> None:
-    budget, timeout = native_calibration._child_measurement_budget(100.0, 94.0)
-    assert budget == 1
-    assert timeout == 1.0
+    budget, timeout = native_calibration._child_measurement_budget(100.0, 89.0)
+    assert budget == 6
+    assert timeout == 6.0
 
-    budget, timeout = native_calibration._child_measurement_budget(100.0, 93.9)
-    assert budget == 1
-    assert timeout == pytest.approx(1.1)
+    budget, timeout = native_calibration._child_measurement_budget(100.0, 88.1)
+    assert budget == 6
+    assert timeout == pytest.approx(6.9)
+
+    budget, timeout = native_calibration._child_measurement_budget(100.0, 88.0)
+    assert budget == 7
+    assert timeout == 7.0
 
 
 @pytest.mark.parametrize(
@@ -456,7 +460,7 @@ def test_native_calibration_timeout_kills_and_reaps_without_writing_evidence(
         native_calibration.run_native_calibration(
             output_path=artifact,
             cache_path=cache,
-            timeout_seconds=1.0,
+            timeout_seconds=6.0,
         )
 
     assert len(process_instances) == 1
@@ -464,6 +468,25 @@ def test_native_calibration_timeout_kills_and_reaps_without_writing_evidence(
     assert process_instances[0].reaped is True
     assert artifact.read_text(encoding="utf-8") == "raw sentinel\n"
     assert cache.read_text(encoding="utf-8") == "cache sentinel\n"
+
+
+def test_native_calibration_rejects_budget_without_measurement_allowance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        native_calibration,
+        "_find_binary",
+        lambda: pytest.fail("native child must not be created"),
+    )
+
+    with pytest.raises(
+        native_calibration.NativeCalibrationError, match="at least 6s"
+    ):
+        native_calibration.run_native_calibration(
+            output_path=tmp_path / "raw.json",
+            cache_path=tmp_path / "cache.json",
+            timeout_seconds=5.9,
+        )
 
 
 @pytest.mark.parametrize(
@@ -621,7 +644,11 @@ def test_diagnostic_artifact_is_ineligible_and_does_not_write_cache(
     assert artifact["acceptance_eligible"] is False
     assert artifact["native_configuration"]["warmup_samples"] == 1
     assert artifact["native_configuration"]["budget_seconds"] == 120
-    assert artifact["orchestration_configuration"]["cleanup_reserve_seconds"] == 5.0
+    assert (
+        artifact["orchestration_configuration"]["publication_reserve_seconds"]
+        == 5.0
+    )
+    assert "cleanup_reserve_seconds" not in artifact["orchestration_configuration"]
     assert "configuration" not in artifact
     assert (
         json.loads((tmp_path / "diagnostic.json").read_text(encoding="utf-8"))
@@ -671,6 +698,12 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     assert len(manifest["buckets"]) == 12
     assert len(manifest["chunks"]) == 12
     assert "orchestration_configuration" in manifest
+    assert manifest["orchestration_configuration"]["global_budget_seconds"] == 120.0
+    assert (
+        manifest["orchestration_configuration"]["publication_reserve_seconds"]
+        == 5.0
+    )
+    assert "cleanup_reserve_seconds" not in manifest["orchestration_configuration"]
     assert "configuration" not in manifest
     assert all(
         len(
@@ -717,6 +750,85 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     manifest["orchestration_configuration"]["global_budget_seconds"] = 119
     (checkpoint / "checkpoint.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(
+        native_calibration.NativeCalibrationError, match="120-second acceptance"
+    ):
+        native_calibration.finalize_native_calibration(
+            checkpoint_dir=checkpoint,
+            output_path=tmp_path / "rejected-final.json",
+            cache_path=tmp_path / "rejected-cache.json",
+        )
+    with pytest.raises(
         native_calibration.NativeCalibrationError, match="orchestration configuration"
     ):
         native_calibration.run_full_calibration(checkpoint_dir=checkpoint, resume=True)
+
+
+def test_full_orchestration_configuration_preserves_exact_budget() -> None:
+    configuration = native_calibration.full_orchestration_configuration(
+        global_budget_seconds=12.5
+    )
+
+    assert configuration == {
+        "polyphonies": [1, 5, 15],
+        "samples_per_bucket": 20,
+        "global_budget_seconds": 12.5,
+        "publication_reserve_seconds": 5.0,
+        "chunk_samples": 20,
+    }
+
+
+def test_full_run_resume_requires_the_same_exact_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        native_calibration, "_find_binary", lambda: tmp_path / "native.exe"
+    )
+    monkeypatch.setattr(
+        native_calibration,
+        "_current_full_provenance",
+        lambda _binary: {
+            "source_git_sha": "test-sha",
+            "native_build_id": "test-sha",
+            "native_source_fingerprint": "test-fingerprint",
+            "dirty_worktree": False,
+            "rustc_version": "rustc 1.97.1",
+            "host_fingerprint": {
+                "qpc_frequency_hz": 10_000_000,
+                "win32_build": "Windows 11 test build",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        native_calibration,
+        "_execute_native_bucket",
+        lambda *args, **kwargs: _native_bucket_result(
+            kind=kwargs["kind"],
+            class_name=kwargs["class_name"],
+            polyphony=kwargs["polyphony"],
+            samples=kwargs["samples"],
+            warmup_samples=kwargs["warmup_samples"],
+            budget_seconds=kwargs["budget_seconds"],
+        ),
+    )
+    checkpoint = tmp_path / "checkpoint"
+    native_calibration.run_full_calibration(
+        checkpoint_dir=checkpoint, timeout_seconds=12.5
+    )
+    manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
+    assert manifest["orchestration_configuration"]["global_budget_seconds"] == 12.5
+
+    monkeypatch.setattr(
+        native_calibration,
+        "_execute_native_bucket",
+        lambda *args, **kwargs: pytest.fail("resume reran a completed bucket"),
+    )
+    native_calibration.run_full_calibration(
+        checkpoint_dir=checkpoint, resume=True, timeout_seconds=12.5
+    )
+    with pytest.raises(
+        native_calibration.NativeCalibrationError,
+        match="orchestration configuration",
+    ):
+        native_calibration.run_full_calibration(
+            checkpoint_dir=checkpoint, resume=True, timeout_seconds=120.0
+        )

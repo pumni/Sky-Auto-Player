@@ -24,10 +24,14 @@ from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_C
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 8
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
-CALIBRATION_ARTIFACT_SCHEMA_VERSION = 3
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 4
 MAX_CALIBRATION_BUDGET_SECONDS = 120
-CLEANUP_RESERVE_SECONDS = 5.0
-MIN_CHILD_BUDGET_SECONDS = 1
+PUBLICATION_RESERVE_SECONDS = 5.0
+NATIVE_CLEANUP_RESERVE_SECONDS = 5
+MIN_NATIVE_MEASUREMENT_SECONDS = 1
+MIN_NATIVE_TOTAL_BUDGET_SECONDS = (
+    NATIVE_CLEANUP_RESERVE_SECONDS + MIN_NATIVE_MEASUREMENT_SECONDS
+)
 FULL_POLYPHONIES = (1, 5, 15)
 FULL_SAMPLE_COUNT = 20
 HOT_GAP_TARGET_US = 5_000
@@ -62,13 +66,16 @@ def _ensure_before_deadline(deadline: float, phase: str) -> None:
 
 
 def _child_measurement_budget(run_deadline: float, now: float) -> tuple[int, float]:
-    remaining_measurement = run_deadline - now - CLEANUP_RESERVE_SECONDS
-    if remaining_measurement < MIN_CHILD_BUDGET_SECONDS:
+    remaining_measurement = run_deadline - now - PUBLICATION_RESERVE_SECONDS
+    child_budget_seconds = math.floor(remaining_measurement)
+    if child_budget_seconds < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
         raise NativeCalibrationError(
-            "global calibration budget expired; five-second cleanup reserve was reached"
+            "global calibration budget cannot provide a native child with "
+            f"{MIN_NATIVE_MEASUREMENT_SECONDS}s measurement after the "
+            f"{NATIVE_CLEANUP_RESERVE_SECONDS}s native cleanup reserve"
         )
     return (
-        min(MAX_CALIBRATION_BUDGET_SECONDS, math.floor(remaining_measurement)),
+        min(MAX_CALIBRATION_BUDGET_SECONDS, child_budget_seconds),
         remaining_measurement,
     )
 
@@ -563,22 +570,18 @@ def _rustc_version() -> str:
         raise NativeCalibrationError(f"could not read rustc provenance: {exc}") from exc
 
 
-def full_orchestration_configuration() -> dict[str, Any]:
+def full_orchestration_configuration(
+    *, global_budget_seconds: float = FULL_CALIBRATION_TIMEOUT_SECONDS
+) -> dict[str, Any]:
     """Return the runner-owned full-calibration contract."""
 
     return {
         "polyphonies": list(FULL_POLYPHONIES),
         "samples_per_bucket": FULL_SAMPLE_COUNT,
-        "global_budget_seconds": MAX_CALIBRATION_BUDGET_SECONDS,
-        "cleanup_reserve_seconds": CLEANUP_RESERVE_SECONDS,
+        "global_budget_seconds": float(global_budget_seconds),
+        "publication_reserve_seconds": PUBLICATION_RESERVE_SECONDS,
         "chunk_samples": FULL_CHUNK_SAMPLES,
     }
-
-
-def full_calibration_configuration() -> dict[str, Any]:
-    """Compatibility name for the runner-owned orchestration configuration."""
-
-    return full_orchestration_configuration()
 
 
 def calibration_bucket_keys() -> list[tuple[str, int, str]]:
@@ -1083,49 +1086,6 @@ def _quantile_stats_i64(values: list[int]) -> dict[str, int]:
     }
 
 
-def _merge_bucket_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    clean_samples = [sample for sample in samples if sample["clean"]]
-    anomalies = [sample["anomalies"] for sample in samples]
-
-    def values(field: str, source: list[dict[str, Any]]) -> list[int]:
-        return [int(sample[field]) for sample in source if sample[field] is not None]
-
-    return {
-        "attempted": len(samples),
-        "clean": len(clean_samples),
-        "clean_sample_count": len(clean_samples),
-        "rejected": len(samples) - len(clean_samples),
-        "partial_send": sum(bool(value["partial_send"]) for value in anomalies),
-        "sample_count": len(samples),
-        "error_count": len(samples) - len(clean_samples),
-        "timeout_count": sum(bool(value["timeout"]) for value in anomalies),
-        "anomaly_count": sum(any(value.values()) for value in anomalies),
-        "class_mismatch_count": sum(
-            bool(value["class_mismatch"]) for value in anomalies
-        ),
-        "call_duration_us": _quantile_stats_u64(
-            values("call_duration_us", clean_samples)
-        ),
-        "first_receipt_us": (
-            _quantile_stats_i64(values("first_receipt_us", clean_samples))
-            if any(sample["first_receipt_us"] is not None for sample in clean_samples)
-            else None
-        ),
-        "last_receipt_us": (
-            _quantile_stats_i64(values("last_receipt_us", clean_samples))
-            if any(sample["last_receipt_us"] is not None for sample in clean_samples)
-            else None
-        ),
-        "intra_chord_spread_us": (
-            _quantile_stats_u64(values("intra_chord_spread_us", clean_samples))
-            if any(
-                sample["intra_chord_spread_us"] is not None for sample in clean_samples
-            )
-            else None
-        ),
-    }
-
-
 def _chunk_artifact(
     result: dict[str, Any],
     *,
@@ -1460,7 +1420,9 @@ def _validate_common_checkpoint_artifact(
     if (
         not isinstance(budget, int)
         or isinstance(budget, bool)
-        or not MIN_CHILD_BUDGET_SECONDS <= budget <= MAX_CALIBRATION_BUDGET_SECONDS
+        or not MIN_NATIVE_TOTAL_BUDGET_SECONDS
+        <= budget
+        <= MAX_CALIBRATION_BUDGET_SECONDS
     ):
         raise NativeCalibrationError(
             f"checkpoint artifact {key} native budget is invalid"
@@ -1705,9 +1667,17 @@ def run_diagnostic_calibration(
         raise NativeCalibrationError(
             "timeout_seconds must be between 1 and 120 seconds"
         )
+    if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+        raise NativeCalibrationError(
+            "timeout_seconds must provide at least "
+            f"{MIN_NATIVE_TOTAL_BUDGET_SECONDS}s for the native child budget"
+        )
     budget_seconds = min(
         MAX_CALIBRATION_BUDGET_SECONDS,
-        max(MIN_CHILD_BUDGET_SECONDS, math.ceil(float(timeout_seconds))),
+        max(
+            MIN_NATIVE_TOTAL_BUDGET_SECONDS,
+            math.floor(float(timeout_seconds)),
+        ),
     )
 
     output = Path(output_path)
@@ -1769,7 +1739,7 @@ def run_diagnostic_calibration(
             "polyphonies": [polyphony],
             "samples_per_bucket": samples,
             "global_budget_seconds": float(timeout_seconds),
-            "cleanup_reserve_seconds": CLEANUP_RESERVE_SECONDS,
+            "publication_reserve_seconds": PUBLICATION_RESERVE_SECONDS,
         }
         artifact = _bucket_artifact(
             result,
@@ -1799,11 +1769,6 @@ def run_full_calibration(
     resume: bool = False,
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
-    orchestration_configuration = full_orchestration_configuration()
-    checkpoint = Path(checkpoint_dir)
-    manifest_path = _checkpoint_path(checkpoint)
-    binary = _find_binary()
-    provenance = _current_full_provenance(binary)
     if timeout_seconds is None:
         timeout_seconds = FULL_CALIBRATION_TIMEOUT_SECONDS
     if not isinstance(timeout_seconds, (int, float)) or isinstance(
@@ -1816,8 +1781,21 @@ def run_full_calibration(
         raise NativeCalibrationError(
             "timeout_seconds must be between 1 and 120 seconds"
         )
+    if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+        raise NativeCalibrationError(
+            "timeout_seconds must provide at least "
+            f"{MIN_NATIVE_TOTAL_BUDGET_SECONDS}s for the native child budget"
+        )
+    timeout = float(timeout_seconds)
+    orchestration_configuration = full_orchestration_configuration(
+        global_budget_seconds=timeout
+    )
+    checkpoint = Path(checkpoint_dir)
+    manifest_path = _checkpoint_path(checkpoint)
+    binary = _find_binary()
+    provenance = _current_full_provenance(binary)
     run_started = time.monotonic()
-    run_deadline = run_started + float(timeout_seconds)
+    run_deadline = run_started + timeout
     if resume:
         if not manifest_path.is_file():
             raise NativeCalibrationError(
@@ -1858,10 +1836,10 @@ def run_full_calibration(
             child_budget_seconds, child_timeout_seconds = _child_measurement_budget(
                 run_deadline, time.monotonic()
             )
-            # The child receives the remaining measurement budget and owns its
-            # own five-second native cleanup reserve.  This keeps a full-mode
-            # checkpoint run bounded as a whole instead of giving every bucket
-            # an independent 120-second allowance.
+            # The child receives the remaining total native budget and owns its
+            # native cleanup reserve. The runner separately keeps its
+            # publication reserve, so the full checkpoint run remains bounded
+            # without giving every bucket an independent 120-second allowance.
             failure_path = (
                 checkpoint
                 / "failures"
@@ -2027,6 +2005,16 @@ def _finalizer_artifact(
     manifest: dict[str, Any], artifacts: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
     orchestration_configuration = full_orchestration_configuration()
+    manifest_configuration = _require_mapping(
+        manifest.get("orchestration_configuration"),
+        "manifest.orchestration_configuration",
+    )
+    if manifest_configuration.get("global_budget_seconds") != float(
+        MAX_CALIBRATION_BUDGET_SECONDS
+    ):
+        raise NativeCalibrationError(
+            "finalizer requires a 120-second acceptance calibration budget"
+        )
     expected_keys = {_bucket_key(*key) for key in calibration_bucket_keys()}
     if set(artifacts) != expected_keys:
         raise NativeCalibrationError(
@@ -2191,6 +2179,16 @@ def finalize_native_calibration(
     checkpoint = Path(checkpoint_dir)
     manifest = _load_json_file(_checkpoint_path(checkpoint))
     orchestration_configuration = full_orchestration_configuration()
+    manifest_configuration = _require_mapping(
+        manifest.get("orchestration_configuration"),
+        "manifest.orchestration_configuration",
+    )
+    if manifest_configuration.get("global_budget_seconds") != float(
+        MAX_CALIBRATION_BUDGET_SECONDS
+    ):
+        raise NativeCalibrationError(
+            "finalizer requires a 120-second acceptance calibration budget"
+        )
     if manifest.get("orchestration_configuration") != orchestration_configuration:
         raise NativeCalibrationError("finalizer orchestration configuration mismatch")
     entries = manifest.get("buckets")
@@ -2298,9 +2296,17 @@ def run_native_calibration(
         raise NativeCalibrationError(
             "timeout_seconds must be between 1 and 120 seconds"
         )
+    if float(timeout_seconds) < MIN_NATIVE_TOTAL_BUDGET_SECONDS:
+        raise NativeCalibrationError(
+            "timeout_seconds must provide at least "
+            f"{MIN_NATIVE_TOTAL_BUDGET_SECONDS}s for the native child budget"
+        )
     budget_seconds = min(
         MAX_CALIBRATION_BUDGET_SECONDS,
-        max(MIN_CHILD_BUDGET_SECONDS, math.ceil(float(timeout_seconds))),
+        max(
+            MIN_NATIVE_TOTAL_BUDGET_SECONDS,
+            math.floor(float(timeout_seconds)),
+        ),
     )
 
     binary = _find_binary()
@@ -2377,7 +2383,6 @@ __all__ = [
     "NativeCalibrationError",
     "calibration_bucket_keys",
     "finalize_native_calibration",
-    "full_calibration_configuration",
     "run_diagnostic_calibration",
     "run_full_calibration",
     "run_native_calibration",
