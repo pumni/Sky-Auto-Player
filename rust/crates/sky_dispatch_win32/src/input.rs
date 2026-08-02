@@ -129,7 +129,7 @@ pub enum DownSendOutcome {
         timing_error: Option<crate::clock::QpcError>,
     },
     IntegrityLost {
-        inserted_prefix: u8,
+        inserted_before_failure: u8,
         rolled_back: u8,
         rollback_residue: u8,
         first_error: Option<u32>,
@@ -173,6 +173,26 @@ pub struct ReleaseAllOutcome {
     pub released_successfully: bool,
     pub stuck_keys: Vec<u16>,
     pub verification_inconclusive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhysicalKeyPreflightError {
+    UserHeld(Vec<u16>),
+    VerificationInconclusive,
+}
+
+impl fmt::Display for PhysicalKeyPreflightError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UserHeld(keys) => write!(
+                f,
+                "instrument keys are physically held before playback: {keys:?}"
+            ),
+            Self::VerificationInconclusive => {
+                f.write_str("instrument key physical-state verification was inconclusive")
+            }
+        }
+    }
 }
 
 fn no_syscall_boundary_with_clock(
@@ -461,21 +481,15 @@ where
     }
 
     // A non-zero partial insertion has already destroyed chord integrity. Do
-    // not send the remainder: that would make a nominally successful chord
-    // arrive through two separately timestamped SendInput calls. Roll back
-    // the landed prefix immediately and leave any rollback residue tracked so
-    // the worker's terminal cleanup can handle it.
+    // not infer which keys landed and do not send a remainder as Down.
+    // Roll back the entire requested chord immediately; any residue is tracked
+    // as uncertain and the worker's terminal cleanup handles it fail-closed.
     if landed1 > 0 {
-        let rollback = send_fn(&scan_codes[..landed1], true);
-        let rollback_inserted = (rollback.inserted as usize).min(landed1);
+        let rollback = send_fn(scan_codes, true);
+        let rollback_inserted = (rollback.inserted as usize).min(n);
         let rollback_error = (rollback.win32_error != 0).then_some(rollback.win32_error);
-        let sent: SmallVec<[u16; 15]> = scan_codes[..landed1]
-            .iter()
-            .skip(rollback_inserted)
-            .copied()
-            .collect();
         return EmitResult {
-            sent,
+            sent: SmallVec::new(),
             completed_us: rollback.completed_us,
             started_ticks: Some(res1.started_ticks),
             completed_ticks: rollback.completed_ticks,
@@ -491,7 +505,7 @@ where
             chord_integrity_lost: true,
             keys_inserted_before_failure: landed1 as u8,
             keys_rolled_back: rollback_inserted as u8,
-            rollback_residue_keys: landed1.saturating_sub(rollback_inserted) as u8,
+            rollback_residue_keys: n.saturating_sub(rollback_inserted) as u8,
             timing_error: res1.timing_error.or(rollback.timing_error),
         };
     }
@@ -524,22 +538,17 @@ where
         };
     }
 
-    let mut sent: SmallVec<[u16; 15]> = SmallVec::new();
     let mut completed_us = retry.completed_us;
     let started_ticks = Some(res1.started_ticks);
     let mut completed_ticks = retry.completed_ticks;
     let mut send_attempts = 2;
     let mut last_win32_error = retry_error.or(first_win32_error);
     let mut rollback_timing_error = None;
+    let mut keys_rolled_back = 0u8;
+    let mut rollback_residue_keys = 0u8;
     if retry_inserted > 0 {
-        let rollback = send_fn(&scan_codes[..retry_inserted], true);
-        let rollback_inserted = (rollback.inserted as usize).min(retry_inserted);
-        sent.extend(
-            scan_codes[..retry_inserted]
-                .iter()
-                .skip(rollback_inserted)
-                .copied(),
-        );
+        let rollback = send_fn(scan_codes, true);
+        let rollback_inserted = (rollback.inserted as usize).min(n);
         completed_us = rollback.completed_us;
         completed_ticks = rollback.completed_ticks;
         send_attempts = 3;
@@ -547,14 +556,15 @@ where
             .then_some(rollback.win32_error)
             .or(last_win32_error);
         rollback_timing_error = rollback.timing_error;
+        keys_rolled_back = rollback_inserted as u8;
+        rollback_residue_keys = u8::from(rollback_inserted < n).saturating_mul(n as u8);
     }
-    let rollback_residue_keys = sent.len();
     let timing_error = retry
         .timing_error
         .or(res1.timing_error)
         .or(rollback_timing_error);
     EmitResult {
-        sent,
+        sent: SmallVec::new(),
         completed_us,
         started_ticks,
         completed_ticks,
@@ -569,12 +579,8 @@ where
         retried_after_zero_progress: true,
         chord_integrity_lost: retry_inserted > 0,
         keys_inserted_before_failure: retry_inserted as u8,
-        keys_rolled_back: if retry_inserted > 0 {
-            (retry_inserted.saturating_sub(rollback_residue_keys)) as u8
-        } else {
-            0
-        },
-        rollback_residue_keys: rollback_residue_keys as u8,
+        keys_rolled_back,
+        rollback_residue_keys,
         timing_error,
     }
 }
@@ -585,8 +591,8 @@ pub fn emit_down(scan_codes: &[u16]) -> EmitResult {
 
 /// Emit a note-off without delaying the real-time worker.
 ///
-/// A partial `SendInput` result gets one immediate remainder retry.  Any
-/// delayed retry belongs to the coordinator, which can then enter an
+/// A partial `SendInput` result gets one immediate retry of the whole
+/// requested set. Any delayed retry belongs to the coordinator, which can then enter an
 /// interruptible recovery pause instead of blocking command handling inside
 /// the platform seam.
 fn emit_up_with_immediate<F>(scan_codes: &[u16], mut send_fn: F) -> EmitResult
@@ -644,31 +650,37 @@ where
         };
     }
 
-    let remainder = &scan_codes[first_inserted..];
-    let second = send_fn(remainder, true);
-    let second_inserted = (second.inserted as usize).min(remainder.len());
-    let sent_total = first_inserted + second_inserted;
+    // A partial Up is also uncertain: retry the entire requested set instead
+    // of assuming SendInput's inserted count identifies a prefix.
+    let second = send_fn(scan_codes, true);
+    let second_inserted = (second.inserted as usize).min(n);
+    let success = second_inserted >= n;
     let second_win32_error = (second.win32_error != 0).then_some(second.win32_error);
     let last_win32_error = second_win32_error.or(first_win32_error);
-
-    let success = sent_total == n;
-    let sent: SmallVec<[u16; 15]> = scan_codes[..sent_total].iter().copied().collect();
     EmitResult {
-        sent,
+        sent: if success {
+            scan_codes.iter().copied().collect()
+        } else {
+            SmallVec::new()
+        },
         completed_us: second.completed_us,
         started_ticks: Some(first.started_ticks),
         completed_ticks: second.completed_ticks,
         success,
-        keys_dropped: (n - sent_total) as u64,
+        keys_dropped: u64::from(!success),
         first_win32_error: first_win32_error.or(second_win32_error),
         last_win32_error,
         send_attempts: 2,
         zero_progress_retries: u8::from(first_inserted == 0),
         first_inserted: first_inserted as u8,
-        partial_progress: sent_total > 0 && !success,
+        partial_progress: (first_inserted > 0 || second_inserted > 0) && !success,
         retried_after_zero_progress: first_inserted == 0,
         chord_integrity_lost: false,
-        keys_inserted_before_failure: if success { 0 } else { sent_total as u8 },
+        keys_inserted_before_failure: if success {
+            0
+        } else {
+            first_inserted.max(second_inserted) as u8
+        },
         keys_rolled_back: 0,
         rollback_residue_keys: 0,
         timing_error: first.timing_error.or(second.timing_error),
@@ -756,6 +768,35 @@ impl TrackedKeyState {
         Self {
             qpc_clock: Some(clock),
             ..Default::default()
+        }
+    }
+
+    /// Admit a real playback start/resume only when the user is not holding an
+    /// instrument key. Mock emitters do not represent physical keyboard state,
+    /// so they are explicitly exempt from this host preflight.
+    pub fn ensure_instrument_keys_physically_up(&self) -> Result<(), PhysicalKeyPreflightError> {
+        if self.custom_emitter.is_some() {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        {
+            let mut held = Vec::new();
+            for &scan_code in &PHYSICAL_INSTRUMENT_SCAN_CODES {
+                match is_scan_code_physically_down(scan_code) {
+                    Some(true) => held.push(scan_code),
+                    Some(false) => {}
+                    None => return Err(PhysicalKeyPreflightError::VerificationInconclusive),
+                }
+            }
+            if held.is_empty() {
+                Ok(())
+            } else {
+                Err(PhysicalKeyPreflightError::UserHeld(held))
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(())
         }
     }
 
@@ -855,12 +896,23 @@ impl TrackedKeyState {
             .rollback_residue_keys
             .saturating_add(emitted.rollback_residue_keys as u64);
 
-        for &sc in &emitted.sent {
-            self.active_mask |= key_mask(sc).unwrap_or(0);
-        }
+        if emitted.chord_integrity_lost {
+            // SendInput's inserted count is not a trustworthy prefix receipt.
+            // Keep the complete chord possibly active until full cleanup has
+            // verified that every requested key is up.
+            for &sc in &to_send {
+                let bit = key_mask(sc).unwrap_or(0);
+                self.active_mask &= !bit;
+                self.possibly_active_mask |= bit;
+            }
+        } else {
+            for &sc in &emitted.sent {
+                self.active_mask |= key_mask(sc).unwrap_or(0);
+            }
 
-        for &sc in &to_send {
-            self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
+            for &sc in &to_send {
+                self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
+            }
         }
 
         if !emitted.success {
@@ -887,7 +939,7 @@ impl TrackedKeyState {
 
         if emitted.chord_integrity_lost {
             DownSendOutcome::IntegrityLost {
-                inserted_prefix: emitted.keys_inserted_before_failure,
+                inserted_before_failure: emitted.keys_inserted_before_failure,
                 rolled_back: emitted.keys_rolled_back,
                 rollback_residue: emitted.rollback_residue_keys,
                 first_error: emitted.first_win32_error,
@@ -1002,10 +1054,6 @@ impl TrackedKeyState {
 
         if emitted.partial_progress {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
-        }
-        if !emitted.success && emitted.retried_after_zero_progress && emitted.sent.is_empty() {
-            self.sendinput_zero_progress_failures =
-                self.sendinput_zero_progress_failures.saturating_add(1);
         }
         self.keys_inserted_before_failure = self
             .keys_inserted_before_failure
@@ -1257,7 +1305,7 @@ mod tests {
             (vec![3], 3, 0, 1, true),
             // A partial first insertion is rolled back; the remainder is
             // never emitted as a second note-on chord.
-            (vec![2, 1], 1, 1, 2, false),
+            (vec![2, 1], 0, 1, 2, false),
             (vec![0, 0], 0, 3, 2, false),
             (vec![1, 1], 0, 2, 2, false),
             (vec![99], 3, 0, 1, true),
@@ -1276,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_note_on_marks_integrity_loss_and_rolls_back_prefix() {
+    fn partial_note_on_marks_integrity_loss_and_rolls_back_uncertain_chord() {
         let mut calls = 0;
         let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
             calls += 1;
@@ -1290,6 +1338,49 @@ mod tests {
         assert_eq!(emitted.first_inserted, 2);
         assert_eq!(emitted.sent.len(), 0);
         assert_eq!(emitted.send_attempts, 2);
+    }
+
+    #[test]
+    fn partial_note_on_rolls_back_the_uncertain_whole_chord() {
+        let mut calls = Vec::new();
+        let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
+            calls.push((codes.to_vec(), key_up));
+            scripted_result(
+                codes.len(),
+                if key_up { codes.len() as u32 } else { 1 },
+                calls.len() as u64,
+            )
+        });
+
+        assert!(!emitted.success);
+        assert!(emitted.chord_integrity_lost);
+        assert_eq!(calls, vec![(vec![2, 3, 4], false), (vec![2, 3, 4], true)]);
+    }
+
+    #[test]
+    fn partial_note_on_after_zero_retry_rolls_back_the_uncertain_whole_chord() {
+        let mut calls = Vec::new();
+        let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
+            calls.push((codes.to_vec(), key_up));
+            let inserted = match calls.len() {
+                1 => 0,
+                2 if !key_up => 1,
+                _ if key_up => codes.len() as u32,
+                _ => 0,
+            };
+            scripted_result(codes.len(), inserted, calls.len() as u64)
+        });
+
+        assert!(!emitted.success);
+        assert!(emitted.chord_integrity_lost);
+        assert_eq!(
+            calls,
+            vec![
+                (vec![2, 3, 4], false),
+                (vec![2, 3, 4], false),
+                (vec![2, 3, 4], true),
+            ]
+        );
     }
 
     #[test]
@@ -1313,7 +1404,7 @@ mod tests {
     fn up_retry_matrix_is_immediate_and_bounded() {
         for (script, expected_sent, expected_calls, expected_success) in [
             (vec![3], 3, 1, true),
-            (vec![1, 2], 3, 2, true),
+            (vec![1, 3], 3, 2, true),
             (vec![0, 0], 0, 2, false),
             (vec![99], 3, 1, true),
         ] {
@@ -1327,6 +1418,23 @@ mod tests {
             assert_eq!(calls, expected_calls);
             assert_eq!(emitted.success, expected_success);
         }
+    }
+
+    #[test]
+    fn partial_note_off_retries_the_entire_requested_set() {
+        let mut calls = Vec::new();
+        let emitted = emit_up_with_immediate(&[2, 3, 4], |codes, key_up| {
+            assert!(key_up);
+            calls.push(codes.to_vec());
+            scripted_result(
+                codes.len(),
+                if calls.len() == 1 { 1 } else { 3 },
+                calls.len() as u64,
+            )
+        });
+
+        assert!(emitted.success);
+        assert_eq!(calls, vec![vec![2, 3, 4], vec![2, 3, 4]]);
     }
 
     #[test]

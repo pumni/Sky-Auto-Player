@@ -7,6 +7,11 @@ from typing import Any, cast
 import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
+pytestmark = pytest.mark.skipif(
+    not hasattr(sky_player_rs, "RustInputBackend"),
+    reason="RustInputBackend is diagnostic-backend feature gated",
+)
+
 PHYSICAL_SCAN_CODES_PLUS_ONE = [
     0x15,
     0x16,

@@ -1,15 +1,17 @@
 pub mod calibration;
 pub mod engine;
 
-use engine::{ChordConflictPolicy, FaultInjectionScript, NativeDispatchSession};
+use engine::{DispatchProfile, FaultInjectionScript, NativeDispatchSession};
+#[cfg(feature = "diagnostic-backend")]
 use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
-use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_win32::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, TrackedKeyState};
+use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+#[cfg(feature = "diagnostic-backend")]
+use sky_dispatch_win32::input::TrackedKeyState;
 use sky_dispatch_win32::mmcss::PriorityMode;
 use std::sync::Arc;
 
@@ -195,11 +197,13 @@ fn parse_actions(
     Ok(actions)
 }
 
+#[cfg(feature = "diagnostic-backend")]
 #[pyclass(frozen)]
 struct RustInputBackend {
     state: Arc<Mutex<TrackedKeyState>>,
 }
 
+#[cfg(feature = "diagnostic-backend")]
 #[pymethods]
 impl RustInputBackend {
     #[new]
@@ -332,7 +336,7 @@ impl RustInputBackend {
                 dict.set_item("rollback_residue_keys", 0)?;
             }
             sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
-                inserted_prefix,
+                inserted_before_failure,
                 rolled_back,
                 rollback_residue,
                 first_error,
@@ -357,7 +361,7 @@ impl RustInputBackend {
                 dict.set_item("partial_progress", true)?;
                 dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
                 dict.set_item("chord_integrity_lost", true)?;
-                dict.set_item("keys_inserted_before_failure", inserted_prefix)?;
+                dict.set_item("keys_inserted_before_failure", inserted_before_failure)?;
                 dict.set_item("keys_rolled_back", rolled_back)?;
                 dict.set_item("rollback_residue_keys", rollback_residue)?;
             }
@@ -471,24 +475,21 @@ impl NativeDispatchSessionPy {
     #[pyo3(signature = (
         py_actions,
         allowed_scan_codes,
+        profile = "production",
         min_hold_us = StrictU64(50000),
         max_lead_us = StrictU64(2000),
         dispatch_lead_us = StrictU64(0),
-        mock_backend = true,
+        mock_backend = false,
         require_focus = false,
         focus_restore_grace_us = StrictU64(100000),
         spin_threshold_us = StrictU64(150),
-        core_warmup_budget_us = StrictU64(200),
-        late_pulse_drop_threshold_us = None,
-        same_key_conflict_policy = "drop_chord",
-        telemetry_enabled = false,
+        core_warmup_budget_us = StrictU64(0),
         telemetry_mode = None,
-        telemetry_capacity = StrictU64(200000),
+        telemetry_capacity = StrictU64(1024),
         rt_priority_mode = "auto",
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = false,
-        enable_spin_reprobe = false,
         spin_floor_us = StrictU64(700),
         estimator_state_json = None,
         enable_adaptive_lead = false,
@@ -505,6 +506,7 @@ impl NativeDispatchSessionPy {
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
+        profile: &str,
         min_hold_us: StrictU64,
         max_lead_us: StrictU64,
         dispatch_lead_us: StrictU64,
@@ -513,16 +515,12 @@ impl NativeDispatchSessionPy {
         focus_restore_grace_us: StrictU64,
         spin_threshold_us: StrictU64,
         core_warmup_budget_us: StrictU64,
-        late_pulse_drop_threshold_us: Option<StrictU64>,
-        same_key_conflict_policy: &str,
-        telemetry_enabled: bool,
         telemetry_mode: Option<&str>,
         telemetry_capacity: StrictU64,
         rt_priority_mode: &str,
         enable_waitable_timer: bool,
         enable_event_wait: bool,
         enable_adaptive_spin: bool,
-        enable_spin_reprobe: bool,
         spin_floor_us: StrictU64,
         estimator_state_json: Option<&str>,
         enable_adaptive_lead: bool,
@@ -535,6 +533,12 @@ impl NativeDispatchSessionPy {
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
     ) -> PyResult<Self> {
+        let parsed_profile = DispatchProfile::parse(profile).map_err(PyValueError::new_err)?;
+        // `mock_backend` is retained as a narrow source-compatibility input
+        // for existing diagnostic callers. New callers select MockTest via
+        // `profile="mock_test"`; production never enables it implicitly.
+        let mock_backend = mock_backend || parsed_profile.uses_mock_backend();
+        let strict_timing = strict_timing || parsed_profile.strict_timing();
         let min_hold_us = min_hold_us.0;
         let max_lead_us = max_lead_us.0;
         let dispatch_lead_us = dispatch_lead_us.0;
@@ -543,26 +547,17 @@ impl NativeDispatchSessionPy {
         let focus_restore_grace_us = focus_restore_grace_us.0;
         let spin_threshold_us = spin_threshold_us.0;
         let core_warmup_budget_us = core_warmup_budget_us.0;
-        let late_pulse_drop_threshold_us = late_pulse_drop_threshold_us.map(|value| value.0);
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         let parsed_telemetry_mode = match telemetry_mode {
             Some("off") => crate::engine::TelemetryMode::Off,
-            Some("summary") => crate::engine::TelemetryMode::Summary,
             Some("ring") => crate::engine::TelemetryMode::Ring,
-            Some("full_trace") => crate::engine::TelemetryMode::FullTrace,
             Some(_) => {
                 return Err(PyValueError::new_err(
-                    "telemetry_mode must be 'off', 'summary', 'ring', or 'full_trace'",
+                    "telemetry_mode must be 'off' or 'ring'",
                 ));
             }
-            None => {
-                if telemetry_enabled {
-                    crate::engine::TelemetryMode::FullTrace
-                } else {
-                    crate::engine::TelemetryMode::Off
-                }
-            }
+            None => crate::engine::TelemetryMode::Off,
         };
         let spin_floor_us = spin_floor_us.0;
         let input_path_warn_us = input_path_warn_us.0;
@@ -576,14 +571,42 @@ impl NativeDispatchSessionPy {
             "zero_progress_down_once" if mock_backend => {
                 FaultInjectionScript::zero_progress_down_once()
             }
-            "transient_release" | "persistent_release" | "zero_progress_down_once" => {
+            "persistent_zero_down" if mock_backend => FaultInjectionScript::persistent_zero_down(),
+            "partial_down_first_attempt" if mock_backend => {
+                FaultInjectionScript::partial_down_first_attempt()
+            }
+            "partial_down_after_zero_retry" if mock_backend => {
+                FaultInjectionScript::partial_down_after_zero_retry()
+            }
+            "persistent_zero_up" if mock_backend => FaultInjectionScript::persistent_zero_up(),
+            "panic_after_send_before_commit" if mock_backend => {
+                FaultInjectionScript::panic_after_send_before_commit()
+            }
+            "focus_loss_after_due_before_send" if mock_backend => {
+                FaultInjectionScript::focus_loss_after_due_before_send()
+            }
+            "qpc_failure_after_send" if mock_backend => {
+                FaultInjectionScript::qpc_failure_after_send()
+            }
+            "wait_failure" if mock_backend => FaultInjectionScript::wait_failure(),
+            "transient_release"
+            | "persistent_release"
+            | "zero_progress_down_once"
+            | "persistent_zero_down"
+            | "partial_down_first_attempt"
+            | "partial_down_after_zero_retry"
+            | "persistent_zero_up"
+            | "panic_after_send_before_commit"
+            | "focus_loss_after_due_before_send"
+            | "qpc_failure_after_send"
+            | "wait_failure" => {
                 return Err(PyValueError::new_err(
                     "mock_failure_mode requires mock_backend=True",
                 ));
             }
             _ => {
                 return Err(PyValueError::new_err(
-                    "mock_failure_mode must be 'none', 'transient_release', 'persistent_release', or 'zero_progress_down_once'",
+                    "mock_failure_mode must be 'none', 'transient_release', 'persistent_release', 'zero_progress_down_once', 'persistent_zero_down', 'partial_down_first_attempt', 'partial_down_after_zero_retry', 'persistent_zero_up', 'panic_after_send_before_commit', 'focus_loss_after_due_before_send', 'qpc_failure_after_send', or 'wait_failure'",
                 ));
             }
         };
@@ -638,11 +661,6 @@ impl NativeDispatchSessionPy {
                 "estimator_state_json must be at most 65536 bytes",
             ));
         }
-        if late_pulse_drop_threshold_us.is_some_and(|threshold| threshold > 60_000_000) {
-            return Err(PyValueError::new_err(
-                "late_pulse_drop_threshold_us must be at most 60000000",
-            ));
-        }
         if strict_down_completion_late_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "strict_down_completion_late_us must be at most 60000000",
@@ -658,30 +676,11 @@ impl NativeDispatchSessionPy {
                 "supervisor_lease_timeout_us must be at most 60000000",
             ));
         }
-        if telemetry_capacity == 0 || telemetry_capacity > 200_000 {
+        if telemetry_capacity == 0 || telemetry_capacity > 1_024 {
             return Err(PyValueError::new_err(
-                "telemetry_capacity must be between 1 and 200000",
+                "telemetry_capacity must be between 1 and 1024",
             ));
         }
-        let parsed_chord_conflict_policy = match same_key_conflict_policy {
-            "degraded" => ChordConflictPolicy::DropConflictingKeys,
-            "drop_chord" => ChordConflictPolicy::DropWholeChord,
-            "strict" | "abort" => ChordConflictPolicy::AbortPlayback,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "same_key_conflict_policy must be 'degraded', 'drop_chord', or 'strict'",
-                ));
-            }
-        };
-        // Strict timing is a fidelity contract, not merely a telemetry mode.
-        // Enforce the safe conflict policy at the native boundary so a
-        // caller cannot accidentally combine strict timing with a policy
-        // that silently drops an authored chord and reports success.
-        let chord_conflict_policy = if strict_timing {
-            ChordConflictPolicy::AbortPlayback
-        } else {
-            parsed_chord_conflict_policy
-        };
         let priority_mode = match rt_priority_mode {
             "auto" => PriorityMode::Auto,
             "mmcss" => PriorityMode::Mmcss,
@@ -695,12 +694,6 @@ impl NativeDispatchSessionPy {
             }
         };
         let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
-        if let Some(raw) = estimator_state_json {
-            let mut validator =
-                SendLatencyEstimator::try_new(0.2, max_lead_us, allowed_scan_codes.len())
-                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
-            validator.import_state(raw).map_err(PyValueError::new_err)?;
-        }
         let actions = parse_actions(py_actions, &allowed_scan_codes)?;
         let schedule =
             sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
@@ -732,15 +725,12 @@ impl NativeDispatchSessionPy {
             focus_restore_grace_us,
             spin_threshold_us,
             core_warmup_budget_us,
-            late_pulse_drop_threshold_us,
-            chord_conflict_policy,
             parsed_telemetry_mode,
             telemetry_capacity,
             priority_mode,
             enable_waitable_timer,
             enable_event_wait,
             enable_adaptive_spin,
-            enable_spin_reprobe,
             spin_floor_us,
             estimator_state_json.map(str::to_string),
             enable_adaptive_lead,
@@ -1042,6 +1032,7 @@ fn qpc_now_rs() -> PyResult<u64> {
 /// Free-threaded PyO3 extension module for Sky Auto Player dispatch engine.
 #[pyo3::pymodule(gil_used = false)]
 fn sky_player_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "diagnostic-backend")]
     m.add_class::<RustInputBackend>()?;
     m.add_class::<NativeDispatchSessionPy>()?;
     let dispatch_session = m.getattr("DispatchSession")?;

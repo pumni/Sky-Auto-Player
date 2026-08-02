@@ -23,6 +23,137 @@ fn test_coordinator(
     .expect("test coordinator configuration is valid")
 }
 
+#[test]
+fn terminal_lifecycle_does_not_imply_clean_completion() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![2],
+            reason: "focus-race-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![2],
+            reason: "focus-race-up".to_string().into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &[2]).expect("valid schedule");
+    let mut coordinator = test_coordinator(
+        schedule,
+        0,
+        0,
+        sky_dispatch_core::time::TimelineTicks::from_raw,
+    );
+
+    let (batch, _) = coordinator
+        .pop_next_due_authored(0, 0)
+        .expect("first batch is due");
+    coordinator
+        .drop_expired_downs(&batch.intents)
+        .expect("test drop is a valid ledger transition");
+    let _stale_up = coordinator
+        .pop_next_due_authored(1_000, 0)
+        .expect("matching stale Up is due");
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts["dropped_expired"], 1);
+    assert!(coordinator.is_finished());
+    assert_ne!(counts["released"], 2);
+}
+
+#[test]
+fn final_focus_loss_does_not_consume_the_prepared_authored_batch() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![2],
+            reason: "focus-race-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![2],
+            reason: "focus-race-up".to_string().into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &[2]).expect("valid schedule");
+    let coordinator = test_coordinator(
+        schedule,
+        0,
+        0,
+        sky_dispatch_core::time::TimelineTicks::from_raw,
+    );
+
+    let _prepared = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("first batch is due")
+        .expect("prepared batch");
+
+    // Preparation is observational. Focus loss before SendInput must leave
+    // the same batch available for a later prepare/commit cycle.
+    assert_eq!(
+        coordinator
+            .next_authored_ticks(DurationTicks::ZERO)
+            .expect("typed authored deadline")
+            .map(TimelineTicks::as_u64),
+        Some(0)
+    );
+}
+
+#[test]
+fn prepared_batch_cursor_commits_once_after_down_success() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![2],
+            reason: "commit-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![2],
+            reason: "commit-up".to_string().into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &[2]).expect("valid schedule");
+    let mut coordinator = test_coordinator(
+        schedule,
+        0,
+        0,
+        sky_dispatch_core::time::TimelineTicks::from_raw,
+    );
+    let prepared = coordinator
+        .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+        .expect("typed prepare")
+        .expect("down is due");
+
+    coordinator
+        .commit_down_success(prepared, &[2], TimelineTicks::ZERO, TimelineTicks::ZERO)
+        .expect("down commit");
+    assert_eq!(
+        coordinator
+            .next_authored_ticks(DurationTicks::ZERO)
+            .expect("typed authored deadline")
+            .map(TimelineTicks::as_u64),
+        Some(1_000)
+    );
+    assert!(
+        coordinator
+            .commit_down_success(prepared, &[2], TimelineTicks::ZERO, TimelineTicks::ZERO,)
+            .is_err()
+    );
+}
+
 trait LegacyCoordinatorTestApi {
     fn next_pending_release_us(&self, lead_up: u64) -> Option<u64>;
     fn pending_count_due_at(&self, deadline_us: u64, lead_up: u64) -> usize;

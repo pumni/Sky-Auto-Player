@@ -648,8 +648,8 @@ def _run_rust_selftest() -> int:
                 (1, "up", 1_000, [0x15], "selftest"),
             ],
             [0x15],
+            profile="mock_test",
             min_hold_us=0,
-            mock_backend=True,
         )
         session.start()
         if session.join(timeout_ms=5_000) is not True:

@@ -8,13 +8,16 @@ rust-version.workspace = true
 name = "sky_player_rs"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+diagnostic-backend = []
+
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }
 sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
 pyo3 = { version = "=0.29.0", features = ["extension-module"] }
 thiserror = "2"
 smallvec = { version = "1", features = ["serde"] }
-crossbeam-channel = "0.5"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

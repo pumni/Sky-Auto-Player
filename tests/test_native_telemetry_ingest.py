@@ -7,7 +7,8 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     logger = TelemetryLogger("test", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 2,
+            "schema_version": 3,
+            "qpc_frequency_hz": 10_000_000,
             "attempted": 1,
             "accepted": 1,
             "dropped": 0,
@@ -15,63 +16,40 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
             "records": [
                 {
                     "event_index": 0,
-                    "dispatch_id": 7,
-                    "kind": "down",
-                    "scheduled_us": 1_000,
-                    "scheduled_timeline_us": 1_000,
-                    "actual_us": 1_010,
-                    "wake_timeline_us": 1_010,
-                    "dispatch_completed_us": 1_020,
-                    "sender_started_us": 1_011,
-                    "sender_completed_us": 1_018,
-                    "sender_completion_error_us": 18,
-                    "sendinput_call_duration_us": None,
-                    "send_operation_duration_us": 9,
-                    "bookkeeping_duration_us": 2,
-                    "lateness_us": 10,
-                    "visible_lateness_us": 20,
-                    "send_duration_us": 12,
-                    "send_duration_pure_us": 10,
-                    "bookkeeping_us": 2,
-                    "dispatch_lateness_us": 20,
-                    "scan_codes": [0x15],
-                    "sent_scan_codes": [0x15],
-                    "skipped_scan_codes": [],
-                    "generation_ids": [1],
-                    "runtime_outcome": "sent",
-                    "deferred_by_us": 0,
-                    "pre_send_spin_us": 0,
-                    "idle_gap_us": 0,
-                    "reason": "note",
-                    "applied_lead_us": 100,
-                    "first_win32_error": 5,
-                    "last_win32_error": 1460,
-                    "send_attempts": 3,
-                    "zero_progress_retries": 2,
+                    "kind": 0,
+                    "outcome": 0,
+                    "polyphony": 1,
+                    "flags": 1,
+                    "authored_ticks": 10_000,
+                    "effective_deadline_ticks": 10_000,
+                    "wake_ticks": 10_100,
+                    "send_started_ticks": 10_110,
+                    "send_completed_ticks": 10_180,
+                    "applied_lead_ticks": 1_000,
+                    "win32_error": 1460,
                 }
             ],
         }
     )
 
     row = logger.records[0]._materialize()
-    assert row["dispatch_id"] == 7
+    assert row["dispatch_id"] == 0
     assert row["evidence_scope"] == "sender_completion"
-    assert row["send_duration_pure_us"] == 10
-    assert row["bookkeeping_us"] == 2
+    assert row["send_duration_pure_us"] == 7
+    assert row["bookkeeping_us"] == 0
     assert row["scheduled_timeline_us"] == 1_000
     assert row["wake_timeline_us"] == 1_010
     assert row["sender_started_us"] == 1_011
     assert row["sender_completed_us"] == 1_018
     assert row["sender_completion_error_us"] == 18
-    assert row["send_operation_duration_us"] == 9
-    assert row["sendinput_call_duration_us"] is None
-    assert row["send_operation_duration_us"] == 9
-    assert row["bookkeeping_duration_us"] == 2
-    assert row["generation_ids"] == "1"
-    assert row["first_win32_error"] == 5
+    assert row["send_operation_duration_us"] == 7
+    assert row["sendinput_call_duration_us"] == 7
+    assert row["bookkeeping_duration_us"] == 0
+    assert row["generation_ids"] == ""
+    assert row["first_win32_error"] == 1460
     assert row["last_win32_error"] == 1460
-    assert row["send_attempts"] == 3
-    assert row["zero_progress_retries"] == 2
+    assert row["send_attempts"] == 0
+    assert row["zero_progress_retries"] == 0
 
 
 def test_native_terminal_counters_replace_python_placeholders() -> None:

@@ -10,11 +10,42 @@ from typing import Any, cast
 
 import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
+from rust_contract_helpers import assert_clean_finished
 
-from sky_music.domain.scheduler_types import ActionKind
-from sky_music.orchestration.engine import SendLatencyEstimator
 from sky_music.orchestration.native_dispatch import RustDispatchRuntime
 from sky_music.platform.win32 import inputs
+
+_TRACE_OUTCOMES = {
+    0: "sent",
+    1: "deferred_release",
+    2: "failed_note_off",
+    3: "blocked_unfocused",
+    4: "suppressed_stale_up",
+    5: "recovered_zero_progress_but_late",
+    6: "strict_completion_slo_exceeded",
+    7: "chord_integrity_lost",
+    8: "aborted",
+}
+
+
+def _trace_outcome(row: dict[str, Any]) -> str:
+    return _TRACE_OUTCOMES[row["outcome"]]
+
+
+def test_native_dispatch_clean_finished_satisfies_full_contract() -> None:
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 0, [0x15, 0x16], "clean-down"),
+            (1, "up", 2_000, [0x15, 0x16], "clean-up"),
+        ],
+        [0x15, 0x16],
+        min_hold_us=0,
+        mock_backend=True,
+    )
+    session.start()
+    assert session.join(timeout_ms=5_000) is True
+
+    assert_clean_finished(cast(dict[str, Any], session.snapshot()))
 
 
 def test_native_dispatch_session_lifecycle() -> None:
@@ -49,12 +80,16 @@ def test_native_dispatch_session_lifecycle() -> None:
 
     snap_end = cast(dict[str, Any], session.snapshot())
     assert snap_end["is_finished"] is True
-    assert snap_end["status"] == "finished"
+    # Manual cancellation releases the live generation and cancels the
+    # remaining ledger; the strict success contract therefore rejects
+    # `finished`.
+    assert snap_end["status"] == "error"
+    assert snap_end["outcome"] == "error"
     assert sum(snap_end["generation_status_counts"].values()) == snap_end[
         "generation_count"
     ]
     assert snap_end["abort_counts_by_reason"] == {
-        "finished": 1,
+        "error": 1,
         "manual_pause": 1,
     }
     assert snap_end["release_outcome"]["released_successfully"] is True
@@ -246,7 +281,8 @@ def test_native_dispatch_focus_cycles_preserve_future_generations() -> None:
 
     assert session.join(timeout_ms=1_000) is True
     final = cast(dict[str, Any], session.snapshot())
-    assert final["status"] == "finished"
+    assert final["status"] == "error"
+    assert final["outcome"] == "error"
     assert final["terminal_error"] is None
     assert final["generation_status_counts"]["cancelled"] == 1
     assert final["generation_status_counts"]["released"] == 1
@@ -279,8 +315,9 @@ def test_native_dispatch_manual_pause_cancels_live_but_keeps_future_same_key() -
     session.resume()
     assert session.join(timeout_ms=1_000) is True
     final = cast(dict[str, Any], session.snapshot())
-    assert final["status"] == "finished"
-    assert final["terminal_error"] is None
+    assert final["status"] == "error"
+    assert final["outcome"] == "error"
+    assert "clean completion contract failed" in str(final["terminal_error"])
     assert final["generation_status_counts"]["cancelled"] == 1
     assert final["generation_status_counts"]["released"] == 1
 
@@ -294,7 +331,7 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
         [0x15],
         min_hold_us=0,
         mock_backend=True,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
         telemetry_capacity=1,
     )
     with pytest.raises(RuntimeError):
@@ -308,49 +345,54 @@ def test_native_dispatch_telemetry_is_terminal_retain_first_buffer() -> None:
     assert output["dropped"] == 1
     assert output["truncated"] is True
     assert len(output["records"]) == 1
-    assert set(output["records"][0]) >= {
-        "dispatch_completed_us",
-        "send_duration_pure_us",
-        "bookkeeping_us",
-        "runtime_outcome",
-        "generation_ids",
-        "first_win32_error",
-        "last_win32_error",
-        "send_attempts",
-        "zero_progress_retries",
+    assert set(output["records"][0]) == {
+        "event_index",
+        "kind",
+        "outcome",
+        "polyphony",
+        "flags",
+        "authored_ticks",
+        "effective_deadline_ticks",
+        "wake_ticks",
+        "send_started_ticks",
+        "send_completed_ticks",
+        "applied_lead_ticks",
+        "win32_error",
     }
     with pytest.raises(RuntimeError):
         session.take_telemetry_json()
 
 
-def test_native_dispatch_telemetry_preserves_non_send_outcomes() -> None:
+def test_native_dispatch_telemetry_does_not_drop_a_late_pulse() -> None:
     expired = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
-        [(0, "down", 0, [0x15], "expired")],
+        [
+            (0, "down", 0, [0x15], "expired"),
+            (1, "up", 1_000, [0x15], "release"),
+        ],
         [0x15],
+        min_hold_us=0,
         mock_backend=True,
-        telemetry_enabled=True,
-        late_pulse_drop_threshold_us=0,
+        telemetry_mode="ring",
     )
     expired.start()
     assert expired.join() is True
+    assert_clean_finished(cast(dict[str, Any], expired.snapshot()))
     expired_output = cast(
         dict[str, Any],
         json.loads(expired.take_telemetry_json()),
     )
-    assert [row["runtime_outcome"] for row in expired_output["records"]] == [
-        "dropped_expired"
-    ]
+    assert _trace_outcome(expired_output["records"][0]) == "sent"
 
     stale = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         [(0, "up", 0, [0x15], "stale")],
         [0x15],
         mock_backend=True,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     stale.start()
     assert stale.join() is True
     stale_output = cast(dict[str, Any], json.loads(stale.take_telemetry_json()))
-    assert [row["runtime_outcome"] for row in stale_output["records"]] == [
+    assert [_trace_outcome(row) for row in stale_output["records"]] == [
         "suppressed_stale_up"
     ]
 
@@ -364,16 +406,16 @@ def test_native_dispatch_telemetry_marks_deferred_release() -> None:
         [0x15],
         min_hold_us=10_000,
         mock_backend=True,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     session.start()
     assert session.join() is True
     output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
-    assert [row["runtime_outcome"] for row in output["records"]] == [
+    assert [_trace_outcome(row) for row in output["records"]] == [
         "sent",
         "deferred_release",
     ]
-    assert [row["reason"] for row in output["records"]] == ["down", "up"]
+    assert [row["kind"] for row in output["records"]] == [0, 1]
 
 
 def test_native_worker_retries_transient_note_off_before_same_key_down() -> None:
@@ -382,12 +424,13 @@ def test_native_worker_retries_transient_note_off_before_same_key_down() -> None
             (0, "down", 0, [0x15], "down-1"),
             (1, "up", 1_000, [0x15], "up-1"),
             (2, "down", 12_000, [0x15], "down-2"),
+            (3, "up", 13_000, [0x15], "up-2"),
         ],
         [0x15],
         min_hold_us=0,
         mock_backend=True,
         mock_failure_mode="transient_release",
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     session.start()
     assert session.join() is True
@@ -397,16 +440,17 @@ def test_native_worker_retries_transient_note_off_before_same_key_down() -> None
     records = output["records"]
 
     assert snapshot["status"] == "finished"
+    assert snapshot["outcome"] == "finished"
     assert snapshot["active_count"] == 0
     assert snapshot["failed_release_count"] == 0
-    assert any(row["runtime_outcome"] == "failed_note_off" for row in records)
+    assert any(_trace_outcome(row) == "failed_note_off" for row in records)
     assert any(
         row["event_index"] == 1
-        and row["runtime_outcome"] in {"sent", "deferred_release"}
+        and _trace_outcome(row) in {"sent", "deferred_release"}
         for row in records
     )
     assert any(
-        row["event_index"] == 2 and row["runtime_outcome"] == "sent"
+        row["event_index"] == 2 and _trace_outcome(row) == "sent"
         for row in records
     )
 
@@ -418,7 +462,7 @@ def test_native_worker_rejects_zero_progress_retry_that_completes_late() -> None
         mock_backend=True,
         mock_failure_mode="zero_progress_down_once",
         mock_latency_base_us=3_000,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
         strict_timing=True,
     )
     session.start()
@@ -430,7 +474,7 @@ def test_native_worker_rejects_zero_progress_retry_that_completes_late() -> None
     assert snapshot["status"] == "error"
     assert snapshot["recovered_zero_progress_but_late"] == 1
     assert "zero-progress retry" in snapshot["terminal_error"]
-    assert output["records"][0]["runtime_outcome"] == "recovered_zero_progress_but_late"
+    assert _trace_outcome(output["records"][0]) == "recovered_zero_progress_but_late"
 
 
 def test_native_worker_stops_when_supervisor_lease_expires() -> None:
@@ -461,7 +505,7 @@ def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None
         min_hold_us=0,
         mock_backend=True,
         mock_failure_mode="persistent_release",
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     session.start()
     assert session.join() is True
@@ -474,7 +518,7 @@ def test_native_worker_exhausts_persistent_note_off_and_stops_dispatch() -> None
     assert "note-off recovery exhausted" in snapshot["terminal_error"]
     assert snapshot["release_outcome"]["released_successfully"] is False
     assert not any(
-        row["event_index"] == 2 and row["runtime_outcome"] == "sent"
+        row["event_index"] == 2 and _trace_outcome(row) == "sent"
         for row in output["records"]
     )
 
@@ -505,7 +549,13 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
             return True
 
         def take_telemetry_json(self) -> str:
-            return json.dumps({"records": [{"runtime_outcome": "failed_note_off"}]})
+            return json.dumps(
+                {
+                    "records": [{"outcome": 2}],
+                    "schema_version": 3,
+                    "qpc_frequency_hz": 10_000_000,
+                }
+            )
 
         def estimator_state_json(self) -> str:
             return "{}"
@@ -518,9 +568,7 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
         max_lead_us=2_000,
         focus_restore_grace_us=100_000,
         spin_threshold_us=150,
-        late_pulse_drop_threshold_us=None,
-        same_key_conflict_policy="degraded",
-        telemetry_enabled=True,
+        telemetry_mode="ring",
         rt_priority_mode="off",
         enable_waitable_timer=True,
         enable_event_wait=True,
@@ -539,7 +587,7 @@ def test_native_adapter_collects_controlled_error_before_returning(monkeypatch) 
     outcome, latest, telemetry, estimator = runtime.run()
     assert outcome == "error"
     assert latest["terminal_error"] == "note-off recovery exhausted"
-    assert telemetry["records"][0]["runtime_outcome"] == "failed_note_off"
+    assert telemetry["records"][0]["outcome"] == 2
     assert estimator == "{}"
 
 
@@ -550,13 +598,13 @@ def test_native_dispatch_fixed_lead_overrides_adaptive_estimator() -> None:
         min_hold_us=0,
         dispatch_lead_us=1_000,
         mock_backend=True,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
         enable_adaptive_lead=True,
     )
     session.start()
     assert session.join() is True
     output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
-    assert output["records"][0]["applied_lead_us"] == 1_000
+    assert output["records"][0]["applied_lead_ticks"] == 10_000
 
 
 def test_native_dispatch_snapshot_publishes_ui_counter_batch() -> None:
@@ -596,33 +644,62 @@ def test_native_dispatch_adaptive_probe_publishes_effective_threshold() -> None:
 
 
 def test_native_dispatch_estimator_cache_round_trip() -> None:
-    estimator = SendLatencyEstimator(max_poly=6)
-    for _ in range(5):
-        estimator.update(ActionKind.DOWN, 100, 1)
-    initial = json.dumps(estimator.export_state())
-    session = sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
-        [(0, "down", 1_000, [0x15], "note")],
+    seed = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 1_000, [0x15], "seed-down"),
+            (1, "up", 2_000, [0x15], "seed-up"),
+        ],
         [0x15],
         mock_backend=True,
+        telemetry_mode="off",
         enable_adaptive_lead=True,
-        estimator_state_json=initial,
+    )
+    seed.start()
+    assert seed.join() is True
+    initial = cast(dict[str, Any], json.loads(seed.estimator_state_json()))
+
+    session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
+        [
+            (0, "down", 1_000, [0x15], "note"),
+            (1, "up", 2_000, [0x15], "release"),
+        ],
+        [0x15],
+        mock_backend=True,
+        telemetry_mode="off",
+        enable_adaptive_lead=True,
+        estimator_state_json=json.dumps(initial),
     )
     session.start()
     assert session.join() is True
     exported = cast(dict[str, Any], json.loads(session.estimator_state_json()))
-    assert exported["version"] == 7
-    assert exported["count_down"][1] == 6
+    assert exported["version"] == 8
+    initial_down_count = sum(
+        int(pair[1])
+        for class_name in ("hot_pairs", "cold_pairs")
+        for pair in initial["hist_down"][1][class_name]
+    )
+    exported_down_count = sum(
+        int(pair[1])
+        for class_name in ("hot_pairs", "cold_pairs")
+        for pair in exported["hist_down"][1][class_name]
+    )
+    assert exported_down_count == initial_down_count + 1
 
 
-def test_native_dispatch_rejects_invalid_estimator_cache_atomically() -> None:
-    with pytest.raises(ValueError, match="estimator"):
-        sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
-            [(0, "down", 1_000, [0x15], "note")],
-            [0x15],
-            mock_backend=True,
-            enable_adaptive_lead=True,
-            estimator_state_json='{"version":999}',
-        )
+def test_native_dispatch_discards_stale_estimator_cache_and_uses_prior() -> None:
+    session = sky_player_rs.NativeDispatchSessionPy(  # type: ignore[attr-defined]
+        [
+            (0, "down", 1_000, [0x15], "note"),
+            (1, "up", 2_000, [0x15], "release"),
+        ],
+        [0x15],
+        mock_backend=True,
+        enable_adaptive_lead=True,
+        estimator_state_json='{"version":999}',
+    )
+    session.start()
+    assert session.join() is True
+    assert cast(dict[str, Any], session.snapshot())["outcome"] == "finished"
 
 
 @pytest.mark.parametrize(
@@ -634,7 +711,6 @@ def test_native_dispatch_rejects_invalid_estimator_cache_atomically() -> None:
         ("focus_restore_grace_us", True),
         ("spin_threshold_us", True),
         ("core_warmup_budget_us", True),
-        ("late_pulse_drop_threshold_us", True),
         ("telemetry_capacity", True),
         ("spin_floor_us", True),
         ("strict_down_completion_late_us", True),
@@ -680,7 +756,6 @@ def test_native_dispatch_strict_conflict_is_contained_and_reported() -> None:
             ],
             [0x15],
             mock_backend=True,
-            same_key_conflict_policy="strict",
         )
 
 
@@ -705,7 +780,7 @@ def test_native_strict_down_completion_slo_rejects_clean_late_send() -> None:
         mock_latency_base_us=3_000,
         strict_timing=True,
         strict_down_completion_late_us=2_000,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     session.start()
     assert session.join(timeout_ms=5_000) is True
@@ -714,7 +789,7 @@ def test_native_strict_down_completion_slo_rejects_clean_late_send() -> None:
     output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
     assert snapshot["status"] == "error"
     assert "completion SLO" in snapshot["terminal_error"]
-    assert output["records"][0]["runtime_outcome"] == "strict_completion_slo_exceeded"
+    assert _trace_outcome(output["records"][0]) == "strict_completion_slo_exceeded"
 
 
 def test_native_strict_up_completion_slo_rejects_clean_late_release() -> None:
@@ -730,7 +805,7 @@ def test_native_strict_up_completion_slo_rejects_clean_late_release() -> None:
         strict_timing=True,
         strict_down_completion_late_us=10_000,
         strict_up_completion_late_us=2_000,
-        telemetry_enabled=True,
+        telemetry_mode="ring",
     )
     session.start()
     assert session.join(timeout_ms=5_000) is True
@@ -739,7 +814,7 @@ def test_native_strict_up_completion_slo_rejects_clean_late_release() -> None:
     output = cast(dict[str, Any], json.loads(session.take_telemetry_json()))
     assert snapshot["status"] == "error"
     assert "note-off" in snapshot["terminal_error"]
-    assert output["records"][-1]["runtime_outcome"] == "strict_completion_slo_exceeded"
+    assert _trace_outcome(output["records"][-1]) == "strict_completion_slo_exceeded"
 
 
 def test_native_deferred_release_is_excluded_from_strict_completion_slo() -> None:
@@ -765,7 +840,10 @@ def test_native_deferred_release_is_excluded_from_strict_completion_slo() -> Non
 
 def test_native_non_strict_late_send_is_telemetry_only() -> None:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
-        [(0, "down", 0, [0x15], "late-but-best-effort")],
+        [
+            (0, "down", 0, [0x15], "late-but-best-effort"),
+            (1, "up", 10_000, [0x15], "late-release"),
+        ],
         [0x15],
         mock_backend=True,
         mock_latency_base_us=3_000,

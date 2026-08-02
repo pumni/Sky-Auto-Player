@@ -30,9 +30,19 @@ def _py_simulate(actions: tuple[KeyAction, ...], allowed_scan_codes: list[int], 
 
     events: list[dict[str, Any]] = []
     step = 0
+    iterations = 0
     now_us = schedule.batches[0].scheduled_us if schedule.batches else 0
 
     while not coordinator.is_finished():
+        iterations += 1
+        if iterations > 20_000:
+            raise ValueError("simulation step budget exceeded")
+        if (
+            coordinator.cursor >= len(schedule.batches)
+            and not coordinator.pending_by_generation
+            and coordinator.active_by_scan_code
+        ):
+            raise ValueError("simulation incomplete: active generations remain")
         next_dl = coordinator.next_deadline_us(0, 0)
         if next_dl is not None and next_dl > now_us:
             now_us = next_dl
@@ -117,6 +127,9 @@ def _py_simulate(actions: tuple[KeyAction, ...], allowed_scan_codes: list[int], 
                     step += 1
         else:
             now_us += 100
+
+    if coordinator.active_by_scan_code:
+        raise ValueError("simulation incomplete: active generations remain")
 
     return {
         "events": events,
@@ -203,7 +216,11 @@ def test_rust_differential_seeded_schedule_corpus() -> None:
                 send_latency_us,
             )
         except ValueError as e:
-            if "overlapping same-key down actions" in str(e):
+            if (
+                "overlapping same-key down actions" in str(e)
+                or "simulation step budget" in str(e)
+                or "simulation incomplete" in str(e)
+            ):
                 py_result = "ValueError"
             else:
                 raise
@@ -225,7 +242,11 @@ def test_rust_differential_seeded_schedule_corpus() -> None:
             )
             rust_result = cast(dict[str, Any], json.loads(rust_result_json))
         except ValueError as e:
-            if "overlapping same-key down actions" in str(e):
+            if (
+                "overlapping same-key down actions" in str(e)
+                or "simulation step budget" in str(e)
+                or "simulation incomplete" in str(e)
+            ):
                 rust_result = "ValueError"
             else:
                 raise
@@ -265,7 +286,11 @@ def _rs_simulate(
         )
         return cast(dict[str, Any], json.loads(rs_json))
     except ValueError as e:
-        if "overlapping same-key down actions" in str(e):
+        if (
+            "overlapping same-key down actions" in str(e)
+            or "simulation step budget" in str(e)
+            or "simulation incomplete" in str(e)
+        ):
             return "ValueError"
         raise
 
@@ -280,7 +305,11 @@ def _py_simulate_safe(
     try:
         return _py_simulate(actions, allowed, min_hold_us, send_latency_us)
     except ValueError as e:
-        if "overlapping same-key down actions" in str(e):
+        if (
+            "overlapping same-key down actions" in str(e)
+            or "simulation step budget" in str(e)
+            or "simulation incomplete" in str(e)
+        ):
             return "ValueError"
         raise
 

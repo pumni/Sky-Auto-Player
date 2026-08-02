@@ -49,7 +49,7 @@ SUPPORTED_CACHE_VERSION: int = 1
 #: Minimum sample count the calibration run must produce for the cache to
 #: be trusted. Below this the loader returns the fallback rather than a
 #: noisy recommendation that the small sample can't defend.
-MIN_CALIBRATION_SAMPLE_COUNT: int = 50
+MIN_CALIBRATION_SAMPLE_COUNT: int = 20
 
 #: Hard bound on the p99 down / p50 up the loader accepts. Inputs above
 #: this are treated as malformed (a 100 ms first-byte delivery would be a

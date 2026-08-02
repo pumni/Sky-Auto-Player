@@ -22,19 +22,20 @@ from typing import Any
 
 from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
 
-SUPPORTED_NATIVE_CALIBRATION_VERSION = 7
+SUPPORTED_NATIVE_CALIBRATION_VERSION = 8
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 2
-FULL_POLYPHONIES = (1, 2, 3, 5, 8, 15)
-FULL_SAMPLE_COUNT = 5_000
-FULL_COLD_IDLE_GAP_US = 100_000
-FULL_WARMUP_SAMPLES = 50
-FULL_CHUNK_SAMPLES = 1_000
+FULL_POLYPHONIES = (1, 5, 15)
+FULL_SAMPLE_COUNT = 20
+FULL_COLD_IDLE_GAP_US = 25_000
+FULL_WARMUP_SAMPLES = 4
+FULL_CHUNK_SAMPLES = 20
+MAX_DIAGNOSTIC_SAMPLES = 5_000
 CALIBRATION_KINDS = ("down", "up")
 CALIBRATION_CLASSES = ("hot", "cold")
 MAX_NATIVE_CALIBRATION_STDOUT_BYTES = 8 * 1024 * 1024
-QUICK_CALIBRATION_TIMEOUT_SECONDS = 1_800.0
-FULL_CALIBRATION_TIMEOUT_SECONDS = 180.0
+QUICK_CALIBRATION_TIMEOUT_SECONDS = 120.0
+FULL_CALIBRATION_TIMEOUT_SECONDS = 120.0
 
 
 class NativeCalibrationError(RuntimeError):
@@ -452,6 +453,7 @@ def full_calibration_configuration() -> dict[str, Any]:
         "hot_gap_target_us": 5_000,
         "cold_idle_gap_us": FULL_COLD_IDLE_GAP_US,
         "cold_threshold_us": 20_000,
+        "budget_seconds": 120,
     }
 
 
@@ -561,11 +563,19 @@ def _validate_bucket_result(
         if not isinstance(cleanup.get(field), bool):
             raise NativeCalibrationError(f"cleanup.{field} must be boolean")
 
-    raw_samples = data.get("samples")
-    if not isinstance(raw_samples, list) or len(raw_samples) != samples:
-        raise NativeCalibrationError("native bucket sample evidence count is inconsistent")
-    for index, raw_sample in enumerate(raw_samples, start=1):
-        _validate_sample_evidence(raw_sample, f"samples[{index}]")
+    worst_samples = data.get("worst_samples")
+    anomalous_samples = data.get("anomalous_samples")
+    if not isinstance(worst_samples, list) or len(worst_samples) > 16:
+        raise NativeCalibrationError("native bucket worst-sample evidence is not bounded")
+    if not isinstance(anomalous_samples, list):
+        raise NativeCalibrationError("native bucket anomaly evidence is invalid")
+    for index, raw_sample in enumerate(worst_samples, start=1):
+        _validate_sample_evidence(raw_sample, f"worst_samples[{index}]")
+    for index, raw_sample in enumerate(anomalous_samples, start=1):
+        _validate_sample_evidence(raw_sample, f"anomalous_samples[{index}]")
+        anomaly_map = _require_mapping(raw_sample.get("anomalies"), "sample.anomalies")
+        if not any(anomaly_map.values()):
+            raise NativeCalibrationError("anomalous sample evidence is clean")
     return data
 
 
@@ -651,6 +661,7 @@ def _execute_native_bucket(
     polyphony: int,
     samples: int,
     warmup_samples: int,
+    budget_seconds: int,
     timeout_seconds: float,
     progress: bool,
 ) -> dict[str, Any]:
@@ -668,6 +679,8 @@ def _execute_native_bucket(
         str(samples),
         "--warmup-samples",
         str(warmup_samples),
+        "--budget-seconds",
+        str(budget_seconds),
     ]
     try:
         process = subprocess.Popen(
@@ -839,7 +852,8 @@ def _bucket_artifact(
         "total_anomalous": result["total_anomalous"],
         "total_timed_out": result["total_timed_out"],
         "bucket": result["bucket"],
-        "samples": result["samples"],
+        "worst_samples": result["worst_samples"],
+        "anomalous_samples": result["anomalous_samples"],
         "cleanup": result["cleanup"],
     }
 
@@ -966,9 +980,10 @@ def _combine_bucket_chunks(
     if not chunks:
         raise NativeCalibrationError("cannot combine an empty calibration bucket")
     ordered = sorted(chunks, key=lambda chunk: int(chunk["chunk_index"]))
-    samples = [sample for chunk in ordered for sample in chunk["samples"]]
-    if len(samples) != FULL_SAMPLE_COUNT:
-        raise NativeCalibrationError("combined calibration bucket does not contain 5000 samples")
+    if len(ordered) != 1:
+        raise NativeCalibrationError(
+            "compact calibration buckets must be emitted as one bounded artifact"
+        )
     first = ordered[0]
     totals = {
         field: sum(int(chunk[field]) for chunk in ordered)
@@ -1005,8 +1020,9 @@ def _combine_bucket_chunks(
         "polyphony": polyphony,
         "attempted": FULL_SAMPLE_COUNT,
         **totals,
-        "bucket": _merge_bucket_samples(samples),
-        "samples": samples,
+        "bucket": ordered[0]["bucket"],
+        "worst_samples": ordered[0]["worst_samples"],
+        "anomalous_samples": ordered[0]["anomalous_samples"],
         "chunk_count": len(ordered),
         "cleanup": {
             "cleanup_attempted": True,
@@ -1207,16 +1223,21 @@ def _validate_chunk_artifact(
         raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} count mismatch")
     if artifact.get("attempted") != sample_count:
         raise NativeCalibrationError(f"checkpoint chunk {key}/{chunk_index} sample count mismatch")
-    _validate_sample_list(artifact, sample_count, f"{key}/{chunk_index}")
+    _validate_compact_evidence(artifact, f"{key}/{chunk_index}")
     _validate_successful_cleanup(artifact, f"{key}/{chunk_index}")
 
 
-def _validate_sample_list(artifact: dict[str, Any], expected: int, name: str) -> None:
-    samples = artifact.get("samples")
-    if not isinstance(samples, list) or len(samples) != expected:
-        raise NativeCalibrationError(f"{name} has an invalid raw sample list")
-    for index, sample in enumerate(samples, start=1):
-        _validate_sample_evidence(sample, f"{name}.samples[{index}]")
+def _validate_compact_evidence(artifact: dict[str, Any], name: str) -> None:
+    worst_samples = artifact.get("worst_samples")
+    anomalous_samples = artifact.get("anomalous_samples")
+    if not isinstance(worst_samples, list) or len(worst_samples) > 16:
+        raise NativeCalibrationError(f"{name} has an invalid worst-sample list")
+    if not isinstance(anomalous_samples, list):
+        raise NativeCalibrationError(f"{name} has an invalid anomaly list")
+    for index, sample in enumerate(worst_samples, start=1):
+        _validate_sample_evidence(sample, f"{name}.worst_samples[{index}]")
+    for index, sample in enumerate(anomalous_samples, start=1):
+        _validate_sample_evidence(sample, f"{name}.anomalous_samples[{index}]")
 
 
 def _validate_successful_cleanup(artifact: dict[str, Any], name: str) -> None:
@@ -1244,13 +1265,12 @@ def _validate_bucket_artifact(
     if artifact.get("artifact_type") != "native_calibration_bucket":
         raise NativeCalibrationError(f"checkpoint bucket {key} has the wrong type")
     if artifact.get("attempted") != FULL_SAMPLE_COUNT:
-        raise NativeCalibrationError(f"checkpoint bucket {key} does not contain 5000 samples")
+        raise NativeCalibrationError(
+            f"checkpoint bucket {key} does not contain {FULL_SAMPLE_COUNT} samples"
+        )
     if artifact.get("chunk_count") != math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES):
         raise NativeCalibrationError(f"checkpoint bucket {key} has an invalid chunk count")
-    _validate_sample_list(artifact, FULL_SAMPLE_COUNT, key)
-    merged = _merge_bucket_samples(artifact["samples"])
-    if artifact.get("bucket") != merged:
-        raise NativeCalibrationError(f"checkpoint bucket {key} aggregate mismatch")
+    _validate_compact_evidence(artifact, key)
     _validate_successful_cleanup(artifact, key)
 
 
@@ -1346,14 +1366,19 @@ def run_diagnostic_calibration(
         raise NativeCalibrationError("class must be hot or cold")
     if not isinstance(polyphony, int) or isinstance(polyphony, bool) or not 1 <= polyphony <= 15:
         raise NativeCalibrationError("polyphony must be an integer from 1 through 15")
-    if not isinstance(samples, int) or isinstance(samples, bool) or not 1 <= samples <= FULL_SAMPLE_COUNT:
-        raise NativeCalibrationError("samples must be an integer from 1 through 5000")
+    if not isinstance(samples, int) or isinstance(samples, bool) or not 1 <= samples <= MAX_DIAGNOSTIC_SAMPLES:
+        raise NativeCalibrationError(
+            f"samples must be an integer from 1 through {MAX_DIAGNOSTIC_SAMPLES}"
+        )
     if timeout_seconds is None:
         timeout_seconds = QUICK_CALIBRATION_TIMEOUT_SECONDS
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
-    if not math.isfinite(float(timeout_seconds)) or timeout_seconds <= 0:
+    if not math.isfinite(float(timeout_seconds)) or float(timeout_seconds) <= 0:
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
+    if float(timeout_seconds) > 120:
+        raise NativeCalibrationError("timeout_seconds must be between 1 and 120 seconds")
+    budget_seconds = min(120, max(1, math.ceil(float(timeout_seconds))))
 
     output = Path(output_path)
     report_path = Path(failure_report_path) if failure_report_path is not None else output.with_suffix(
@@ -1374,6 +1399,8 @@ def run_diagnostic_calibration(
         str(samples),
         "--warmup-samples",
         "1",
+        "--budget-seconds",
+        str(budget_seconds),
     ]
     try:
         binary = _find_binary()
@@ -1387,6 +1414,7 @@ def run_diagnostic_calibration(
             # One setup cycle seeds the previous exact SendInput completion so
             # the first measured cold gap has a real classification anchor.
             warmup_samples=1,
+            budget_seconds=budget_seconds,
             timeout_seconds=float(timeout_seconds),
             progress=True,
         )
@@ -1444,9 +1472,12 @@ def run_full_calibration(
         timeout_seconds = FULL_CALIBRATION_TIMEOUT_SECONDS
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
-    if not math.isfinite(float(timeout_seconds)) or timeout_seconds <= 0:
+    if not math.isfinite(float(timeout_seconds)) or float(timeout_seconds) <= 0:
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
-
+    if float(timeout_seconds) > 120:
+        raise NativeCalibrationError("timeout_seconds must be between 1 and 120 seconds")
+    run_started = time.monotonic()
+    run_deadline = run_started + float(timeout_seconds)
     if resume:
         if not manifest_path.is_file():
             raise NativeCalibrationError("--resume requested but checkpoint manifest is missing")
@@ -1482,6 +1513,19 @@ def run_full_calibration(
                 bucket_chunks.append(completed_chunks[chunk_key])
                 continue
 
+            remaining_total = run_deadline - time.monotonic()
+            if remaining_total <= 5.0:
+                raise NativeCalibrationError(
+                    "global calibration budget expired; five-second cleanup reserve was reached"
+                )
+            # The child receives the remaining measurement budget and owns its
+            # own five-second native cleanup reserve.  This keeps a full-mode
+            # checkpoint run bounded as a whole instead of giving every bucket
+            # an independent 120-second allowance.
+            remaining_measurement = remaining_total - 5.0
+            child_budget_seconds = min(120, max(1, math.ceil(remaining_measurement)))
+            child_timeout_seconds = min(float(timeout_seconds), float(child_budget_seconds))
+
             failure_path = (
                 checkpoint
                 / "failures"
@@ -1501,6 +1545,8 @@ def run_full_calibration(
                 str(sample_count),
                 "--warmup-samples",
                 str(FULL_WARMUP_SAMPLES),
+                "--budget-seconds",
+                str(child_budget_seconds),
             ]
             try:
                 raw = _execute_native_bucket(
@@ -1510,7 +1556,8 @@ def run_full_calibration(
                     polyphony=polyphony,
                     samples=sample_count,
                     warmup_samples=FULL_WARMUP_SAMPLES,
-                    timeout_seconds=float(timeout_seconds),
+                    budget_seconds=child_budget_seconds,
+                    timeout_seconds=child_timeout_seconds,
                     progress=True,
                 )
                 _validate_bucket_result(
@@ -1624,7 +1671,7 @@ def _finalizer_artifact(
     configuration = full_calibration_configuration()
     expected_keys = {_bucket_key(*key) for key in calibration_bucket_keys()}
     if set(artifacts) != expected_keys:
-        raise NativeCalibrationError("finalizer requires exactly 24 known buckets")
+        raise NativeCalibrationError("finalizer requires the configured calibration buckets")
     provenance: dict[str, Any] | None = None
     nested: dict[str, dict[str, dict[str, Any]]] = {"down": {}, "up": {}}
     totals = {
@@ -1658,12 +1705,12 @@ def _finalizer_artifact(
             raise NativeCalibrationError(f"finalizer found a non-bucket artifact in {key}")
         if artifact.get("chunk_count") != math.ceil(FULL_SAMPLE_COUNT / FULL_CHUNK_SAMPLES):
             raise NativeCalibrationError(f"finalizer has an invalid chunk count in {key}")
-        _validate_sample_list(artifact, FULL_SAMPLE_COUNT, key)
+        _validate_compact_evidence(artifact, key)
         bucket = _require_mapping(artifact.get("bucket"), f"{key}.bucket")
-        if bucket != _merge_bucket_samples(artifact["samples"]):
-            raise NativeCalibrationError(f"finalizer bucket aggregate mismatch in {key}")
         if bucket.get("attempted") != FULL_SAMPLE_COUNT or bucket.get("sample_count") != FULL_SAMPLE_COUNT:
-            raise NativeCalibrationError(f"finalizer requires 5000 samples in {key}")
+            raise NativeCalibrationError(
+                f"finalizer requires {FULL_SAMPLE_COUNT} measured samples in {key}"
+            )
         if bucket.get("clean_sample_count", 0) < MIN_CALIBRATION_SAMPLE_COUNT:
             raise NativeCalibrationError(f"finalizer has too few clean samples in {key}")
         cleanup = _require_mapping(artifact.get("cleanup"), f"{key}.cleanup")
@@ -1752,7 +1799,7 @@ def finalize_native_calibration(
         raise NativeCalibrationError("finalizer configuration mismatch")
     entries = manifest.get("buckets")
     if not isinstance(entries, list) or len(entries) != len(calibration_bucket_keys()):
-        raise NativeCalibrationError("finalizer requires exactly 24 bucket entries")
+        raise NativeCalibrationError("finalizer requires the configured bucket entries")
     artifacts: dict[str, dict[str, Any]] = {}
     expected_keys = {_bucket_key(*key) for key in calibration_bucket_keys()}
     for entry in entries:
@@ -1843,14 +1890,17 @@ def run_native_calibration(
         or not math.isfinite(float(timeout_seconds))
     ):
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
-    if timeout_seconds <= 0:
+    if float(timeout_seconds) <= 0:
         raise NativeCalibrationError("timeout_seconds must be a finite positive number")
+    if float(timeout_seconds) > 120:
+        raise NativeCalibrationError("timeout_seconds must be between 1 and 120 seconds")
+    budget_seconds = min(120, max(1, math.ceil(float(timeout_seconds))))
 
     binary = _find_binary()
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
             process = subprocess.Popen(
-                [str(binary), "--mode", mode],
+                [str(binary), "--mode", mode, "--budget-seconds", str(budget_seconds)],
                 stdout=stdout_file,
                 stderr=stderr_file,
                 shell=False,

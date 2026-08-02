@@ -11,7 +11,7 @@ Run the same command on the baseline and follow-up revisions, then compare the
 JSON files::
 
     uv run --env-file .env python scripts/bench_native_acceptance.py \
-        --repeats 3 --actions 512 --output native-followup.json
+        --repeats 2 --actions 128 --output native-followup.json
 
 The completion-error percentiles are a host-side proxy. They do not measure
 when a game samples Windows input, renders a frame, or produces audio.
@@ -222,19 +222,18 @@ def _new_session(
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         list(SKY_15_SCAN_CODES),
+        profile="mock_test" if backend == "mock" else "production",
         min_hold_us=100,
         max_lead_us=2_000,
-        mock_backend=backend == "mock",
         mock_latency_base_us=mock_base_latency_us,
         mock_latency_per_key_us=mock_per_key_latency_us,
         require_focus=False,
-        telemetry_enabled=True,
-        telemetry_capacity=max(1_024, len(actions) + 16),
+        telemetry_mode="ring",
+        telemetry_capacity=min(1_024, max(1, len(actions))),
         rt_priority_mode=rt_priority_mode,
         enable_waitable_timer=True,
         enable_event_wait=True,
         enable_adaptive_spin=adaptive_spin,
-        enable_spin_reprobe=adaptive_spin,
         enable_adaptive_lead=True,
     )
 
@@ -248,6 +247,7 @@ def _run_dispatch(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    timeout_ms: int = 60_000,
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -259,8 +259,11 @@ def _run_dispatch(
     )
     started_ns = time.perf_counter_ns()
     session.start()
-    if not session.join(timeout_ms=60_000):
-        raise RuntimeError("native acceptance session exceeded 60 seconds")
+    if not session.join(timeout_ms=timeout_ms):
+        session.panic_release()
+        session.quit()
+        session.join(timeout_ms=5_000)
+        raise RuntimeError("native acceptance session exceeded its hard budget")
     wall_us = (time.perf_counter_ns() - started_ns) // 1_000
     snapshot = dict(session.snapshot())
     telemetry = json.loads(session.take_telemetry_json())
@@ -368,8 +371,14 @@ def _measure_command_interrupt(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--actions", type=int, default=512)
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--actions", type=int, default=128)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=120.0,
+        help="hard whole-command budget in seconds (1..120; default: 120)",
+    )
     parser.add_argument("--label", default="native")
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -541,6 +550,12 @@ def main() -> int:
         raise SystemExit("this acceptance benchmark requires Windows")
     if args.actions <= 0 or args.repeats <= 0:
         raise SystemExit("--actions and --repeats must be positive")
+    if (
+        isinstance(args.budget_seconds, bool)
+        or not math.isfinite(args.budget_seconds)
+        or not 1.0 <= args.budget_seconds <= 120.0
+    ):
+        raise SystemExit("--budget-seconds must be between 1 and 120 seconds")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
     mock_base_latency_us, mock_per_key_latency_us = _resolve_mock_latency_values(
@@ -559,6 +574,14 @@ def main() -> int:
     host_info = _host_fingerprint(native_info)
 
     polyphonies = _parse_polyphony(args.polyphony)
+    run_deadline = time.monotonic() + args.budget_seconds
+
+    def next_timeout_ms() -> int:
+        remaining = run_deadline - time.monotonic() - 5.0
+        if remaining <= 0:
+            raise RuntimeError("native acceptance budget expired before cleanup reserve")
+        return max(1_000, min(60_000, math.ceil(remaining * 1_000)))
+
     dispatch_runs: list[dict[str, Any]] = []
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
@@ -572,6 +595,7 @@ def main() -> int:
                 mock_per_key_latency_us=mock_per_key_latency_us,
                 adaptive_spin=not args.no_adaptive_spin,
                 rt_priority_mode=args.rt_priority_mode,
+                timeout_ms=next_timeout_ms(),
             )
             for _ in range(args.repeats)
         ]
@@ -618,16 +642,19 @@ def main() -> int:
         }
         by_polyphony[str(polyphony)] = poly_report
         dispatch_runs.extend(runs)
-    interrupt_runs = [
-        _measure_command_interrupt(
-            backend=args.backend,
-            mock_base_latency_us=mock_base_latency_us,
-            mock_per_key_latency_us=mock_per_key_latency_us,
-            adaptive_spin=not args.no_adaptive_spin,
-            rt_priority_mode=args.rt_priority_mode,
+    interrupt_runs = []
+    for _ in range(args.repeats):
+        if run_deadline - time.monotonic() <= 5.0:
+            raise RuntimeError("native acceptance budget expired before interrupt checks")
+        interrupt_runs.append(
+            _measure_command_interrupt(
+                backend=args.backend,
+                mock_base_latency_us=mock_base_latency_us,
+                mock_per_key_latency_us=mock_per_key_latency_us,
+                adaptive_spin=not args.no_adaptive_spin,
+                rt_priority_mode=args.rt_priority_mode,
+            )
         )
-        for _ in range(args.repeats)
-    ]
     sender_errors = [
         value
         for run in dispatch_runs
@@ -639,6 +666,7 @@ def main() -> int:
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
         "repeats": args.repeats,
+        "budget_seconds": args.budget_seconds,
         "sender_completion_error_us": {
             key: _stats(sender_errors)[key]
             for key in ("p50", "p95", "p99", "max")

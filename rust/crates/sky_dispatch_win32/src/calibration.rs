@@ -79,6 +79,9 @@ pub enum CalibrationError {
     #[error("calibration statistics overflowed")]
     StatisticsOverflow,
 
+    #[error("calibration measurement budget expired before cleanup")]
+    BudgetExceeded,
+
     #[error(
         "cold idle gap {configured_us}us is shorter than the shared threshold {threshold_us}us"
     )]
@@ -452,6 +455,9 @@ pub struct CalibrationConfig {
     pub cold_idle_gap_us: u64,
     /// Shared physical threshold used to classify measured packets.
     pub cold_threshold_us: u64,
+    /// Hard process budget. Five seconds are reserved for final cleanup and
+    /// artifact publication; callers must keep this in 1..=120 seconds.
+    pub budget_seconds: u64,
 }
 
 impl Default for CalibrationConfig {
@@ -465,6 +471,7 @@ impl Default for CalibrationConfig {
             hot_gap_target_us: 5_000,
             cold_idle_gap_us: 100_000,
             cold_threshold_us: SEND_COLD_THRESHOLD_US,
+            budget_seconds: 120,
         }
     }
 }
@@ -473,9 +480,10 @@ impl CalibrationConfig {
     /// Minimal quick-calibration preset (user setup).
     pub fn quick() -> Self {
         Self {
-            samples_per_hot_bucket: 200,
-            samples_per_cold_bucket: 200,
-            warmup_samples: 10,
+            polyphonies: vec![1, 5, 15],
+            samples_per_hot_bucket: 20,
+            samples_per_cold_bucket: 20,
+            warmup_samples: 4,
             ..Self::default()
         }
     }
@@ -562,8 +570,12 @@ pub struct CalibrationBucketOutput {
     pub total_anomalous: u64,
     pub total_timed_out: u64,
     pub bucket: BucketStats,
-    /// Per-sample evidence used to merge independently timed chunks exactly.
-    pub samples: Vec<CalibrationSampleEvidence>,
+    /// Bounded diagnostic evidence retained after aggregation.  The full raw
+    /// sample stream is never serialized into an artifact.
+    pub worst_samples: Vec<CalibrationSampleEvidence>,
+    /// Every anomalous sample is retained because anomalies are acceptance
+    /// blockers and are expected to be rare.
+    pub anomalous_samples: Vec<CalibrationSampleEvidence>,
     pub cleanup: CleanupOutcome,
 }
 
@@ -623,6 +635,9 @@ fn validate_calibration_config(config: &CalibrationConfig) -> Result<(), Calibra
         || config.samples_per_cold_bucket == 0
     {
         return Err(CalibrationError::ZeroSamples);
+    }
+    if !(1..=120).contains(&config.budget_seconds) {
+        return Err(CalibrationError::BudgetExceeded);
     }
     if config.cold_threshold_us == 0 {
         return Err(CalibrationError::ColdIdleGapTooShort {
@@ -1070,6 +1085,7 @@ mod platform {
         next_sequence: u32,
         possibly_active_mask: u16,
         last_send_completed_ticks: Option<QpcTicks>,
+        measurement_deadline: Option<QpcTicks>,
     }
 
     fn stop_pump_on_startup_failure(
@@ -1146,7 +1162,74 @@ mod platform {
                 next_sequence: 1,
                 possibly_active_mask: 0,
                 last_send_completed_ticks: None,
+                measurement_deadline: None,
             })
+        }
+
+        pub fn set_measurement_deadline(&mut self, deadline: QpcTicks) {
+            self.measurement_deadline = Some(deadline);
+        }
+
+        /// Return a QPC deadline with a five-second cleanup reserve.
+        pub fn measurement_deadline(
+            &self,
+            budget_seconds: u64,
+        ) -> Result<QpcTicks, CalibrationError> {
+            let budget_us = budget_seconds
+                .checked_mul(1_000_000)
+                .ok_or(CalibrationError::ClockFailure)?;
+            let measurement_us = budget_us.saturating_sub(5_000_000);
+            let duration = self
+                .qpc_clock
+                .duration_from_us(measurement_us)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let now = self
+                .qpc_clock
+                .now()
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            now.checked_add_duration(duration)
+                .map_err(|_| CalibrationError::ClockFailure)
+        }
+
+        pub fn budget_expired(&self, deadline: QpcTicks) -> Result<bool, CalibrationError> {
+            Ok(self
+                .qpc_clock
+                .now()
+                .map_err(|_| CalibrationError::ClockFailure)?
+                >= deadline)
+        }
+
+        fn ensure_budget(&self) -> Result<(), CalibrationError> {
+            if let Some(deadline) = self.measurement_deadline
+                && self.budget_expired(deadline)?
+            {
+                return Err(CalibrationError::BudgetExceeded);
+            }
+            Ok(())
+        }
+
+        fn sleep_with_budget(&self, duration: Duration) -> Result<(), CalibrationError> {
+            let Some(deadline) = self.measurement_deadline else {
+                std::thread::sleep(duration);
+                return Ok(());
+            };
+            let now = self
+                .qpc_clock
+                .now()
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let remaining = deadline
+                .checked_duration_since(now)
+                .map_err(|_| CalibrationError::BudgetExceeded)?;
+            let remaining_us = self
+                .qpc_clock
+                .duration_to_us(remaining)
+                .map_err(|_| CalibrationError::ClockFailure)?;
+            let requested_us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
+            if remaining_us == 0 || requested_us > remaining_us {
+                return Err(CalibrationError::BudgetExceeded);
+            }
+            std::thread::sleep(duration);
+            self.ensure_budget()
         }
 
         fn cleanup_keyboard(&mut self) -> CleanupOutcome {
@@ -1192,6 +1275,7 @@ mod platform {
             key_up: bool,
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
+            self.ensure_budget()?;
             let n = scan_codes.len();
             if n == 0 || n > 15 {
                 return Err(CalibrationError::PolyphonyTooLarge(n));
@@ -1251,14 +1335,27 @@ mod platform {
                 }
             }
 
-            // A partial call still has useful evidence for the packets that
-            // were inserted. Continue collecting those receipts until the
-            // same bounded timeout rather than returning before the pump can
-            // observe them.
+            // A partial call is not evidence for a known prefix. Fail closed
+            // for the whole requested packet and let session cleanup release
+            // every instrument key before the process exits.
+            if partial_send {
+                let (lock, cvar) = self.shared.as_ref();
+                let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+                guard.active_sequence = None;
+                cvar.notify_all();
+                return Err(CalibrationError::PacketIntegrity {
+                    phase: "partial_send",
+                    sequence_id: seq,
+                    expected,
+                    received: psr.inserted.min(expected as u32) as u8,
+                    win32_error: (psr.win32_error != 0).then_some(psr.win32_error),
+                });
+            }
+
             let expected_receipts = (psr.inserted as usize).min(scan_codes.len()) as u8;
 
             // Wait for expected receipts.
-            let deadline = std::time::Instant::now() + receipt_timeout;
+            let receipt_deadline = std::time::Instant::now() + receipt_timeout;
             let (first, last, count, anomalies) = {
                 let (lock, cvar) = self.shared.as_ref();
                 let mut guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
@@ -1272,8 +1369,28 @@ mod platform {
                     if n_received >= expected_receipts as usize {
                         break;
                     }
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    let mut remaining =
+                        receipt_deadline.saturating_duration_since(std::time::Instant::now());
+                    if let Some(budget_deadline) = self.measurement_deadline {
+                        let now = self
+                            .qpc_clock
+                            .now()
+                            .map_err(|_| CalibrationError::ClockFailure)?;
+                        let budget_remaining = budget_deadline
+                            .checked_duration_since(now)
+                            .map_err(|_| CalibrationError::BudgetExceeded)?;
+                        let budget_remaining_us = self
+                            .qpc_clock
+                            .duration_to_us(budget_remaining)
+                            .map_err(|_| CalibrationError::ClockFailure)?;
+                        remaining = remaining.min(Duration::from_micros(budget_remaining_us));
+                    }
                     if remaining.is_zero() {
+                        guard.active_sequence = None;
+                        cvar.notify_all();
+                        if self.measurement_deadline.is_some() {
+                            return Err(CalibrationError::BudgetExceeded);
+                        }
                         break;
                     }
                     guard = cvar
@@ -1392,6 +1509,7 @@ mod platform {
                 .checked_add_duration(gap_ticks)
                 .map_err(|_| CalibrationError::ClockFailure)?;
             loop {
+                self.ensure_budget()?;
                 let now = self
                     .qpc_clock
                     .now()
@@ -1408,7 +1526,7 @@ mod platform {
                     .duration_to_us(crate::clock::DurationTicks::from_raw(remaining))
                     .map_err(|_| CalibrationError::ClockFailure)?;
                 if remaining_us > 100 {
-                    std::thread::sleep(Duration::from_micros(remaining_us.min(1_000)));
+                    self.sleep_with_budget(Duration::from_micros(remaining_us.min(1_000)))?;
                 } else {
                     std::hint::spin_loop();
                 }
@@ -1696,6 +1814,8 @@ mod platform {
 
         let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
         let mut session = CalibrationSession::open()?;
+        let measurement_deadline = session.measurement_deadline(config.budget_seconds)?;
+        session.set_measurement_deadline(measurement_deadline);
 
         let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
         let hot_gap_sleep = Duration::from_micros(config.hot_gap_target_us);
@@ -1768,6 +1888,9 @@ mod platform {
                 // Warm-up is deliberately excluded from both measured
                 // classes. It is not evidence of either hot or cold state.
                 for _ in 0..config.warmup_samples {
+                    if session.budget_expired(measurement_deadline)? {
+                        return Err(CalibrationError::BudgetExceeded);
+                    }
                     let sample = match kind {
                         PacketKind::Down => {
                             let s = session.measure_packet(scan_codes, false, receipt_timeout)?;
@@ -1782,7 +1905,7 @@ mod platform {
                     };
                     record_attempt(&sample, true, false)?;
                     if !hot_gap_sleep.is_zero() {
-                        std::thread::sleep(hot_gap_sleep);
+                        session.sleep_with_budget(hot_gap_sleep)?;
                     }
                 }
 
@@ -1799,13 +1922,16 @@ mod platform {
                     ),
                 ] {
                     for _ in 0..sample_count {
+                        if session.budget_expired(measurement_deadline)? {
+                            return Err(CalibrationError::BudgetExceeded);
+                        }
                         let protocol = calibration_protocol(kind, class);
                         // Up/Cold must establish the physical Down state first;
                         // its cold wait is anchored to that setup completion.
                         if !protocol.contains(&CalibrationStep::ColdGapAfterPrepare)
                             && !gap.is_zero()
                         {
-                            std::thread::sleep(gap);
+                            session.sleep_with_budget(gap)?;
                         }
                         let sample = match kind {
                             PacketKind::Down => {
@@ -1880,7 +2006,7 @@ mod platform {
         }
 
         Ok(CalibrationOutput {
-            version: 7,
+            version: 8,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -1916,6 +2042,7 @@ mod platform {
 
     fn failure_phase(source: &CalibrationError, fallback: &'static str) -> &'static str {
         match source {
+            CalibrationError::BudgetExceeded => "budget",
             CalibrationError::PacketIntegrity { phase, .. } if phase.starts_with("cleanup") => {
                 "cleanup"
             }
@@ -1973,6 +2100,8 @@ mod platform {
         let polyphony = config.polyphonies[0];
         let _mmcss = MmcssGuard::acquire(PriorityMode::Auto);
         let mut session = CalibrationSession::open()?;
+        let measurement_deadline = session.measurement_deadline(config.budget_seconds)?;
+        session.set_measurement_deadline(measurement_deadline);
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..polyphony as usize];
         let receipt_timeout = Duration::from_millis(config.receipt_timeout_ms as u64);
         let cold_threshold_ticks = session
@@ -2046,6 +2175,14 @@ mod platform {
             expected_samples
         );
         for sample_index in 1..=config.warmup_samples {
+            if session.budget_expired(measurement_deadline)? {
+                step_result = Err(BucketStepFailure {
+                    sample_index,
+                    phase: "budget",
+                    source: CalibrationError::BudgetExceeded,
+                });
+                break;
+            }
             match kind {
                 PacketKind::Down => {
                     let measured_down =
@@ -2101,13 +2238,28 @@ mod platform {
             if step_result.is_err() {
                 break;
             }
-            if !hot_gap.is_zero() {
-                std::thread::sleep(hot_gap);
+            if !hot_gap.is_zero()
+                && let Err(source) = session.sleep_with_budget(hot_gap)
+            {
+                step_result = Err(BucketStepFailure {
+                    sample_index,
+                    phase: "budget",
+                    source,
+                });
+                break;
             }
         }
 
         if step_result.is_ok() {
             for sample_index in 1..=expected_samples {
+                if session.budget_expired(measurement_deadline)? {
+                    step_result = Err(BucketStepFailure {
+                        sample_index,
+                        phase: "budget",
+                        source: CalibrationError::BudgetExceeded,
+                    });
+                    break;
+                }
                 eprintln!(
                     "[calibration] bucket={}/{}/{} sample={}/{} phase=starting",
                     format!("{kind:?}").to_lowercase(),
@@ -2139,8 +2291,15 @@ mod platform {
                             });
                             break;
                         }
-                    } else if !hot_gap.is_zero() {
-                        std::thread::sleep(hot_gap);
+                    } else if !hot_gap.is_zero()
+                        && let Err(source) = session.sleep_with_budget(hot_gap)
+                    {
+                        step_result = Err(BucketStepFailure {
+                            sample_index,
+                            phase: "budget",
+                            source,
+                        });
+                        break;
                     }
                 }
 
@@ -2258,7 +2417,7 @@ mod platform {
             .saturating_add(bucket.timeout_count);
 
         Ok(CalibrationBucketOutput {
-            version: 7,
+            version: 8,
             measurement_protocol_version: MEASUREMENT_PROTOCOL_VERSION,
             source_git_sha: env!("SKY_NATIVE_BUILD_COMMIT"),
             native_build_id: env!("SKY_NATIVE_BUILD_COMMIT"),
@@ -2282,10 +2441,8 @@ mod platform {
             total_anomalous,
             total_timed_out,
             bucket,
-            samples: measured
-                .iter()
-                .map(sample_evidence)
-                .collect::<Result<Vec<_>, _>>()?,
+            worst_samples: compact_worst_samples(&measured, 16)?,
+            anomalous_samples: anomalous_sample_evidence(&measured)?,
             cleanup,
         })
     }
@@ -2343,6 +2500,39 @@ fn sample_evidence(
         win32_error: sample.win32_error,
         anomalies: sample.anomalies.clone(),
     })
+}
+
+fn evidence_score(evidence: &CalibrationSampleEvidence) -> u64 {
+    let first = evidence.first_receipt_us.unwrap_or_default().unsigned_abs();
+    let last = evidence.last_receipt_us.unwrap_or_default().unsigned_abs();
+    evidence
+        .call_duration_us
+        .saturating_add(first)
+        .saturating_add(last)
+        .saturating_add(evidence.intra_chord_spread_us.unwrap_or_default())
+}
+
+fn compact_worst_samples(
+    samples: &[CalibrationSample],
+    limit: usize,
+) -> Result<Vec<CalibrationSampleEvidence>, CalibrationError> {
+    let mut evidence = samples
+        .iter()
+        .map(sample_evidence)
+        .collect::<Result<Vec<_>, _>>()?;
+    evidence.sort_by_key(|sample| std::cmp::Reverse(evidence_score(sample)));
+    evidence.truncate(limit);
+    Ok(evidence)
+}
+
+fn anomalous_sample_evidence(
+    samples: &[CalibrationSample],
+) -> Result<Vec<CalibrationSampleEvidence>, CalibrationError> {
+    samples
+        .iter()
+        .filter(|sample| sample.anomalies.any())
+        .map(sample_evidence)
+        .collect()
 }
 
 fn aggregate_samples(samples: &[CalibrationSample]) -> Result<BucketStats, CalibrationError> {

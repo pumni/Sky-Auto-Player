@@ -58,6 +58,7 @@ use sky_dispatch_win32::calibration::{CalibrationConfig, CalibrationError, run_c
         receipt_timeout_ms = None,
         inter_sample_gap_us = None,
         cold_idle_gap_us = None,
+        budget_seconds = None,
         mode = None,
     )
 )]
@@ -70,6 +71,7 @@ pub fn run_calibration_rs(
     receipt_timeout_ms: Option<u32>,
     inter_sample_gap_us: Option<u64>,
     cold_idle_gap_us: Option<u64>,
+    budget_seconds: Option<u64>,
     mode: Option<&str>,
 ) -> PyResult<String> {
     // Build base config from mode.
@@ -124,6 +126,14 @@ pub fn run_calibration_rs(
     }
     if let Some(g) = cold_idle_gap_us {
         config.cold_idle_gap_us = g;
+    }
+    if let Some(seconds) = budget_seconds {
+        if !(1..=120).contains(&seconds) {
+            return Err(PyRuntimeError::new_err(
+                "budget_seconds must be between 1 and 120",
+            ));
+        }
+        config.budget_seconds = seconds;
     }
 
     // Run the calibration on the calling thread. The Python GIL is released

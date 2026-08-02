@@ -66,7 +66,7 @@ class TestRealtimeScopeGcFallback:
 
 
 class TestTelemetryFlushChunk:
-    """Incremental CSV flush bounds peak RAM during playback."""
+    """Bounded telemetry retains only a fixed diagnostic ring."""
 
     @staticmethod
     def _make_logger(tmp_path: Path, name: str, *, retain: bool = False):
@@ -83,38 +83,38 @@ class TestTelemetryFlushChunk:
         return logger
 
     def test_flush_chunk_defers_records_to_lifecycle_save(self, tmp_path: Path) -> None:
-        """Soft threshold reports pressure without mutating the runtime buffer."""
-        from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
+        """The retain-first buffer never grows past its fixed capacity."""
+        from sky_music.orchestration.telemetry import _TELEMETRY_MAX_BUFFER
     
         logger = self._make_logger(tmp_path, "flush_test")
     
-        for _ in range(_TELEMETRY_FLUSH_CHUNK + 1):
+        for _ in range(_TELEMETRY_MAX_BUFFER + 1):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
     
-        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
-        assert logger.flush_if_large() is True
-        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
+        assert len(logger.records) == _TELEMETRY_MAX_BUFFER
+        assert logger.flush_if_large() is False
+        assert logger.record_stats()["dropped"] == 1
 
     def test_retain_mode_preserves_records_past_flush(self, tmp_path: Path) -> None:
-        """If retain_all=True, flush_if_large does not truncate in memory."""
-        from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
+        """The test retention hook cannot bypass the bounded detail buffer."""
+        from sky_music.orchestration.telemetry import _TELEMETRY_MAX_BUFFER
     
         logger = self._make_logger(tmp_path, "retain_test", retain=True)
     
-        for _ in range(_TELEMETRY_FLUSH_CHUNK + 1):
+        for _ in range(_TELEMETRY_MAX_BUFFER + 1):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
     
-        assert logger.flush_if_large() is True
-        assert len(logger.records) == _TELEMETRY_FLUSH_CHUNK + 1
+        assert logger.flush_if_large() is False
+        assert len(logger.records) == _TELEMETRY_MAX_BUFFER
 
     def test_csv_written_incrementally(self, tmp_path: Path) -> None:
         """flush_if_large no longer writes to CSV during runtime; save() writes all."""
-        from sky_music.orchestration.telemetry import _TELEMETRY_FLUSH_CHUNK
+        from sky_music.orchestration.telemetry import _TELEMETRY_MAX_BUFFER
     
         csv_path = tmp_path / "incr_test.csv"
         logger = self._make_logger(tmp_path, "incr_test")
     
-        for _ in range(_TELEMETRY_FLUSH_CHUNK):
+        for _ in range(_TELEMETRY_MAX_BUFFER):
             logger.record(0, "down", 0, 0, 0, 0, (), "test")
         logger.record(1, "up", 1000, 1000, 0, 0, (), "test")
         
@@ -126,7 +126,7 @@ class TestTelemetryFlushChunk:
         logger.save()
         assert csv_path.exists()
         data = csv_path.read_text(encoding="utf-8")
-        expected_len = _TELEMETRY_FLUSH_CHUNK + 1
+        expected_len = _TELEMETRY_MAX_BUFFER
         # Plus 1 for header
         assert len(data.strip().splitlines()) == expected_len + 1
 

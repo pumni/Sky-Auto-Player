@@ -482,6 +482,7 @@ class PlaybackEngine:
         self.actions = actions
         self.lead_cache_path: str | None = lead_cache_path
         self._lead_cache_loaded: bool = False
+        self._native_estimator_state_json: str | None = None
         self.runtime_schedule: RuntimeSchedule | None = compile_runtime_intents(actions)
         self.total_time_us = max((int(action.at_us) for action in actions), default=0)
         self.backend = backend
@@ -536,7 +537,13 @@ class PlaybackEngine:
                 if cache_file.is_file() and cache_file.stat().st_size < 64 * 1024:
                     raw = cache_file.read_text(encoding="utf-8")
                     data = json.loads(raw)
-                    if self.estimator.import_state(data):
+                    if isinstance(data, dict) and data.get("version") == 8:
+                        # Rust owns the current cache schema. Keep it opaque to
+                        # the Python estimator and pass it only to the native
+                        # session that can validate its histogram state.
+                        self._native_estimator_state_json = raw
+                        self._lead_cache_loaded = True
+                    elif self.estimator.import_state(data):
                         self._lead_cache_loaded = True
             except Exception:
                 pass  # Corrupt cache — silently fall back to cold start
@@ -777,10 +784,10 @@ class PlaybackEngine:
             dispatch_lead_us=self.dispatch_lead_us,
             focus_restore_grace_us=self.focus_restore_grace_us,
             spin_threshold_us=self.current_spin_threshold_us,
-            core_warmup_budget_us=200,
-            late_pulse_drop_threshold_us=self.late_pulse_drop_threshold_us,
-            same_key_conflict_policy=self.same_key_conflict_policy,
-            telemetry_enabled=self.telemetry.enabled,
+            # Keep the optional core warmup disabled until a real-host A/B
+            # demonstrates the required p99 gain within the CPU budget.
+            core_warmup_budget_us=0,
+            telemetry_mode="ring" if self.telemetry.enabled else "off",
             rt_priority_mode=self.rt_priority_mode,
             enable_waitable_timer=self.enable_waitable_timer,
             enable_event_wait=self.enable_event_wait,
@@ -792,7 +799,7 @@ class PlaybackEngine:
             strict_down_completion_late_us=self.strict_down_completion_late_us,
             strict_up_completion_late_us=self.strict_up_completion_late_us,
             estimator_state_json=(
-                json.dumps(self.estimator.export_state())
+                self._native_estimator_state_json
                 if self.enable_adaptive_lead
                 else None
             ),
@@ -1318,7 +1325,6 @@ class PlaybackEngine:
                 )
                 if result == PLAYBACK_FINISHED:
                     self._log_timing_summary()
-                    self.telemetry.release_summary()  # MEM-4: free ~100-500 KB summary dict
                 return result
         finally:
             self._input_path_degraded = self._health_monitor.input_path_degraded
@@ -1412,16 +1418,30 @@ class PlaybackEngine:
                     )
 
                 # Phase D: Persist lead estimator state for next session.
-                if self.lead_cache_path and self.enable_adaptive_lead:
+                if (
+                    self.lead_cache_path
+                    and self.enable_adaptive_lead
+                    and not (
+                        self._dispatch_plan is not None
+                        and self._dispatch_plan.backend == "rust"
+                    )
+                ):
                     try:
                         cache_file = Path(self.lead_cache_path)
-                        cache_file.parent.mkdir(parents=True, exist_ok=True)
-                        tmp = cache_file.with_suffix(".tmp")
-                        tmp.write_text(
-                            json.dumps(self.estimator.export_state(), indent=2),
-                            encoding="utf-8",
-                        )
-                        tmp.replace(cache_file)
+                        preserve_native_cache = False
+                        if cache_file.is_file() and cache_file.stat().st_size < 64 * 1024:
+                            existing = json.loads(cache_file.read_text(encoding="utf-8"))
+                            preserve_native_cache = (
+                                isinstance(existing, dict) and existing.get("version") == 8
+                            )
+                        if not preserve_native_cache:
+                            cache_file.parent.mkdir(parents=True, exist_ok=True)
+                            tmp = cache_file.with_suffix(".tmp")
+                            tmp.write_text(
+                                json.dumps(self.estimator.export_state(), indent=2),
+                                encoding="utf-8",
+                            )
+                            tmp.replace(cache_file)
                     except Exception:
                         pass
 

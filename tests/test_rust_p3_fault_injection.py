@@ -1,7 +1,7 @@
 """P3.1 — Fault-injection backend coverage tests.
 
 Tests the scripted InjectedSendOutcome / FaultInjectionScript backend:
-- Call-index-scripted failures via mock_failure_mode strings
+- Explicit call-index script cases, with one terminal outcome per case
 - Down failure (zero progress once) → controlled error
 - Up failure (transient) → retry → eventual release
 - Up failure (persistent) → note-off exhaustion → controlled error
@@ -17,7 +17,9 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
+import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
+from rust_contract_helpers import assert_clean_finished
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,7 +46,7 @@ def _make_session(
         min_hold_us=min_hold_us,
         mock_backend=True,
         mock_failure_mode=mock_failure_mode,
-        telemetry_enabled=telemetry_enabled,
+        telemetry_mode="ring" if telemetry_enabled else "off",
         supervisor_lease_timeout_us=supervisor_lease_timeout_us,
     )
 
@@ -60,8 +62,8 @@ def _run(session: Any, *, timeout_ms: int = 5_000) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_fault_zero_progress_down_once_triggers_error() -> None:
-    """First Down call returns 0 inserted; engine must not continue dispatching."""
+def test_fault_zero_progress_down_once_recovers_cleanly() -> None:
+    """One zero-progress Down is retried immediately and can finish cleanly."""
     session = _make_session(
         [
             (0, _DOWN, 0, [0x15], "d1"),
@@ -71,10 +73,7 @@ def test_fault_zero_progress_down_once_triggers_error() -> None:
     )
     snap = _run(session)
 
-    assert snap["status"] in ("error", "finished"), snap
-    release = snap["release_outcome"]
-    assert release is not None
-    assert release["released_successfully"] is True or snap["status"] == "error"
+    assert_clean_finished(snap)
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +82,7 @@ def test_fault_zero_progress_down_once_triggers_error() -> None:
 
 
 def test_fault_transient_release_eventually_succeeds() -> None:
-    """Transient Up failure (first 3 calls) → engine retries → finish or error."""
+    """Transient Up failure (first 3 calls) → recovery → clean finish."""
     session = _make_session(
         [
             (0, _DOWN, 0, [0x15], "d1"),
@@ -94,11 +93,7 @@ def test_fault_transient_release_eventually_succeeds() -> None:
     )
     snap = _run(session, timeout_ms=10_000)
 
-    assert snap["status"] in ("finished", "error")
-    release = snap["release_outcome"]
-    assert release is not None
-    if snap["status"] == "finished":
-        assert release["released_successfully"] is True
+    assert_clean_finished(snap)
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +139,7 @@ def test_fault_none_fast_path_finishes_cleanly() -> None:
     )
     snap = _run(session)
 
-    assert snap["status"] == "finished"
-    assert snap["release_outcome"]["released_successfully"] is True
-    counts = snap["generation_status_counts"]
-    total = sum(counts.values())
-    assert total == snap["generation_count"]
-    assert counts.get("released", 0) == snap["generation_count"]
+    assert_clean_finished(snap)
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +168,7 @@ def test_fault_quit_during_wait_triggers_cleanup() -> None:
     assert elapsed < 1.0, f"quit took too long: {elapsed:.3f}s"
 
     snap = cast(dict[str, Any], session.snapshot())
-    # Engine may report 'quit', 'error', or 'finished' depending on whether
-    # cleanup completes before the status is sampled.
-    assert snap["status"] in ("quit", "error", "finished"), snap
+    assert snap["outcome"] == "quit", snap
     assert snap["release_outcome"] is not None
 
 
@@ -236,8 +224,9 @@ def test_fault_quit_during_recovery_exits_cleanly() -> None:
     assert elapsed < 2.0, f"quit during recovery took too long: {elapsed:.3f}s"
 
     snap = cast(dict[str, Any], session.snapshot())
-    # Quit may arrive before or after recovery exhaustion → finished is valid.
-    assert snap["status"] in ("quit", "error", "finished"), snap
+    # Persistent release failure makes cleanup itself terminally unsafe; quit
+    # must still never be rewritten as a successful finish.
+    assert snap["outcome"] == "error", snap
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +248,38 @@ def test_fault_zero_progress_does_not_send_subsequent_chords() -> None:
     )
     snap = _run(session, timeout_ms=10_000)
 
-    assert snap["status"] in ("finished", "error")
+    assert_clean_finished(snap)
     counts = snap["generation_status_counts"]
     total = sum(counts.values())
     assert total == snap["generation_count"], (
         f"generation_count mismatch: {total} != {snap['generation_count']}"
     )
 
+
+@pytest.mark.parametrize(
+    ("script_case", "expected_outcome"),
+    [
+        ("persistent_zero_down", "error"),
+        ("partial_down_first_attempt", "error"),
+        ("partial_down_after_zero_retry", "error"),
+        ("persistent_zero_up", "error"),
+        ("panic_after_send_before_commit", "error"),
+        ("focus_loss_after_due_before_send", "error"),
+        ("qpc_failure_after_send", "error"),
+        ("wait_failure", "error"),
+    ],
+)
+def test_fault_script_cases_have_one_terminal_outcome(
+    script_case: str,
+    expected_outcome: str,
+) -> None:
+    """PR 0 contract table; unsupported cases fail until their script exists."""
+    session = _make_session(
+        [
+            (0, _DOWN, 0, [0x15, 0x16], script_case),
+            (1, _UP, 1_000, [0x15, 0x16], f"{script_case}-release"),
+        ],
+        mock_failure_mode=script_case,
+    )
+    snap = _run(session, timeout_ms=10_000)
+    assert snap["outcome"] == expected_outcome, snap

@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 from sky_music.platform.win32.native_calibration import (
-    FULL_CALIBRATION_TIMEOUT_SECONDS,
     QUICK_CALIBRATION_TIMEOUT_SECONDS,
     NativeCalibrationError,
     run_native_calibration,
@@ -34,13 +33,14 @@ def main() -> int:
         help="resume only from a checkpoint with exact matching provenance",
     )
     parser.add_argument(
+        "--budget-seconds",
         "--timeout-seconds",
+        dest="timeout_seconds",
         type=float,
         default=None,
         help=(
-            "native subprocess/chunk timeout in seconds; defaults to "
-            f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s for quick and "
-            f"{FULL_CALIBRATION_TIMEOUT_SECONDS:g}s per chunk for full"
+            "hard native measurement budget in seconds (1..120); defaults to "
+            f"{QUICK_CALIBRATION_TIMEOUT_SECONDS:g}s"
         ),
     )
     parser.add_argument("--output", type=Path, default=Path(".cache/calibration-native.json"))

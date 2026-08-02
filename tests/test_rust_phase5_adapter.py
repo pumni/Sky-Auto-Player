@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 
+import pytest
+import sky_player_rs  # type: ignore[import-not-found,import-untyped]
+
 from sky_music.orchestration.core.rust_adapter import (
     RustInputAdapter,
     is_rust_dispatch_available,
@@ -28,6 +31,8 @@ def test_rust_dispatch_feature_flag_disable() -> None:
 
 
 def test_rust_input_adapter_lifecycle() -> None:
+    if not hasattr(sky_player_rs, "RustInputBackend"):
+        pytest.skip("RustInputBackend is diagnostic-backend feature gated")
     adapter = RustInputAdapter(mock=True)
 
     health = adapter.get_health()

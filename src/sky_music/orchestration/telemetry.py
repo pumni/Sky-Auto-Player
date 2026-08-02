@@ -16,8 +16,8 @@ from sky_music.infrastructure.backend import BackendHealth
 _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
-_TELEMETRY_MAX_BUFFER = 200_000
-NATIVE_TELEMETRY_SCHEMA_VERSION = 2
+_TELEMETRY_MAX_BUFFER = 1_024
+NATIVE_TELEMETRY_SCHEMA_VERSION = 3
 
 
 def _optional_int(value: Any) -> int | None:
@@ -27,14 +27,28 @@ def _optional_int(value: Any) -> int | None:
         raise ValueError("native telemetry integer field is invalid")
     return value
 
+
+def _required_nonnegative_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"native telemetry field {field} is invalid")
+    return value
+
 _CSV_FIELDS: list[str] = [
     "song",
     "event_index",
+    "authored_ticks",
+    "effective_deadline_ticks",
+    "wake_ticks",
+    "send_started_ticks",
+    "send_completed_ticks",
+    "applied_lead_ticks",
+    "win32_error",
     "dispatch_id",
     "packet_id",
     "kind",
     "scheduled_us",
     "scheduled_timeline_us",
+    "effective_deadline_us",
     "actual_us",
     "wake_timeline_us",
     "dispatch_completed_us",
@@ -88,6 +102,14 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "scheduled_us",
         "scheduled_timeline_us",
         "actual_us",
+        "authored_ticks",
+        "effective_deadline_ticks",
+        "effective_deadline_us",
+        "wake_ticks",
+        "send_started_ticks",
+        "send_completed_ticks",
+        "applied_lead_ticks",
+        "win32_error",
         "wake_timeline_us",
         "dispatch_completed_us",
         "lateness_us",
@@ -129,7 +151,9 @@ class TelemetryRecord:
     __slots__ = (
         "_dict",
         "actual_us",
+        "applied_lead_ticks",
         "applied_lead_us",
+        "authored_ticks",
         "authored_us",
         "bookkeeping_duration_us",
         "bookkeeping_us",
@@ -140,6 +164,8 @@ class TelemetryRecord:
         "dispatch_completed_us",
         "dispatch_id",
         "dispatch_lateness_us",
+        "effective_deadline_ticks",
+        "effective_deadline_us",
         "event_index",
         "first_win32_error",
         "generation_ids",
@@ -159,10 +185,12 @@ class TelemetryRecord:
         "scheduled_timeline_us",
         "scheduled_us",
         "send_attempts",
+        "send_completed_ticks",
         "send_completed_us",
         "send_duration_pure_us",
         "send_duration_us",
         "send_operation_duration_us",
+        "send_started_ticks",
         "send_started_us",
         "sender_completed_us",
         "sender_completion_error_us",
@@ -174,8 +202,10 @@ class TelemetryRecord:
         "visible_lateness_us",
         "wait_target_us",
         "wake_error_us",
+        "wake_ticks",
         "wake_timeline_us",
         "wake_us",
+        "win32_error",
         "zero_progress_retries",
     )
 
@@ -230,8 +260,22 @@ class TelemetryRecord:
         sendinput_call_duration_us: int | None = None,
         bookkeeping_duration_us: int | None = None,
         send_operation_duration_us: int | None = None,
+        authored_ticks: int = 0,
+        effective_deadline_ticks: int = 0,
+        wake_ticks: int = 0,
+        send_started_ticks: int = 0,
+        send_completed_ticks: int = 0,
+        applied_lead_ticks: int = 0,
+        win32_error: int = 0,
     ) -> None:
         self._dict = None
+        self.authored_ticks = authored_ticks
+        self.effective_deadline_ticks = effective_deadline_ticks
+        self.wake_ticks = wake_ticks
+        self.send_started_ticks = send_started_ticks
+        self.send_completed_ticks = send_completed_ticks
+        self.applied_lead_ticks = applied_lead_ticks
+        self.win32_error = win32_error
         self.song_name = song_name
         self.event_index = event_index
         self.kind = kind
@@ -239,6 +283,7 @@ class TelemetryRecord:
         self.scheduled_timeline_us = (
             scheduled_us if scheduled_timeline_us is None else scheduled_timeline_us
         )
+        self.effective_deadline_us = self.scheduled_timeline_us
         self.actual_us = actual_us
         self.lateness_us = lateness_us
         self.send_duration_us = send_duration_us
@@ -307,12 +352,20 @@ class TelemetryRecord:
             self._dict = {
                 "song": self.song_name,
                 "event_index": self.event_index,
+                "authored_ticks": self.authored_ticks,
+                "effective_deadline_ticks": self.effective_deadline_ticks,
+                "wake_ticks": self.wake_ticks,
+                "send_started_ticks": self.send_started_ticks,
+                "send_completed_ticks": self.send_completed_ticks,
+                "applied_lead_ticks": self.applied_lead_ticks,
+                "win32_error": self.win32_error,
                 "dispatch_id": self.event_index if self.dispatch_id is None else self.dispatch_id,
                 "packet_id": 0 if self.packet_id is None else self.packet_id,
                 "evidence_scope": "sender_completion",
                 "kind": self.kind,
                 "scheduled_us": self.scheduled_us,
                 "scheduled_timeline_us": self.scheduled_timeline_us,
+                "effective_deadline_us": self.effective_deadline_us,
                 "actual_us": self.actual_us,
                 "wake_timeline_us": self.wake_timeline_us,
                 "dispatch_completed_us": (
@@ -639,6 +692,30 @@ class TelemetryLogger:
 
         self._attempted_record_count += attempted
         self._dropped_count += dropped
+        frequency = output.get("qpc_frequency_hz")
+        if (
+            not isinstance(frequency, int)
+            or isinstance(frequency, bool)
+            or frequency <= 0
+        ):
+            raise ValueError("native telemetry envelope is missing qpc_frequency_hz")
+
+        def ticks_to_us(ticks: int) -> int:
+            if isinstance(ticks, bool) or not isinstance(ticks, int) or ticks < 0:
+                raise ValueError("native telemetry tick field is invalid")
+            return (ticks * 1_000_000) // frequency
+
+        outcome_names = {
+            0: "sent",
+            1: "deferred_release",
+            2: "failed_note_off",
+            3: "blocked_unfocused",
+            4: "suppressed_stale_up",
+            5: "recovered_zero_progress_but_late",
+            6: "strict_completion_slo_exceeded",
+            7: "chord_integrity_lost",
+            8: "aborted",
+        }
         for row in records:
             if not isinstance(row, dict):
                 raise ValueError("invalid native telemetry record")
@@ -646,65 +723,92 @@ class TelemetryLogger:
                 self._dropped_count += 1
                 self._truncated = True
                 continue
-            native_call_duration = _optional_int(row.get("sendinput_call_duration_us"))
-            self.records.append(
-                TelemetryRecord(
-                    self.song_name,
-                    int(row["event_index"]),
-                    str(row["kind"]),
-                    int(row["scheduled_us"]),
-                    int(row["actual_us"]),
-                    int(row["lateness_us"]),
-                    int(row["send_duration_us"]),
-                    tuple(int(value) for value in row["scan_codes"]),
-                    str(row["reason"]),
-                    int(row["dispatch_id"]),
-                    int(row["dispatch_completed_us"]),
-                    tuple(int(value) for value in row["sent_scan_codes"]),
-                    tuple(int(value) for value in row["skipped_scan_codes"]),
-                    tuple(int(value) for value in row["generation_ids"]),
-                    str(row["runtime_outcome"]),
-                    int(row["deferred_by_us"]),
-                    int(row["pre_send_spin_us"]),
-                    int(row["idle_gap_us"]),
-                    int(row["visible_lateness_us"]),
-                    int(row["applied_lead_us"]),
-                    int(row.get("send_duration_pure_us", row.get("sendinput_call_duration_us", 0))),
-                    int(row.get("bookkeeping_us", row.get("bookkeeping_duration_us", 0))),
-                    int(row["dispatch_lateness_us"]),
-                    _optional_int(row.get("first_win32_error")),
-                    _optional_int(row.get("last_win32_error")),
-                    int(row.get("send_attempts", 0)),
-                    int(row.get("zero_progress_retries", 0)),
-                    _optional_int(row.get("head_of_line_delay_us")),
-                    row.get("same_timestamp_release_before_down"),
-                    _optional_int(row.get("packet_id")),
-                    authored_us=_optional_int(row.get("scheduled_timeline_us")),
-                    scheduled_timeline_us=_optional_int(row.get("scheduled_timeline_us")),
-                    wake_us=_optional_int(row.get("wake_timeline_us")),
-                    wake_timeline_us=_optional_int(row.get("wake_timeline_us")),
-                    send_started_us=_optional_int(
-                        row.get("sender_started_us", row.get("send_started_us"))
-                    ),
-                    send_completed_us=_optional_int(
-                        row.get("sender_completed_us", row.get("send_completed_us"))
-                    ),
-                    sender_completion_error_us=_optional_int(
-                        row.get("sender_completion_error_us")
-                    ),
-                    send_operation_duration_us=_optional_int(
-                        row.get("send_operation_duration_us")
-                    ),
-                    sendinput_call_duration_us=native_call_duration,
-                    bookkeeping_duration_us=_optional_int(
-                        row.get("bookkeeping_duration_us")
-                    ),
-                )
+            event_index = _required_nonnegative_int(row.get("event_index"), "event_index")
+            kind_code = _required_nonnegative_int(row.get("kind"), "kind")
+            outcome_code = _required_nonnegative_int(row.get("outcome"), "outcome")
+            polyphony = _required_nonnegative_int(row.get("polyphony"), "polyphony")
+            flags = _required_nonnegative_int(row.get("flags"), "flags")
+            if kind_code not in (0, 1) or not 0 <= polyphony <= 15:
+                raise ValueError("native telemetry record has invalid kind/polyphony")
+            outcome = outcome_names.get(outcome_code)
+            if outcome is None:
+                raise ValueError("native telemetry record has unknown outcome code")
+            authored_ticks = _required_nonnegative_int(
+                row.get("authored_ticks"), "authored_ticks"
             )
-            # The Python compatibility constructor defaults a missing legacy
-            # field to send_duration_pure_us. Native JSON explicitly carries
-            # nullable single-syscall semantics, so preserve an explicit null.
-            self.records[-1].sendinput_call_duration_us = native_call_duration
+            effective_ticks = _required_nonnegative_int(
+                row.get("effective_deadline_ticks"), "effective_deadline_ticks"
+            )
+            wake_ticks = _required_nonnegative_int(row.get("wake_ticks"), "wake_ticks")
+            started_ticks = _required_nonnegative_int(
+                row.get("send_started_ticks"), "send_started_ticks"
+            )
+            completed_ticks = _required_nonnegative_int(
+                row.get("send_completed_ticks"), "send_completed_ticks"
+            )
+            lead_ticks = _required_nonnegative_int(
+                row.get("applied_lead_ticks"), "applied_lead_ticks"
+            )
+            win32_error = _required_nonnegative_int(row.get("win32_error"), "win32_error")
+            authored_us = ticks_to_us(authored_ticks)
+            effective_us = ticks_to_us(effective_ticks)
+            wake_us = ticks_to_us(wake_ticks)
+            started_us = ticks_to_us(started_ticks) if started_ticks else None
+            completed_us = ticks_to_us(completed_ticks) if completed_ticks else wake_us
+            send_duration_us = (
+                max(0, completed_us - started_us) if started_us is not None else 0
+            )
+            sent_codes = tuple(range(polyphony)) if flags & 1 else ()
+            skipped_codes = () if flags & 1 else tuple(range(polyphony))
+            record = TelemetryRecord(
+                self.song_name,
+                event_index,
+                "up" if kind_code else "down",
+                authored_us,
+                wake_us,
+                wake_us - effective_us,
+                send_duration_us,
+                tuple(range(polyphony)),
+                "",
+                event_index,
+                completed_us,
+                sent_codes,
+                skipped_codes,
+                (),
+                outcome,
+                0,
+                0,
+                0,
+                completed_us - effective_us,
+                ticks_to_us(lead_ticks),
+                send_duration_us,
+                0,
+                completed_us - effective_us,
+                win32_error or None,
+                win32_error or None,
+                0,
+                0,
+                None,
+                None,
+                event_index,
+                authored_us=authored_us,
+                scheduled_timeline_us=effective_us,
+                wake_us=wake_us,
+                wake_timeline_us=wake_us,
+                send_started_us=started_us,
+                send_completed_us=completed_us,
+                sender_completion_error_us=completed_us - effective_us,
+                send_operation_duration_us=send_duration_us,
+                sendinput_call_duration_us=send_duration_us,
+                authored_ticks=authored_ticks,
+                effective_deadline_ticks=effective_ticks,
+                wake_ticks=wake_ticks,
+                send_started_ticks=started_ticks,
+                send_completed_ticks=completed_ticks,
+                applied_lead_ticks=lead_ticks,
+                win32_error=win32_error,
+            )
+            self.records.append(record)
             self._accepted_record_count += 1
         self._truncated = self._truncated or bool(output.get("truncated")) or self._dropped_count > 0
 

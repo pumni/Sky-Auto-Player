@@ -8,9 +8,15 @@ History: built by `archive/2026-06_rt-pipeline-extreme-optimization-plan.md`; A/
 
 ## 1. The single ground truth
 
-The game registers a key press iff the key is observed held for **at least 1 game frame**
-(completion-to-completion). Every mechanism below is subordinate to that invariant; see
-`timing-principles.md` §0/§3.
+The Rust worker can prove only the sender boundary:
+`authored/effective deadline → worker wake → SendInput entry → SendInput return`, with an
+optional app-owned Raw Input delivery proxy during calibration. It must not be described as
+game-observed latency; game polling and render-frame sampling are not instrumented.
+
+`outcome == finished` is a strict clean-completion claim: every compiled generation is
+`Released`, no generation is scheduled/active/pending/cancelled/dropped, all backend masks are
+zero, and no rejection, partial-send, zero-progress, or uncertain-cleanup counter is non-zero.
+Quit, skip, panic, focus cancellation, and manual cancellation are never `finished`.
 
 ## 2. Component map
 
@@ -30,7 +36,7 @@ PlaybackEngine (orchestration/engine.py)            facade: wiring + lifecycle o
  │   ├─ DispatchHealthMonitor                        focus cache, backend-health cache, input-path p95
  │   └─ InputBackend → send_scan_code_batch_trusted  cached INPUT arrays → user32.SendInput
  │   └─ PlaybackSupervisor (orchestration/playback_supervisor.py)  control thread:
-     command queue + command event, focus polling, progress consumption/publishing,
+     atomic control flags + command event, focus polling, progress consumption/publishing,
      DispatchThreadPriorityScope (infrastructure/rt_priority.py) on the dispatch thread
 ```
 
@@ -122,58 +128,48 @@ ledger/mask mismatch into a successful result.
   lateness. The physical playback anchor is placed in the future by the initial lead plus a wake
   guard, so an authored first note at `t=0` can dispatch at `anchor - lead` rather than being
   forced late by the worker prologue.
-- **Chord conflict default is fidelity-first.** `drop_chord` rejects the whole authored chord;
-  `strict` also terminates playback; `degraded` is an explicit legacy/diagnostic mode that may
-  send a partial chord. Multiple same-timestamp Down batches are rejected by the native compiler
-  because they cannot be made atomic after the Python boundary. At the Rust/PyO3 boundary,
-  `strict_timing = true` always coerces the effective policy to `AbortPlayback`, even when a
-  caller omits the policy and receives the Python-facing `drop_chord` default.
+- **Runtime conflicts fail closed.** The compiler rejects authored overlap; any unexpected
+  runtime conflict is an invariant error and aborts the session. Production never terminalizes
+  a chord as `DroppedConflict` or `DroppedExpired` and then continues.
 - **Strict completion SLO is post-send.** A clean, single-attempt Down and a clean,
   non-deferred, single-source Up must complete within their configured
   `strict_down_completion_late_us` / `strict_up_completion_late_us` thresholds (2,000 µs
   defaults). Exceeding either threshold records `strict_completion_slo_exceeded`, performs full
   cleanup, and ends with a controlled error. Deferred or mixed release cohorts are excluded from
   this comparison because their authored timestamp is not their effective dispatch target.
-- **Estimator query cost is bounded.** Rolling p95 values are refreshed only when a sample is
-  inserted or state is imported; real-time lead queries are O(polyphony) integer comparisons and
-  do not sort the rolling window. Saturation is returned with the applied lead from the same
-  estimate.
-- **Wake-error probe** (`enable_adaptive_spin`): 30 × 2 ms probe sleeps run strictly *before*
+- **Estimator query cost is O(1).** Rolling p95 values and lead components are refreshed only
+  when a sample is inserted or state is imported. The worker indexes a fixed
+  `[polyphony][direction × hot/cold][normal/strict]` cache; it does not sort, scan histograms,
+  allocate, or migrate timing state in the dispatch decision.
+- **Wake-error probe** (`enable_adaptive_spin`): 10 × 2 ms probe sleeps run strictly *before*
   `start_perf` (same rule as `gc.collect`), deriving
   `effective_spin_threshold = clamp(spin_floor_us, 3000, p95_wake_error + 200)` µs (default
-  `spin_floor_us = 700`, cap 3000 µs). The probe also retains p50/p99/max diagnostics. A later
-  reprobe uses a robust `median + 6 × MAD + 200 µs` candidate over its small cooperative sample,
-  raises the threshold immediately, and lowers it by at most 50 µs per update. This keeps one timer
-  outlier from forcing a 3 ms spin window while retaining fast protection when the timer path degrades.
-- **Cross-session lead cache:** `SendLatencyEstimator` exports/imports version-4 rolling p95
-  samples plus separate Up residual state via `.cache/lead_estimator.json`; version-2 and
-  version-3 caches are migrated conservatively. Wrapped ring windows are exported oldest-first so
-  restore preserves the next overwrite position.
-  Corrupt/version-mismatched cache is silently dropped. Loaded flag is recorded in
-  `runtime_options.lead_cache_loaded`.
-- **Idle-gap core warmup (Phase 1/6):** When the gap since last `SendInput` completion ≥ 20 ms, a
-  `core_warmup_budget_us` (default 200 µs, capped at 500 µs) is added directly to the
+  `spin_floor_us = 700`, cap 3000 µs). The probe retains bounded wake diagnostics. There is no
+  mid-song reprobe in the native worker; calibration is a startup concern and never runs inside
+  the precision window.
+- **Cross-session lead cache:** `SendLatencyEstimator` accepts only the current version-8 schema
+  via `.cache/lead_estimator.json`. Timing cache is not user data: any corrupt or older/newer
+  version is discarded and playback starts from the conservative prior. The current schema
+  contains only per-class histogram pairs, tail reserves, residual channels, and delivery-proxy
+  channels; there is no legacy sample reconstruction or scalar EMA/count export. Loaded state is
+  recorded in `runtime_options.lead_cache_loaded`.
+- **Idle-gap core warmup:** When the gap since last `SendInput` completion ≥ 20 ms, an optional
+  `core_warmup_budget_us` (default 0, capped at 500 µs) is added directly to the
   `effective_spin_threshold` for the final precision wait. The cold/hot decision and this guard
   use physical QPC time, not the logical playback clock, so a long pause/focus recovery still
   treats the first subsequent send as cold. This expands the busy-spin window right before the
   deadline to warm the CPU core without adding a separate blocking sleep cycle.
-- **Mid-song spin re-probe (Phase H):** During inter-note gaps ≥ 0.5 s, if ≥ 30 s have elapsed
-  since the last reprobe, the dispatch thread starts an eight-sample cooperative attempt. It takes
-  at most one 2 ms sample per outer wait iteration and services command/focus state between
-  samples; pause, focus, stop, or an unsafe deadline discards the partial attempt. A candidate is
-  committed only after all eight samples using robust `median + 6 × MAD + 200 µs`, floor/cap and
-  asymmetric hysteresis. Kill switch: `enable_spin_reprobe`
-  (auto-off when `enable_adaptive_spin = False`). Applied thresholds are recorded in
-  `runtime_options.reprobe_applied_thresholds`.
+- **Mid-song spin re-probe:** Removed from the native worker and native API. The worker performs
+  only the bounded startup probe before the playback anchor.
 
-**Adaptive pre-play probe context.** In threaded playback, the 30-sample, 2 ms wake-error probe
+**Adaptive pre-play probe context.** In threaded playback, the 10-sample, 2 ms wake-error probe
 runs on the dispatch thread after the timer and priority scopes have entered and before the final
 epoch rebase. The result is applied to the loop before its first wait. Direct playback probes in
 its execution context before creating the playback anchor. A probe failure preserves the configured
 threshold and records the degradation; it does not abort playback. `p95 + 200 µs`, the configured
-floor/cap, and the existing kill switch remain unchanged.
+  floor/cap remain unchanged.
 
-**Calibration evidence boundary.** The latency calibration cache is schema version 6,
+**Calibration evidence boundary.** The native calibration output is schema version 7,
 measurement protocol 3. Measured bucket admission uses the actual QPC idle gap from the
 immediately previous exact SendInput completion to the current exact SendInput entry; a
 requested sleep overshoot is a class mismatch and is rejected from timing quantiles. It is an
@@ -186,16 +182,17 @@ injections are tracked separately and excluded from measured classes. Only compl
 anomaly-free samples enter timing quantiles; partial, timeout, reordered, duplicate, or unexpected
 receipts remain diagnostic counters. The calibration process snapshots/restores its registration
 and performs bounded full-instrument KeyUp cleanup; uncertain cleanup or a failed subprocess is
-an error, not successful calibration. Full calibration is a sequential 24-bucket run split into
-1,000-sample native chunks. A cold chunk has a 100-second idle-gap floor and a 180-second
-per-process timeout; prior chunks are atomically checkpointed with a SHA-256 before the next
-physical-input chunk starts. Raw sample evidence is retained so chunk quantiles are merged
-exactly. Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
-clean-worktree state, toolchain, host fingerprint, schema/protocol, or full configuration.
+an error, not successful calibration. Quick calibration uses the 12-bucket anchor matrix
+1/5/15 × Down/Up × Hot/Cold with 20 clean samples and four warmups per bucket. This 12-bucket
+matrix is the only acceptance matrix. Each bucket is bounded by the native QPC budget and
+performs cleanup before its artifact is accepted. Artifacts contain aggregate counters/quantiles,
+the worst 16 samples, and every anomalous sample; the complete raw stream is never serialized.
+Resume is fail-closed on any mismatch in exact Git SHA, native build/source fingerprint,
+clean-worktree state, toolchain, host fingerprint, schema/protocol, or configuration.
 Diagnostic runs are single-bucket, progress-reporting, and always emit an ineligible artifact or
 failure report containing the exact bucket/sample/phase/error/Win32/cleanup context. Only the
-finalizer may write trusted cache evidence, and it requires all 24 known buckets, 5,000 samples
-per bucket, exact aggregate totals, identical provenance, and successful cleanup. A dirty,
+finalizer may write trusted cache evidence, and it requires all 12 configured buckets, at least
+20 clean samples per bucket, identical provenance, and successful cleanup. A dirty,
 diagnostic, incomplete, or SHA-mismatched artifact is not release evidence. The sender telemetry
 stream instead uses `evidence_kind = "sender_completion"` and never claims Raw Input or
 game-observed delivery.
@@ -261,6 +258,12 @@ The selected backend, reason, probe diagnostics and fidelity mode are shown in r
 The Python supervisor owns a `try/finally` cleanup path, and the Rust worker has a bounded
 supervisor lease that performs full-instrument release if heartbeats stop.
 
+The native PyO3 boundary has three named profiles: `production` (real `SendInput`, abort-on-
+invariant-failure), `strict_timing_diagnostic` (production backend plus completion SLO checks), and
+`mock_test` (scripted backend for tests/measurement only). The profile is the authoritative policy
+selection. Diagnostic backend classes are feature-gated and are not exported by the production
+wheel.
+
 ## 6. Production defaults & kill switches
 
 All graduated ON (config/RUNTIME_STATE layer; library/engine constructor defaults stay off so
@@ -272,11 +275,11 @@ deterministic tests are unaffected):
 | Fidelity policy | `fidelity_mode: normal` | `fidelity_mode: strict` for acceptance/soak |
 | MMCSS/priority ladder | `rt_priority_mode: auto` (config) | `--rt-priority-mode off` |
 | Adaptive dispatch lead | `enable_adaptive_lead: true` (config) | `--no-adaptive-lead` |
-| Same-key chord conflict | `drop_chord` for best-effort; Rust strict timing coerces to abort | `degraded` legacy or explicit `strict` abort |
+| Same-key chord conflict | compiler/runtime invariant; unexpected conflict aborts | no production drop policy |
 | Lead p95 cross-session cache | `.cache/lead_estimator.json` | `lead_cache_path = None` |
 | Adaptive spin threshold | `enable_adaptive_spin: true` (config) | `--no-adaptive-spin` |
-| Mid-song spin re-probe | `enable_spin_reprobe: true` when adaptive spin on | set `enable_adaptive_spin: false` |
-| Idle-gap core warmup | `core_warmup_budget_us = 200`, threshold 20 ms | `core_warmup_budget_us = 0` |
+| Mid-song spin re-probe | removed from native worker and API | unavailable |
+| Idle-gap core warmup | `core_warmup_budget_us = 0`, threshold 20 ms | leave at 0 |
 | Device margin | `.cache/input_latency.json` → `min_hold_margin_us`; default 500 | profile override |
 | Event-driven waits | on (runtime) | `--no-event-wait` |
 | GIL switch interval 1 ms | on | `--no-switch-interval-tuning` |
@@ -306,19 +309,19 @@ cleanest send tail of all runs.
 
 To protect the dispatch hot path, the dispatch thread never synchronously writes telemetry files to disk or allocates unbounded arrays. If `TelemetryLogger` reaches its hard record cap (`_TELEMETRY_MAX_BUFFER`), it retains the first records, stops accepting new records, and increments exact truncation/drop markers. Final CSV export is performed off the dispatch hot path during playback lifecycle teardown.
 
-The Rust path reserves the configured bounded retain-first record buffer before the playback epoch
+The Rust path reserves the configured bounded retain-first `RtTraceRecord` buffer before the playback epoch
 when telemetry is enabled, so a long diagnostic session cannot trigger a Vec growth/copy on the
 dispatch thread. Telemetry is opt-in and this predictable memory reservation is preferred over
 allocator jitter; with telemetry disabled no event record is materialized. The hard cap remains
 explicit. The compiled
 schedule uses a flat 8-byte packed `CompactIntent` arena plus small batch headers; only the current batch is
 materialized into full intent views. Runtime active/release ownership uses 15-key arrays and
-bitmasks rather than hash tables. Per-record scan/generation fields use inline storage and
-reasons remain compact IDs on the worker; bounded summary counters and 50 µs histograms remain
-available in every native run, including summary-only runs where the retain-first event buffer is
-disabled. Reason strings and JSON are materialized only after terminal join. This preserves the
-existing CSV fields and outcome strings without per-send disk I/O while making production health
-histograms available without retaining every event.
+bitmasks rather than hash tables. Per-record data is fixed-size tick fields and compact flags;
+bounded summary counters remain
+available in every native run, including `Off` mode where the retain-first event buffer is
+disabled. There is no unbounded or `FullTrace` mode. Human-readable outcomes and JSON are
+materialized only after terminal join. This keeps precision-window work bounded and avoids
+per-send serialization.
 
 The unsigned logical timeline also guards against sub-lead collapse: authored timestamps smaller
 than the requested lead are not all saturated to deadline zero. The first action uses the future

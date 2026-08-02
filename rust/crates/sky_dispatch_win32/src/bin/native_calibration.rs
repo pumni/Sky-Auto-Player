@@ -40,6 +40,7 @@ fn main() -> Result<(), String> {
     let mut polyphony = None;
     let mut samples = None;
     let mut warmup_samples = 50u32;
+    let mut budget_seconds = 120u64;
     let mut metadata = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -81,10 +82,20 @@ fn main() -> Result<(), String> {
                     .parse::<u32>()
                     .map_err(|_| "--warmup-samples must be an integer".to_string())?;
             }
+            "--budget-seconds" => {
+                budget_seconds = args
+                    .next()
+                    .ok_or_else(|| "--budget-seconds requires a value".to_string())?
+                    .parse::<u64>()
+                    .map_err(|_| "--budget-seconds must be an integer".to_string())?;
+                if !(1..=120).contains(&budget_seconds) {
+                    return Err("--budget-seconds must be between 1 and 120".to_string());
+                }
+            }
             "--metadata" => metadata = true,
             "--help" => {
                 println!(
-                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N]"
+                    "usage: native_calibration --mode bucket --kind down|up --class hot|cold --polyphony N --samples N [--warmup-samples N] [--budget-seconds 1..120]"
                 );
                 return Ok(());
             }
@@ -126,6 +137,7 @@ fn main() -> Result<(), String> {
         config.samples_per_hot_bucket = sample_count;
         config.samples_per_cold_bucket = sample_count;
         config.warmup_samples = warmup_samples;
+        config.budget_seconds = budget_seconds;
         let result = run_calibration_bucket_json(&config, kind, class);
         match result {
             Ok(output) => {
@@ -161,8 +173,11 @@ fn main() -> Result<(), String> {
             }
         }
     } else if mode == "quick" {
-        let output =
-            run_calibration_json(&CalibrationConfig::quick()).map_err(|error| error.to_string())?;
+        let output = {
+            let mut config = CalibrationConfig::quick();
+            config.budget_seconds = budget_seconds;
+            run_calibration_json(&config).map_err(|error| error.to_string())?
+        };
         println!("{output}");
         Ok(())
     } else {

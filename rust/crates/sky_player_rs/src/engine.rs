@@ -1,6 +1,5 @@
 //! End-to-end real-time native dispatch session engine.
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
@@ -39,6 +38,7 @@ const PAUSED_POLL_US: u64 = 2_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
+const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
 const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
@@ -58,13 +58,17 @@ pub enum InjectedSendOutcome {
         win32_error: u32,
     },
     /// Partial insertion: exactly `inserted` keys succeed.
-    Prefix {
+    Partial {
         inserted: u8,
         latency_ticks: u64,
         win32_error: u32,
     },
     /// Emitter spin-stalls for `duration_ticks` QPC ticks without sending.
     Stall { duration_ticks: u64 },
+    /// Return from the simulated send boundary, then panic before coordinator commit.
+    PanicAfterSend,
+    /// Return a complete send receipt but fail the post-send QPC boundary.
+    QpcFailureAfterSend,
 }
 
 /// Script that maps call-index → `InjectedSendOutcome`.
@@ -80,6 +84,8 @@ pub struct FaultInjectionScript {
     pub base_latency_ticks: u64,
     /// Extra latency per key, in QPC ticks, applied to every call.
     pub per_key_latency_ticks: u64,
+    pub focus_loss_after_due_before_send: bool,
+    pub wait_failure: bool,
 }
 
 impl FaultInjectionScript {
@@ -158,6 +164,102 @@ impl FaultInjectionScript {
         }
     }
 
+    /// Both immediate Down attempts make zero progress.
+    pub fn persistent_zero_down() -> Self {
+        Self {
+            entries: vec![
+                (
+                    0,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+                (
+                    1,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// The first Down attempt partially inserts a chord.
+    pub fn partial_down_first_attempt() -> Self {
+        Self {
+            entries: vec![(
+                0,
+                InjectedSendOutcome::Partial {
+                    inserted: 1,
+                    latency_ticks: 0,
+                    win32_error: 5,
+                },
+            )],
+            ..Default::default()
+        }
+    }
+
+    /// The first Down attempt is empty, then the immediate retry splits.
+    pub fn partial_down_after_zero_retry() -> Self {
+        Self {
+            entries: vec![
+                (
+                    0,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+                (
+                    1,
+                    InjectedSendOutcome::Partial {
+                        inserted: 1,
+                        latency_ticks: 0,
+                        win32_error: 5,
+                    },
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// Every Up attempt makes zero progress.
+    pub fn persistent_zero_up() -> Self {
+        Self::persistent_release()
+    }
+
+    /// Panic after the simulated SendInput boundary and before coordinator commit.
+    pub fn panic_after_send_before_commit() -> Self {
+        Self {
+            entries: vec![(0, InjectedSendOutcome::PanicAfterSend)],
+            ..Default::default()
+        }
+    }
+
+    pub fn focus_loss_after_due_before_send() -> Self {
+        Self {
+            focus_loss_after_due_before_send: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn qpc_failure_after_send() -> Self {
+        Self {
+            entries: vec![(0, InjectedSendOutcome::QpcFailureAfterSend)],
+            ..Default::default()
+        }
+    }
+
+    pub fn wait_failure() -> Self {
+        Self {
+            wait_failure: true,
+            ..Default::default()
+        }
+    }
+
     /// Resolve the outcome for `call_index`.  Returns `None` → Full success, no latency.
     pub fn resolve(&self, call_index: usize) -> Option<&InjectedSendOutcome> {
         self.entries
@@ -170,38 +272,6 @@ impl FaultInjectionScript {
 /// Kept for backward-compatibility with existing call sites that imported this name.
 /// New code should use `FaultInjectionScript` directly.
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MockFailureMode {
-    None,
-    TransientRelease,
-    PersistentRelease,
-    ZeroProgressDownOnce,
-}
-
-impl From<MockFailureMode> for FaultInjectionScript {
-    fn from(m: MockFailureMode) -> Self {
-        match m {
-            MockFailureMode::None => FaultInjectionScript::none(),
-            MockFailureMode::TransientRelease => FaultInjectionScript::transient_release(),
-            MockFailureMode::PersistentRelease => FaultInjectionScript::persistent_release(),
-            MockFailureMode::ZeroProgressDownOnce => {
-                FaultInjectionScript::zero_progress_down_once()
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChordConflictPolicy {
-    /// Preserve the legacy best-effort behavior and send only non-conflicting
-    /// keys. This mode is intentionally not fidelity-first.
-    DropConflictingKeys,
-    /// Drop the complete authored chord when any key is already active.
-    DropWholeChord,
-    /// Drop the complete chord and terminate playback with a controlled error.
-    AbortPlayback,
-}
-
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub elapsed_us: u64,
@@ -265,49 +335,49 @@ pub struct EngineSnapshot {
     pub release_outcome: Option<ReleaseAllOutcome>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct NativeTelemetryRecord {
+/// Fixed-size record retained on the real-time worker path.
+///
+/// Human-readable outcome names, authored reasons, scan-code lists and
+/// microsecond projections are deliberately materialized only after the
+/// worker has stopped.  This is the only representation kept in the bounded
+/// native ring.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct RtTraceRecord {
     pub event_index: u32,
-    pub dispatch_id: u64,
-    pub kind: &'static str,
-    pub scheduled_us: u64,
-    pub actual_us: u64,
-    pub dispatch_completed_us: u64,
-    /// Explicit timeline boundaries. `actual_us` remains a compatibility
-    /// alias for `wake_timeline_us`.
-    pub scheduled_timeline_us: u64,
-    pub wake_timeline_us: u64,
-    pub sender_started_us: Option<u64>,
-    pub sender_completed_us: Option<u64>,
-    pub sender_completion_error_us: Option<i64>,
-    /// Duration from the first actual SendInput call entry to the final call
-    /// return for the logical operation. `None` means no exact call boundary
-    /// was available.
-    pub send_operation_duration_us: Option<u64>,
-    pub sendinput_call_duration_us: Option<u64>,
-    pub bookkeeping_duration_us: Option<u64>,
-    pub lateness_us: i64,
-    pub visible_lateness_us: i64,
-    pub send_duration_us: u64,
-    pub send_duration_pure_us: u64,
-    pub bookkeeping_us: u64,
-    pub dispatch_lateness_us: i64,
-    pub scan_codes: SmallVec<[u16; 15]>,
-    pub sent_scan_codes: SmallVec<[u16; 15]>,
-    pub skipped_scan_codes: SmallVec<[u16; 15]>,
-    pub generation_ids: SmallVec<[u64; 15]>,
-    pub runtime_outcome: &'static str,
-    pub deferred_by_us: u64,
-    pub pre_send_spin_us: u64,
-    pub idle_gap_us: u64,
-    #[serde(skip)]
-    pub reason_id: u16,
-    pub reason: Option<String>,
-    pub applied_lead_us: u64,
-    pub first_win32_error: Option<u32>,
-    pub last_win32_error: Option<u32>,
-    pub send_attempts: u8,
-    pub zero_progress_retries: u8,
+    pub kind: u8,
+    pub outcome: u8,
+    pub polyphony: u8,
+    pub flags: u8,
+    pub authored_ticks: u64,
+    pub effective_deadline_ticks: u64,
+    pub wake_ticks: u64,
+    pub send_started_ticks: u64,
+    pub send_completed_ticks: u64,
+    pub applied_lead_ticks: u32,
+    pub win32_error: u32,
+}
+
+const TRACE_KIND_DOWN: u8 = 0;
+const TRACE_KIND_UP: u8 = 1;
+const TRACE_FLAG_SENT_FULL: u8 = 1 << 0;
+const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
+const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
+const TRACE_FLAG_ANOMALY: u8 = 1 << 3;
+
+fn trace_outcome_code(outcome: &str) -> u8 {
+    match outcome {
+        "sent" => 0,
+        "deferred_release" => 1,
+        "failed_note_off" => 2,
+        "blocked_unfocused" => 3,
+        "suppressed_stale_up" => 4,
+        "recovered_zero_progress_but_late" => 5,
+        "strict_completion_slo_exceeded" => 6,
+        "chord_integrity_lost" => 7,
+        "aborted" => 8,
+        _ => 255,
+    }
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -353,66 +423,48 @@ impl Default for TimingSemantics {
 }
 
 impl NativeTelemetrySummary {
-    fn observe(&mut self, record: &NativeTelemetryRecord) {
+    fn observe(&mut self, record: &RtTraceRecord) {
         self.dispatch_count = self.dispatch_count.saturating_add(1);
         match record.kind {
-            "down" => self.down_count = self.down_count.saturating_add(1),
-            "up" => self.up_count = self.up_count.saturating_add(1),
+            TRACE_KIND_DOWN => self.down_count = self.down_count.saturating_add(1),
+            TRACE_KIND_UP => self.up_count = self.up_count.saturating_add(1),
             _ => {}
         }
         self.requested_key_count = self
             .requested_key_count
-            .saturating_add(record.scan_codes.len() as u64);
-        self.sent_key_count = self
-            .sent_key_count
-            .saturating_add(record.sent_scan_codes.len() as u64);
-        self.skipped_key_count = self
-            .skipped_key_count
-            .saturating_add(record.skipped_scan_codes.len() as u64);
-        self.max_lateness_us = self.max_lateness_us.max(record.visible_lateness_us);
-        self.max_send_duration_us = self.max_send_duration_us.max(record.send_duration_us);
-        let lateness_bucket = record
-            .visible_lateness_us
-            .max(0)
-            .unsigned_abs()
-            .saturating_div(50)
-            .min(15) as usize;
-        let send_bucket = record.send_duration_us.saturating_div(50).min(15) as usize;
-        if record.visible_lateness_us.max(0).unsigned_abs() / 50 >= 15 {
-            self.lateness_overflow_count = self.lateness_overflow_count.saturating_add(1);
+            .saturating_add(u64::from(record.polyphony));
+        if record.flags & TRACE_FLAG_SENT_FULL != 0 {
+            self.sent_key_count = self
+                .sent_key_count
+                .saturating_add(u64::from(record.polyphony));
         }
-        if record.send_duration_us / 50 >= 15 {
-            self.send_duration_overflow_count = self.send_duration_overflow_count.saturating_add(1);
+        if record.flags & TRACE_FLAG_SENT_FULL == 0 {
+            self.skipped_key_count = self
+                .skipped_key_count
+                .saturating_add(u64::from(record.polyphony));
         }
-        self.lateness_histogram_50us[lateness_bucket] =
-            self.lateness_histogram_50us[lateness_bucket].saturating_add(1);
-        self.send_duration_histogram_50us[send_bucket] =
-            self.send_duration_histogram_50us[send_bucket].saturating_add(1);
     }
 }
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct NativeTelemetryOutput {
     pub schema_version: u32,
-    pub records: VecDeque<NativeTelemetryRecord>,
+    pub qpc_frequency_hz: u64,
+    pub records: VecDeque<RtTraceRecord>,
     pub summary: NativeTelemetrySummary,
     pub attempted: u64,
     pub accepted: u64,
     pub dropped: u64,
     pub truncated: bool,
     pub timing_semantics: TimingSemantics,
-    #[serde(skip)]
-    reason_table: Vec<String>,
 }
 
-const MIXED_RELEASE_REASON: &str = "mixed_deferred_release";
-const MIXED_RELEASE_REASON_ID: u16 = u16::MAX;
-
 impl NativeTelemetryOutput {
-    fn new(mode: TelemetryMode, capacity: usize, reason_table: Vec<String>) -> Self {
+    fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
-            schema_version: 2,
-            records: if matches!(mode, TelemetryMode::Ring | TelemetryMode::FullTrace) {
+            schema_version: 3,
+            qpc_frequency_hz: 0,
+            records: if matches!(mode, TelemetryMode::Ring) {
                 // Reserve the complete bounded buffer before the worker
                 // epoch. Telemetry is an opt-in diagnostic mode; once it is
                 // enabled, a later VecDeque growth/copy on the dispatch thread is
@@ -427,103 +479,116 @@ impl NativeTelemetryOutput {
             dropped: 0,
             truncated: false,
             timing_semantics: TimingSemantics::default(),
-            reason_table,
         }
-    }
-
-    fn materialize_reasons(&mut self) -> Result<(), String> {
-        for record in &mut self.records {
-            if record.reason.is_none() {
-                let reason = self
-                    .reason_table
-                    .get(record.reason_id as usize)
-                    .map(String::as_str)
-                    .or((record.reason_id == MIXED_RELEASE_REASON_ID)
-                        .then_some(MIXED_RELEASE_REASON))
-                    .ok_or_else(|| "native telemetry reason id is out of bounds".to_string())?;
-                record.reason = Some(reason.to_string());
-            }
-        }
-        Ok(())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryMode {
     Off,
-    Summary,
     Ring,
-    FullTrace,
+}
+
+/// Deliberate session profiles. The profile owns backend/policy selection so
+/// callers do not compose a contradictory matrix of booleans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchProfile {
+    Production,
+    StrictTimingDiagnostic,
+    MockTest,
+}
+
+impl DispatchProfile {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "production" => Ok(Self::Production),
+            "strict_timing_diagnostic" => Ok(Self::StrictTimingDiagnostic),
+            "mock_test" => Ok(Self::MockTest),
+            _ => Err(
+                "profile must be 'production', 'strict_timing_diagnostic', or 'mock_test'"
+                    .to_string(),
+            ),
+        }
+    }
+
+    pub(crate) fn uses_mock_backend(self) -> bool {
+        matches!(self, Self::MockTest)
+    }
+
+    pub(crate) fn strict_timing(self) -> bool {
+        matches!(self, Self::StrictTimingDiagnostic)
+    }
 }
 
 struct TelemetryCollector {
     mode: TelemetryMode,
     capacity: usize,
     output: NativeTelemetryOutput,
-    mixed_release_reason_id: u16,
-    next_dispatch_id: u64,
-    last_completed_us: Option<u64>,
 }
 
 impl TelemetryCollector {
-    fn new(mode: TelemetryMode, capacity: usize, reason_table: Vec<String>) -> Self {
+    fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
             mode,
             capacity,
-            output: NativeTelemetryOutput::new(mode, capacity, reason_table),
-            mixed_release_reason_id: MIXED_RELEASE_REASON_ID,
-            next_dispatch_id: 0,
-            last_completed_us: None,
+            output: NativeTelemetryOutput::new(mode, capacity),
         }
     }
 
     fn push<F>(&mut self, build: F)
     where
-        F: FnOnce() -> NativeTelemetryRecord,
+        F: FnOnce() -> RtTraceRecord,
     {
         self.output.attempted = self.output.attempted.saturating_add(1);
         if self.mode == TelemetryMode::Off {
             return;
         }
 
-        let mut record = build();
+        if self.output.records.len() == self.capacity {
+            self.output.dropped = self.output.dropped.saturating_add(1);
+            self.output.truncated = true;
+            return;
+        }
+
+        let record = build();
         self.output.summary.observe(&record);
-        record.dispatch_id = self.next_dispatch_id;
-        record.idle_gap_us = self
-            .last_completed_us
-            .map_or(0, |previous| record.actual_us.saturating_sub(previous));
-        self.last_completed_us = Some(record.dispatch_completed_us);
 
         match self.mode {
             TelemetryMode::Off => unreachable!(),
-            TelemetryMode::Summary => {}
             TelemetryMode::Ring => {
-                if self.output.records.len() == self.capacity {
-                    self.output.records.pop_front();
-                }
                 self.output.records.push_back(record);
                 self.output.accepted = self.output.accepted.saturating_add(1);
             }
-            TelemetryMode::FullTrace => {
-                if self.output.records.len() < self.capacity {
-                    self.output.records.push_back(record);
-                    self.output.accepted = self.output.accepted.saturating_add(1);
-                } else {
-                    self.output.dropped = self.output.dropped.saturating_add(1);
-                    self.output.truncated = true;
-                }
-            }
         }
-
-        self.next_dispatch_id = self.next_dispatch_id.saturating_add(1);
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum WorkerCommand {
-    Skip,
-    Quit,
-    PanicRelease,
+#[derive(Debug, Clone, Default)]
+struct RecentLatencyRing {
+    values: [i32; 32],
+    next: u8,
+    len: u8,
+}
+
+impl RecentLatencyRing {
+    fn push(&mut self, value: i64) {
+        self.values[usize::from(self.next)] =
+            value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        self.next = (self.next + 1) % self.values.len() as u8;
+        self.len = self.len.saturating_add(1).min(self.values.len() as u8);
+    }
+
+    fn to_vec(&self) -> Vec<i64> {
+        let len = usize::from(self.len);
+        let start = if self.len == self.values.len() as u8 {
+            usize::from(self.next)
+        } else {
+            0
+        };
+        (0..len)
+            .map(|offset| i64::from(self.values[(start + offset) % self.values.len()]))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -572,6 +637,7 @@ pub struct WorkerMetricsLocal {
     pub wait_path_degraded: bool,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    recent_latencies: RecentLatencyRing,
 }
 
 #[derive(Default)]
@@ -596,7 +662,7 @@ fn try_publish_metrics(
     force: bool,
 ) {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
-    if (force || now_us.saturating_sub(last) >= 20_000)
+    if (force || now_us.saturating_sub(last) >= 50_000)
         && let Some(mut guard) = shared.snapshot.try_lock()
     {
         *guard = local.clone();
@@ -618,15 +684,12 @@ struct WorkerConfig {
     focus_restore_grace_us: u64,
     spin_threshold_us: u64,
     core_warmup_budget_us: u64,
-    late_pulse_drop_threshold_us: Option<u64>,
-    chord_conflict_policy: ChordConflictPolicy,
     telemetry_mode: TelemetryMode,
     telemetry_capacity: usize,
     priority_mode: PriorityMode,
     enable_waitable_timer: bool,
     enable_event_wait: bool,
     enable_adaptive_spin: bool,
-    enable_spin_reprobe: bool,
     spin_floor_us: u64,
     estimator_state_json: Option<String>,
     enable_adaptive_lead: bool,
@@ -640,10 +703,6 @@ struct WorkerConfig {
 pub struct NativeDispatchSession {
     config: Mutex<Option<WorkerConfig>>,
     generation_count: u64,
-    command_tx: Sender<WorkerCommand>,
-    command_rx: Receiver<WorkerCommand>,
-    latency_tx: Sender<i64>,
-    latency_rx: Receiver<i64>,
     interrupt: Arc<OwnedEvent>,
     desired_pause: Arc<AtomicBool>,
     quit_requested: Arc<AtomicBool>,
@@ -678,15 +737,12 @@ impl NativeDispatchSession {
         focus_restore_grace_us: u64,
         spin_threshold_us: u64,
         core_warmup_budget_us: u64,
-        late_pulse_drop_threshold_us: Option<u64>,
-        chord_conflict_policy: ChordConflictPolicy,
         telemetry_mode: TelemetryMode,
         telemetry_capacity: usize,
         priority_mode: PriorityMode,
         enable_waitable_timer: bool,
         enable_event_wait: bool,
         enable_adaptive_spin: bool,
-        enable_spin_reprobe: bool,
         spin_floor_us: u64,
         estimator_state_json: Option<String>,
         enable_adaptive_lead: bool,
@@ -705,14 +761,6 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = schedule.generation_count;
-        let (command_tx, command_rx) = bounded(32);
-        let (latency_tx, latency_rx) = bounded(512);
-        if let Some(raw) = &estimator_state_json {
-            let mut validator =
-                SendLatencyEstimator::try_new(0.2, max_lead_us, allowed_scan_codes.len())
-                    .map_err(|error| error.to_string())?;
-            validator.import_state(raw)?;
-        }
         let metrics = Arc::new(SharedMetrics::default());
         metrics.snapshot.lock().total_us = total_us;
         Ok(Self {
@@ -730,15 +778,12 @@ impl NativeDispatchSession {
                 focus_restore_grace_us,
                 spin_threshold_us,
                 core_warmup_budget_us,
-                late_pulse_drop_threshold_us,
-                chord_conflict_policy,
                 telemetry_mode,
                 telemetry_capacity,
                 priority_mode,
                 enable_waitable_timer,
                 enable_event_wait,
                 enable_adaptive_spin,
-                enable_spin_reprobe,
                 spin_floor_us,
                 estimator_state_json,
                 enable_adaptive_lead,
@@ -749,10 +794,6 @@ impl NativeDispatchSession {
                 supervisor_lease_timeout_us,
             })),
             generation_count,
-            command_tx,
-            command_rx,
-            latency_tx,
-            latency_rx,
             interrupt: Arc::new(interrupt),
             desired_pause: Arc::new(AtomicBool::new(false)),
             quit_requested: Arc::new(AtomicBool::new(false)),
@@ -795,7 +836,6 @@ impl NativeDispatchSession {
             return Err("session configuration is no longer available".to_string());
         };
 
-        let rx = self.command_rx.clone();
         let interrupt = Arc::clone(&self.interrupt);
         let desired_pause = Arc::clone(&self.desired_pause);
         let quit_requested = Arc::clone(&self.quit_requested);
@@ -811,7 +851,6 @@ impl NativeDispatchSession {
         let priority_acquired = Arc::clone(&self.priority_acquired);
         let estimator_output = Arc::clone(&self.estimator_output);
         let supervisor_heartbeat_ticks = Arc::clone(&self.supervisor_heartbeat_ticks);
-        let latency_tx = self.latency_tx.clone();
         supervisor_heartbeat_ticks.store(heartbeat_ticks.as_u64(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
@@ -820,7 +859,6 @@ impl NativeDispatchSession {
                 let worker_result = catch_unwind(AssertUnwindSafe(|| {
                     run_worker(
                         config,
-                        &rx,
                         &interrupt,
                         &desired_pause,
                         &quit_requested,
@@ -832,7 +870,6 @@ impl NativeDispatchSession {
                         &telemetry_output,
                         &priority_acquired,
                         &estimator_output,
-                        &latency_tx,
                         &supervisor_heartbeat_ticks,
                     )
                 }));
@@ -886,14 +923,13 @@ impl NativeDispatchSession {
         }
     }
 
-    fn send_command(&self, command: WorkerCommand) -> Result<(), String> {
+    fn signal_worker(&self) -> Result<(), String> {
         if !matches!(
             self.lifecycle.load(Ordering::Acquire),
             LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
-        let _ = self.command_tx.try_send(command);
         let _ = self.interrupt.signal();
         Ok(())
     }
@@ -924,7 +960,7 @@ impl NativeDispatchSession {
             return Err("session commands require a running worker".to_string());
         }
         self.skip_requested.store(true, Ordering::Release);
-        self.send_command(WorkerCommand::Skip)
+        self.signal_worker()
     }
 
     pub fn quit(&self) -> Result<(), String> {
@@ -935,7 +971,7 @@ impl NativeDispatchSession {
             return Err("session commands require a running worker".to_string());
         }
         self.quit_requested.store(true, Ordering::Release);
-        self.send_command(WorkerCommand::Quit)
+        self.signal_worker()
     }
 
     pub fn panic_release(&self) -> Result<(), String> {
@@ -946,7 +982,7 @@ impl NativeDispatchSession {
             return Err("session commands require a running worker".to_string());
         }
         self.panic_requested.store(true, Ordering::Release);
-        self.send_command(WorkerCommand::PanicRelease)
+        self.signal_worker()
     }
 
     pub fn update_focus(&self, active: bool) {
@@ -974,13 +1010,17 @@ impl NativeDispatchSession {
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.lifecycle.load(Ordering::Acquire);
         let paused = self.metrics.is_paused.load(Ordering::Relaxed);
-        let terminal_error = self.terminal_outcome.load(Ordering::Acquire) == OUTCOME_ERROR;
+        let outcome = self.terminal_outcome.load(Ordering::Acquire);
         let status = match lifecycle {
             LIFECYCLE_NEW => "ready",
             LIFECYCLE_RUNNING if paused => "paused",
             LIFECYCLE_RUNNING => "playing",
-            LIFECYCLE_FINISHED if terminal_error => "error",
-            LIFECYCLE_FINISHED => "finished",
+            LIFECYCLE_FINISHED => match outcome {
+                OUTCOME_ERROR => "error",
+                OUTCOME_QUIT => "quit",
+                OUTCOME_SKIPPED => "skipped",
+                _ => "finished",
+            },
             LIFECYCLE_POISONED if self.metrics.panicked.load(Ordering::Acquire) => "panicked",
             LIFECYCLE_POISONED => "poisoned",
             _ => "invalid",
@@ -996,7 +1036,7 @@ impl NativeDispatchSession {
             late_10ms: local.late_10ms,
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
-            recent_latencies_us: self.latency_rx.try_iter().collect(),
+            recent_latencies_us: local.recent_latencies.to_vec(),
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -1084,12 +1124,11 @@ impl NativeDispatchSession {
             return Err("telemetry is available only after worker termination".to_string());
         }
         drop(done);
-        let mut output = self
+        let output = self
             .telemetry_output
             .lock()
             .take()
             .ok_or_else(|| "telemetry has already been taken".to_string())?;
-        output.materialize_reasons()?;
         serde_json::to_string(&output)
             .map_err(|error| format!("failed to serialize native telemetry: {error}"))
     }
@@ -1213,7 +1252,6 @@ fn admission_failure(
 #[allow(clippy::too_many_arguments)]
 fn run_worker(
     config: WorkerConfig,
-    rx: &Receiver<WorkerCommand>,
     interrupt: &OwnedEvent,
     desired_pause: &AtomicBool,
     quit_requested: &AtomicBool,
@@ -1225,7 +1263,6 @@ fn run_worker(
     telemetry_output: &Mutex<Option<NativeTelemetryOutput>>,
     priority_acquired: &Mutex<String>,
     estimator_output: &Mutex<Option<String>>,
-    latency_tx: &Sender<i64>,
     supervisor_heartbeat_ticks: &AtomicU64,
 ) -> u8 {
     let qpc_clock = match QpcClock::initialize() {
@@ -1235,6 +1272,8 @@ fn run_worker(
             return 1;
         }
     };
+    let focus_loss_fault = config.fault_script.focus_loss_after_due_before_send;
+    let wait_fault = config.fault_script.wait_failure;
     let mut backend = if config.mock_backend {
         let script = Arc::new(config.fault_script);
         let latency_base_us = config.mock_latency_base_us;
@@ -1282,7 +1321,7 @@ fn run_worker(
                     *win32_error,
                     *latency_ticks,
                 ),
-                Some(InjectedSendOutcome::Prefix {
+                Some(InjectedSendOutcome::Partial {
                     inserted,
                     latency_ticks,
                     win32_error,
@@ -1302,6 +1341,27 @@ fn run_worker(
                     // actually blocking the thread (consistent with RT discipline).
                     mock_platform_send_result(qpc_clock, codes.len() as u32, 0, 0, *duration_ticks)
                 }
+                Some(InjectedSendOutcome::PanicAfterSend) => {
+                    let _ = mock_platform_send_result(
+                        qpc_clock,
+                        codes.len() as u32,
+                        codes.len() as u32,
+                        0,
+                        0,
+                    );
+                    panic!("fault injection: panic after send before commit");
+                }
+                Some(InjectedSendOutcome::QpcFailureAfterSend) => {
+                    let mut result = mock_platform_send_result(
+                        qpc_clock,
+                        codes.len() as u32,
+                        codes.len() as u32,
+                        0,
+                        0,
+                    );
+                    result.timing_error = Some(QpcError::CounterUnavailable);
+                    result
+                }
             }
         })
     } else {
@@ -1312,6 +1372,7 @@ fn run_worker(
     let mut terminal_error: Option<String> = None;
     let mut secondary_errors: Vec<String> = Vec::new();
     let mut last_published_error: Option<String> = None;
+    let mut focus_loss_fault_injected = false;
     let power_guard = PowerThrottlingGuard::disable_current_thread();
     local_metrics.power_throttling_disabled = power_guard.is_active();
     let priority_guard = MmcssGuard::acquire(config.priority_mode);
@@ -1329,11 +1390,11 @@ fn run_worker(
                 );
             }
         };
-    if let Some(raw) = &config.estimator_state_json
-        && let Err(error) = estimator.import_state(raw)
-    {
-        force_full_cleanup = true;
-        terminal_error = Some(format!("invalid estimator state: {error}"));
+    if let Some(raw) = &config.estimator_state_json {
+        // Timing caches are disposable runtime evidence. Any schema or
+        // provenance mismatch starts from the conservative prior; it must not
+        // turn a playback session into a keyboard cleanup failure.
+        let _ = estimator.import_state(raw);
     }
     let min_hold_ticks = match qpc_clock.duration_from_us(config.min_hold_us) {
         Ok(ticks) => ticks,
@@ -1345,33 +1406,28 @@ fn run_worker(
             );
         }
     };
-    let late_pulse_drop_threshold_ticks = match config.late_pulse_drop_threshold_us {
-        Some(threshold_us) => match qpc_clock.duration_from_us(threshold_us) {
-            Ok(ticks) => Some(ticks),
+    let hard_late_abort_threshold_ticks =
+        match qpc_clock.duration_from_us(HARD_LATE_ABORT_THRESHOLD_US) {
+            Ok(ticks) => ticks,
             Err(error) => {
                 return admission_failure(
                     &mut backend,
                     metrics,
-                    format!("late-pulse threshold conversion failed: {error:?}"),
+                    format!("hard late-abort threshold conversion failed: {error:?}"),
                 );
             }
-        },
-        None => None,
-    };
-    let retry_late_threshold_ticks = match qpc_clock.duration_from_us(
-        config
-            .late_pulse_drop_threshold_us
-            .unwrap_or(STRICT_RETRY_LATE_THRESHOLD_US),
-    ) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("retry-late threshold conversion failed: {error:?}"),
-            );
-        }
-    };
+        };
+    let retry_late_threshold_ticks =
+        match qpc_clock.duration_from_us(STRICT_RETRY_LATE_THRESHOLD_US) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("retry-late threshold conversion failed: {error:?}"),
+                );
+            }
+        };
     let strict_down_completion_late_ticks =
         match qpc_clock.duration_from_us(config.strict_down_completion_late_us) {
             Ok(ticks) => ticks,
@@ -1437,16 +1493,6 @@ fn run_worker(
             );
         }
     };
-    let spin_reprobe_interval_ticks = match qpc_clock.duration_from_us(30_000_000) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("spin reprobe conversion failed: {error:?}"),
-            );
-        }
-    };
     let lease_timeout_ticks = match qpc_clock.duration_from_us(config.supervisor_lease_timeout_us) {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -1477,7 +1523,6 @@ fn run_worker(
             }
         };
     let delivery_margin_ticks = DurationTicks::ZERO;
-    let telemetry_reason_table = config.schedule.reason_table.clone();
     let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         config.schedule,
         config.min_hold_us,
@@ -1513,16 +1558,12 @@ fn run_worker(
             );
         }
     };
-    let mut telemetry = TelemetryCollector::new(
-        config.telemetry_mode,
-        config.telemetry_capacity,
-        telemetry_reason_table,
-    );
+    let mut telemetry = TelemetryCollector::new(config.telemetry_mode, config.telemetry_capacity);
     let mut abort_counts: HashMap<&'static str, u64> = HashMap::with_capacity(6);
     let mut effective_spin_threshold_us = config.spin_threshold_us;
     let _ = interrupt.try_take();
     if config.enable_adaptive_spin
-        && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 30)
+        && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 10)
     {
         publish_wake_error_stats(stats, &mut local_metrics);
         effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
@@ -1549,7 +1590,7 @@ fn run_worker(
                 );
             }
         };
-    let mut effective_spin_threshold_ticks =
+    let effective_spin_threshold_ticks =
         match qpc_clock.duration_from_us(effective_spin_threshold_us) {
             Ok(ticks) => ticks,
             Err(error) => {
@@ -1560,7 +1601,6 @@ fn run_worker(
                 );
             }
         };
-    let mut last_spin_probe_ticks = initial_now_ticks;
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
@@ -1659,6 +1699,7 @@ fn run_worker(
         .copied()
         .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
     let mut focus_restore_started_ticks: Option<QpcTicks> = None;
+    let mut physical_key_preflight_required = true;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
@@ -1680,6 +1721,10 @@ fn run_worker(
     if let Some(error) = qpc_admission_error {
         force_full_cleanup = true;
         terminal_error = Some(error);
+    }
+    if wait_fault {
+        force_full_cleanup = true;
+        terminal_error = Some("wait failure injected".to_string());
     }
 
     // Every QPC query after admission is part of the worker's correctness
@@ -1728,20 +1773,6 @@ fn run_worker(
         }};
     }
 
-    macro_rules! authored_batch_or_terminal {
-        ($index:expr) => {{
-            match coordinator.schedule.try_materialize_batch_authored($index) {
-                Ok(batch) => batch,
-                Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error =
-                        Some(format!("runtime schedule materialization failure: {error}"));
-                    break;
-                }
-            }
-        }};
-    }
-
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         if terminal_error.is_some() {
             return;
@@ -1778,7 +1809,6 @@ fn run_worker(
                     break;
                 }
             }
-            drain_commands(rx, quit_requested, skip_requested, panic_requested);
             if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
                 break;
             }
@@ -1808,6 +1838,8 @@ fn run_worker(
                     &mut last_published_error,
                 );
                 try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                terminal_error = Some("panic_release_requested".to_string());
+                break;
             }
 
             let mut now_ticks = qpc_ticks_or_terminal!();
@@ -1865,6 +1897,7 @@ fn run_worker(
                         break;
                     }
                     focus_restore_started_ticks = None;
+                    physical_key_preflight_required = true;
                     publish_backend_metrics(
                         &backend,
                         &mut local_metrics,
@@ -2121,7 +2154,6 @@ fn run_worker(
                         break;
                     }
                 };
-                let actual_us = qpc_ticks_to_us_or_terminal!(actual_ticks);
                 let result = backend.key_up(&scan_codes);
                 if let Some(error) = backend.timing_error.take() {
                     force_full_cleanup = true;
@@ -2151,40 +2183,6 @@ fn run_worker(
                     }
                 };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                let (send_operation_duration_us, sendinput_call_duration_us) =
-                    match exact_sender_durations(
-                        qpc_clock,
-                        result.send_started_ticks,
-                        result.send_completed_ticks,
-                        result.send_attempts,
-                        false,
-                    ) {
-                        Ok(durations) => durations,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
-                                Some(format!("note-off exact sender boundary failure: {error:?}"));
-                            break;
-                        }
-                    };
-                let sender_started_us = if result.send_attempts == 0 {
-                    None
-                } else {
-                    let started = result.send_started_ticks.expect("validated sender start");
-                    let started_elapsed_ticks = match clock_state
-                        .get_elapsed_allow_pre_epoch(started, allow_pre_epoch_startup_dispatch)
-                    {
-                        Ok(ticks) => ticks,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
-                                "note-off sender-start playback clock failure: {error}"
-                            ));
-                            break;
-                        }
-                    };
-                    Some(qpc_ticks_to_us_or_terminal!(started_elapsed_ticks))
-                };
                 last_send_qpc_ticks = Some(completed_qpc_ticks);
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
@@ -2287,6 +2285,11 @@ fn run_worker(
                     force_full_cleanup = true;
                     terminal_error =
                         Some("coordinator returned an empty pending release batch".to_string());
+                    break;
+                };
+                let Some(effective_deadline_ticks) = first_deadline else {
+                    force_full_cleanup = true;
+                    terminal_error = Some("coordinator returned no release deadline".to_string());
                     break;
                 };
                 let first = &due_pending[first_index];
@@ -2400,11 +2403,6 @@ fn run_worker(
                     terminal_error = Some(format!("estimator update failure: {error}"));
                     break;
                 }
-                let reason_id = if mixed_source {
-                    telemetry.mixed_release_reason_id
-                } else {
-                    first.reason_id
-                };
                 let release_outcome = if strict_up_completion_late {
                     "strict_completion_slo_exceeded"
                 } else {
@@ -2415,50 +2413,34 @@ fn run_worker(
                         recovery_required,
                     )
                 };
-                telemetry.push(|| NativeTelemetryRecord {
+                let mut trace_flags = 0;
+                if result.sent.len() == scan_codes.len() {
+                    trace_flags |= TRACE_FLAG_SENT_FULL;
+                }
+                if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
+                    trace_flags |= TRACE_FLAG_RECOVERY;
+                }
+                if deferred_by_us > 0 {
+                    trace_flags |= TRACE_FLAG_DEFERRED;
+                }
+                if release_outcome != "sent" {
+                    trace_flags |= TRACE_FLAG_ANOMALY;
+                }
+                telemetry.push(|| RtTraceRecord {
                     event_index: first.source_action_index,
-                    dispatch_id: 0,
-                    kind: "up",
-                    scheduled_us,
-                    actual_us,
-                    dispatch_completed_us: completed_effective,
-                    scheduled_timeline_us: scheduled_us,
-                    wake_timeline_us: actual_us,
-                    sender_started_us,
-                    sender_completed_us: send_operation_duration_us.map(|_| completed_effective),
-                    sender_completion_error_us: send_operation_duration_us
-                        .map(|_| signed_delta(completed_effective, scheduled_us)),
-                    send_operation_duration_us,
-                    sendinput_call_duration_us,
-                    bookkeeping_duration_us: Some(
-                        bookkeeping_completed_us.saturating_sub(result.send_completed_us),
-                    ),
-                    lateness_us: signed_delta(actual_us, scheduled_us),
-                    visible_lateness_us: signed_delta(completed_effective, scheduled_us),
-                    send_duration_us: bookkeeping_completed_us.saturating_sub(started_us),
-                    send_duration_pure_us: send_operation_duration_us.unwrap_or(0),
-                    bookkeeping_us: bookkeeping_completed_us
-                        .saturating_sub(result.send_completed_us),
-                    dispatch_lateness_us: signed_delta(actual_us, scheduled_us)
-                        .saturating_add(result.send_completed_us.saturating_sub(started_us) as i64),
-                    scan_codes: scan_codes.clone(),
-                    sent_scan_codes: result.sent.clone(),
-                    skipped_scan_codes: result.skipped_duplicates.clone(),
-                    generation_ids: due_pending
-                        .iter()
-                        .map(|pending| pending.generation_id)
-                        .collect(),
-                    runtime_outcome: release_outcome,
-                    deferred_by_us,
-                    pre_send_spin_us: pending_pre_send_spin_us,
-                    idle_gap_us: 0,
-                    reason_id,
-                    reason: None,
-                    applied_lead_us: lead_up,
-                    first_win32_error: result.first_win32_error,
-                    last_win32_error: result.last_win32_error,
-                    send_attempts: result.send_attempts,
-                    zero_progress_retries: result.zero_progress_retries,
+                    kind: TRACE_KIND_UP,
+                    outcome: trace_outcome_code(release_outcome),
+                    polyphony: scan_codes.len() as u8,
+                    flags: trace_flags,
+                    authored_ticks: scheduled_ticks.as_u64(),
+                    effective_deadline_ticks: effective_deadline_ticks.as_u64(),
+                    wake_ticks: actual_ticks.as_u64(),
+                    send_started_ticks: result.send_started_ticks.map_or(0, |ticks| ticks.as_u64()),
+                    send_completed_ticks: result
+                        .send_completed_ticks
+                        .map_or(0, |ticks| ticks.as_u64()),
+                    applied_lead_ticks: lead_up_ticks.as_u64() as u32,
+                    win32_error: result.last_win32_error.unwrap_or(0),
                 });
                 if config.enable_adaptive_lead
                     && pending_plan
@@ -2506,7 +2488,6 @@ fn run_worker(
                     true,
                     deferred_release,
                     &mut local_metrics,
-                    latency_tx,
                 );
                 publish_backend_metrics(
                     &backend,
@@ -2584,31 +2565,23 @@ fn run_worker(
                     break;
                 }
             };
-            let next_batch_index = match coordinator
-                .pop_next_due_authored_ticks(effective_now_ticks, lead_down_ticks)
+            let prepared_batch = match coordinator
+                .prepare_next_due_authored(effective_now_ticks, lead_down_ticks)
             {
-                Ok(value) => value.map(|(index, _)| index),
+                Ok(value) => value,
                 Err(error) => {
                     force_full_cleanup = true;
-                    terminal_error = Some(format!("coordinator authored-pop failure: {error}"));
+                    terminal_error = Some(format!("coordinator authored-prepare failure: {error}"));
                     break;
                 }
             };
-            if let Some(batch_index) = next_batch_index {
+            if let Some(prepared_batch) = prepared_batch {
+                let batch_index = prepared_batch.index;
                 // --- Borrow scope: extract all scalar and stack data before any &mut call ---
                 // `batch_view` borrows from `coordinator.schedule`. We must not call any
                 // `&mut coordinator` method until this scope ends. Pull every field we need
                 // into Copy / stack-owned values here.
-                let batch_scheduled_ticks =
-                    match coordinator.effective_batch_scheduled_ticks(batch_index) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
-                                Some(format!("coordinator schedule lookup failure: {error}"));
-                            break;
-                        }
-                    };
+                let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
                 let batch_view = match coordinator
                     .schedule
                     .view_batch_ticks(batch_index, batch_scheduled_ticks)
@@ -2631,27 +2604,13 @@ fn run_worker(
                         break;
                     }
                 };
-                let batch_reason_id = batch_view.reason_id();
+                let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
                 let batch_intent_count = batch_view.intents.len();
                 // Conflict check: O(N) bitwise, no allocation.
                 let conflict_mask = coordinator.check_down_conflicts_compact(batch_view.intents);
                 let has_conflicts = conflict_mask != 0;
                 // Scan codes for SendInput: stack-only buffer.
                 let scan_batch = batch_view.scan_code_batch_excluding_mask(conflict_mask);
-                // Collect conflict scan codes into stack buffer for telemetry.
-                let conflict_scan_batch = if has_conflicts {
-                    batch_view.scan_code_batch_excluding_mask(!conflict_mask)
-                } else {
-                    sky_dispatch_core::model::ScanCodeBatch::new_empty()
-                };
-                // Materialise full generation ids for telemetry (only if enabled).
-                // This allocation is guarded by the telemetry mode so production
-                // fast path avoids SmallVec creation.
-                let materialized_for_telemetry = if telemetry.mode != TelemetryMode::Off {
-                    Some(batch_view.materialize())
-                } else {
-                    None
-                };
                 // --- End of borrow scope: all data is now in stack-local copies ---
 
                 if batch_kind == ActionKind::Down {
@@ -2660,28 +2619,9 @@ fn run_worker(
                     // the outer-loop sample, terminalize this authored batch;
                     // it must not be replayed after the focus grace period.
                     if !focus_matches(config.require_focus, focus_active, target_hwnd) {
-                        // Terminalize ALL intents (both conflicting and non-conflicting).
-                        // We use the compact path: terminalize non-conflicting as DroppedExpired,
-                        // conflicting were already accounted by check_down_conflicts_compact.
-                        if !has_conflicts {
-                            // Non-conflicting slots: terminate as expired.
-                            // Fallback to the owned path for the cleanup branch — not hot.
-                            let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                            if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("coordinator expiry failure: {error}"));
-                                break;
-                            }
-                        } else {
-                            let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                            if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("coordinator expiry failure: {error}"));
-                                break;
-                            }
-                        }
+                        // The batch was only prepared. Leave the cursor and generation
+                        // ledger untouched so the same authored chord can be prepared again
+                        // after focus restoration.
                         if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
                             force_full_cleanup = true;
                             terminal_error = Some(format!("focus suspension failed: {error}"));
@@ -2693,56 +2633,19 @@ fn run_worker(
                             break;
                         }
                         focus_restore_started_ticks = None;
-                        telemetry.push(|| {
-                            let scan_codes: SmallVec<[u16; 15]> =
-                                scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
-                                .as_ref()
-                                .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
-                                .unwrap_or_default();
-                            NativeTelemetryRecord {
-                                event_index: batch_source_action_index,
-                                dispatch_id: 0,
-                                kind: "down",
-                                scheduled_us: batch_scheduled_us,
-                                actual_us: effective_now_us,
-                                dispatch_completed_us: effective_now_us,
-                                scheduled_timeline_us: batch_scheduled_us,
-                                wake_timeline_us: effective_now_us,
-                                sender_started_us: None,
-                                sender_completed_us: None,
-                                sender_completion_error_us: None,
-                                send_operation_duration_us: None,
-                                sendinput_call_duration_us: None,
-                                bookkeeping_duration_us: None,
-                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                send_duration_us: 0,
-                                send_duration_pure_us: 0,
-                                bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                scan_codes,
-                                sent_scan_codes: SmallVec::new(),
-                                skipped_scan_codes: SmallVec::new(),
-                                generation_ids,
-                                runtime_outcome: "blocked_unfocused",
-                                deferred_by_us: 0,
-                                pre_send_spin_us: 0,
-                                idle_gap_us: 0,
-                                reason_id: batch_reason_id,
-                                reason: None,
-                                applied_lead_us: lead_down,
-                                first_win32_error: None,
-                                last_win32_error: None,
-                                send_attempts: 0,
-                                zero_progress_retries: 0,
-                            }
+                        telemetry.push(|| RtTraceRecord {
+                            event_index: batch_source_action_index,
+                            kind: TRACE_KIND_DOWN,
+                            outcome: trace_outcome_code("blocked_unfocused"),
+                            polyphony: scan_batch.len() as u8,
+                            flags: TRACE_FLAG_ANOMALY,
+                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
+                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
+                            wake_ticks: effective_now_ticks.as_u64(),
+                            send_started_ticks: 0,
+                            send_completed_ticks: 0,
+                            applied_lead_ticks: lead_down_ticks.as_u64() as u32,
+                            win32_error: 0,
                         });
                         publish_backend_metrics(
                             &backend,
@@ -2753,207 +2656,55 @@ fn run_worker(
                         try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
-                    if late_pulse_drop_threshold_ticks.is_some_and(|threshold| {
-                        threshold == DurationTicks::ZERO
-                            || effective_now_ticks
-                                .checked_duration_since(batch_scheduled_ticks)
-                                .is_ok_and(|late| late > threshold)
-                    }) {
-                        // Expired drop — materialize only for the coordinator call.
-                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                        if let Err(error) = coordinator.drop_expired_downs(&owned.intents) {
+                    if focus_loss_fault && !focus_loss_fault_injected {
+                        focus_loss_fault_injected = true;
+                        force_full_cleanup = true;
+                        terminal_error = Some(
+                            "focus lost after due check before SendInput boundary".to_string(),
+                        );
+                        break;
+                    }
+                    if physical_key_preflight_required {
+                        if let Err(error) = backend.ensure_instrument_keys_physically_up() {
                             force_full_cleanup = true;
-                            terminal_error = Some(format!("coordinator expiry failure: {error}"));
+                            terminal_error = Some(format!(
+                                "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
+                            ));
                             break;
                         }
-                        telemetry.push(|| {
-                            let scan_codes: SmallVec<[u16; 15]> =
-                                scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
-                                .as_ref()
-                                .map(|b| b.intents.iter().filter_map(|i| i.generation_id).collect())
-                                .unwrap_or_default();
-                            NativeTelemetryRecord {
-                                event_index: batch_source_action_index,
-                                dispatch_id: 0,
-                                kind: "down",
-                                scheduled_us: batch_scheduled_us,
-                                actual_us: effective_now_us,
-                                dispatch_completed_us: effective_now_us,
-                                scheduled_timeline_us: batch_scheduled_us,
-                                wake_timeline_us: effective_now_us,
-                                sender_started_us: None,
-                                sender_completed_us: None,
-                                sender_completion_error_us: None,
-                                send_operation_duration_us: None,
-                                sendinput_call_duration_us: None,
-                                bookkeeping_duration_us: None,
-                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                send_duration_us: 0,
-                                send_duration_pure_us: 0,
-                                bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                scan_codes,
-                                sent_scan_codes: SmallVec::new(),
-                                skipped_scan_codes: SmallVec::new(),
-                                generation_ids,
-                                runtime_outcome: "dropped_expired",
-                                deferred_by_us: 0,
-                                pre_send_spin_us: 0,
-                                idle_gap_us: 0,
-                                reason_id: batch_reason_id,
-                                reason: None,
-                                applied_lead_us: lead_down,
-                                first_win32_error: None,
-                                last_win32_error: None,
-                                send_attempts: 0,
-                                zero_progress_retries: 0,
-                            }
-                        });
-                        continue;
+                        physical_key_preflight_required = false;
                     }
-
-                    // Conflict handling. Conflict slots were checked with the compact mask;
-                    // now update counters and decide policy.
-                    let playable_count = scan_batch.len();
-                    let conflict_count = conflict_scan_batch.len();
+                    if effective_now_ticks
+                        .checked_duration_since(batch_scheduled_ticks)
+                        .is_ok_and(|late| late > hard_late_abort_threshold_ticks)
+                    {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "authored Down exceeded hard lateness safety threshold of {}us",
+                            HARD_LATE_ABORT_THRESHOLD_US
+                        ));
+                        break;
+                    }
+                    // A runtime conflict means coordinator/backend state no
+                    // longer matches the compiled schedule. It is an
+                    // invariant failure, never a user-selectable drop mode.
                     if has_conflicts {
                         local_metrics.authored_conflict_events =
                             local_metrics.authored_conflict_events.saturating_add(1);
-                        local_metrics.authored_keys_rejected =
-                            local_metrics.authored_keys_rejected.saturating_add(
-                                if matches!(
-                                    config.chord_conflict_policy,
-                                    ChordConflictPolicy::DropWholeChord
-                                        | ChordConflictPolicy::AbortPlayback
-                                ) {
-                                    batch_intent_count as u64
-                                } else {
-                                    conflict_count as u64
-                                },
-                            );
-                        // Terminalize conflicted slots (counter update only, no mask change).
-                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                        // Use the existing API which operates on RuntimeKeyIntent.
-                        let conflicts_intents: SmallVec<[_; 15]> = owned
-                            .intents
-                            .iter()
-                            .filter(|i| {
-                                conflict_mask
-                                    & sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::bit_for_slot_pub(i.key_slot)
-                                    != 0
-                            })
-                            .cloned()
-                            .collect();
-                        telemetry.push(|| {
-                            let scan_codes: SmallVec<[u16; 15]> =
-                                conflict_scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> = conflicts_intents
-                                .iter()
-                                .filter_map(|i| i.generation_id)
-                                .collect();
-                            NativeTelemetryRecord {
-                                event_index: batch_source_action_index,
-                                dispatch_id: 0,
-                                kind: "down",
-                                scheduled_us: batch_scheduled_us,
-                                actual_us: effective_now_us,
-                                dispatch_completed_us: effective_now_us,
-                                scheduled_timeline_us: batch_scheduled_us,
-                                wake_timeline_us: effective_now_us,
-                                sender_started_us: None,
-                                sender_completed_us: None,
-                                sender_completion_error_us: None,
-                                send_operation_duration_us: None,
-                                sendinput_call_duration_us: None,
-                                bookkeeping_duration_us: None,
-                                lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                send_duration_us: 0,
-                                send_duration_pure_us: 0,
-                                bookkeeping_us: 0,
-                                dispatch_lateness_us: signed_delta(
-                                    effective_now_us,
-                                    batch_scheduled_us,
-                                ),
-                                scan_codes,
-                                sent_scan_codes: SmallVec::new(),
-                                skipped_scan_codes: SmallVec::new(),
-                                generation_ids,
-                                runtime_outcome: "dropped_conflict",
-                                deferred_by_us: 0,
-                                pre_send_spin_us: 0,
-                                idle_gap_us: 0,
-                                reason_id: batch_reason_id,
-                                reason: None,
-                                applied_lead_us: lead_down,
-                                first_win32_error: None,
-                                last_win32_error: None,
-                                send_attempts: 0,
-                                zero_progress_retries: 0,
-                            }
-                        });
-                    }
-                    let send_playable = !has_conflicts
-                        || matches!(
-                            config.chord_conflict_policy,
-                            ChordConflictPolicy::DropConflictingKeys
-                        );
-                    if has_conflicts && !send_playable {
                         local_metrics.authored_chords_rejected =
                             local_metrics.authored_chords_rejected.saturating_add(1);
-                        // Terminalize playable (non-conflict) intents too since whole chord drops.
-                        let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                        let playable_intents: SmallVec<[_; 15]> = owned
-                            .intents
-                            .iter()
-                            .filter(|i| {
-                                conflict_mask
-                                    & sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::bit_for_slot_pub(i.key_slot)
-                                    == 0
-                            })
-                            .cloned()
-                            .collect();
-                        if let Err(error) = coordinator.drop_conflicted_downs(&playable_intents) {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("coordinator conflict failure: {error}"));
-                            break;
-                        }
-                        if matches!(
-                            config.chord_conflict_policy,
-                            ChordConflictPolicy::AbortPlayback
-                        ) {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
-                                "same-key conflict rejected authored chord at action {}",
-                                batch_source_action_index
-                            ));
-                            publish_backend_metrics(
-                                &backend,
-                                &mut local_metrics,
-                                metrics,
-                                &mut last_published_error,
-                            );
-                            try_publish_metrics(
-                                &local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
-                            break;
-                        }
+                        local_metrics.authored_keys_rejected = local_metrics
+                            .authored_keys_rejected
+                            .saturating_add(batch_intent_count as u64);
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "unexpected blocked authored Down at action {}",
+                            batch_source_action_index
+                        ));
+                        break;
                     }
-                    if send_playable && !scan_batch.is_empty() {
+
+                    if !scan_batch.is_empty() {
                         let started_ticks = match qpc_clock.now() {
                             Ok(ticks) => ticks,
                             Err(error) => {
@@ -2975,7 +2726,6 @@ fn run_worker(
                                 break;
                             }
                         };
-                        let actual_us = qpc_ticks_to_us_or_terminal!(actual_ticks);
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
                         if let Some(error) = backend.timing_error.take() {
@@ -2991,10 +2741,10 @@ fn run_worker(
                             result_sent,
                             result_skipped_duplicates,
                             result_send_attempts,
-                            result_zero_progress_retries,
+                            _result_zero_progress_retries,
                             result_retried_after_zero_progress,
                             result_chord_integrity_lost,
-                            result_first_win32_error,
+                            _result_first_win32_error,
                             result_last_win32_error,
                             result_success,
                         ) = match &result {
@@ -3073,6 +2823,19 @@ fn run_worker(
                             ),
                         };
 
+                        if matches!(
+                            &result,
+                            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress { .. }
+                                | sky_dispatch_win32::input::DownSendOutcome::IntegrityLost { .. }
+                        ) {
+                            force_full_cleanup = true;
+                            terminal_error = Some(format!(
+                                "authored Down send integrity failure at action {}",
+                                batch_source_action_index
+                            ));
+                            break;
+                        }
+
                         let completed_qpc_ticks = match result_completed_ticks {
                             Some(ticks) => ticks,
                             None => {
@@ -3098,51 +2861,12 @@ fn run_worker(
                         };
                         let completed_effective =
                             qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                        let (send_operation_duration_us, sendinput_call_duration_us) =
-                            match exact_sender_durations(
-                                qpc_clock,
-                                result_started_ticks,
-                                result_completed_ticks,
-                                result_send_attempts,
-                                result_chord_integrity_lost,
-                            ) {
-                                Ok(durations) => durations,
-                                Err(error) => {
-                                    force_full_cleanup = true;
-                                    terminal_error = Some(format!(
-                                        "note-on exact sender boundary failure: {error:?}"
-                                    ));
-                                    break;
-                                }
-                            };
-                        let sender_started_us = if result_send_attempts == 0 {
-                            None
-                        } else {
-                            let started = result_started_ticks.expect("validated sender start");
-                            let started_elapsed_ticks = match clock_state
-                                .get_elapsed_allow_pre_epoch(
-                                    started,
-                                    allow_pre_epoch_startup_dispatch,
-                                ) {
-                                Ok(ticks) => ticks,
-                                Err(error) => {
-                                    force_full_cleanup = true;
-                                    terminal_error = Some(format!(
-                                        "note-on sender-start playback clock failure: {error}"
-                                    ));
-                                    break;
-                                }
-                            };
-                            Some(qpc_ticks_to_us_or_terminal!(started_elapsed_ticks))
-                        };
                         last_send_qpc_ticks = Some(completed_qpc_ticks);
-                        // Activate sent downs via the compact path.
-                        if let Err(error) = coordinator.activate_sent_downs_compact_ticks(
-                            coordinator.cursor - 1,
+                        if let Err(error) = coordinator.commit_down_success(
+                            prepared_batch,
                             &result_sent,
                             effective_now_ticks,
                             completed_effective_ticks,
-                            conflict_mask,
                         ) {
                             force_full_cleanup = true;
                             terminal_error =
@@ -3166,7 +2890,7 @@ fn run_worker(
                             }
                         };
                         let clean_down_sample = result_success
-                            && result_sent.len() == playable_count
+                            && result_sent.len() == batch_intent_count
                             && result_skipped_duplicates.is_empty()
                             && result_send_attempts == 1
                             && !result_chord_integrity_lost;
@@ -3197,7 +2921,7 @@ fn run_worker(
                                 ActionKind::Down,
                                 result_completed_us.saturating_sub(started_us),
                                 result_sent.len(),
-                                playable_count,
+                                batch_intent_count,
                                 lead_down,
                                 completion_error_us,
                                 clean_down_sample,
@@ -3209,79 +2933,42 @@ fn run_worker(
                             break;
                         }
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
-                        telemetry.push(|| {
-                            // Scan codes: materialized view for telemetry includes full chord.
-                            let scan_codes: SmallVec<[u16; 15]> =
-                                scan_batch.as_slice().iter().copied().collect();
-                            let generation_ids: SmallVec<[u64; 15]> = materialized_for_telemetry
-                                .as_ref()
-                                .map(|b| {
-                                    b.intents
-                                        .iter()
-                                        .filter(|i| conflict_mask & (1u16 << i.key_slot) == 0)
-                                        .filter_map(|i| i.generation_id)
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            NativeTelemetryRecord {
-                                event_index: batch_source_action_index,
-                                dispatch_id: 0,
-                                kind: "down",
-                                scheduled_us: batch_scheduled_us,
-                                actual_us,
-                                dispatch_completed_us: completed_effective,
-                                scheduled_timeline_us: batch_scheduled_us,
-                                wake_timeline_us: actual_us,
-                                sender_started_us,
-                                sender_completed_us: send_operation_duration_us
-                                    .map(|_| completed_effective),
-                                sender_completion_error_us: send_operation_duration_us
-                                    .map(|_| signed_delta(completed_effective, batch_scheduled_us)),
-                                send_operation_duration_us,
-                                sendinput_call_duration_us,
-                                bookkeeping_duration_us: Some(
-                                    bookkeeping_completed_us.saturating_sub(result_completed_us),
-                                ),
-                                lateness_us: signed_delta(actual_us, batch_scheduled_us),
-                                visible_lateness_us: signed_delta(
-                                    completed_effective,
-                                    batch_scheduled_us,
-                                ),
-                                send_duration_us: bookkeeping_completed_us
-                                    .saturating_sub(started_us),
-                                send_duration_pure_us: send_operation_duration_us.unwrap_or(0),
-                                bookkeeping_us: bookkeeping_completed_us
-                                    .saturating_sub(result_completed_us),
-                                dispatch_lateness_us: signed_delta(actual_us, batch_scheduled_us)
-                                    .saturating_add(
-                                        result_completed_us.saturating_sub(started_us) as i64
-                                    ),
-                                scan_codes,
-                                sent_scan_codes: result_sent.clone(),
-                                skipped_scan_codes: result_skipped_duplicates.clone(),
-                                generation_ids,
-                                runtime_outcome: if recovered_retry_late {
-                                    "recovered_zero_progress_but_late"
-                                } else if strict_down_completion_late {
-                                    "strict_completion_slo_exceeded"
-                                } else if result_chord_integrity_lost {
-                                    "chord_integrity_lost"
-                                } else if result_sent.len() == scan_batch.len() {
-                                    "sent"
-                                } else {
-                                    "partial_note_on"
-                                },
-                                deferred_by_us: 0,
-                                pre_send_spin_us: pending_pre_send_spin_us,
-                                idle_gap_us: 0,
-                                reason_id: batch_reason_id,
-                                reason: None,
-                                applied_lead_us: lead_down,
-                                first_win32_error: result_first_win32_error,
-                                last_win32_error: result_last_win32_error,
-                                send_attempts: result_send_attempts,
-                                zero_progress_retries: result_zero_progress_retries,
-                            }
+                        let down_outcome = if recovered_retry_late {
+                            "recovered_zero_progress_but_late"
+                        } else if strict_down_completion_late {
+                            "strict_completion_slo_exceeded"
+                        } else if result_chord_integrity_lost {
+                            "chord_integrity_lost"
+                        } else if result_sent.len() == scan_batch.len() {
+                            "sent"
+                        } else {
+                            "partial_note_on"
+                        };
+                        let mut trace_flags = 0;
+                        if result_sent.len() == scan_batch.len() {
+                            trace_flags |= TRACE_FLAG_SENT_FULL;
+                        }
+                        if recovered_retry_late || result_chord_integrity_lost {
+                            trace_flags |= TRACE_FLAG_RECOVERY;
+                        }
+                        if down_outcome != "sent" {
+                            trace_flags |= TRACE_FLAG_ANOMALY;
+                        }
+                        telemetry.push(|| RtTraceRecord {
+                            event_index: batch_source_action_index,
+                            kind: TRACE_KIND_DOWN,
+                            outcome: trace_outcome_code(down_outcome),
+                            polyphony: batch_intent_count as u8,
+                            flags: trace_flags,
+                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
+                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
+                            wake_ticks: actual_ticks.as_u64(),
+                            send_started_ticks: result_started_ticks
+                                .map_or(0, |ticks| ticks.as_u64()),
+                            send_completed_ticks: result_completed_ticks
+                                .map_or(0, |ticks| ticks.as_u64()),
+                            applied_lead_ticks: lead_down_ticks.as_u64() as u32,
+                            win32_error: result_last_win32_error.unwrap_or(0),
                         });
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
@@ -3324,7 +3011,6 @@ fn run_worker(
                             false,
                             false,
                             &mut local_metrics,
-                            latency_tx,
                         );
                         if result_chord_integrity_lost {
                             force_full_cleanup = true;
@@ -3408,9 +3094,7 @@ fn run_worker(
                         }
                     }
                 } else {
-                    // Up batch: must materialise to drive request_releases (needs generation IDs).
-                    let owned = authored_batch_or_terminal!(coordinator.cursor - 1);
-                    let (_, suppressed) = match coordinator.request_releases(&owned.intents) {
+                    let (_, suppressed) = match coordinator.commit_up_request(prepared_batch) {
                         Ok(value) => value,
                         Err(error) => {
                             force_full_cleanup = true;
@@ -3420,48 +3104,19 @@ fn run_worker(
                         }
                     };
                     if !suppressed.is_empty() {
-                        telemetry.push(|| NativeTelemetryRecord {
+                        telemetry.push(|| RtTraceRecord {
                             event_index: batch_source_action_index,
-                            dispatch_id: 0,
-                            kind: "up",
-                            scheduled_us: batch_scheduled_us,
-                            actual_us: effective_now_us,
-                            dispatch_completed_us: effective_now_us,
-                            scheduled_timeline_us: batch_scheduled_us,
-                            wake_timeline_us: effective_now_us,
-                            sender_started_us: None,
-                            sender_completed_us: None,
-                            sender_completion_error_us: None,
-                            send_operation_duration_us: None,
-                            sendinput_call_duration_us: None,
-                            bookkeeping_duration_us: None,
-                            lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                            visible_lateness_us: signed_delta(effective_now_us, batch_scheduled_us),
-                            send_duration_us: 0,
-                            send_duration_pure_us: 0,
-                            bookkeeping_us: 0,
-                            dispatch_lateness_us: signed_delta(
-                                effective_now_us,
-                                batch_scheduled_us,
-                            ),
-                            scan_codes: suppressed.iter().map(|intent| intent.scan_code).collect(),
-                            sent_scan_codes: SmallVec::new(),
-                            skipped_scan_codes: SmallVec::new(),
-                            generation_ids: suppressed
-                                .iter()
-                                .filter_map(|intent| intent.generation_id)
-                                .collect(),
-                            runtime_outcome: "suppressed_stale_up",
-                            deferred_by_us: 0,
-                            pre_send_spin_us: 0,
-                            idle_gap_us: 0,
-                            reason_id: batch_reason_id,
-                            reason: None,
-                            applied_lead_us: lead_up,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            send_attempts: 0,
-                            zero_progress_retries: 0,
+                            kind: TRACE_KIND_UP,
+                            outcome: trace_outcome_code("suppressed_stale_up"),
+                            polyphony: suppressed.len() as u8,
+                            flags: TRACE_FLAG_ANOMALY,
+                            authored_ticks: authored_batch_scheduled_ticks.as_u64(),
+                            effective_deadline_ticks: batch_scheduled_ticks.as_u64(),
+                            wake_ticks: effective_now_ticks.as_u64(),
+                            send_started_ticks: 0,
+                            send_completed_ticks: 0,
+                            applied_lead_ticks: lead_up_ticks.as_u64() as u32,
+                            win32_error: 0,
                         });
                     }
                 }
@@ -3561,58 +3216,6 @@ fn run_worker(
                 let target_sample_elapsed_us =
                     qpc_ticks_to_us_or_terminal!(target_sample_elapsed_ticks);
                 if deadline_ticks > target_sample_elapsed_ticks {
-                    let remaining_ticks = match deadline_ticks
-                        .checked_duration_since(target_sample_elapsed_ticks)
-                    {
-                        Ok(duration) => duration,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("deadline ordering failure: {error}"));
-                            break;
-                        }
-                    };
-                    let remaining_us = match qpc_clock.duration_to_us(remaining_ticks) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
-                                Some(format!("deadline telemetry conversion failure: {error:?}"));
-                            break;
-                        }
-                    };
-                    if config.enable_adaptive_spin
-                        && config.enable_spin_reprobe
-                        && remaining_us >= 30_000
-                        && now_ticks
-                            .checked_duration_since(last_spin_probe_ticks)
-                            .is_ok_and(|elapsed| elapsed >= spin_reprobe_interval_ticks)
-                    {
-                        if let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 8)
-                        {
-                            publish_wake_error_stats(stats, &mut local_metrics);
-                            let candidate =
-                                derive_spin_threshold_us(stats.robust_us, config.spin_floor_us);
-                            let adjusted =
-                                adjust_spin_threshold(effective_spin_threshold_us, candidate);
-                            if adjusted != effective_spin_threshold_us {
-                                effective_spin_threshold_us = adjusted;
-                                local_metrics.effective_spin_threshold_us = adjusted;
-                                effective_spin_threshold_ticks =
-                                    match qpc_clock.duration_from_us(adjusted) {
-                                        Ok(ticks) => ticks,
-                                        Err(error) => {
-                                            force_full_cleanup = true;
-                                            terminal_error = Some(format!(
-                                                "spin threshold conversion failed: {error:?}"
-                                            ));
-                                            break;
-                                        }
-                                    };
-                            }
-                            last_spin_probe_ticks = qpc_ticks_or_terminal!();
-                        }
-                        continue;
-                    }
                     let target_qpc = match clock_state
                         .epoch
                         .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
@@ -3790,6 +3393,17 @@ fn run_worker(
         );
     }
 
+    if terminal_error.is_none()
+        && !skip_requested.load(Ordering::Acquire)
+        && !quit_requested.load(Ordering::Acquire)
+        && !clean_completion_proven(&coordinator, &backend)
+    {
+        terminal_error = Some(
+            "clean completion contract failed: authored generations or backend state were not fully released"
+                .to_string(),
+        );
+    }
+
     if let Err(error) = coordinator.cancel_all() {
         record_termination_error(
             &mut terminal_error,
@@ -3857,6 +3471,7 @@ fn run_worker(
     }
     try_publish_metrics(&local_metrics, metrics, end_us, true);
     metrics.is_paused.store(false, Ordering::Relaxed);
+    telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
     *telemetry_output.lock() = Some(telemetry.output);
     *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();
     match (worker_result, cleanup_result) {
@@ -3916,22 +3531,6 @@ fn supervisor_lease_expired(
     Ok(elapsed > timeout_ticks)
 }
 
-fn drain_commands(
-    rx: &Receiver<WorkerCommand>,
-    quit_requested: &AtomicBool,
-    skip_requested: &AtomicBool,
-    panic_requested: &AtomicBool,
-) {
-    loop {
-        match rx.try_recv() {
-            Ok(WorkerCommand::Skip) => skip_requested.store(true, Ordering::Release),
-            Ok(WorkerCommand::Quit) => quit_requested.store(true, Ordering::Release),
-            Ok(WorkerCommand::PanicRelease) => panic_requested.store(true, Ordering::Release),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-        }
-    }
-}
-
 fn focus_matches(
     require_focus: bool,
     focus_active: &AtomicBool,
@@ -3957,7 +3556,6 @@ fn record_lateness(
     is_release: bool,
     deferred_release: bool,
     local_metrics: &mut WorkerMetricsLocal,
-    latency_tx: &Sender<i64>,
 ) {
     if deferred_release {
         return;
@@ -3981,7 +3579,7 @@ fn record_lateness(
     if clamped > 2_000 {
         local_metrics.late_2ms = local_metrics.late_2ms.saturating_add(1);
     }
-    let _ = latency_tx.try_send(lateness_us);
+    local_metrics.recent_latencies.push(lateness_us);
 }
 
 fn cancel_coordinator_or_terminal(
@@ -4011,6 +3609,32 @@ fn release_state_verified(backend: &TrackedKeyState, outcome: &ReleaseAllOutcome
         && backend.active_mask == 0
         && backend.possibly_active_mask == 0
         && backend.failed_release_mask == 0
+}
+
+fn clean_completion_proven(
+    coordinator: &RuntimeDispatchCoordinator,
+    backend: &TrackedKeyState,
+) -> bool {
+    let counts = coordinator.generation_status_counts();
+    let all_released = counts.get("released").copied().unwrap_or_default()
+        == coordinator.schedule.generation_count
+        && counts.values().sum::<u64>() == coordinator.schedule.generation_count;
+    all_released
+        && counts.get("scheduled").copied().unwrap_or_default() == 0
+        && counts.get("active").copied().unwrap_or_default() == 0
+        && counts.get("release_pending").copied().unwrap_or_default() == 0
+        && counts.get("dropped_backend").copied().unwrap_or_default() == 0
+        && counts.get("dropped_conflict").copied().unwrap_or_default() == 0
+        && counts.get("dropped_expired").copied().unwrap_or_default() == 0
+        && counts.get("cancelled").copied().unwrap_or_default() == 0
+        && backend.active_mask == 0
+        && backend.possibly_active_mask == 0
+        && backend.failed_release_mask == 0
+        && backend.keys_dropped == 0
+        && backend.chord_split_events == 0
+        && backend.sendinput_partial_events == 0
+        && backend.sendinput_zero_progress_failures == 0
+        && backend.authored_keys_rejected == 0
 }
 
 fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
@@ -4172,6 +3796,7 @@ fn signed_timeline_delta_us(
 /// syscall. The operation spans the first call entry through the final call
 /// return; a single-call duration is only valid for exactly one non-rollback
 /// call.
+#[cfg(test)]
 fn exact_sender_durations(
     qpc_clock: QpcClock,
     started_ticks: Option<QpcTicks>,
@@ -4303,6 +3928,7 @@ fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
         .clamp(spin_floor_us, 3_000)
 }
 
+#[cfg(test)]
 fn adjust_spin_threshold(current_us: u64, candidate_us: u64) -> u64 {
     if candidate_us >= current_us {
         candidate_us
@@ -4398,21 +4024,22 @@ fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_PATH_WINDOW_CAPACITY, WakeErrorStats, WorkerCommand, adjust_spin_threshold,
+        FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
+        NativeDispatchSession, TelemetryMode, WakeErrorStats, adjust_spin_threshold,
         anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
-        derive_spin_threshold_us, drain_commands, exact_sender_durations, focus_gate_matches,
+        derive_spin_threshold_us, exact_sender_durations, focus_gate_matches,
         record_input_path_health, record_termination_error, release_runtime_outcome,
         supervisor_lease_expired, update_estimator_after_send,
     };
-    use crossbeam_channel::bounded;
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-    use sky_dispatch_core::model::ActionKind;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_win32::clock::{
         DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
     };
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn supervisor_lease_treats_future_heartbeat_as_fresh() {
@@ -4465,6 +4092,17 @@ mod tests {
             supervisor_lease_expired(QpcTicks::from_raw(2), DurationTicks::ZERO, &heartbeat),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn recent_latency_ring_is_bounded_and_keeps_latest_values() {
+        let mut ring = super::RecentLatencyRing::default();
+        for value in 0..40 {
+            ring.push(value);
+        }
+        assert_eq!(ring.to_vec().len(), 32);
+        assert_eq!(ring.to_vec().first(), Some(&8));
+        assert_eq!(ring.to_vec().last(), Some(&39));
     }
 
     #[test]
@@ -4572,28 +4210,6 @@ mod tests {
     }
 
     #[test]
-    fn saturated_terminal_queue_cannot_overwrite_latest_pause_state() {
-        let (tx, rx) = bounded(32);
-        for _ in 0..32 {
-            tx.send(WorkerCommand::Quit).unwrap();
-        }
-        let desired_pause = AtomicBool::new(true);
-
-        // Resume is latest-wins state, not a queued command. A stale queued
-        // terminal command must not be able to write it back.
-        for index in 0..10_000 {
-            desired_pause.store(index % 2 == 0, Ordering::Release);
-        }
-        let quit_requested = AtomicBool::new(false);
-        let skip_requested = AtomicBool::new(false);
-        let panic_requested = AtomicBool::new(false);
-        drain_commands(&rx, &quit_requested, &skip_requested, &panic_requested);
-
-        assert!(!desired_pause.load(Ordering::Acquire));
-        assert!(quit_requested.load(Ordering::Acquire));
-    }
-
-    #[test]
     fn focus_gate_requires_both_validation_and_foreground_match() {
         assert!(!focus_gate_matches(true, false, 123, true));
         assert!(!focus_gate_matches(true, true, 123, false));
@@ -4689,18 +4305,18 @@ mod tests {
 
         update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120, false);
         let state = estimator.export_state();
-        assert_eq!(state.count_down[3], 0);
-        assert_eq!(state.count_residual, 0);
+        assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
+        assert_eq!(state.residuals[0].count, 0);
 
         update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120, false);
         let state = estimator.export_state();
-        assert_eq!(state.count_down[3], 0);
-        assert_eq!(state.count_residual, 0);
+        assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
+        assert_eq!(state.residuals[0].count, 0);
 
         update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120, true);
         let state = estimator.export_state();
-        assert_eq!(state.count_down[3], 1);
-        assert_eq!(estimator.export_state().count_residual, 1);
+        assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
+        assert_eq!(estimator.export_state().residuals[0].count, 1);
     }
 
     #[test]
@@ -4739,5 +4355,105 @@ mod tests {
 
         assert_eq!(primary.as_deref(), Some("coordinator pre-cleanup mismatch"));
         assert_eq!(secondary, vec!["release verification failed"]);
+    }
+
+    #[test]
+    fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down-1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up-1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "down-2".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "up-2".to_string().into(),
+            },
+        ];
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+            .expect("valid fault-injection schedule");
+        let script = FaultInjectionScript {
+            entries: vec![
+                (
+                    0,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+                (
+                    1,
+                    InjectedSendOutcome::Zero {
+                        latency_ticks: 0,
+                        win32_error: 1460,
+                    },
+                ),
+            ],
+            ..FaultInjectionScript::default()
+        };
+        let session = NativeDispatchSession::new(
+            schedule,
+            0,
+            2_000,
+            0,
+            vec![0x15, 0x16],
+            true,
+            0,
+            0,
+            script,
+            false,
+            100_000,
+            150,
+            0,
+            TelemetryMode::Ring,
+            64,
+            sky_dispatch_win32::mmcss::PriorityMode::Off,
+            true,
+            true,
+            false,
+            700,
+            None,
+            false,
+            300,
+            false,
+            2_000,
+            2_000,
+            0,
+        )
+        .expect("test session admission");
+
+        session.start().expect("worker start");
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, "error", "zero progress must be terminal");
+        let telemetry: serde_json::Value =
+            serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+                .expect("valid telemetry JSON");
+        let records = telemetry["records"].as_array().expect("records array");
+        assert!(
+            !records.iter().any(|record| {
+                record["event_index"] == 2 && record["runtime_outcome"] == "sent"
+            })
+        );
     }
 }

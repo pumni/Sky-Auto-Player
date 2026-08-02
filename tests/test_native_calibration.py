@@ -32,7 +32,7 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
     setup_attempted = 20
     warmup_attempted = 10
     return {
-        "version": 7,
+        "version": 8,
         "measurement_protocol_version": 3,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
@@ -52,7 +52,7 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
             "warmup_samples": warmup_attempted,
             "receipt_timeout_ms": 200,
             "hot_gap_target_us": 5_000,
-            "cold_idle_gap_us": 100_000,
+            "cold_idle_gap_us": 25_000,
             "cold_threshold_us": 20_000,
         },
         "warmup_attempted": warmup_attempted,
@@ -82,12 +82,12 @@ def _native_result(*, clean: int = 64, cleanup_success: bool = True) -> dict[str
 
 
 def _native_bucket_result(
-    *, kind: str, class_name: str, polyphony: int, samples: int = 5_000
+    *, kind: str, class_name: str, polyphony: int, samples: int = 20
 ) -> dict[str, object]:
     base = _native_result(clean=samples)
     base_bucket = base["buckets"]["down"]["1"]["hot"]  # type: ignore[index]
     assert isinstance(base_bucket, dict)
-    setup = samples + 50 if kind == "up" else 0
+    setup = samples + 4 if kind == "up" else 0
     sample = {
         "clean": True,
         "call_duration_us": 1,
@@ -107,7 +107,7 @@ def _native_bucket_result(
         },
     }
     return {
-        "version": 7,
+        "version": 8,
         "measurement_protocol_version": 3,
         "evidence_kind": "injected_raw_input_delivery_proxy",
         "source_git_sha": "test-sha",
@@ -124,10 +124,10 @@ def _native_bucket_result(
             "polyphonies": [polyphony],
             "samples_per_hot_bucket": samples,
             "samples_per_cold_bucket": samples,
-            "warmup_samples": 50,
+            "warmup_samples": 4,
             "receipt_timeout_ms": 200,
             "hot_gap_target_us": 5_000,
-            "cold_idle_gap_us": 100_000,
+            "cold_idle_gap_us": 25_000,
             "cold_threshold_us": 20_000,
         },
         "kind": kind,
@@ -137,14 +137,15 @@ def _native_bucket_result(
         "setup_attempted": setup,
         "setup_anomalous": 0,
         "setup_timed_out": 0,
-        "warmup_attempted": 50,
+        "warmup_attempted": 4,
         "warmup_anomalous": 0,
         "warmup_timed_out": 0,
-        "total_attempted": samples + setup + 50,
+        "total_attempted": samples + setup + 4,
         "total_anomalous": 0,
         "total_timed_out": 0,
         "bucket": base_bucket,
-        "samples": [sample.copy() for _ in range(samples)],
+        "worst_samples": [sample.copy()],
+        "anomalous_samples": [],
         "cleanup": {
             "cleanup_attempted": True,
             "cleanup_success": True,
@@ -501,14 +502,14 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     )
     checkpoint = tmp_path / "checkpoint"
     result = native_calibration.run_full_calibration(checkpoint_dir=checkpoint)
-    assert result["completed_buckets"] == 24
+    assert result["completed_buckets"] == 12
     assert not (tmp_path / "trusted-cache.json").exists()
     manifest = json.loads((checkpoint / "checkpoint.json").read_text(encoding="utf-8"))
-    assert len(manifest["buckets"]) == 24
-    assert len(manifest["chunks"]) == 24 * 5
+    assert len(manifest["buckets"]) == 12
+    assert len(manifest["chunks"]) == 12
     assert all(
-        len(json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))["samples"])
-        == 1_000
+        len(json.loads((checkpoint / entry["artifact"]).read_text(encoding="utf-8"))["worst_samples"])
+        <= 16
         for entry in manifest["chunks"]
     )
     assert all(
@@ -525,7 +526,7 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
     resumed = native_calibration.run_full_calibration(
         checkpoint_dir=checkpoint, resume=True
     )
-    assert resumed["completed_buckets"] == 24
+    assert resumed["completed_buckets"] == 12
 
     final = native_calibration.finalize_native_calibration(
         checkpoint_dir=checkpoint,
@@ -533,5 +534,5 @@ def test_full_checkpoint_is_bucketed_and_finalizer_is_only_cache_writer(
         cache_path=tmp_path / "trusted-cache.json",
     )
     assert final["acceptance_eligible"] is True
-    assert final["measured_attempted"] == 24 * 5_000
+    assert final["measured_attempted"] == 12 * 20
     assert (tmp_path / "trusted-cache.json").is_file()

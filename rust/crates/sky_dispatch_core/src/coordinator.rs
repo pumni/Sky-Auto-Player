@@ -112,6 +112,10 @@ pub enum CoordinatorError {
     Time(#[from] crate::time::TimeArithmeticError),
     #[error("invalid batch index {index}")]
     InvalidBatchIndex { index: usize },
+    #[error("runtime schedule validation failed: {0}")]
+    Schedule(#[from] RuntimeScheduleError),
+    #[error("prepared batch index {prepared} does not match coordinator cursor {cursor}")]
+    PreparedBatchMismatch { prepared: usize, cursor: usize },
     #[error("invalid key slot {slot}")]
     InvalidKeySlot { slot: KeySlot },
     #[error("generation count does not fit in usize")]
@@ -1297,6 +1301,13 @@ pub struct PendingDispatchPlan {
     pub lead_saturated: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedBatch {
+    pub index: usize,
+    pub effective_scheduled_ticks: TimelineTicks,
+    pub effective_lead_ticks: DurationTicks,
+}
+
 #[derive(Debug)]
 pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
@@ -1766,12 +1777,25 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn is_finished(&self) -> bool {
+        // This is a lifecycle predicate, not the success predicate. A
+        // terminal backend/conflict/expired generation allows the worker to
+        // stop, but the session must still reject OUTCOME_FINISHED unless
+        // every generation is Released and every clean-completion counter is
+        // zero.
         // An authored down may legitimately have no matching up in the input
         // timeline.  The worker's terminal cleanup owns that case, so do not
         // wait forever on an active generation that has no pending release.
         // Failed pending releases are kept alive by `requeue_failed_releases`
         // until they succeed or recovery aborts the session.
-        self.cursor >= self.schedule.batches.len() && self.pending_mask == 0
+        let terminal_count = self.counters.released
+            + self.counters.dropped_conflict
+            + self.counters.dropped_backend
+            + self.counters.dropped_expired
+            + self.counters.cancelled;
+        self.cursor >= self.schedule.batches.len()
+            && self.active_mask == 0
+            && self.pending_mask == 0
+            && terminal_count == self.schedule.generation_count
     }
 
     /// Verify the compact masks and terminal ledger agree exactly.
@@ -2028,11 +2052,11 @@ impl RuntimeDispatchCoordinator {
         .map(|(index, lead)| (index, lead.as_u64()))
     }
 
-    pub fn pop_next_due_authored_ticks(
-        &mut self,
+    pub fn prepare_next_due_authored(
+        &self,
         now: TimelineTicks,
         dispatch_lead: DurationTicks,
-    ) -> Result<Option<(usize, DurationTicks)>, CoordinatorError> {
+    ) -> Result<Option<PreparedBatch>, CoordinatorError> {
         if self.cursor >= self.schedule.batches.len()
             || self.release_recovery_started_ticks.is_some()
         {
@@ -2059,10 +2083,72 @@ impl RuntimeDispatchCoordinator {
         if deadline > now || (authored > now && self.early_pop_blocked(batch)) {
             return Ok(None);
         }
+        Ok(Some(PreparedBatch {
+            index,
+            effective_scheduled_ticks: authored,
+            effective_lead_ticks: effective_lead,
+        }))
+    }
+
+    pub fn commit_down_success(
+        &mut self,
+        prepared: PreparedBatch,
+        sent_scan_codes: &[u16],
+        started: TimelineTicks,
+        completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.index,
+                cursor: self.cursor,
+            });
+        }
+        self.activate_sent_downs_compact_ticks(
+            prepared.index,
+            sent_scan_codes,
+            started,
+            completed,
+            0,
+        )?;
         self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
             crate::time::TimeArithmeticError::Overflow,
         ))?;
-        Ok(Some((index, effective_lead)))
+        Ok(())
+    }
+
+    pub fn commit_up_request(
+        &mut self,
+        prepared: PreparedBatch,
+    ) -> Result<ReleaseRequestResult, CoordinatorError> {
+        if prepared.index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.index,
+                cursor: self.cursor,
+            });
+        }
+        let batch = self
+            .schedule
+            .view_batch_ticks(prepared.index, prepared.effective_scheduled_ticks)?
+            .materialize();
+        let result = self.request_releases(&batch.intents)?;
+        self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
+            crate::time::TimeArithmeticError::Overflow,
+        ))?;
+        Ok(result)
+    }
+
+    pub fn pop_next_due_authored_ticks(
+        &mut self,
+        now: TimelineTicks,
+        dispatch_lead: DurationTicks,
+    ) -> Result<Option<(usize, DurationTicks)>, CoordinatorError> {
+        let Some(prepared) = self.prepare_next_due_authored(now, dispatch_lead)? else {
+            return Ok(None);
+        };
+        self.cursor = self.cursor.checked_add(1).ok_or(CoordinatorError::Time(
+            crate::time::TimeArithmeticError::Overflow,
+        ))?;
+        Ok(Some((prepared.index, prepared.effective_lead_ticks)))
     }
 
     /// Check whether any intent in `compact_intents` conflicts with an

@@ -10,6 +10,12 @@ This document is the engineering source of truth for designing, reviewing, and c
 * **Frame-Bound Sampling:** The game samples input state once per render frame. For a key-down event to be registered, the key must remain held down for **at least 1 game frame**. This is the only hard timing constraint.
 * **No Arbitrary Margins:** Same-key feasibility is determined strictly by the key's minimum hold duration (`min_hold_us`). The scheduler does not add a separate scheduling-time latency guess (such as the legacy `release_latency_margin_us`). Note that since 2026-07 `min_hold_us` itself *includes* a small constant **device-delivery margin** (`min_hold_margin_us`, default 500 µs — see §2): that margin models a measured physical effect (post-`SendInput` kernel delivery latency), not a scheduling fudge factor, and setting it to 0 restores the pure frame-ratio model.
 
+For the Rust worker, game polling is not a proof boundary. The proved runtime sequence ends at
+`SendInput` return; an app-owned Raw Input receipt is an optional delivery proxy and must never be
+called game-observed latency. A session may report `finished` only after the complete clean ledger
+and backend-mask contract described in `rt-dispatch-architecture.md` §1; cancellation is not a
+successful finish.
+
 ### Evidence Hierarchy
 When resolving conflicts, the following hierarchy applies:
 1. **Observed Game Behavior** (audio/onsets recorded in-game) — wins over everything.
@@ -80,8 +86,9 @@ reject such repeats instead of silently treating them as guaranteed.
 
 If the authored interval is smaller than `min_hold_us`:
 1. **Strict Mode:** The scheduler rejects the playback and recommends a lower tempo.
-2. **Drop-chord Mode (production default):** The scheduler preserves the minimum hold (`min_hold_us`) for the first note, which naturally overlaps the scheduled start of the second note. At runtime, the complete conflicting authored chord is dropped, preserving chord fidelity rather than emitting a partial chord.
-3. **Degraded Mode (legacy/diagnostic):** Only non-conflicting keys may be sent. This mode is explicit because it can change the musical content of an authored chord.
+2. **Runtime invariant failure:** The compiler rejects authored overlap; if a conflict appears at
+   runtime anyway, the worker aborts fail-closed. It never reports `finished` after dropping a
+   chord or a late pulse.
 
 ---
 
@@ -100,7 +107,7 @@ The sender-side completion-to-completion proxy preserves the intended hold floor
 ### Interaction with Adaptive Dispatch Lead (2026-07)
 Since the RT-pipeline optimization, dispatch targets **onset = SendInput completion**: events are popped early by a bounded rolling p95 of `send_duration_us`, bucketed by action kind and polyphony, so completions land on `scheduled_us`. Cold buckets use a conservative prior and lower-bucket/global evidence; the resulting lead is monotonic with polyphony and clamped to the configured maximum. The lead is symmetric (downs and releases) and **the floor always wins**: a release becomes due at
 $$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
-and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. Version-2 and version-3 lead caches are migrated to the version-4 rolling model, which also persists separate Up residual correction. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. The native lead cache accepts only the current version-8 histogram schema; an older or newer cache is discarded and playback starts from the conservative prior. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
 Pending releases use a bounded cohort fixed point: the Up lead is selected from the releases that
 share the next effective deadline, rather than from all currently pending keys. The resulting
@@ -121,7 +128,7 @@ rather than an unreported tail.
 
 Native `strict_timing` is a completion contract in addition to a dispatch decision. The Rust
 boundary forces same-key conflicts to `AbortPlayback`, regardless of the caller's parsed
-`drop_chord` default. A clean, single-attempt Down and a clean, non-deferred, single-source Up
+legacy conflict-policy input. A clean, single-attempt Down and a clean, non-deferred, single-source Up
 must satisfy `strict_down_completion_late_us` and `strict_up_completion_late_us` (2,000 µs by
 default) after `SendInput` returns. A violation is recorded as
 `strict_completion_slo_exceeded`, followed by full cleanup and a controlled error. Deferred or
@@ -186,21 +193,20 @@ previous-session lead estimates rather than cold-starting at zero for `_SEED_SAM
 Corrupt or version-mismatched cache is silently ignored — never raises into play.
 
 ### Idle-gap core warmup (Phase E)
-After a gap of ≥ 20 ms since the last `SendInput` completion elapsed, the dispatch thread
-expands its final spin threshold by adding `core_warmup_budget_us` (default 200 µs, capped at
+After a gap of ≥ 20 ms since the last `SendInput` completion elapsed, the dispatch thread may
+expand its final spin threshold by adding `core_warmup_budget_us` (default 0, capped at
 `CORE_WARMUP_SPIN_MAX_US` = 500 µs) to the `effective_spin_threshold`. This widens the busy-spin
 window immediately before the deadline — warming the CPU core without a separate blocking
 spin. The cold guard is skipped when the dispatch is already late, a command requires pause/stop,
 a release is due at the same target, or no blocking interval remains.
-Controlled in `core/loop.py` by `core_warmup_budget_us` (default 200) and
+Controlled in `core/loop.py` by `core_warmup_budget_us` (default 0) and
 `SEND_COLD_THRESHOLD_US` (20_000 µs).
 
-### Mid-song spin re-probe (Phase H)
-The pre-play spin probe derives `effective_spin_threshold_us` once before playback. Mid-song,
-if a gap of ≥ 0.5 s remains to the next deadline AND ≥ 30 s have elapsed since the last reprobe,
-the dispatch thread re-probes timer wake error (8 × 2 ms sleeps) and updates
-`spin_threshold_us` with hysteresis (±50 µs). Kill switch: `enable_spin_reprobe = False`
-(auto-disabled when `enable_adaptive_spin = False`).
+### Mid-song spin re-probe
+The native worker performs only the bounded startup probe. Mid-song reprobe was removed from the
+native precision window; the legacy compatibility option is ignored by that worker. The Python
+oracle may retain its diagnostic-only path for rollback tests, but it is not part of the Rust
+production timing contract.
 
 ---
 

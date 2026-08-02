@@ -7,7 +7,7 @@ wait behavior, not end-to-end ``SendInput`` latency.
 
 Usage::
 
-    uv run python scripts/bench_rust_vs_python.py --repeats 5
+    uv run python scripts/bench_rust_vs_python.py --repeats 2
     uv run python scripts/bench_rust_vs_python.py --song "songs/All Of Me.json" \
         --fps 60 --profile balanced --repeats 10 --output bench.json
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,11 +64,17 @@ class _Progress:
 class _CountingWait:
     """Count Python wait returns using the same wait strategy as production."""
 
-    def __init__(self) -> None:
+    def __init__(self, deadline_ns: int | None = None) -> None:
         self._delegate = HybridWaitStrategy(enable_event_wait=False)
         self.wake_count = 0
+        self._deadline_ns = deadline_ns
+
+    def _check_budget(self) -> None:
+        if self._deadline_ns is not None and time.perf_counter_ns() >= self._deadline_ns:
+            raise TimeoutError("Rust/Python benchmark exceeded its hard budget")
 
     def spin_until_us(self, target_system_us: int, clock: Any) -> None:
+        self._check_budget()
         self._delegate.spin_until_us(target_system_us, clock)
 
     def wait_until_us(
@@ -79,6 +86,7 @@ class _CountingWait:
         policy: Any,
         command_event: int | None = None,
     ) -> bool:
+        self._check_budget()
         result = self._delegate.wait_until_us(
             target_system_us,
             clock,
@@ -119,7 +127,7 @@ def _stats(values: list[int]) -> dict[str, float | int]:
     }
 
 
-def _native_sample(actions: tuple[Any, ...]) -> _Sample:
+def _native_sample(actions: tuple[Any, ...], *, timeout_ms: int = 60_000) -> _Sample:
     import sky_player_rs
 
     native_actions = [
@@ -135,24 +143,26 @@ def _native_sample(actions: tuple[Any, ...]) -> _Sample:
     session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         native_actions,
         list(SKY_15_SCAN_CODES),
+        profile="mock_test",
         min_hold_us=50_000,
         max_lead_us=2_000,
-        mock_backend=True,
         require_focus=False,
-        telemetry_enabled=True,
-        telemetry_capacity=200_000,
+        telemetry_mode="ring",
+        telemetry_capacity=1_024,
         rt_priority_mode="off",
         enable_waitable_timer=True,
         enable_event_wait=False,
         enable_adaptive_spin=False,
-        enable_spin_reprobe=False,
         enable_adaptive_lead=False,
     )
     process_cpu_start = time.process_time_ns()
     wall_start = time.perf_counter_ns()
     session.start()
-    if not session.join(timeout_ms=60_000):
-        raise RuntimeError("Rust benchmark session exceeded 60 seconds")
+    if not session.join(timeout_ms=timeout_ms):
+        session.panic_release()
+        session.quit()
+        session.join(timeout_ms=5_000)
+        raise TimeoutError("Rust benchmark session exceeded its hard budget")
     wall_us = (time.perf_counter_ns() - wall_start) // 1_000
     process_cpu_us = (time.process_time_ns() - process_cpu_start) // 1_000
     snapshot = dict(session.snapshot())
@@ -173,7 +183,9 @@ def _native_sample(actions: tuple[Any, ...]) -> _Sample:
     )
 
 
-def _python_sample(actions: tuple[Any, ...], total_us: int) -> _Sample:
+def _python_sample(
+    actions: tuple[Any, ...], total_us: int, *, deadline_ns: int | None = None
+) -> _Sample:
     clock = PerfCounterClock()
     backend = DryRunBackend()
     backend.set_clock(clock)
@@ -188,7 +200,7 @@ def _python_sample(actions: tuple[Any, ...], total_us: int) -> _Sample:
         _Focus(),
         require_focus=False,
     )
-    wait_strategy = _CountingWait()
+    wait_strategy = _CountingWait(deadline_ns)
     loop = DispatchLoop(
         coordinator=RuntimeDispatchCoordinator(
             compile_runtime_intents(actions),
@@ -264,7 +276,13 @@ def _parse_args() -> argparse.Namespace:
         choices=("local_precise", "balanced", "audience_safe"),
         default="balanced",
     )
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=120.0,
+        help="hard whole-command budget in seconds (1..120; default: 120)",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -273,6 +291,12 @@ def main() -> int:
     args = _parse_args()
     if args.fps <= 0 or args.repeats <= 0:
         raise SystemExit("--fps and --repeats must be positive")
+    if (
+        isinstance(args.budget_seconds, bool)
+        or not math.isfinite(args.budget_seconds)
+        or not 1.0 <= args.budget_seconds <= 120.0
+    ):
+        raise SystemExit("--budget-seconds must be between 1 and 120 seconds")
     if not args.song.is_file():
         raise SystemExit(f"song not found: {args.song}")
 
@@ -286,11 +310,21 @@ def main() -> int:
         f"repeats={args.repeats} backend=mock"
     )
 
-    rust_samples = [_native_sample(actions) for _ in range(args.repeats)]
-    python_samples = [
-        _python_sample(actions, int(metadata.playback_duration_us))
-        for _ in range(args.repeats)
-    ]
+    deadline_ns = time.perf_counter_ns() + int(args.budget_seconds * 1_000_000_000)
+    rust_samples = []
+    python_samples = []
+    for _ in range(args.repeats):
+        remaining_ms = (deadline_ns - time.perf_counter_ns()) // 1_000_000 - 5_000
+        if remaining_ms <= 0:
+            raise TimeoutError("Rust/Python benchmark exceeded its hard budget")
+        rust_samples.append(_native_sample(actions, timeout_ms=min(60_000, int(remaining_ms))))
+        python_samples.append(
+            _python_sample(
+                actions,
+                int(metadata.playback_duration_us),
+                deadline_ns=deadline_ns,
+            )
+        )
     report: dict[str, Any] = {
         "corpus": str(args.song),
         "notes": len(song.notes),
@@ -299,6 +333,7 @@ def main() -> int:
         "profile": args.profile,
         "fps": args.fps,
         "repeats": args.repeats,
+        "budget_seconds": args.budget_seconds,
         "backend": "mock",
         "rust": _aggregate(rust_samples),
         "python": _aggregate(python_samples),

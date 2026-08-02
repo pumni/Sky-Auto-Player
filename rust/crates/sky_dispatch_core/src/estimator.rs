@@ -21,16 +21,18 @@
 //! | `cold_reserve_us` | Polyphony-linear cold prior |
 //! | `residual_bias_us` | EMA of completion-error residual (Down/Up × Hot/Cold) |
 //!
-//! The histogram-based fast model is O(1) to update and O(buckets) to query.
-//! No allocation, no sort, no clone.
+//! The histogram model is updated outside the precision decision and publishes
+//! a fixed lookup table. Dispatch queries are O(1): no allocation, sort,
+//! histogram scan, or clone occurs in the decision path.
 //!
 //! The slow tail reserve is a long-decay exponential envelope that prevents
 //! the estimator from forgetting rare catastrophic tails too quickly.
 //!
 //! ## State version
 //!
-//! Version 6 adds independent delivery-proxy channels for Down/Up × Hot/Cold.
-//! Versions 2–7 are accepted and migrated conservatively.
+//! Version 8 publishes the fixed lead lookup table. Timing cache state is
+//! ephemeral diagnostic data, so only the current schema is accepted; older or
+//! newer versions are discarded and the conservative prior is used.
 
 use crate::model::ActionKind;
 use serde::{Deserialize, Serialize};
@@ -40,9 +42,6 @@ use thiserror::Error;
 
 /// Minimum samples before a bucket switches from prior to observed estimate.
 const SEED_SAMPLES: usize = 5;
-/// Legacy rolling-window size retained for v2–v4 import only.
-const ROLLING_WINDOW: usize = 32;
-
 /// Histogram bucket width in microseconds (25 µs resolution).
 const BUCKET_WIDTH_US: u64 = 25;
 /// Number of histogram buckets (covers 0–6 375 µs; overflow lands in the last
@@ -78,9 +77,7 @@ const PER_KEY_COLD_PRIOR_US: u64 = 40;
 const WAKE_RESERVE_US: u64 = 50;
 
 /// Current on-disk state format version.
-pub const ESTIMATOR_STATE_VERSION: u32 = 7;
-const HISTOGRAM_STATE_VERSION: u32 = 5;
-const DELIVERY_PROXY_CHANNEL_STATE_VERSION: u32 = 6;
+pub const ESTIMATOR_STATE_VERSION: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum EstimatorConfigError {
@@ -338,18 +335,6 @@ impl Histogram {
         self.max_seen_us = self.max_seen_us.max(other.max_seen_us);
         Ok(())
     }
-
-    /// Build a conservative histogram from a legacy rolling-window sample vec.
-    fn from_legacy_samples(samples: &[u64]) -> Result<Self, String> {
-        let mut hist = Self::default();
-        for &v in samples {
-            if v > MAX_SAMPLE_US {
-                return Err("legacy sample exceeds MAX_SAMPLE_US".to_string());
-            }
-            hist.push(v).map_err(|error| error.to_string())?;
-        }
-        Ok(hist)
-    }
 }
 
 // ─── Slow tail reserve ────────────────────────────────────────────────────────
@@ -593,9 +578,6 @@ pub struct HistBucketJson {
     /// Cold-class slow tail reserve value.
     #[serde(default)]
     pub cold_tail_reserve_us: u64,
-    /// Version 5/6 shared tail reserve, retained for migration only.
-    #[serde(default)]
-    pub tail_reserve_us: u64,
 }
 
 /// Version-5 residual channel export.
@@ -611,79 +593,21 @@ pub struct ResidualChannelJson {
     pub warm: bool,
 }
 
-/// Unified on-disk format accepting versions 2–7.
+/// Current on-disk format. Timing cache state is disposable diagnostic state;
+/// older and newer schemas are rejected instead of being migrated in the
+/// dispatch core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EstimatorStateJson {
     pub version: u32,
-    #[serde(default)]
-    pub saved_at: String,
     pub max_poly: usize,
 
-    // ── Legacy fields (versions 2–4, kept for backward compat import) ──
-    #[serde(default)]
-    pub ema_down: Vec<f64>,
-    #[serde(default)]
-    pub warm_down: Vec<bool>,
-    #[serde(default)]
-    pub count_down: Vec<u64>,
-    #[serde(default)]
-    pub sum_down: Vec<u64>,
-    #[serde(default)]
-    pub ema_down_total: f64,
-    #[serde(default)]
-    pub warm_down_total: bool,
-    #[serde(default)]
-    pub count_down_total: u64,
-    #[serde(default)]
-    pub sum_down_total: u64,
-    #[serde(default)]
-    pub ema_up: f64,
-    #[serde(default)]
-    pub warm_up: bool,
-    #[serde(default)]
-    pub count_up: u64,
-    #[serde(default)]
-    pub sum_up: u64,
-    #[serde(default)]
-    pub ema_residual: f64,
-    #[serde(default)]
-    pub warm_residual: bool,
-    #[serde(default)]
-    pub count_residual: u64,
-    #[serde(default)]
-    pub sum_residual: i64,
-    #[serde(default)]
-    pub samples_down: Vec<Vec<u64>>,
-    #[serde(default)]
-    pub samples_up: Vec<Vec<u64>>,
-    #[serde(default)]
-    pub samples_down_total: Vec<u64>,
-    #[serde(default)]
-    pub samples_up_total: Vec<u64>,
-    #[serde(default)]
-    pub ema_residual_up: f64,
-    #[serde(default)]
-    pub warm_residual_up: bool,
-    #[serde(default)]
-    pub count_residual_up: u64,
-    #[serde(default)]
-    pub sum_residual_up: i64,
-
-    // ── Version 5 fields ──
     /// Per-polyphony histogram state for Down direction.
-    #[serde(default)]
     pub hist_down: Vec<HistBucketJson>,
     /// Per-polyphony histogram state for Up direction.
-    #[serde(default)]
     pub hist_up: Vec<HistBucketJson>,
     /// Four residual channels: down_hot, down_cold, up_hot, up_cold.
-    #[serde(default)]
     pub residuals: Vec<ResidualChannelJson>,
-    /// Calibrated delivery proxy prior (µs) per polyphony bucket; 0 = uncalibrated.
-    #[serde(default)]
-    pub delivery_proxy_us: Vec<u64>,
     /// Delivery proxy channels ordered as Down/Hot, Down/Cold, Up/Hot, Up/Cold.
-    #[serde(default)]
     pub delivery_proxy_channels: Vec<[u64; 4]>,
 }
 
@@ -691,9 +615,9 @@ pub struct EstimatorStateJson {
 
 /// Conservative adaptive estimator with named lead components.
 ///
-/// Public API is backward-compatible with the v4 interface; all new fields are
-/// additive.  `estimate_lead` now returns a richer `LeadEstimate` with a full
-/// `LeadComponents` breakdown and a `LeadConfidence` level.
+/// The estimator exposes the current histogram/residual model only.
+/// `estimate_lead` returns a `LeadEstimate` with a full `LeadComponents`
+/// breakdown and a `LeadConfidence` level.
 #[derive(Debug, Clone)]
 pub struct SendLatencyEstimator {
     pub max_poly: usize,
@@ -715,15 +639,10 @@ pub struct SendLatencyEstimator {
     /// Order: down_hot, down_cold, up_hot, up_cold.
     delivery_proxy_us: [Vec<u64>; 4],
 
-    // ── Legacy scalar counts kept for export backward compat ──
-    count_down: Vec<u64>,
-    sum_down: Vec<u64>,
-    count_down_total: u64,
-    sum_down_total: u64,
-    count_up: Vec<u64>,
-    sum_up: Vec<u64>,
-    count_up_total: u64,
-    sum_up_total: u64,
+    /// Cached normal/strict estimates indexed by polyphony, channel and
+    /// policy. The cache is rebuilt after a sample or calibration update;
+    /// dispatch only indexes it.
+    lead_cache: Vec<[[LeadEstimate; 2]; 4]>,
 }
 
 fn residual_index(kind: ActionKind, class: LatencyClass) -> usize {
@@ -755,7 +674,14 @@ impl SendLatencyEstimator {
 
     fn new_unchecked(alpha: f64, max_lead_us: u64, max_poly: usize) -> Self {
         let size = max_poly + 1;
-        Self {
+        let empty = LeadEstimate {
+            applied_us: 0,
+            uncapped_us: 0,
+            saturated: false,
+            components: LeadComponents::default(),
+            confidence: LeadConfidence::PriorOnly,
+        };
+        let mut estimator = Self {
             max_poly,
             alpha,
             max_lead_us,
@@ -765,15 +691,54 @@ impl SendLatencyEstimator {
             up_totals: DirectionTotals::default(),
             residuals: Default::default(),
             delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
-            count_down: vec![0; size],
-            sum_down: vec![0; size],
-            count_down_total: 0,
-            sum_down_total: 0,
-            count_up: vec![0; size],
-            sum_up: vec![0; size],
-            count_up_total: 0,
-            sum_up_total: 0,
+            lead_cache: vec![[[empty; 2]; 4]; size],
+        };
+        estimator.refresh_lead_cache();
+        estimator
+    }
+
+    fn refresh_lead_cache(&mut self) {
+        let mut cache = self.lead_cache.clone();
+        for (n, poly_cache) in cache.iter_mut().enumerate().take(self.max_poly + 1).skip(1) {
+            for (channel, channel_cache) in poly_cache.iter_mut().enumerate() {
+                let (kind, class) = match channel {
+                    0 => (ActionKind::Down, LatencyClass::Hot),
+                    1 => (ActionKind::Down, LatencyClass::Cold),
+                    2 => (ActionKind::Up, LatencyClass::Hot),
+                    3 => (ActionKind::Up, LatencyClass::Cold),
+                    _ => unreachable!(),
+                };
+                for (strict_index, estimate) in channel_cache.iter_mut().enumerate() {
+                    let strict = strict_index == 1;
+                    let mut best_components = LeadComponents::default();
+                    let mut best_uncapped = 0u64;
+                    let mut best_confidence = LeadConfidence::PriorOnly;
+                    for bucket in 1..=n {
+                        let (components, confidence) =
+                            self.build_components(kind, bucket, class, strict);
+                        let uncapped = components.total_uncapped();
+                        if uncapped >= best_uncapped {
+                            best_uncapped = uncapped;
+                            best_components = components;
+                            best_confidence = confidence;
+                        }
+                    }
+                    let saturated = best_uncapped > self.max_lead_us;
+                    *estimate = LeadEstimate {
+                        applied_us: best_uncapped.min(self.max_lead_us),
+                        uncapped_us: best_uncapped,
+                        saturated,
+                        components: best_components,
+                        confidence: if saturated {
+                            LeadConfidence::Saturated
+                        } else {
+                            best_confidence
+                        },
+                    };
+                }
+            }
         }
+        self.lead_cache = cache;
     }
 
     #[cfg(test)]
@@ -806,68 +771,17 @@ impl SendLatencyEstimator {
             ActionKind::Down => {
                 self.down.ensure_push(n, duration_us, latency_class)?;
                 self.down_totals.ensure_push(duration_us, latency_class)?;
-                self.count_down[n]
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
-                self.sum_down[n]
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket sum"))?;
-                self.count_down_total
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total count"))?;
-                self.sum_down_total
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total sum"))?;
                 self.down.push(n, duration_us, latency_class)?;
                 self.down_totals.push(duration_us, latency_class)?;
-                self.count_down[n] = self.count_down[n]
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket count"))?;
-                self.sum_down[n] = self.sum_down[n]
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down bucket sum"))?;
-                self.count_down_total = self
-                    .count_down_total
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total count"))?;
-                self.sum_down_total = self
-                    .sum_down_total
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("down total sum"))?;
             }
             ActionKind::Up => {
                 self.up.ensure_push(n, duration_us, latency_class)?;
                 self.up_totals.ensure_push(duration_us, latency_class)?;
-                self.count_up[n]
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
-                self.sum_up[n]
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket sum"))?;
-                self.count_up_total
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total count"))?;
-                self.sum_up_total
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total sum"))?;
                 self.up.push(n, duration_us, latency_class)?;
                 self.up_totals.push(duration_us, latency_class)?;
-                self.count_up[n] = self.count_up[n]
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket count"))?;
-                self.sum_up[n] = self.sum_up[n]
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up bucket sum"))?;
-                self.count_up_total = self
-                    .count_up_total
-                    .checked_add(1)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total count"))?;
-                self.sum_up_total = self
-                    .sum_up_total
-                    .checked_add(duration_us)
-                    .ok_or(EstimatorStateError::ArithmeticOverflow("up total sum"))?;
             }
         }
+        self.refresh_lead_cache();
         Ok(())
     }
 
@@ -892,7 +806,9 @@ impl SendLatencyEstimator {
         class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
         let alpha = self.alpha;
-        self.residuals[residual_index(kind, class)].update(alpha, error_us)
+        self.residuals[residual_index(kind, class)].update(alpha, error_us)?;
+        self.refresh_lead_cache();
+        Ok(())
     }
 
     /// Update the calibrated delivery proxy prior for a polyphony bucket.
@@ -922,6 +838,7 @@ impl SendLatencyEstimator {
         }
         let n = 1.max(self.max_poly.min(n_keys));
         self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
+        self.refresh_lead_cache();
         Ok(())
     }
 
@@ -1067,38 +984,8 @@ impl SendLatencyEstimator {
         strict_upper_tail: bool,
     ) -> LeadEstimate {
         let n = 1.max(self.max_poly.min(n_keys));
-
-        // Monotonic envelope: ensure larger chords get at least the lead of
-        // smaller chords.
-        let mut best_components = LeadComponents::default();
-        let mut best_uncapped = 0u64;
-        let mut best_confidence = LeadConfidence::PriorOnly;
-
-        for bucket in 1..=n {
-            let (comps, conf) =
-                self.build_components(kind, bucket, latency_class, strict_upper_tail);
-            let uncapped = comps.total_uncapped();
-            if uncapped >= best_uncapped {
-                best_uncapped = uncapped;
-                best_components = comps;
-                best_confidence = conf;
-            }
-        }
-
-        let saturated = best_uncapped > self.max_lead_us;
-        let confidence = if saturated {
-            LeadConfidence::Saturated
-        } else {
-            best_confidence
-        };
-
-        LeadEstimate {
-            applied_us: best_uncapped.min(self.max_lead_us),
-            uncapped_us: best_uncapped,
-            saturated,
-            components: best_components,
-            confidence,
-        }
+        let channel = residual_index(kind, latency_class);
+        self.lead_cache[n][channel][usize::from(strict_upper_tail)]
     }
 
     pub fn get_lead_us(&self, kind: ActionKind, n_keys: usize) -> u64 {
@@ -1112,37 +999,23 @@ impl SendLatencyEstimator {
     // ── State persistence ─────────────────────────────────────────────────────
 
     pub fn export_state(&self) -> EstimatorStateJson {
-        let hist_down: Vec<HistBucketJson> = self
-            .down
-            .hot
-            .iter()
-            .zip(&self.down.cold)
-            .zip(&self.down.tail_hot)
-            .zip(&self.down.tail_cold)
-            .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
-                hot_pairs: hot.to_export_pairs(),
-                cold_pairs: cold.to_export_pairs(),
-                hot_tail_reserve_us: hot_tail.get(),
-                cold_tail_reserve_us: cold_tail.get(),
-                tail_reserve_us: hot_tail.get().max(cold_tail.get()),
-            })
-            .collect();
-
-        let hist_up: Vec<HistBucketJson> = self
-            .up
-            .hot
-            .iter()
-            .zip(&self.up.cold)
-            .zip(&self.up.tail_hot)
-            .zip(&self.up.tail_cold)
-            .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
-                hot_pairs: hot.to_export_pairs(),
-                cold_pairs: cold.to_export_pairs(),
-                hot_tail_reserve_us: hot_tail.get(),
-                cold_tail_reserve_us: cold_tail.get(),
-                tail_reserve_us: hot_tail.get().max(cold_tail.get()),
-            })
-            .collect();
+        let export_direction = |direction: &DirectionBuckets| {
+            direction
+                .hot
+                .iter()
+                .zip(&direction.cold)
+                .zip(&direction.tail_hot)
+                .zip(&direction.tail_cold)
+                .map(|(((hot, cold), hot_tail), cold_tail)| HistBucketJson {
+                    hot_pairs: hot.to_export_pairs(),
+                    cold_pairs: cold.to_export_pairs(),
+                    hot_tail_reserve_us: hot_tail.get(),
+                    cold_tail_reserve_us: cold_tail.get(),
+                })
+                .collect()
+        };
+        let hist_down = export_direction(&self.down);
+        let hist_up = export_direction(&self.up);
 
         let residuals = self
             .residuals
@@ -1160,98 +1033,12 @@ impl SendLatencyEstimator {
             })
             .collect();
 
-        // Legacy fields kept for cross-version tools.
-        let ema_down: Vec<f64> = self
-            .down
-            .hot
-            .iter()
-            .map(|h| h.p95().unwrap_or(0) as f64)
-            .collect();
-        let warm_down: Vec<bool> = self.down.hot.iter().map(|h| h.is_warm()).collect();
-
         EstimatorStateJson {
             version: ESTIMATOR_STATE_VERSION,
-            saved_at: String::new(),
             max_poly: self.max_poly,
-            ema_down,
-            warm_down,
-            count_down: self.count_down.clone(),
-            sum_down: self.sum_down.clone(),
-            ema_down_total: self.down_totals.hot.p95().unwrap_or(0) as f64,
-            warm_down_total: self.down_totals.hot.is_warm(),
-            count_down_total: self.count_down_total,
-            sum_down_total: self.sum_down_total,
-            ema_up: self.up_totals.hot.p95().unwrap_or(0) as f64,
-            warm_up: self.up_totals.hot.is_warm(),
-            count_up: self.count_up_total,
-            sum_up: self.sum_up_total,
-            ema_residual: self.residuals[0].ema,
-            warm_residual: self.residuals[0].warm,
-            count_residual: self.residuals[0].count,
-            sum_residual: self.residuals[0].sum,
-            samples_down: self
-                .down
-                .hot
-                .iter()
-                .map(|h| {
-                    // Reconstruct an approximate sample vec from the histogram.
-                    h.buckets
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(i, &c)| {
-                            std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
-                        })
-                        .take(ROLLING_WINDOW)
-                        .collect()
-                })
-                .collect(),
-            samples_up: self
-                .up
-                .hot
-                .iter()
-                .map(|h| {
-                    h.buckets
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(i, &c)| {
-                            std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
-                        })
-                        .take(ROLLING_WINDOW)
-                        .collect()
-                })
-                .collect(),
-            samples_down_total: {
-                self.down_totals
-                    .hot
-                    .buckets
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(i, &c)| {
-                        std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
-                    })
-                    .take(ROLLING_WINDOW)
-                    .collect()
-            },
-            samples_up_total: {
-                self.up_totals
-                    .hot
-                    .buckets
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(i, &c)| {
-                        std::iter::repeat_n((i as u64 + 1) * BUCKET_WIDTH_US, c as usize)
-                    })
-                    .take(ROLLING_WINDOW)
-                    .collect()
-            },
-            ema_residual_up: self.residuals[2].ema,
-            warm_residual_up: self.residuals[2].warm,
-            count_residual_up: self.residuals[2].count,
-            sum_residual_up: self.residuals[2].sum,
             hist_down,
             hist_up,
             residuals,
-            delivery_proxy_us: self.delivery_proxy_us[0].clone(),
             delivery_proxy_channels,
         }
     }
@@ -1260,72 +1047,15 @@ impl SendLatencyEstimator {
         let state: EstimatorStateJson =
             serde_json::from_str(json_str).map_err(|e| format!("invalid estimator json: {e}"))?;
 
-        if !matches!(
-            state.version,
-            2 | 3
-                | 4
-                | HISTOGRAM_STATE_VERSION
-                | DELIVERY_PROXY_CHANNEL_STATE_VERSION
-                | ESTIMATOR_STATE_VERSION
-        ) {
-            return Err(format!("unsupported estimator version: {}", state.version));
+        if state.version != ESTIMATOR_STATE_VERSION {
+            return Err(format!(
+                "unsupported estimator version {}; timing cache must be regenerated",
+                state.version
+            ));
         }
         if !(1..=32).contains(&state.max_poly) {
             return Err("max_poly must be in 1..=32".to_string());
         }
-        if state.version <= 4 {
-            let expected_len = state.max_poly + 1;
-            for (label, actual) in [
-                ("ema_down", state.ema_down.len()),
-                ("warm_down", state.warm_down.len()),
-                ("count_down", state.count_down.len()),
-                ("sum_down", state.sum_down.len()),
-            ] {
-                if actual != expected_len {
-                    return Err(format!("{label} length does not match max_poly"));
-                }
-            }
-        }
-
-        let validate_count_sum = |count: u64, sum: u64, label: &str| {
-            let max_sum = count
-                .checked_mul(MAX_SAMPLE_US)
-                .ok_or_else(|| format!("{label} count/sum range overflows u64"))?;
-            if sum > max_sum {
-                return Err(format!("{label} sum is inconsistent with count"));
-            }
-            Ok::<(), String>(())
-        };
-        for (label, count, sum) in [
-            (
-                "count_down_total",
-                state.count_down_total,
-                state.sum_down_total,
-            ),
-            (
-                "count_residual",
-                state.count_residual,
-                state.sum_residual.unsigned_abs(),
-            ),
-            (
-                "count_residual_up",
-                state.count_residual_up,
-                state.sum_residual_up.unsigned_abs(),
-            ),
-        ] {
-            validate_count_sum(count, sum, label)?;
-        }
-        if state.version <= 4 {
-            for (index, (&count, &sum)) in state
-                .count_down
-                .iter()
-                .zip(state.sum_down.iter())
-                .enumerate()
-            {
-                validate_count_sum(count, sum, &format!("count_down[{index}]"))?;
-            }
-        }
-
         let expected_len = state.max_poly + 1;
         let target_poly = self.max_poly.max(state.max_poly);
         let target_len = target_poly + 1;
@@ -1336,264 +1066,94 @@ impl SendLatencyEstimator {
         let mut new_down_totals = DirectionTotals::default();
         let mut new_up_totals = DirectionTotals::default();
 
-        if state.version >= HISTOGRAM_STATE_VERSION {
-            // Version 5: import from histogram pairs directly.
-            if state.hist_down.len() != expected_len || state.hist_up.len() != expected_len {
-                return Err("hist_down/hist_up length does not match max_poly".to_string());
-            }
-            for (i, bucket) in state.hist_down.iter().enumerate() {
-                new_down.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
-                new_down.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
-                let (hot_tail, cold_tail) = if state.version >= ESTIMATOR_STATE_VERSION {
-                    (bucket.hot_tail_reserve_us, bucket.cold_tail_reserve_us)
-                } else {
-                    (bucket.tail_reserve_us, bucket.tail_reserve_us)
-                };
-                if bucket.tail_reserve_us > MAX_SAMPLE_US
-                    || hot_tail > MAX_SAMPLE_US
-                    || cold_tail > MAX_SAMPLE_US
-                {
-                    return Err(format!("down tail reserve at {i} exceeds sample cap"));
-                }
-                new_down.tail_hot[i].value_us = hot_tail;
-                new_down.tail_cold[i].value_us = cold_tail;
-            }
-            for (i, bucket) in state.hist_up.iter().enumerate() {
-                new_up.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
-                new_up.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
-                let (hot_tail, cold_tail) = if state.version >= ESTIMATOR_STATE_VERSION {
-                    (bucket.hot_tail_reserve_us, bucket.cold_tail_reserve_us)
-                } else {
-                    (bucket.tail_reserve_us, bucket.tail_reserve_us)
-                };
-                if bucket.tail_reserve_us > MAX_SAMPLE_US
-                    || hot_tail > MAX_SAMPLE_US
-                    || cold_tail > MAX_SAMPLE_US
-                {
-                    return Err(format!("up tail reserve at {i} exceeds sample cap"));
-                }
-                new_up.tail_hot[i].value_us = hot_tail;
-                new_up.tail_cold[i].value_us = cold_tail;
-            }
-            // Rebuild global totals by direct bucket merge. Do not reconstruct
-            // synthetic samples or cap a bucket at an arbitrary sample count:
-            // persisted counts are part of the estimator's evidence.
-            for h in &new_down.hot {
-                new_down_totals.hot.merge_counts_from(h)?;
-            }
-            for h in &new_down.cold {
-                new_down_totals.cold.merge_counts_from(h)?;
-            }
-            for h in &new_up.hot {
-                new_up_totals.hot.merge_counts_from(h)?;
-            }
-            for h in &new_up.cold {
-                new_up_totals.cold.merge_counts_from(h)?;
-            }
-        } else {
-            // Versions 2–4: migrate from rolling-window samples conservatively.
-            let valid_legacy = |v: f64| v.is_finite() && v >= 0.0 && v <= MAX_SAMPLE_US as f64;
-
-            // Basic array size check for legacy fields.
-            if state.version >= 2 {
-                if state.ema_down.len() != expected_len
-                    || state.warm_down.len() != expected_len
-                    || state.count_down.len() != expected_len
-                    || state.sum_down.len() != expected_len
-                {
-                    return Err("estimator bucket arrays do not match max_poly".to_string());
-                }
-                if !state.ema_down.iter().copied().all(valid_legacy)
-                    || !valid_legacy(state.ema_down_total)
-                    || !valid_legacy(state.ema_up)
-                {
-                    return Err("estimator lead values are outside the accepted range".to_string());
-                }
-                if !state.ema_residual.is_finite()
-                    || state.ema_residual < -(MAX_RESIDUAL_US as f64)
-                    || state.ema_residual > (MAX_RESIDUAL_US * 2) as f64
-                    || !state.ema_residual_up.is_finite()
-                    || state.ema_residual_up < -(MAX_RESIDUAL_US as f64)
-                    || state.ema_residual_up > (MAX_RESIDUAL_US * 2) as f64
-                {
-                    return Err(
-                        "estimator residual value is outside the accepted range".to_string()
-                    );
-                }
-            }
-
-            if state.version >= 3 {
-                // V3/V4: rolling sample vecs available.
-                if state.samples_down.len() != expected_len
-                    || state.samples_up.len() != expected_len
-                {
-                    return Err("estimator rolling bucket arrays do not match max_poly".to_string());
-                }
-                for (i, samples) in state.samples_down.iter().enumerate() {
-                    new_down.hot[i] = Histogram::from_legacy_samples(samples)?;
-                    // Rebuild tail reserve from max observed.
-                    if let Some(max) = new_down.hot[i].max() {
-                        new_down.tail_hot[i].update(max);
-                    }
-                }
-                for (i, samples) in state.samples_up.iter().enumerate() {
-                    new_up.hot[i] = Histogram::from_legacy_samples(samples)?;
-                    if let Some(max) = new_up.hot[i].max() {
-                        new_up.tail_hot[i].update(max);
-                    }
-                }
-                new_down_totals.hot = Histogram::from_legacy_samples(&state.samples_down_total)?;
-                new_up_totals.hot = Histogram::from_legacy_samples(&state.samples_up_total)?;
-            } else {
-                // V2: synthesise from EMA scalars.
-                for i in 0..expected_len {
-                    if state.warm_down[i] && state.count_down[i] >= SEED_SAMPLES as u64 {
-                        let v = round_half_to_even(state.ema_down[i]).max(0) as u64;
-                        for _ in 0..ROLLING_WINDOW.min(state.count_down[i] as usize) {
-                            new_down.hot[i].push(v).map_err(|error| error.to_string())?;
-                        }
-                        new_down.tail_hot[i].update(v);
-                    }
-                }
-                if state.warm_up && state.count_up >= SEED_SAMPLES as u64 {
-                    let v = round_half_to_even(state.ema_up).max(0) as u64;
-                    for i in 0..expected_len {
-                        for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
-                            new_up.hot[i].push(v).map_err(|error| error.to_string())?;
-                        }
-                        new_up.tail_hot[i].update(v);
-                    }
-                    for _ in 0..ROLLING_WINDOW.min(state.count_up as usize) {
-                        new_up_totals
-                            .hot
-                            .push(v)
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-                if state.warm_down_total && state.count_down_total >= SEED_SAMPLES as u64 {
-                    let v = round_half_to_even(state.ema_down_total).max(0) as u64;
-                    for _ in 0..ROLLING_WINDOW.min(state.count_down_total as usize) {
-                        new_down_totals
-                            .hot
-                            .push(v)
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-            }
+        if state.hist_down.len() != expected_len || state.hist_up.len() != expected_len {
+            return Err("hist_down/hist_up length does not match max_poly".to_string());
         }
-
-        if state.version >= ESTIMATOR_STATE_VERSION {
-            let derived_down_count = new_down_totals
-                .hot
-                .total
-                .checked_add(new_down_totals.cold.total)
-                .ok_or_else(|| "down class totals overflow".to_string())?;
-            if derived_down_count != state.count_down_total {
-                return Err("down total count is inconsistent with class histograms".to_string());
+        for (i, bucket) in state.hist_down.iter().enumerate() {
+            new_down.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
+            new_down.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
+            if bucket.hot_tail_reserve_us > MAX_SAMPLE_US
+                || bucket.cold_tail_reserve_us > MAX_SAMPLE_US
+            {
+                return Err(format!("down tail reserve at {i} exceeds sample cap"));
             }
-            let derived_up_count = new_up_totals
-                .hot
-                .total
-                .checked_add(new_up_totals.cold.total)
-                .ok_or_else(|| "up class totals overflow".to_string())?;
-            if derived_up_count != state.count_up {
-                return Err("up total count is inconsistent with class histograms".to_string());
+            new_down.tail_hot[i].value_us = bucket.hot_tail_reserve_us;
+            new_down.tail_cold[i].value_us = bucket.cold_tail_reserve_us;
+        }
+        for (i, bucket) in state.hist_up.iter().enumerate() {
+            new_up.hot[i] = Histogram::from_export_pairs(&bucket.hot_pairs)?;
+            new_up.cold[i] = Histogram::from_export_pairs(&bucket.cold_pairs)?;
+            if bucket.hot_tail_reserve_us > MAX_SAMPLE_US
+                || bucket.cold_tail_reserve_us > MAX_SAMPLE_US
+            {
+                return Err(format!("up tail reserve at {i} exceeds sample cap"));
             }
+            new_up.tail_hot[i].value_us = bucket.hot_tail_reserve_us;
+            new_up.tail_cold[i].value_us = bucket.cold_tail_reserve_us;
+        }
+        // Rebuild totals by direct histogram merge. No synthetic sample vector
+        // or fixed reconstruction cap is involved.
+        for h in &new_down.hot {
+            new_down_totals.hot.merge_counts_from(h)?;
+        }
+        for h in &new_down.cold {
+            new_down_totals.cold.merge_counts_from(h)?;
+        }
+        for h in &new_up.hot {
+            new_up_totals.hot.merge_counts_from(h)?;
+        }
+        for h in &new_up.cold {
+            new_up_totals.cold.merge_counts_from(h)?;
         }
 
         // ── Build residuals ───────────────────────────────────────────────────
         let mut new_residuals: [ResidualEma; 4] = Default::default();
 
-        if state.version >= HISTOGRAM_STATE_VERSION && state.residuals.len() != 4 {
+        if state.residuals.len() != 4 {
             return Err("residuals must contain exactly four channels".to_string());
         }
-        if state.version >= HISTOGRAM_STATE_VERSION {
-            for (i, ch) in state.residuals.iter().enumerate() {
-                // Validate bounds.
-                if !ch.ema.is_finite()
-                    || ch.ema < -(MAX_RESIDUAL_US as f64)
-                    || ch.ema > (MAX_RESIDUAL_US * 2) as f64
-                {
-                    return Err(format!("residual channel {i} ema is out of range"));
-                }
-                if (ch.warm && ch.count < SEED_SAMPLES as u64)
-                    || (!ch.warm && ch.count >= SEED_SAMPLES as u64)
-                {
-                    return Err(format!("residual channel {i} has inconsistent warm state"));
-                }
-                if ch.sum.unsigned_abs()
-                    > ch.count
-                        .checked_mul((MAX_RESIDUAL_US * 2) as u64)
-                        .ok_or_else(|| format!("residual channel {i} sum overflows"))?
-                {
-                    return Err(format!("residual channel {i} sum is out of range"));
-                }
-                new_residuals[i] = ResidualEma {
-                    count: ch.count,
-                    sum: ch.sum,
-                    ema: ch.ema,
-                    warm: ch.warm,
-                };
+        for (i, ch) in state.residuals.iter().enumerate() {
+            if !ch.ema.is_finite()
+                || ch.ema < -(MAX_RESIDUAL_US as f64)
+                || ch.ema > (MAX_RESIDUAL_US * 2) as f64
+            {
+                return Err(format!("residual channel {i} ema is out of range"));
             }
-        } else {
-            // Migrate from v4 down/up residual scalars.
-            if !state.ema_residual.is_finite() {
-                return Err("ema_residual is not finite".to_string());
+            if (ch.warm && ch.count < SEED_SAMPLES as u64)
+                || (!ch.warm && ch.count >= SEED_SAMPLES as u64)
+            {
+                return Err(format!("residual channel {i} has inconsistent warm state"));
             }
-            new_residuals[0] = ResidualEma {
-                count: state.count_residual,
-                sum: state.sum_residual,
-                ema: state.ema_residual,
-                warm: state.warm_residual,
-            };
-            if !state.ema_residual_up.is_finite() {
-                return Err("ema_residual_up is not finite".to_string());
+            if ch.sum.unsigned_abs()
+                > ch.count
+                    .checked_mul((MAX_RESIDUAL_US * 2) as u64)
+                    .ok_or_else(|| format!("residual channel {i} sum overflows"))?
+            {
+                return Err(format!("residual channel {i} sum is out of range"));
             }
-            new_residuals[2] = ResidualEma {
-                count: state.count_residual_up,
-                sum: state.sum_residual_up,
-                ema: state.ema_residual_up,
-                warm: state.warm_residual_up,
+            new_residuals[i] = ResidualEma {
+                count: ch.count,
+                sum: ch.sum,
+                ema: ch.ema,
+                warm: ch.warm,
             };
         }
 
         // ── Delivery proxy ────────────────────────────────────────────────────
         let mut new_delivery_proxy: [Vec<u64>; 4] = std::array::from_fn(|_| vec![0u64; target_len]);
-        if state.version >= DELIVERY_PROXY_CHANNEL_STATE_VERSION {
-            if state.delivery_proxy_channels.len() != expected_len {
-                return Err("delivery_proxy_channels length does not match max_poly".to_string());
-            }
-            for (polyphony, channels) in state.delivery_proxy_channels.iter().enumerate() {
-                for (channel, &value) in channels.iter().enumerate() {
-                    if value > MAX_SAMPLE_US {
-                        return Err(format!(
-                            "delivery proxy channel {channel} at polyphony {polyphony} exceeds sample cap"
-                        ));
-                    }
-                    new_delivery_proxy[channel][polyphony] = value;
-                }
-            }
-        } else if !state.delivery_proxy_us.is_empty() {
-            if state.delivery_proxy_us.len() != expected_len {
-                return Err("delivery_proxy_us length does not match max_poly".to_string());
-            }
-            for (i, &value) in state.delivery_proxy_us.iter().enumerate() {
+        if state.delivery_proxy_channels.len() != expected_len {
+            return Err("delivery_proxy_channels length does not match max_poly".to_string());
+        }
+        for (polyphony, channels) in state.delivery_proxy_channels.iter().enumerate() {
+            for (channel, &value) in channels.iter().enumerate() {
                 if value > MAX_SAMPLE_US {
-                    return Err("delivery proxy exceeds sample cap".to_string());
+                    return Err(format!(
+                        "delivery proxy channel {channel} at polyphony {polyphony} exceeds sample cap"
+                    ));
                 }
-                new_delivery_proxy[0][i] = value;
+                new_delivery_proxy[channel][polyphony] = value;
             }
         }
-
-        // ── Legacy scalar counts ──────────────────────────────────────────────
-        let mut counts_down = state.count_down;
-        counts_down.resize(target_len, 0);
-        let mut sums_down = state.sum_down;
-        sums_down.resize(target_len, 0);
-        let mut counts_up = self.count_up.clone();
-        counts_up.resize(target_len, 0);
-        let mut sums_up = self.sum_up.clone();
-        sums_up.resize(target_len, 0);
 
         // ── Atomically apply all validated state ──────────────────────────────
         self.max_poly = target_poly;
@@ -1603,14 +1163,7 @@ impl SendLatencyEstimator {
         self.up_totals = new_up_totals;
         self.residuals = new_residuals;
         self.delivery_proxy_us = new_delivery_proxy;
-        self.count_down = counts_down;
-        self.sum_down = sums_down;
-        self.count_down_total = state.count_down_total;
-        self.sum_down_total = state.sum_down_total;
-        self.count_up = counts_up;
-        self.sum_up = sums_up;
-        self.count_up_total = state.count_up;
-        self.sum_up_total = state.sum_up;
+        self.refresh_lead_cache();
         Ok(())
     }
 }
@@ -1979,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn v5_state_round_trip_preserves_histogram() {
+    fn current_state_round_trip_preserves_histogram() {
         let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
         for v in [100, 200, 300, 400, 500, 600, 700, 800] {
             source.update(ActionKind::Down, v, 2);
@@ -2050,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_histogram_merge_keeps_counts_above_legacy_reconstruction_cap() {
+    fn persisted_histogram_merge_keeps_all_persisted_counts() {
         let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
         for _ in 0..300 {
             source.update(ActionKind::Down, 300, 2);
@@ -2083,49 +1636,6 @@ mod tests {
     }
 
     #[test]
-    fn v2_state_migrates_conservatively() {
-        let legacy = r#"{
-            "version": 2, "saved_at": "", "max_poly": 2,
-            "ema_down": [0.0, 100.0, 200.0],
-            "warm_down": [false, true, true],
-            "count_down": [0, 5, 5], "sum_down": [0, 500, 1000],
-            "ema_down_total": 150.0, "warm_down_total": true,
-            "count_down_total": 10, "sum_down_total": 1500,
-            "ema_up": 120.0, "warm_up": true, "count_up": 5, "sum_up": 600,
-            "ema_residual": 0.0, "warm_residual": false,
-            "count_residual": 0, "sum_residual": 0
-        }"#;
-        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 6);
-        estimator.import_state(legacy).unwrap();
-        assert!(estimator.get_lead_us(ActionKind::Down, 2) >= 200);
-        assert!(estimator.get_lead_us(ActionKind::Up, 1) >= 120);
-    }
-
-    #[test]
-    fn v3_state_migrates_conservatively() {
-        let mut source = SendLatencyEstimator::new(0.2, 5_000, 2);
-        for v in [100u64, 110, 120, 130, 140] {
-            source.update(ActionKind::Down, v, 2);
-            source.update(ActionKind::Up, v + 10, 2);
-        }
-        // Export as v3 by manually tweaking the version field.
-        let mut state = source.export_state();
-        state.version = 3;
-        // Zero the v5 fields to simulate a real v3 file.
-        state.hist_down.clear();
-        state.hist_up.clear();
-        state.residuals.clear();
-        let json = serde_json::to_string(&state).unwrap();
-        let mut restored = SendLatencyEstimator::new(0.2, 5_000, 4);
-        restored.import_state(&json).unwrap();
-        // After migration the estimate should be ballpark-correct.
-        assert!(
-            restored.get_lead_us(ActionKind::Down, 2) >= WAKE_RESERVE_US,
-            "migrated v3 lead must be at least WAKE_RESERVE_US"
-        );
-    }
-
-    #[test]
     fn invalid_state_does_not_mutate_estimator() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 6);
         for _ in 0..10 {
@@ -2133,9 +1643,11 @@ mod tests {
         }
         let lead_before = estimator.get_lead_us(ActionKind::Down, 1);
         let invalid = r#"{
-            "version": 5, "max_poly": 2,
-            "hist_down": [{"hot_pairs":[[999,1]],"cold_pairs":[],"tail_reserve_us":0}],
-            "hist_up": [], "residuals": []
+            "version": 8, "max_poly": 2,
+            "hist_down": [{"hot_pairs":[[999,1]],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}],
+            "hist_up": [{"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}, {"hot_pairs":[],"cold_pairs":[],"hot_tail_reserve_us":0,"cold_tail_reserve_us":0}],
+            "residuals": [{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false},{"count":0,"sum":0,"ema":0.0,"warm":false}],
+            "delivery_proxy_channels": [[0,0,0,0],[0,0,0,0],[0,0,0,0]]
         }"#;
         assert!(estimator.import_state(invalid).is_err());
         assert_eq!(estimator.get_lead_us(ActionKind::Down, 1), lead_before);
@@ -2177,7 +1689,7 @@ mod tests {
         let before = serde_json::to_string(&estimator.export_state()).unwrap();
 
         let mut tail = estimator.export_state();
-        tail.hist_down[1].tail_reserve_us = u64::MAX;
+        tail.hist_down[1].hot_tail_reserve_us = u64::MAX;
         assert!(
             estimator
                 .import_state(&serde_json::to_string(&tail).unwrap())
@@ -2257,15 +1769,8 @@ mod tests {
     }
 
     #[test]
-    fn rolling_p95_is_conservative_and_bounded() {
-        // Compatibility alias for the old test name — now tests the histogram.
+    fn histogram_p95_alias_remains_conservative_and_bounded() {
         histogram_p95_is_conservative_and_bounded();
-    }
-
-    #[test]
-    fn v3_state_round_trip_preserves_rolling_samples() {
-        // Compat alias — now goes through v5 histogram round-trip.
-        v5_state_round_trip_preserves_histogram();
     }
 
     #[test]
@@ -2297,23 +1802,21 @@ mod tests {
     }
 
     #[test]
-    fn invalid_state_does_not_mutate_estimator_v3() {
-        // Alias kept for test name compat.
+    fn invalid_current_state_does_not_mutate_estimator() {
         invalid_state_does_not_mutate_estimator();
     }
 
     #[test]
     fn update_overflow_is_an_error_without_partial_mutation() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 2);
-        estimator.count_down[1] = u64::MAX;
+        let bucket = Histogram::checked_bucket_for(100);
+        estimator.down.hot[1].buckets[bucket] = u32::MAX;
         let histogram_before = estimator.down.hot[1].total;
-        let sum_before = estimator.sum_down[1];
 
         assert!(matches!(
             estimator.update(ActionKind::Down, 100, 1),
-            Err(EstimatorStateError::ArithmeticOverflow("down bucket count"))
+            Err(EstimatorStateError::ArithmeticOverflow("histogram bucket"))
         ));
         assert_eq!(estimator.down.hot[1].total, histogram_before);
-        assert_eq!(estimator.sum_down[1], sum_before);
     }
 }

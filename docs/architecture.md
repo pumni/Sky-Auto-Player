@@ -68,7 +68,7 @@ The `PlaybackEngine` feeds this schedule into the [RuntimeDispatchCoordinator](.
   Authored/configuration values are expressed in microseconds at the Python/API boundary;
   the native worker converts them once to checked QPC-derived tick durations. Scheduling,
   pause/recovery, minimum-hold and deadline decisions remain in typed ticks.
-* **Conflict Resolution:** If a same-key down event is scheduled while the previous generation of that key is still active (e.g. due to compaction or dispatch delay), the coordinator applies the configured chord-conflict policy. `degraded` drops only conflicting keys, `drop_chord` drops the complete authored chord, and `strict`/`abort` records a controlled terminal error and aborts playback. Fidelity verification uses `strict`; `drop_chord` remains the best-effort UX policy.
+* **Conflict Resolution:** The compiler rejects authored same-key overlap. In the production Rust worker, any unexpected runtime conflict is an invariant failure: authored dispatch stops, cleanup runs, and the session ends in `error`; it is never converted into a successful drop. The configured `degraded`/`drop_chord` policies are retained only for the explicit Python diagnostic/oracle rollback path.
 
 ### Step 5: High-Precision Scheduling & Thread Hardening
 To achieve microsecond accuracy on Windows, the dispatch thread employs:
@@ -85,7 +85,7 @@ Under Python 3.14 free-threaded (no-GIL), the production dispatch path executes 
 * **Failure presentation:** A native worker exception or controlled Rust timing error is returned to the playback card as an error result after cleanup; the picker app remains open and shows the diagnostic. Only an explicit quit command returns the `quit` result that closes the playback app.
 * **Command semantics:** Manual pause/resume is latest-wins atomic state plus an interrupt signal; it is not replayed from the bounded edge-command queue. Terminal commands retain monotonic atomic flags so queue saturation cannot undo the latest pause state.
 * **Packaging gate:** release CI builds the exact version-specific wheel, installs it into the active test/build interpreter, verifies it again there, and only then runs Python tests/PyInstaller. The wheel gate requires a clean checkout and, when present, an exact `GITHUB_SHA`/`git HEAD` match. `build_app.py` embeds the exact release build ID and native-source fingerprint in the frozen Python package. Source checkouts compare native files and schema/ABI through that fingerprint, so Python/UI/docs edits do not invalidate a compatible wheel while native contract edits do. A missing frozen metadata module fails closed. The frozen executable runs `--selftest-rust` through the production probe and completes a mock worker without emitting real input.
-* **Diagnostics:** `--doctor` reports native availability, enabled state, Rust core/rustc/PyO3 versions, `cp314t` ABI, schema, and build commit. Native telemetry records the selected implementation plus the same build metadata, and each actual send record preserves structured Win32 error/retry fields (`first_win32_error`, `last_win32_error`, `send_attempts`, `zero_progress_retries`). Mixed-release reason text uses a reserved reason ID on the worker and is materialized after dispatch.
+* **Diagnostics:** `--doctor` reports native availability, enabled state, Rust core/rustc/PyO3 versions, `cp314t` ABI, schema, and build commit. Production exports only `DispatchSession` and build metadata; the tracked-key `RustInputBackend` is diagnostic-feature gated. Native telemetry retains a bounded fixed-size tick record (`RtTraceRecord`); outcome names and microsecond projections are materialized after the worker joins.
 
 ---
 
@@ -95,7 +95,7 @@ To prevent input loss, stuck keys, and timing drift:
 * **Active State Tracking:** The backend tracks all physically depressed keys in a 15-bit instrument mask. If a duplicate down command is sent for an already-held key, the backend filters it out to prevent queue clutter without hash-table work.
 * **Release-first suspend lifecycle:** The native worker releases and verifies physical keys before calling `coordinator.cancel_live_generations()`. This cancels only `Active` and `ReleasePending` generations, clears live masks, and preserves future `Scheduled` generations and the authored cursor across resumable focus loss or manual pause. `cancel_all()` remains reserved for terminal quit/skip/error/panic/termination paths.
 * **Dual-release on focus transitions:** When Sky loses foreground the dispatch thread releases tracked keys and freezes the timeline using QPC ticks; when Sky regains focus it performs a second idempotent release verification while foreground before resuming future scheduled work. A release failure or inconclusive verification is terminal and cannot be hidden by cleanup.
-* **Partial note-on chord integrity (G5):** If `SendInput` returns `sent == n` for a musical note-on, the chord is committed. A zero-progress result may retry the **whole chord** once, immediately and without sleep. Any non-zero partial insertion is never followed by a remainder note-on: the landed prefix is rolled back immediately, `chord_split_events` is incremented, and the worker ends playback through a controlled integrity error after cleanup.
+* **Partial note-on chord integrity (G5):** If `SendInput` returns `sent == n` for a musical note-on, the chord is committed. A zero-progress result may retry the **whole chord** once, immediately and without sleep. Any partial insertion makes the **whole requested chord uncertain**; production never infers a sent prefix or dispatches a remainder. It sends Up for the whole chord, verifies cleanup (falling back to full-instrument cleanup when needed), and ends playback through a controlled integrity error.
 * **Failed note-off ownership:** A pending release is not discarded when `SendInput` makes no progress. The platform seam performs at most one immediate remainder retry; all delayed retry/backoff (`2/5/10/20 ms`, up to eight attempts) is coordinator-owned and interruptible. Exhaustion enters error recovery and performs full-instrument release before cancellation. Same-key downs remain blocked while that release is pending.
 * **Release recovery timeline:** While a failed release is retrying, authored dispatch is held behind the pending release. After successful recovery, an O(1) immutable playback-clock offset advances the effective authored timeline, so same-key work is sent after release without an overdue catch-up burst or an O(N) schedule rewrite.
 * **Release telemetry:** Note-off outcomes distinguish complete, partial, and failed sends (including deferred variants), and release lateness is measured from SendInput completion so retry and syscall time are included. Win32 values are observed diagnostics, not a guaranteed causal classification.
@@ -117,35 +117,32 @@ dedicated `native_calibration.exe` process creates the app-owned Win32 calibrati
 strictly through `SendInput`, and correlates the window's `WM_INPUT` receipt with native-call
 completion. The player process does not modify its own Raw Input registration. Only complete,
 anomaly-free samples contribute to quantiles; cleanup or process failures are unsuccessful
-calibration. The current output is schema version 7 / measurement protocol 3. Measured bucket
+calibration. The current native output is schema version 8 / measurement protocol 3. Measured bucket
 admission is based on the actual QPC idle gap between the previous exact SendInput completion and
 the current exact SendInput entry; requested sleep duration is not evidence. Validated evidence
 is stored in `.cache/input_latency.json` with the `injected_raw_input_delivery_proxy` label and
 must carry the exact Git SHA, native build SHA, native source fingerprint, toolchain, Windows/QPC
 provenance, and verified cleanup result.
-Calibration execution is always bounded: quick mode defaults to a 1,800-second subprocess
-timeout and full mode to 180 seconds per native chunk. Full mode is never a single 24-bucket
-process or an unbounded 5,000-sample process. The runner executes the deterministic sequence
-`down/1/hot`, `down/1/cold`, `up/1/hot`, `up/1/cold`, through `up/15/cold`, one physical-input
-bucket at a time. Each bucket is measured as five sequential 1,000-sample chunks; after every
-chunk it verifies cleanup, atomically renames the chunk artifact, writes its SHA-256, and
-atomically advances a checkpoint manifest. After all five chunks, it writes the combined bucket
-artifact. No physical-input chunks run concurrently on one host.
+Calibration execution is always bounded by a native QPC budget in the inclusive range 1–120
+seconds; five seconds at the end are reserved for cleanup and artifact publication. The only
+acceptance matrix is 1/5/15 × Down/Up × Hot/Cold, with 20 clean samples and four warmups per
+bucket. Every bucket is isolated, cleanup-verified, and bounded. Stable-window early stopping is
+not yet an acceptance claim; the current runner records the configured bounded sample set.
 
-Full mode retains exactly 5,000 hot and 5,000 cold samples for each of the six polyphonies and
-keeps `cold_idle_gap_us = 100000`; these are immutable finalizer gates, not timeout or retry
-budgets. `--resume` accepts a bucket only when the exact Git SHA, native build ID, native source
-fingerprint, clean-worktree state, Rust toolchain, host fingerprint, schema/protocol, and full
-configuration all match. A mismatch rejects the checkpoint; it is never silently reused.
+Calibration artifacts retain aggregate counters/quantiles, the worst 16 samples, and every
+anomalous sample. They never contain the complete raw sample stream. `--resume` accepts a bucket
+only when the exact Git SHA, native build ID, native source fingerprint, clean-worktree state,
+Rust toolchain, host fingerprint, schema/protocol, and configuration all match. A mismatch
+rejects the checkpoint; it is never silently reused.
 
 Diagnostic mode runs one requested bucket with a caller-selected sample count, prints native
 progress, and writes either an ineligible bucket artifact or an always-written failure report
 with kind, class, polyphony, sample index, phase, exact error, Win32 error, and cleanup state.
 Diagnostic artifacts have `acceptance_eligible = false` and cannot be consumed by the finalizer.
-The finalizer requires exactly 24 known buckets, exact aggregate totals, 5,000 attempts in every
-bucket, identical provenance, and successful cleanup everywhere before writing the trusted
+The finalizer requires the configured 12 buckets, at least 20 clean attempts in every bucket,
+identical provenance, and successful cleanup everywhere before writing the trusted
 `.cache/input_latency.json`; the runner and checkpoint writer never write that cache.
 
 A timeout kills and reaps only the current native chunk process and preserves prior checkpoint
-artifacts. `--timeout-seconds` is an explicit, finite positive per-chunk override for controlled
-runs; it does not change the full-mode sample contract.
+artifacts. `--timeout-seconds` is an explicit, finite positive override for controlled runs and
+can never exceed the 120-second process budget.

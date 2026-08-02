@@ -106,11 +106,13 @@ def test_record_does_not_soft_flush_25k_events_until_save(
         )
     # Soft chunk is 10k; without pause, record() must not flush below hard cap (200k).
     assert len(flush_calls) == 0, "record() must not soft-flush mid-stream under hard cap"
-    assert len(tel.records) == n_events
+    assert len(tel.records) == tel_mod._TELEMETRY_MAX_BUFFER
+    assert tel.record_stats()["accepted"] == tel_mod._TELEMETRY_MAX_BUFFER
+    assert tel.record_stats()["dropped"] == n_events - tel_mod._TELEMETRY_MAX_BUFFER
     tel.save()
     assert len(flush_calls) == 1, "save() must flush remaining records exactly once"
     assert (tmp_path / "tel.csv").exists()
-    assert tel_mod._TELEMETRY_FLUSH_CHUNK == 10_000
+    assert tel_mod._TELEMETRY_MAX_BUFFER == 1_024
 
 
 def test_pause_path_flush_fires_when_buffer_large(tmp_path: Path, monkeypatch: Any) -> None:

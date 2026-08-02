@@ -71,6 +71,7 @@ pub fn simulate_schedule(
 
     let mut events = Vec::new();
     let mut step: u32 = 0;
+    let mut iterations: u32 = 0;
 
     let mut now_us: u64 = if let Some(batch) = coordinator.schedule.batches.first() {
         batch.scheduled_us
@@ -79,6 +80,20 @@ pub fn simulate_schedule(
     };
 
     while !coordinator.is_finished() {
+        iterations = iterations.saturating_add(1);
+        if iterations > 20_000 {
+            return Err(crate::compile::CompileError::Simulation(
+                "simulation step budget exceeded".to_string(),
+            ));
+        }
+        if coordinator.schedule.batches.len() <= coordinator.cursor
+            && coordinator.pending_mask == 0
+            && coordinator.active_mask != 0
+        {
+            return Err(crate::compile::CompileError::Simulation(
+                "simulation incomplete: active generations remain".to_string(),
+            ));
+        }
         let pending_deadline = coordinator
             .next_pending_release_ticks(crate::time::DurationTicks::ZERO)
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
