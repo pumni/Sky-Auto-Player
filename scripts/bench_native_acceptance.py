@@ -31,6 +31,10 @@ from typing import Any
 
 from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.orchestration.native_provenance import native_source_fingerprint
+from sky_music.orchestration.telemetry import (
+    TelemetryRecord,
+    materialize_native_trace,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -143,7 +147,7 @@ def _host_fingerprint(native_info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
     """Return signed, absolute, early and late error distributions.
 
     Signed aggregate percentiles are retained for report compatibility, but
@@ -154,8 +158,8 @@ def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     def values_for(rows: list[dict[str, Any]]) -> list[int]:
         values: list[int] = []
-        for row in rows:
-            value = row.get("sender_completion_error_us")
+        for record in rows:
+            value = record.sender_completion_error_us
             if not isinstance(value, int) or isinstance(value, bool):
                 raise RuntimeError(
                     "sender telemetry is missing exact sender_completion_error_us"
@@ -176,7 +180,7 @@ def _completion_error_report(records: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     by_kind = {
-        kind: report_for([row for row in records if row.get("kind") == kind], kind)
+        kind: report_for([record for record in records if record.kind == kind], kind)
         for kind in ("down", "up")
     }
     result = report_for(records, "all")
@@ -267,25 +271,23 @@ def _run_dispatch(
     wall_us = (time.perf_counter_ns() - started_ns) // 1_000
     snapshot = dict(session.snapshot())
     telemetry = json.loads(session.take_telemetry_json())
-    records = telemetry.get("records", [])
+    records = materialize_native_trace(telemetry)
     if len(records) != len(actions):
         raise RuntimeError(
             f"required sender telemetry expected {len(actions)} records, got {len(records)}"
         )
     sender_errors = [
-        value
-        for value in (
-            record.get("sender_completion_error_us")
-            for record in records
-        )
-        if isinstance(value, int) and not isinstance(value, bool)
+        record.sender_completion_error_us
+        for record in records
+        if isinstance(record.sender_completion_error_us, int)
+        and not isinstance(record.sender_completion_error_us, bool)
     ]
     if len(sender_errors) != len(records):
         raise RuntimeError("required sender telemetry has missing exact completion errors")
     lead_by_polyphony = {
-        str(len(record.get("scan_codes", []))): int(record.get("applied_lead_us", 0))
+        str(record.native_polyphony): int(record.applied_lead_us)
         for record in records
-        if record.get("kind") == "down" and record.get("scan_codes")
+        if record.kind == "down" and record.native_polyphony is not None
     }
     peak_rss = _peak_working_set_bytes()
     result: dict[str, Any] = {

@@ -1,36 +1,49 @@
 from __future__ import annotations
 
-from sky_music.orchestration.telemetry import TelemetryLogger
+from sky_music.orchestration.telemetry import TelemetryLogger, materialize_native_trace
+
+
+def _compact_output() -> dict[str, object]:
+    return {
+        "schema_version": 3,
+        "qpc_frequency_hz": 10_000_000,
+        "attempted": 1,
+        "accepted": 1,
+        "dropped": 0,
+        "truncated": False,
+        "records": [
+            {
+                "event_index": 0,
+                "kind": 0,
+                "outcome": 0,
+                "polyphony": 1,
+                "flags": 1,
+                "authored_ticks": 10_000,
+                "effective_deadline_ticks": 10_000,
+                "wake_ticks": 10_100,
+                "send_started_ticks": 10_110,
+                "send_completed_ticks": 10_180,
+                "applied_lead_ticks": 1_000,
+                "win32_error": 1460,
+            }
+        ],
+    }
+
+
+def test_native_trace_materializer_decodes_current_compact_schema() -> None:
+    output = _compact_output()
+    record = materialize_native_trace(output)[0]
+
+    assert record.kind == "down"
+    assert record.runtime_outcome == "sent"
+    assert record.native_polyphony == 1
+    assert record.sender_completion_error_us == 18
+    assert record.applied_lead_us == 100
 
 
 def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     logger = TelemetryLogger("test", enabled=True, retain_records_after_save=True)
-    logger.ingest_native_output(
-        {
-            "schema_version": 3,
-            "qpc_frequency_hz": 10_000_000,
-            "attempted": 1,
-            "accepted": 1,
-            "dropped": 0,
-            "truncated": False,
-            "records": [
-                {
-                    "event_index": 0,
-                    "kind": 0,
-                    "outcome": 0,
-                    "polyphony": 1,
-                    "flags": 1,
-                    "authored_ticks": 10_000,
-                    "effective_deadline_ticks": 10_000,
-                    "wake_ticks": 10_100,
-                    "send_started_ticks": 10_110,
-                    "send_completed_ticks": 10_180,
-                    "applied_lead_ticks": 1_000,
-                    "win32_error": 1460,
-                }
-            ],
-        }
-    )
+    logger.ingest_native_output(_compact_output())
 
     row = logger.records[0]._materialize()
     assert row["dispatch_id"] == 0
