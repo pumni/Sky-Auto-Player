@@ -50,7 +50,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Manual validation runs all relevant gates."
+            exit 0
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             changed_files="$(git diff --name-only "$PR_BASE_SHA" "$CURRENT_SHA")"
           elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
             changed_files="$(git diff-tree --root --no-commit-id --name-only -r "$CURRENT_SHA")"
@@ -150,7 +154,7 @@ jobs:
       - name: Benchmark — native sender-side acceptance and regression gate
         # Mock backend only: records host-side timing evidence without sending
         # input to a game or another process.
-        run: uv run --env-file .env python scripts/bench_native_acceptance.py --actions 256 --repeats 3 --polyphony 1,2,3,5,8,15 --baseline .github/native_acceptance_baseline.json --label ci
+        run: uv run --env-file .env python scripts/bench_native_acceptance.py --actions 256 --dispatch-repeats 3 --command-samples 100 --polyphony 1,2,3,5,8,15 --rt-priority-mode off --label ci
 
   status:
     name: Sky Auto Player — full altitude gate

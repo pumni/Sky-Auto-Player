@@ -40,6 +40,8 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
+BENCHMARK_SCHEMA_VERSION = 2
+COMMAND_TIMING_DOMAIN = "native_qpc_v1"
 
 
 def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
@@ -83,6 +85,32 @@ def _required_stats(values: list[int], name: str) -> dict[str, int]:
     if not values:
         raise RuntimeError(f"required metric {name} has no measurements")
     return _stats(values)
+
+
+def _ratio_ppm(numerator_us: int, denominator_us: int) -> int:
+    if denominator_us <= 0:
+        raise RuntimeError("playback wall time must be positive")
+    return numerator_us * 1_000_000 // denominator_us
+
+
+def _benchmark_config(
+    *,
+    args: argparse.Namespace,
+    polyphonies: list[int],
+    mock_base_latency_us: int,
+    mock_per_key_latency_us: int,
+) -> dict[str, Any]:
+    return {
+        "backend": args.backend,
+        "rt_priority_mode": args.rt_priority_mode,
+        "adaptive_spin": not args.no_adaptive_spin,
+        "waitable_timer": True,
+        "event_wait": True,
+        "mock_base_latency_us": mock_base_latency_us,
+        "mock_per_key_latency_us": mock_per_key_latency_us,
+        "actions": args.actions,
+        "polyphony": polyphonies,
+    }
 
 
 class TelemetryIntegrityError(RuntimeError):
@@ -422,7 +450,7 @@ def _new_session(
             min_hold_us=100,
             mock_latency_base_us=mock_base_latency_us,
             mock_latency_per_key_us=mock_per_key_latency_us,
-            telemetry_capacity=min(1_024, max(1, len(actions))),
+            telemetry_capacity=min(4_096, max(64, len(actions) + 64)),
             rt_priority_mode=rt_priority_mode,
             enable_waitable_timer=True,
             enable_event_wait=True,
@@ -530,6 +558,15 @@ def _run_dispatch(
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
             "outcome": snapshot.get("outcome"),
         }
+        result["worker_cpu_ratio_ppm"] = _ratio_ppm(
+            result["worker_cpu_time_us"], result["playback_wall_time_us"]
+        )
+        result["process_cpu_ratio_ppm"] = _ratio_ppm(
+            result["process_cpu_time_us"], result["playback_wall_time_us"]
+        )
+        result["spin_cpu_ratio_ppm"] = _ratio_ppm(
+            result["spin_cpu_time_us"], result["playback_wall_time_us"]
+        )
         return result
     except Exception as exc:
         if snapshot is None:
@@ -621,13 +658,28 @@ def _measure_command_interrupt(
         key not in result for key in required
     ):
         raise RuntimeError("native pause timing result is incomplete")
+    if not (
+        int(result["requested_ticks"])
+        <= int(result["observed_ticks"])
+        <= int(result["acknowledged_ticks"])
+    ):
+        raise RuntimeError("native pause timing QPC ordering is invalid")
+    if any(int(result[key]) < 0 for key in required[4:]):
+        raise RuntimeError("native pause timing latency must be non-negative")
     return {key: int(result[key]) for key in required}
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--actions", type=int, default=128)
-    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help="deprecated alias for --dispatch-repeats",
+    )
+    parser.add_argument("--dispatch-repeats", type=int, default=None)
+    parser.add_argument("--command-samples", type=int, default=100)
     parser.add_argument(
         "--continue-after-failure",
         action="store_true",
@@ -677,8 +729,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rt-priority-mode",
         choices=("auto", "mmcss", "time_critical", "highest", "off"),
-        default="auto",
-        help="real-time priority policy (default: auto)",
+        default="off",
+        help="real-time priority policy (default: off)",
     )
     parser.add_argument(
         "--baseline",
@@ -744,17 +796,106 @@ def _assert_correctness(run: dict[str, Any]) -> None:
         )
 
 
+def _resolve_repeat_counts(args: argparse.Namespace) -> tuple[int, int]:
+    if args.repeats is not None and args.dispatch_repeats is not None:
+        raise SystemExit(
+            "--repeats and --dispatch-repeats are ambiguous; use one"
+        )
+    dispatch_repeats = (
+        args.dispatch_repeats
+        if args.dispatch_repeats is not None
+        else args.repeats
+        if args.repeats is not None
+        else 2
+    )
+    if dispatch_repeats <= 0:
+        raise SystemExit("--dispatch-repeats must be positive")
+    if args.command_samples <= 0:
+        raise SystemExit("--command-samples must be positive")
+    return dispatch_repeats, args.command_samples
+
+
+def _assert_baseline_compatible(
+    report: dict[str, Any],
+    baseline: dict[str, Any],
+) -> None:
+    if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
+        raise SystemExit(
+            "legacy baseline is incompatible; regenerate with benchmark schema version 2"
+        )
+    if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
+        raise SystemExit(
+            "baseline command timing domain is incompatible; regenerate with native_qpc_v1"
+        )
+    if report.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
+        raise SystemExit("candidate benchmark schema version is invalid")
+    if report.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
+        raise SystemExit("candidate command timing domain is invalid")
+    required_config = (
+        "backend",
+        "rt_priority_mode",
+        "adaptive_spin",
+        "waitable_timer",
+        "event_wait",
+        "mock_base_latency_us",
+        "mock_per_key_latency_us",
+        "actions",
+        "polyphony",
+    )
+    baseline_config = baseline.get("benchmark_config")
+    report_config = report.get("benchmark_config")
+    if not isinstance(baseline_config, dict) or not isinstance(report_config, dict):
+        raise SystemExit(
+            "baseline is incompatible; benchmark_config fingerprint is required"
+        )
+    for key in required_config:
+        if key not in baseline_config or key not in report_config:
+            raise SystemExit(
+                f"baseline is incompatible; benchmark_config.{key} is required"
+            )
+    if baseline_config != report_config:
+        raise SystemExit(
+            "benchmark config fingerprint mismatch; refusing to compare metrics"
+        )
+    if baseline.get("statistics_eligible") is not True:
+        raise SystemExit("baseline is incompatible; it is not statistics-eligible")
+    if baseline.get("excluded_runs") != 0:
+        raise SystemExit("baseline is incompatible; excluded runs are not allowed")
+    required_metrics = (
+        ("sender_completion_error_us", "p50"),
+        ("sender_completion_error_us", "p99"),
+        ("sender_completion_error_us", "max"),
+        ("command_observation_latency_us", "p99"),
+        ("command_completion_latency_us", "p99"),
+        ("worker_cpu_ratio_ppm", "p50"),
+        ("process_cpu_ratio_ppm", "p50"),
+        ("spin_cpu_ratio_ppm", "p50"),
+        ("peak_rss_bytes", "max"),
+    )
+    for section, field in required_metrics:
+        values = baseline.get(section)
+        if not isinstance(values, dict) or field not in values:
+            raise SystemExit(
+                f"baseline is incompatible; missing metric {section}.{field}"
+            )
+
+
 def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
     try:
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"cannot read benchmark baseline {baseline_path}: {exc}") from exc
 
+    _assert_baseline_compatible(report, baseline)
     checks = [
-        ("sender_completion_error_us", "p95", 1.25),
-        ("sender_completion_error_us", "p99", 1.25),
-        ("command_interrupt_latency_us", "p95", 1.50),
-        ("peak_rss_bytes", "max", 1.25),
+        ("sender_completion_error_us", "p50", 1.05),
+        ("sender_completion_error_us", "p99", 1.05),
+        ("sender_completion_error_us", "max", 1.10),
+        ("command_observation_latency_us", "p99", 1.05),
+        ("command_completion_latency_us", "p99", 1.05),
+        ("worker_cpu_ratio_ppm", "p50", 1.05),
+        ("process_cpu_ratio_ppm", "p50", 1.05),
+        ("spin_cpu_ratio_ppm", "p50", 1.05),
     ]
     for section, field, ratio in checks:
         observed = float(report[section][field])
@@ -766,6 +907,19 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
                 f"native benchmark regression in {section}.{field}: "
                 f"observed={observed:g}, baseline={expected:g}, allowed={expected * ratio:g}"
             )
+
+    observed_rss = int(report.get("peak_rss_bytes", {}).get("max", 0))
+    expected_rss = int(baseline.get("peak_rss_bytes", {}).get("max", 0))
+    if observed_rss > 52 * 1024 * 1024:
+        raise SystemExit(
+            f"native benchmark memory ceiling exceeded: observed={observed_rss}"
+        )
+    if expected_rss > 0 and observed_rss > expected_rss + 2 * 1024 * 1024:
+        raise SystemExit(
+            "native benchmark memory regression: "
+            f"observed={observed_rss}, baseline={expected_rss}, "
+            f"allowed={expected_rss + 2 * 1024 * 1024}"
+        )
 
     for polyphony, observed in report.get("by_polyphony", {}).items():
         expected_poly = baseline.get("by_polyphony", {}).get(polyphony) or baseline.get(
@@ -779,12 +933,12 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
                 observed_value = float(observed_errors.get(dimension, {}).get(field, 0))
                 if expected <= 0:
                     continue
-                if observed_value > expected * 1.25:
+                if observed_value > expected * 1.05:
                     raise SystemExit(
                         "native benchmark regression in "
                         f"by_polyphony.{polyphony}.completion_error_us.{dimension}.{field}: "
                         f"observed={observed_value:g}, baseline={expected:g}, "
-                        f"allowed={expected * 1.25:g}"
+                        f"allowed={expected * 1.05:g}"
                     )
             for kind in ("down", "up"):
                 expected_kind = expected_errors.get("by_kind", {}).get(kind, {})
@@ -795,12 +949,12 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
                         observed_value = float(observed_kind.get(dimension, {}).get(field, 0))
                         if expected <= 0:
                             continue
-                        if observed_value > expected * 1.25:
+                        if observed_value > expected * 1.05:
                             raise SystemExit(
                                 "native benchmark regression in "
                                 f"by_polyphony.{polyphony}.completion_error_us.by_kind."
                                 f"{kind}.{dimension}.{field}: observed={observed_value:g}, "
-                                f"baseline={expected:g}, allowed={expected * 1.25:g}"
+                                f"baseline={expected:g}, allowed={expected * 1.05:g}"
                             )
 
 
@@ -808,8 +962,9 @@ def main() -> int:
     args = _parse_args()
     if os.name != "nt":
         raise SystemExit("this acceptance benchmark requires Windows")
-    if args.actions <= 0 or args.repeats <= 0:
-        raise SystemExit("--actions and --repeats must be positive")
+    dispatch_repeats, command_samples = _resolve_repeat_counts(args)
+    if args.actions <= 0:
+        raise SystemExit("--actions must be positive")
     if (
         isinstance(args.budget_seconds, bool)
         or not math.isfinite(args.budget_seconds)
@@ -847,7 +1002,7 @@ def main() -> int:
     successful_suites: list[dict[str, Any]] = []
     suite_results: list[BenchmarkRunResult] = []
     failures: list[dict[str, Any]] = []
-    for run_index in range(args.repeats):
+    for run_index in range(dispatch_repeats):
         suite_runs: dict[str, dict[str, Any]] = {}
         current_polyphony = polyphonies[0]
         current_actions = _actions(args.actions, current_polyphony)
@@ -870,21 +1025,12 @@ def main() -> int:
                 run.pop("_telemetry", None)
                 suite_runs[str(polyphony)] = run
 
-            if run_deadline - time.monotonic() <= 5.0:
-                raise RuntimeError("native acceptance budget expired before interrupt checks")
-            interrupt = _measure_command_interrupt(
-                backend=args.backend,
-                mock_base_latency_us=mock_base_latency_us,
-                mock_per_key_latency_us=mock_per_key_latency_us,
-                adaptive_spin=not args.no_adaptive_spin,
-                rt_priority_mode=args.rt_priority_mode,
-            )
-            successful_suites.append({"dispatch": suite_runs, "interrupt": interrupt})
+            successful_suites.append({"dispatch": suite_runs})
             suite_results.append(
                 BenchmarkRunResult(
                     run_index=run_index,
                     polyphony=0,
-                    result={"dispatch": suite_runs, "interrupt": interrupt},
+                    result={"dispatch": suite_runs},
                     failure=None,
                 )
             )
@@ -937,20 +1083,74 @@ def main() -> int:
             if not args.continue_after_failure:
                 break
 
-    validity = _run_validity_summary(args.repeats, suite_results)
-    if failures:
+    command_runs: list[dict[str, int]] = []
+    command_failures: list[dict[str, Any]] = []
+    command_actions = _actions(1, 1)
+    for sample_index in range(command_samples):
+        try:
+            command_runs.append(
+                _measure_command_interrupt(
+                    backend=args.backend,
+                    mock_base_latency_us=mock_base_latency_us,
+                    mock_per_key_latency_us=mock_per_key_latency_us,
+                    adaptive_spin=not args.no_adaptive_spin,
+                    rt_priority_mode=args.rt_priority_mode,
+                )
+            )
+        except Exception as exc:
+            artifact_path = _failed_run_artifact_path(
+                args.output, dispatch_repeats + sample_index
+            )
+            _write_failed_run_artifact(
+                artifact_path,
+                git_info=git_info,
+                native_info=native_info,
+                host_info=host_info,
+                run_index=dispatch_repeats + sample_index,
+                polyphony=1,
+                actions=command_actions,
+                snapshot=None,
+                telemetry=None,
+                diagnostics=None,
+                exception=exc,
+            )
+            command_failures.append(
+                {
+                    "sample_index": sample_index,
+                    "artifact": str(artifact_path),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    validity = _run_validity_summary(dispatch_repeats, suite_results)
+    if failures or command_failures:
         invalid_report: dict[str, Any] = {
+            "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
+            "command_timing_domain": COMMAND_TIMING_DOMAIN,
             "label": args.label,
             "backend": args.backend,
             "actions_per_polyphony": args.actions * 2,
             "polyphony": polyphonies,
-            "repeats": args.repeats,
+            "dispatch_repeats": dispatch_repeats,
+            "command_samples": command_samples,
             "budget_seconds": args.budget_seconds,
+            "benchmark_config": _benchmark_config(
+                args=args,
+                polyphonies=polyphonies,
+                mock_base_latency_us=mock_base_latency_us,
+                mock_per_key_latency_us=mock_per_key_latency_us,
+            ),
             **validity,
-            "unattempted_runs": args.repeats - len(suite_results),
+            "requested_dispatch_suites": dispatch_repeats,
+            "successful_dispatch_suites": len(successful_suites),
+            "failed_dispatch_suites": len(failures),
+            "requested_command_samples": command_samples,
+            "successful_command_samples": len(command_runs),
+            "failed_command_samples": len(command_failures),
+            "unattempted_dispatch_suites": dispatch_repeats - len(suite_results),
             "statistics_eligible": False,
             "excluded_runs": 0,
-            "failures": failures,
+            "failures": failures + command_failures,
             "mock_latency_model": {
                 "base_us": mock_base_latency_us,
                 "per_key_us": mock_per_key_latency_us,
@@ -976,7 +1176,6 @@ def main() -> int:
         for suite in successful_suites
         for run in suite["dispatch"].values()
     ]
-    interrupt_runs = [suite["interrupt"] for suite in successful_suites]
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
         actions = _actions(args.actions, polyphony)
@@ -996,6 +1195,9 @@ def main() -> int:
             "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
             "playback_wall_time_us": _stats([run["playback_wall_time_us"] for run in runs]),
             "spin_duty_cycle_ppm": _stats([run["spin_duty_cycle_ppm"] for run in runs]),
+            "worker_cpu_ratio_ppm": _stats([run["worker_cpu_ratio_ppm"] for run in runs]),
+            "process_cpu_ratio_ppm": _stats([run["process_cpu_ratio_ppm"] for run in runs]),
+            "spin_cpu_ratio_ppm": _stats([run["spin_cpu_ratio_ppm"] for run in runs]),
             "peak_rss_bytes": _required_stats(
                 [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None],
                 "peak_rss_bytes",
@@ -1029,9 +1231,24 @@ def main() -> int:
         "backend": args.backend,
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
-        "repeats": args.repeats,
+        "dispatch_repeats": dispatch_repeats,
+        "command_samples": command_samples,
         "budget_seconds": args.budget_seconds,
+        "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
+        "command_timing_domain": COMMAND_TIMING_DOMAIN,
+        "benchmark_config": _benchmark_config(
+            args=args,
+            polyphonies=polyphonies,
+            mock_base_latency_us=mock_base_latency_us,
+            mock_per_key_latency_us=mock_per_key_latency_us,
+        ),
         **validity,
+        "requested_dispatch_suites": dispatch_repeats,
+        "successful_dispatch_suites": len(successful_suites),
+        "failed_dispatch_suites": 0,
+        "requested_command_samples": command_samples,
+        "successful_command_samples": len(command_runs),
+        "failed_command_samples": 0,
         "statistics_eligible": True,
         "excluded_runs": 0,
         "failures": [],
@@ -1047,19 +1264,24 @@ def main() -> int:
             [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None],
             "peak_rss_bytes",
         ),
-        "command_interrupt_latency_us": _stats(
-            [run["completion_latency_us"] for run in interrupt_runs]
-        ),
         "command_observation_latency_us": _stats(
-            [run["observation_latency_us"] for run in interrupt_runs]
+            [run["observation_latency_us"] for run in command_runs]
         ),
         "command_completion_latency_us": _stats(
-            [run["completion_latency_us"] for run in interrupt_runs]
+            [run["completion_latency_us"] for run in command_runs]
         ),
         "command_cleanup_cost_us": _stats(
-            [run["cleanup_cost_us"] for run in interrupt_runs]
+            [run["cleanup_cost_us"] for run in command_runs]
         ),
-        "command_timing_domain": "native_qpc",
+        "worker_cpu_ratio_ppm": _stats(
+            [run["worker_cpu_ratio_ppm"] for run in dispatch_runs]
+        ),
+        "process_cpu_ratio_ppm": _stats(
+            [run["process_cpu_ratio_ppm"] for run in dispatch_runs]
+        ),
+        "spin_cpu_ratio_ppm": _stats(
+            [run["spin_cpu_ratio_ppm"] for run in dispatch_runs]
+        ),
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
         "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
         "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),

@@ -716,9 +716,9 @@ impl TestDispatchSessionPy {
                 "mock latency values must be at most 1000000 microseconds",
             ));
         }
-        if telemetry_capacity == 0 || telemetry_capacity > 1_024 {
+        if telemetry_capacity == 0 || telemetry_capacity > 4_096 {
             return Err(PyValueError::new_err(
-                "telemetry_capacity must be between 1 and 1024",
+                "telemetry_capacity must be between 1 and 4096",
             ));
         }
         let priority_mode = match rt_priority_mode {

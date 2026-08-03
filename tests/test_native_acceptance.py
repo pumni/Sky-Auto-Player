@@ -70,11 +70,84 @@ def test_benchmark_budget_cap_leaves_room_for_release_command_samples() -> None:
     assert ACCEPTANCE.MAX_BENCHMARK_BUDGET_SECONDS >= 300.0
 
 
-def test_benchmark_default_priority_policy_is_auto(
+def test_benchmark_default_priority_policy_is_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "argv", ["bench_native_acceptance.py"])
-    assert ACCEPTANCE._parse_args().rt_priority_mode == "auto"
+    assert ACCEPTANCE._parse_args().rt_priority_mode == "off"
+
+
+def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
+    args = SimpleNamespace(repeats=2, dispatch_repeats=3, command_samples=4)
+    with pytest.raises(SystemExit, match="ambiguous"):
+        ACCEPTANCE._resolve_repeat_counts(args)
+
+
+def test_schema_two_baseline_requires_matching_timing_domain_and_config() -> None:
+    config = {
+        "backend": "mock",
+        "rt_priority_mode": "off",
+        "adaptive_spin": True,
+        "waitable_timer": True,
+        "event_wait": True,
+        "mock_base_latency_us": 80,
+        "mock_per_key_latency_us": 40,
+        "actions": 128,
+        "polyphony": [1, 2, 3, 5, 8, 15],
+    }
+    report = {
+        "benchmark_schema_version": 2,
+        "command_timing_domain": "native_qpc_v1",
+        "benchmark_config": config,
+        "statistics_eligible": True,
+        "excluded_runs": 0,
+        "sender_completion_error_us": {"p50": 1, "p99": 1, "max": 1},
+        "command_observation_latency_us": {"p99": 1},
+        "command_completion_latency_us": {"p99": 1},
+        "worker_cpu_ratio_ppm": {"p50": 1},
+        "process_cpu_ratio_ppm": {"p50": 1},
+        "spin_cpu_ratio_ppm": {"p50": 1},
+        "peak_rss_bytes": {"max": 1},
+    }
+    ACCEPTANCE._assert_baseline_compatible(report, dict(report))
+
+    legacy = {"command_timing_domain": "native_qpc"}
+    with pytest.raises(SystemExit, match="legacy baseline"):
+        ACCEPTANCE._assert_baseline_compatible(report, legacy)
+
+    mismatched = dict(report)
+    mismatched["benchmark_config"] = {**config, "rt_priority_mode": "auto"}
+    with pytest.raises(SystemExit, match="fingerprint mismatch"):
+        ACCEPTANCE._assert_baseline_compatible(report, mismatched)
+
+
+def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
+    workflow = (
+        Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    manual_branch = 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]'
+    path_diff = 'changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"'
+    assert workflow.index(manual_branch) < workflow.index(path_diff)
+    assert "--dispatch-repeats 3" in workflow
+    assert "--command-samples 100" in workflow
+    assert "--rt-priority-mode off" in workflow
+
+
+@pytest.mark.windows
+def test_test_support_pause_timing_smoke_uses_100_fresh_sessions() -> None:
+    if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        pytest.skip("requires the test-support native wheel")
+    for _ in range(100):
+        result = ACCEPTANCE._measure_command_interrupt(
+            backend="mock",
+            mock_base_latency_us=80,
+            mock_per_key_latency_us=40,
+            adaptive_spin=True,
+            rt_priority_mode="off",
+        )
+        assert result["requested_ticks"] <= result["observed_ticks"]
+        assert result["observed_ticks"] <= result["acknowledged_ticks"]
+        assert result["generation"] > 0
 
 
 @pytest.mark.parametrize(
