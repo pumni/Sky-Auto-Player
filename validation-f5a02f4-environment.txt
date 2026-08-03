@@ -1,0 +1,43 @@
+Validation environment for direct baseline f5a02f48556b49db976747dc266d4aec926a3106
+
+git_sha=f5a02f48556b49db976747dc266d4aec926a3106
+branch=main
+origin_main=f5a02f48556b49db976747dc266d4aec926a3106
+working_tree=clean at capture time
+rustc=rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo=cargo 1.97.1 (c980f4866 2026-06-30)
+python=3.14.3 free-threading build (cp314t)
+wheel_abi=cp314t-win_amd64
+gil_after_import=false
+qpc_frequency_hz=10000000
+native_build_commit=f5a02f48556b49db976747dc266d4aec926a3106
+native_schema_version=2
+mmcss=not queried in this baseline gate
+adaptive_spin=benchmark default; exact run setting not available from this gate
+telemetry_mode=benchmark default; exact run setting not available from this gate
+keyboard_layout=not available from restricted host query
+target_receiver=not used by the mock gate; real receiver identity not available here
+background_load=not controlled; process count observed as 203
+power_plan=Balanced (381b4222-f694-41f0-9685-ff5bb260df2e)
+windows_build=not available: Win32 CIM query was access denied
+cpu=not available: Win32 CIM query was access denied
+logical_core_count=not available: Win32 CIM query was access denied
+ram=not available: Win32 CIM query was access denied
+
+Commands passed:
+  cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+  cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+  cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+  cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+  UV_CACHE_DIR=.uv-cache uv run --env-file .env python scripts/build_rust_wheel.py --test-support
+  UV_CACHE_DIR=.uv-cache uv run --env-file .env pytest -m "not slow"
+
+Results:
+  Rust: pass (64 + 1 + 12 + 56 + 39 unit/property/integration tests; no failures)
+  Python: 551 passed, 1 xpassed, 1 warning
+
+Benchmark provenance:
+  The prior f5a02f4 mock and real artifacts remain the authoritative local
+  provisional evidence. A fresh benchmark run is intentionally deferred until
+  the fail-closed harness changes are implemented; the old harness excluded
+  incomplete telemetry repetitions and is not acceptable for new statistics.
