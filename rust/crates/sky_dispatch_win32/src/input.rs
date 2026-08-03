@@ -15,12 +15,39 @@ pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
 pub const FULL_INSTRUMENT_MASK: u16 = (1u16 << PHYSICAL_INSTRUMENT_SCAN_CODES.len()) - 1;
 
 // The current instrument allowlist contains no E0/E1 extended scan codes.
+const MAX_INSTRUMENT_SCAN_CODE: usize = 0x35;
+const SCAN_CODE_TO_MASK: [u16; MAX_INSTRUMENT_SCAN_CODE + 1] = {
+    let mut table = [0u16; MAX_INSTRUMENT_SCAN_CODE + 1];
+    table[0x15] = 1 << 0;
+    table[0x16] = 1 << 1;
+    table[0x17] = 1 << 2;
+    table[0x18] = 1 << 3;
+    table[0x19] = 1 << 4;
+    table[0x23] = 1 << 5;
+    table[0x24] = 1 << 6;
+    table[0x25] = 1 << 7;
+    table[0x26] = 1 << 8;
+    table[0x27] = 1 << 9;
+    table[0x31] = 1 << 10;
+    table[0x32] = 1 << 11;
+    table[0x33] = 1 << 12;
+    table[0x34] = 1 << 13;
+    table[0x35] = 1 << 14;
+    table
+};
 
+#[inline]
 fn key_mask(scan_code: u16) -> Option<u16> {
-    PHYSICAL_INSTRUMENT_SCAN_CODES
-        .iter()
-        .position(|&code| code == scan_code)
-        .map(|slot| 1u16 << slot)
+    let mask = SCAN_CODE_TO_MASK
+        .get(scan_code as usize)
+        .copied()
+        .unwrap_or(0);
+    (mask != 0).then_some(mask)
+}
+
+#[inline]
+fn valid_instrument_scan_code(scan_code: u16) -> bool {
+    key_mask(scan_code).is_some()
 }
 
 fn scan_codes_from_mask(mask: u16) -> Vec<u16> {
@@ -430,7 +457,7 @@ pub fn send_input_raw_with_clock(
     if scan_codes.len() > PHYSICAL_INSTRUMENT_SCAN_CODES.len()
         || scan_codes
             .iter()
-            .any(|&scan_code| !PHYSICAL_INSTRUMENT_SCAN_CODES.contains(&scan_code))
+            .any(|&scan_code| !valid_instrument_scan_code(scan_code))
     {
         return PlatformSendResult {
             requested: u32::try_from(scan_codes.len()).unwrap_or(u32::MAX),
@@ -1675,6 +1702,21 @@ mod tests {
             mask_for_scan_codes(&PHYSICAL_INSTRUMENT_SCAN_CODES),
             FULL_INSTRUMENT_MASK
         );
+        assert_eq!(
+            PHYSICAL_INSTRUMENT_SCAN_CODES
+                .iter()
+                .filter_map(|&scan_code| key_mask(scan_code))
+                .fold(0, |mask, bit| mask | bit),
+            FULL_INSTRUMENT_MASK
+        );
+        assert!(
+            PHYSICAL_INSTRUMENT_SCAN_CODES
+                .iter()
+                .all(|&scan_code| valid_instrument_scan_code(scan_code))
+        );
+        assert!(!valid_instrument_scan_code(0x14));
+        assert!(!valid_instrument_scan_code(0x36));
+        assert!(!valid_instrument_scan_code(0xffff));
     }
 
     #[test]
