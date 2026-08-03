@@ -20,6 +20,7 @@ when a game samples Windows input, renders a frame, or produces audio.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -79,6 +80,131 @@ def _required_stats(values: list[int], name: str) -> dict[str, int]:
     if not values:
         raise RuntimeError(f"required metric {name} has no measurements")
     return _stats(values)
+
+
+class TelemetryIntegrityError(RuntimeError):
+    """Raised when a benchmark trace cannot prove one record per authored action."""
+
+    def __init__(self, diagnostics: dict[str, Any]) -> None:
+        self.diagnostics = diagnostics
+        super().__init__(
+            "native telemetry integrity failure: "
+            + json.dumps(diagnostics, sort_keys=True)
+        )
+
+
+def _validate_telemetry_integrity(
+    *,
+    actions: list[tuple[int, str, int, list[int], str]],
+    telemetry: dict[str, Any],
+    records: list[TelemetryRecord],
+    polyphony: int,
+) -> dict[str, Any]:
+    """Prove that the compact native trace is a complete authored action set.
+
+    A matching record count is insufficient: a duplicate event index can hide a
+    missing action.  This validation deliberately checks the exact authored
+    index and kind mapping before a repetition is eligible for statistics.
+    """
+
+    expected_indices = [int(action[0]) for action in actions]
+    expected_kinds = {int(action[0]): str(action[1]) for action in actions}
+    actual_indices = [int(record.event_index) for record in records]
+    counts = collections.Counter(actual_indices)
+    duplicate_indices = sorted(index for index, count in counts.items() if count > 1)
+    expected_set = set(expected_indices)
+    actual_set = set(actual_indices)
+    missing_indices = sorted(expected_set - actual_set)
+    unexpected_indices = sorted(actual_set - expected_set)
+    kind_mismatches = [
+        {
+            "event_index": record.event_index,
+            "expected": expected_kinds[record.event_index],
+            "actual": record.kind,
+        }
+        for record in records
+        if record.event_index in expected_kinds
+        and record.kind != expected_kinds[record.event_index]
+    ]
+    diagnostics: dict[str, Any] = {
+        "polyphony": polyphony,
+        "expected_count": len(actions),
+        "records_count": len(records),
+        "attempted": telemetry.get("attempted"),
+        "accepted": telemetry.get("accepted"),
+        "dropped": telemetry.get("dropped"),
+        "truncated": telemetry.get("truncated"),
+        "expected_indices": expected_indices,
+        "actual_indices": actual_indices,
+        "missing_indices": missing_indices,
+        "duplicate_indices": duplicate_indices,
+        "unexpected_indices": unexpected_indices,
+        "kind_mismatches": kind_mismatches,
+    }
+    valid = (
+        diagnostics["attempted"] == len(actions)
+        and diagnostics["accepted"] == len(actions)
+        and diagnostics["dropped"] == 0
+        and diagnostics["truncated"] is False
+        and len(records) == len(actions)
+        and not missing_indices
+        and not duplicate_indices
+        and not unexpected_indices
+        and not kind_mismatches
+    )
+    if not valid:
+        raise TelemetryIntegrityError(diagnostics)
+    return diagnostics
+
+
+def _failed_run_artifact_path(output: Path | None, run_index: int) -> Path:
+    """Choose a unique diagnostic path without overwriting an earlier failure."""
+
+    stem = (output or (REPOSITORY_ROOT / "native-acceptance.json")).resolve()
+    candidate = stem.with_name(f"{stem.stem}-failed-run-{run_index}.json")
+    attempt = 1
+    while candidate.exists():
+        attempt += 1
+        candidate = stem.with_name(
+            f"{stem.stem}-failed-run-{run_index}-attempt-{attempt}.json"
+        )
+    return candidate
+
+
+def _write_failed_run_artifact(
+    path: Path,
+    *,
+    git_info: dict[str, Any],
+    native_info: dict[str, Any],
+    host_info: dict[str, Any],
+    run_index: int,
+    polyphony: int,
+    actions: list[tuple[int, str, int, list[int], str]],
+    snapshot: dict[str, Any] | None,
+    telemetry: dict[str, Any] | None,
+    diagnostics: dict[str, Any] | None,
+    exception: BaseException,
+) -> Path:
+    """Persist every available failed-run diagnostic and never replace a file."""
+
+    if path.exists():
+        raise FileExistsError(f"refusing to overwrite failed-run artifact {path}")
+    payload = {
+        "git_provenance": git_info,
+        "native_provenance": native_info,
+        "host_fingerprint": host_info,
+        "run_index": run_index,
+        "polyphony": polyphony,
+        "actions": actions,
+        "session_snapshot": snapshot,
+        "raw_telemetry": telemetry,
+        "validation_diagnostics": diagnostics,
+        "exception": f"{type(exception).__name__}: {exception}",
+        "command_line": list(os.sys.argv),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    return path
 
 
 def _git_provenance() -> dict[str, Any]:
@@ -279,10 +405,12 @@ def _run_dispatch(
     snapshot = dict(session.snapshot())
     telemetry = json.loads(session.take_telemetry_json())
     records = materialize_native_trace(telemetry)
-    if len(records) != len(actions):
-        raise RuntimeError(
-            f"required sender telemetry expected {len(actions)} records, got {len(records)}"
-        )
+    _validate_telemetry_integrity(
+        actions=actions,
+        telemetry=telemetry,
+        records=records,
+        polyphony=polyphony,
+    )
     sender_errors = [
         record.sender_completion_error_us
         for record in records

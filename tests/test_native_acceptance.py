@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
@@ -74,3 +75,111 @@ def test_negative_mock_latency_is_rejected() -> None:
             mock_base_latency_us=-1,
             mock_per_key_latency_us=None,
         )
+
+
+def _integrity_fixture() -> tuple[list[tuple[int, str, int, list[int], str]], dict, list]:
+    actions = [
+        (10, "down", 0, [21], "down"),
+        (11, "up", 5_000, [21], "up"),
+    ]
+    telemetry = {
+        "attempted": 2,
+        "accepted": 2,
+        "dropped": 0,
+        "truncated": False,
+    }
+    records = [
+        SimpleNamespace(event_index=10, kind="down"),
+        SimpleNamespace(event_index=11, kind="up"),
+    ]
+    return actions, telemetry, records
+
+
+def test_complete_native_telemetry_passes_one_to_one_validation() -> None:
+    actions, telemetry, records = _integrity_fixture()
+
+    diagnostics = ACCEPTANCE._validate_telemetry_integrity(
+        actions=actions, telemetry=telemetry, records=records, polyphony=1
+    )
+
+    assert diagnostics["missing_indices"] == []
+    assert diagnostics["duplicate_indices"] == []
+    assert diagnostics["kind_mismatches"] == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "diagnostic"),
+    [
+        (lambda actions, telemetry, records: records.pop(), "missing_indices"),
+        (
+            lambda actions, telemetry, records: records.__setitem__(
+                1, SimpleNamespace(event_index=10, kind="down")
+            ),
+            "duplicate_indices",
+        ),
+        (
+            lambda actions, telemetry, records: records.__setitem__(
+                1, SimpleNamespace(event_index=12, kind="up")
+            ),
+            "unexpected_indices",
+        ),
+        (
+            lambda actions, telemetry, records: records.__setitem__(
+                1, SimpleNamespace(event_index=11, kind="down")
+            ),
+            "kind_mismatches",
+        ),
+        (lambda actions, telemetry, records: telemetry.__setitem__("dropped", 1), "dropped"),
+        (
+            lambda actions, telemetry, records: telemetry.__setitem__("truncated", True),
+            "truncated",
+        ),
+        (
+            lambda actions, telemetry, records: telemetry.__setitem__("attempted", 1),
+            "attempted",
+        ),
+        (
+            lambda actions, telemetry, records: telemetry.__setitem__("accepted", 1),
+            "accepted",
+        ),
+    ],
+)
+def test_invalid_native_telemetry_fails_closed(mutate, diagnostic: str) -> None:
+    actions, telemetry, records = _integrity_fixture()
+    mutate(actions, telemetry, records)
+
+    with pytest.raises(ACCEPTANCE.TelemetryIntegrityError) as raised:
+        ACCEPTANCE._validate_telemetry_integrity(
+            actions=actions, telemetry=telemetry, records=records, polyphony=1
+        )
+
+    assert raised.value.diagnostics[diagnostic]
+
+
+def test_failed_run_artifact_contains_raw_diagnostics_and_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    actions, telemetry, records = _integrity_fixture()
+    path = ACCEPTANCE._failed_run_artifact_path(tmp_path / "acceptance.json", 3)
+    exception = RuntimeError("synthetic failure")
+
+    written = ACCEPTANCE._write_failed_run_artifact(
+        path,
+        git_info={"git_sha": "git"},
+        native_info={"native_build_commit": "native"},
+        host_info={"platform": "test"},
+        run_index=3,
+        polyphony=1,
+        actions=actions,
+        snapshot={"outcome": "error"},
+        telemetry=telemetry,
+        diagnostics={"records": len(records)},
+        exception=exception,
+    )
+
+    assert written == path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["raw_telemetry"] == telemetry
+    assert payload["validation_diagnostics"] == {"records": 2}
+    assert payload["exception"] == "RuntimeError: synthetic failure"
+    assert ACCEPTANCE._failed_run_artifact_path(tmp_path / "acceptance.json", 3) != path
