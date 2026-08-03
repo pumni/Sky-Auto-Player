@@ -206,7 +206,7 @@ impl HybridWaiter {
         spin_threshold_ticks: DurationTicks,
         interrupt: &OwnedEvent,
     ) -> WaitResult {
-        let mut spin_started_us = None;
+        let mut spin_started_ticks = None;
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
             if interrupt.try_take() {
@@ -240,20 +240,14 @@ impl HybridWaiter {
                 }
             };
             if now_ticks >= target_ticks {
-                let now_us =
-                    match qpc_clock.duration_to_us(DurationTicks::from_raw(now_ticks.as_u64())) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return WaitResult {
-                                outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                spin_us: 0,
-                            };
-                        }
-                    };
-                return WaitResult {
-                    outcome: WaitOutcome::Deadline,
-                    spin_us: spin_started_us.map_or(0, |started| now_us.saturating_sub(started)),
-                };
+                return deadline_wait_result(
+                    qpc_clock,
+                    spin_started_ticks,
+                    now_ticks,
+                    interrupt,
+                    self.event_wait_enabled,
+                    observed_generation,
+                );
             }
             let remaining_ticks = match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
                 Some(remaining) => remaining,
@@ -270,10 +264,21 @@ impl HybridWaiter {
                         && interrupt.signal_generation() != observed_generation
                     {
                         if interrupt.try_take() {
-                            return WaitResult {
-                                outcome: WaitOutcome::Interrupted,
-                                spin_us: 0,
+                            let completed_ticks = match qpc_clock.now() {
+                                Ok(ticks) => ticks,
+                                Err(_) => {
+                                    return WaitResult {
+                                        outcome: WaitOutcome::Failed(WaitFailure::Clock),
+                                        spin_us: 0,
+                                    };
+                                }
                             };
+                            return wait_result_with_spin(
+                                WaitOutcome::Interrupted,
+                                qpc_clock,
+                                spin_started_ticks,
+                                completed_ticks,
+                            );
                         }
                         observed_generation = interrupt.signal_generation();
                     }
@@ -288,22 +293,14 @@ impl HybridWaiter {
                         }
                     };
                     if now_ticks >= target_ticks {
-                        let now_us = match qpc_clock
-                            .duration_to_us(DurationTicks::from_raw(now_ticks.as_u64()))
-                        {
-                            Ok(value) => value,
-                            Err(_) => {
-                                return WaitResult {
-                                    outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                    spin_us: 0,
-                                };
-                            }
-                        };
-                        return WaitResult {
-                            outcome: WaitOutcome::Deadline,
-                            spin_us: spin_started_us
-                                .map_or(0, |started| now_us.saturating_sub(started)),
-                        };
+                        return deadline_wait_result(
+                            qpc_clock,
+                            spin_started_ticks,
+                            now_ticks,
+                            interrupt,
+                            self.event_wait_enabled,
+                            observed_generation,
+                        );
                     }
                     let remaining_ticks =
                         match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
@@ -318,18 +315,7 @@ impl HybridWaiter {
                     if remaining_ticks > spin_threshold_ticks.as_u64() {
                         break;
                     }
-                    let now_us = match qpc_clock
-                        .duration_to_us(DurationTicks::from_raw(now_ticks.as_u64()))
-                    {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return WaitResult {
-                                outcome: WaitOutcome::Failed(WaitFailure::Clock),
-                                spin_us: 0,
-                            };
-                        }
-                    };
-                    spin_started_us.get_or_insert(now_us);
+                    spin_started_ticks.get_or_insert(now_ticks);
                     std::hint::spin_loop();
                 }
                 continue;
@@ -508,6 +494,76 @@ fn robust_wake_error_us(sorted_errors: &[u64]) -> u64 {
     median.saturating_add(median_sorted(&deviations).saturating_mul(6))
 }
 
+fn spin_duration_us(
+    qpc_clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: QpcTicks,
+) -> Result<u64, WaitFailure> {
+    let Some(started_ticks) = started_ticks else {
+        return Ok(0);
+    };
+    let elapsed_ticks = completed_ticks
+        .checked_duration_since(started_ticks)
+        .map_err(|_| WaitFailure::Clock)?;
+    qpc_clock
+        .duration_to_us(elapsed_ticks)
+        .map_err(|_| WaitFailure::Clock)
+}
+
+fn wait_result_with_spin(
+    outcome: WaitOutcome,
+    qpc_clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: QpcTicks,
+) -> WaitResult {
+    match spin_duration_us(qpc_clock, started_ticks, completed_ticks) {
+        Ok(spin_us) => WaitResult { outcome, spin_us },
+        Err(failure) => WaitResult {
+            outcome: WaitOutcome::Failed(failure),
+            spin_us: 0,
+        },
+    }
+}
+
+fn deadline_wait_result(
+    qpc_clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: QpcTicks,
+    interrupt: &OwnedEvent,
+    event_wait_enabled: bool,
+    observed_generation: u64,
+) -> WaitResult {
+    if event_wait_enabled {
+        match (
+            interrupt.signal_generation() != observed_generation,
+            interrupt.try_take(),
+        ) {
+            (_, true) => {
+                // The one final zero-time consume is allowed at the deadline
+                // handoff, including the SetEvent-to-generation publication
+                // window. There is no event poll in the spin loop itself.
+                return wait_result_with_spin(
+                    WaitOutcome::Interrupted,
+                    qpc_clock,
+                    started_ticks,
+                    completed_ticks,
+                );
+            }
+            (true, false) => {
+                // A changed generation without an owned event means another
+                // consumer won the auto-reset event; the deadline is safe.
+            }
+            (false, false) => {}
+        }
+    }
+    wait_result_with_spin(
+        WaitOutcome::Deadline,
+        qpc_clock,
+        started_ticks,
+        completed_ticks,
+    )
+}
+
 impl Default for HybridWaiter {
     fn default() -> Self {
         Self::new()
@@ -516,9 +572,10 @@ impl Default for HybridWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{HybridWaiter, WaitOutcome, robust_wake_error_us};
-    use crate::clock::qpc_now_us;
+    use super::{HybridWaiter, WaitOutcome, robust_wake_error_us, spin_duration_us};
+    use crate::clock::{QpcClock, QpcTicks, qpc_now_us};
     use crate::event::OwnedEvent;
+    use std::num::NonZeroU64;
 
     #[test]
     fn pre_signalled_event_interrupts_a_long_wait() {
@@ -550,6 +607,23 @@ mod tests {
     }
 
     #[test]
+    fn spin_duration_converts_one_completed_tick_interval() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        assert_eq!(
+            spin_duration_us(
+                clock,
+                Some(QpcTicks::from_raw(1_000)),
+                QpcTicks::from_raw(1_500),
+            ),
+            Ok(500)
+        );
+        assert_eq!(
+            spin_duration_us(clock, None, QpcTicks::from_raw(1_500)),
+            Ok(0)
+        );
+    }
+
+    #[test]
     fn final_spin_does_not_poll_the_event_object_per_iteration() {
         let event = OwnedEvent::new_auto_reset().expect("event");
         let waiter = HybridWaiter::new();
@@ -558,9 +632,9 @@ mod tests {
             waiter.wait_until_us(target, 500, &event),
             WaitOutcome::Deadline
         );
-        // One initial consume is allowed; the final spin itself is generation
-        // only and must not issue a zero-time Win32 wait for every iteration.
-        assert_eq!(event.take_count(), 1);
+        // One initial consume and one final deadline handoff probe are
+        // allowed; the final spin itself must not poll the event per iteration.
+        assert!(event.take_count() <= 2);
     }
 
     #[test]
