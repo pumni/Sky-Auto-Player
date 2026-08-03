@@ -37,6 +37,10 @@ from sky_music.infrastructure.hotkeys import (
     hotkey_conflicts_with_note_keys,
     parse_hotkey,
 )
+from sky_music.orchestration.native_admission import (
+    NativeAdmissionError,
+    require_rust_core,
+)
 from sky_music.orchestration.runtime_session import (
     RUNTIME_STATE,
     PlaybackOverrides,
@@ -536,20 +540,12 @@ def _run_optimize_selftest() -> int:
 def _run_rust_selftest() -> int:
     """Verify production native admission with an empty native schedule."""
     try:
+        rust_build = require_rust_core()
         import sky_player_rs  # type: ignore[import-not-found]
 
-        from sky_music.orchestration.native_dispatch import probe_native_dispatch
+        from sky_music.orchestration.native_admission import EXPECTED_NATIVE_ABI
         from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
 
-        probe = probe_native_dispatch(force=True)
-        if not probe.available:
-            raise RuntimeError(f"native admission failed ({probe.reason}): {probe.detail}")
-        info = sky_player_rs.build_info()  # type: ignore[attr-defined]
-        if (
-            info.get("schema_version") != RUST_DISPATCH_SCHEMA_VERSION
-            or info.get("free_threaded") is not True
-        ):
-            raise RuntimeError(f"unexpected native build metadata: {info!r}")
         session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             [],
             [0x15],
@@ -566,10 +562,26 @@ def _run_rust_selftest() -> int:
         snapshot = session.snapshot()
         if snapshot.get("status") != "finished":
             raise RuntimeError(f"unexpected native terminal snapshot: {snapshot!r}")
-    except Exception as exc:
+    except NativeAdmissionError as exc:
+        print("sha_match=false")
+        print("rust_selftest=fail")
         print(f"Rust selftest failed: {exc}", file=sys.stderr)
         return 1
-    print("Rust selftest OK: native module imported and empty schedule terminated cleanly.")
+    except Exception as exc:
+        print("rust_selftest=fail")
+        print(f"Rust selftest failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"app_build_commit={rust_build.app_build_commit}")
+    print(f"native_build_commit={rust_build.native_build_commit}")
+    print("sha_match=true")
+    print(
+        "schema_match="
+        f"{str(rust_build.schema_version == RUST_DISPATCH_SCHEMA_VERSION).lower()}"
+    )
+    print(f"abi_match={str(rust_build.native_abi == EXPECTED_NATIVE_ABI).lower()}")
+    print(f"win32_backend={str(rust_build.win32_backend).lower()}")
+    print("rust_selftest=pass")
+    print("Rust selftest OK: native module admitted and empty schedule terminated cleanly.")
     return 0
 
 
@@ -848,11 +860,22 @@ def main() -> int:
             song_path=args.song,
         )
 
-    song_choices = get_song_choices(force_refresh=True)
-
     if args.list:
+        song_choices = get_song_choices(force_refresh=True)
         print_choices_local(song_choices)
         return 0
+
+    try:
+        RUNTIME_STATE.rust_build_info = require_rust_core()
+    except NativeAdmissionError as exc:
+        print(
+            "\nSky Auto Player cannot start playback because the Rust native core "
+            f"failed admission: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    song_choices = get_song_choices(force_refresh=True)
 
     if not song_choices and args.song is None:
         print_choices_local(song_choices)

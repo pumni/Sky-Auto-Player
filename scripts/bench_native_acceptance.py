@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 from sky_music.layouts import SKY_15_SCAN_CODES
-from sky_music.orchestration.native_provenance import native_source_fingerprint
 from sky_music.orchestration.telemetry import (
     TelemetryRecord,
     materialize_native_trace,
@@ -109,14 +108,12 @@ def _git_provenance() -> dict[str, Any]:
     return {"git_sha": sha, "dirty_worktree": False}
 
 
-def _native_provenance() -> dict[str, Any]:
+def _native_provenance(expected_commit: str) -> dict[str, Any]:
     import sky_player_rs
 
     info = dict(sky_player_rs.build_info())
     required = (
         "native_build_commit",
-        "dirty_worktree",
-        "native_source_fingerprint",
         "rustc_version",
         "schema_version",
         "native_abi",
@@ -126,13 +123,10 @@ def _native_provenance() -> dict[str, Any]:
         value = info.get(name)
         if value in (None, "", "unknown"):
             raise RuntimeError(f"native build provenance is missing {name}")
-    if info["dirty_worktree"] is not False:
-        raise RuntimeError("native build provenance is dirty")
-    expected_fingerprint = native_source_fingerprint(REPOSITORY_ROOT, str(info["native_abi"]))
-    if info["native_source_fingerprint"] != expected_fingerprint:
+    if info["native_build_commit"] != expected_commit:
         raise RuntimeError(
-            "native source fingerprint does not match the current checkout: "
-            f"native={info['native_source_fingerprint']} expected={expected_fingerprint}"
+            "native build commit does not match the current checkout: "
+            f"native={info['native_build_commit']} expected={expected_commit}"
         )
     return info
 
@@ -580,7 +574,7 @@ def main() -> int:
     )
 
     git_info = _git_provenance()
-    native_info = _native_provenance()
+    native_info = _native_provenance(git_info["git_sha"])
     if native_info["native_build_commit"] != git_info["git_sha"]:
         raise RuntimeError(
             "native build provenance does not match Git HEAD: "
@@ -718,7 +712,6 @@ def main() -> int:
         "evidence_scope": "sender_completion",
         "git_sha": git_info["git_sha"],
         "native_build_commit": native_info["native_build_commit"],
-        "native_source_fingerprint": native_info["native_source_fingerprint"],
         "rustc_version": native_info["rustc_version"],
         "schema_version": native_info["schema_version"],
         "backend_evidence": "real_sendinput_sender_completion"

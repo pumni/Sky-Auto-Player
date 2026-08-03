@@ -109,8 +109,12 @@ def check_calibration_cache() -> dict:
 
 
 def check_native_dispatch() -> dict[str, Any]:
-    """Report native module/toolchain/ABI status for the default-on sender."""
-    from sky_music.orchestration.native_dispatch import probe_native_dispatch
+    """Report native metadata and admission status without creating a session."""
+    from sky_music.orchestration.native_admission import (
+        NativeAdmissionError,
+        inspect_rust_core,
+        validate_rust_build_info,
+    )
 
     status: dict[str, Any] = {
         "ok": False,
@@ -119,33 +123,42 @@ def check_native_dispatch() -> dict[str, Any]:
         "available": False,
         "msg": "",
     }
-    try:
-        import sky_player_rs  # type: ignore[import-not-found]
+    inspection = inspect_rust_core()
+    status["native_module_path"] = inspection.module_path
+    if inspection.info is None:
+        status["msg"] = f"Rust dispatch module is unavailable and is required: {inspection.error}"
+        return status
 
-        info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
-        status.update(info)
-        probe = probe_native_dispatch(force=True)
-        status["available"] = probe.available
-        status["probe_reason"] = probe.reason.value
-        status["probe_detail"] = probe.detail
-        status["native_module_path"] = probe.module_path
-        status["ok"] = status["available"]
-        status["msg"] = (
-            f"Rust dispatch is required; core={info.get('rust_core_version', 'unknown')}, "
-            f"rustc={info.get('rustc_version', 'unknown')}, "
-            f"PyO3={info.get('pyo3_version', 'unknown')}, "
-            f"ABI={info.get('native_abi', 'unknown')}, "
-            f"schema={info.get('native_schema_version', 'unknown')}, "
-            f"commit={info.get('native_build_commit', 'unknown')}."
+    info = inspection.info
+    status.update(info)
+    status["available"] = True
+    try:
+        from sky_music._native_build import (
+            APP_BUILD_COMMIT,  # type: ignore[reportMissingImports]
         )
-        if not status["available"]:
-            status["msg"] += f" Admission failed ({probe.reason.value}): {probe.detail}"
-    except (ImportError, AttributeError, RuntimeError, TypeError) as exc:
-        status["msg"] = (
-            "Rust dispatch module is unavailable"
-            + " and is required"
-            + f": {exc}"
+
+        status["application_build_commit"] = APP_BUILD_COMMIT
+        runtime_gil_probe = getattr(sys, "_is_gil_enabled", None)
+        if not callable(runtime_gil_probe) or runtime_gil_probe():
+            raise NativeAdmissionError("active Python runtime is not free-threaded")
+        validated = validate_rust_build_info(
+            app_commit=APP_BUILD_COMMIT,
+            native_info=info,
         )
+        status["ok"] = True
+        status["commit_match"] = (
+            validated.app_build_commit == validated.native_build_commit
+        )
+        status["msg"] = (
+            "Rust native core: "
+            f"application commit={validated.app_build_commit}, "
+            f"native commit={validated.native_build_commit}, "
+            f"rustc={validated.rustc_version}, ABI={validated.native_abi}, "
+            f"schema={validated.schema_version}, "
+            f"Win32 backend={'available' if validated.win32_backend else 'missing'}."
+        )
+    except (ImportError, NativeAdmissionError, TypeError, ValueError) as exc:
+        status["msg"] = f"Rust native admission failed: {exc}"
     return status
 
 

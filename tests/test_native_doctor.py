@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from sky_music.infrastructure import doctor
-from sky_music.orchestration import native_dispatch
+
+APP_COMMIT = "a" * 40
 
 
 def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
@@ -13,23 +14,22 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
         "rustc_version": "rustc 1.97.1",
         "pyo3_version": "0.29.0",
         "native_abi": "cp314t-win_amd64",
-        "native_schema_version": 1,
-        "native_build_commit": "abc123",
+        "schema_version": 2,
+        "native_schema_version": 2,
+        "native_build_commit": APP_COMMIT,
+        "version": "0.1.0",
+        "free_threaded": True,
+        "win32_backend": True,
     }
     monkeypatch.setitem(
         sys.modules,
         "sky_player_rs",
         SimpleNamespace(build_info=lambda: info),
     )
-    monkeypatch.setattr(
-        native_dispatch,
-        "probe_native_dispatch",
-        lambda **_kwargs: native_dispatch.NativeProbeResult(
-            available=True,
-            reason=native_dispatch.NativeProbeReason.AVAILABLE,
-            detail="test native dispatch",
-        ),
-    )
+    app_metadata = ModuleType("sky_music._native_build")
+    app_metadata.APP_BUILD_COMMIT = APP_COMMIT  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sky_music._native_build", app_metadata)
+    monkeypatch.setattr(doctor.sys, "_is_gil_enabled", lambda: False)
 
     result = doctor.check_native_dispatch()
 
@@ -37,6 +37,7 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
     assert result["required"] is True
     assert "rustc 1.97.1" in result["msg"]
     assert "cp314t-win_amd64" in result["msg"]
+    assert result["commit_match"] is True
 
 
 def test_native_doctor_marks_explicit_missing_module_as_required(monkeypatch) -> None:

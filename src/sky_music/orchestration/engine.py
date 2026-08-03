@@ -15,7 +15,6 @@ from sky_music.infrastructure.focus import (
 from sky_music.orchestration.native_dispatch import (
     NativeDispatchError,
     RustDispatchRuntime,
-    probe_native_dispatch,
 )
 from sky_music.orchestration.native_models import (
     PLAYBACK_ERROR,
@@ -87,12 +86,6 @@ class PlaybackEngine:
         self.focus_guard = focus_guard or (
             Win32SkyFocusGuard() if self.require_focus else NoopFocusGuard()
         )
-        if not self.dry_run:
-            probe = probe_native_dispatch()
-            if not probe.available:
-                raise RuntimeError(
-                    f"Native Rust dispatch is unavailable: {probe.reason.value}: {probe.detail}"
-                )
 
     @property
     def input_path_degraded(self) -> bool:
@@ -138,7 +131,6 @@ class PlaybackEngine:
             {
                 "native_build_version": snapshot.get("native_build_version"),
                 "native_build_commit": snapshot.get("native_build_commit"),
-                "native_source_fingerprint": snapshot.get("native_source_fingerprint"),
                 "native_abi": snapshot.get("native_abi"),
                 "rt_priority_acquired": snapshot.get("rt_priority_acquired"),
                 "wait_strategy_acquired": snapshot.get("wait_strategy_acquired"),

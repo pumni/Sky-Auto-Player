@@ -88,6 +88,14 @@ free-threaded-runtime, or Win32-backend failure. No exception path executes a
 Python sender. Recovery is performed by rolling back the application release,
 not by selecting a second dispatch engine inside the binary.
 
+Production admission runs once after the free-threaded runtime check and
+before song discovery or UI startup. It reads the generated
+`sky_music._native_build.APP_BUILD_COMMIT` and compares it with the exact
+40-character `native_build_commit` returned by `sky_player_rs.build_info()`.
+The packaged application never runs Git, hashes the Rust source tree, checks
+module mtimes, or accepts an environment override for this contract. Doctor
+may inspect and report mismatches without creating a `DispatchSession`.
+
 Current source and active tests therefore contain no `DispatchLoop`, Python
 `RuntimeDispatchCoordinator`, Python `PlaybackSupervisor`, Python sender
 backend, `RustInputAdapter`, or backend-selection environment flags. Rust's

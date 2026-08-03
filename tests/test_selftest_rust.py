@@ -3,9 +3,51 @@
 from __future__ import annotations
 
 import main as main_mod
+from sky_music.orchestration.native_admission import RustBuildInfo
 
 
-def test_rust_selftest_runs_empty_native_schedule_without_input() -> None:
+class _FakeSession:
+    def __init__(self, *_args, **_kwargs) -> None:
+        return None
+
+    def start(self) -> None:
+        return None
+
+    def join(self, timeout_ms: int) -> bool:
+        assert timeout_ms == 5_000
+        return True
+
+    def snapshot(self) -> dict[str, object]:
+        return {"status": "finished"}
+
+
+class _FakeConfig:
+    def __init__(self, **_kwargs) -> None:
+        return None
+
+
+class _FakeNative:
+    DispatchSession = _FakeSession
+    SessionConfig = _FakeConfig
+
+
+def test_rust_selftest_runs_empty_native_schedule_without_input(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_mod,
+        "require_rust_core",
+        lambda: RustBuildInfo(
+            app_build_commit="a" * 40,
+            native_build_commit="a" * 40,
+            schema_version=2,
+            native_abi="cp314t-win_amd64",
+            native_version="0.1.0",
+            rustc_version="rustc test",
+            module_path="sky_player_rs.pyd",
+            win32_backend=True,
+        ),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "sky_player_rs", _FakeNative())
+
     assert main_mod._run_rust_selftest() == 0
 
 

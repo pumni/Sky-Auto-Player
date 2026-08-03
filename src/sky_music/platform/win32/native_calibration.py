@@ -371,23 +371,14 @@ def _validate_result(
             raise NativeCalibrationError(
                 "frozen release is missing native calibration provenance metadata"
             ) from exc
-        expected_build_id = getattr(native_build, "EXPECTED_NATIVE_BUILD_ID", "")
-        expected_fingerprint = getattr(
-            native_build, "EXPECTED_NATIVE_SOURCE_FINGERPRINT", ""
-        )
-        if not isinstance(expected_build_id, str) or not isinstance(
-            expected_fingerprint, str
-        ):
+        expected_build_id = getattr(native_build, "APP_BUILD_COMMIT", "")
+        if not isinstance(expected_build_id, str):
             raise NativeCalibrationError(
                 "frozen release has invalid native calibration provenance metadata"
             )
         if data["native_build_id"] != expected_build_id:
             raise NativeCalibrationError(
                 "native calibration build does not match the frozen release"
-            )
-        if data["native_source_fingerprint"] != expected_fingerprint:
-            raise NativeCalibrationError(
-                "native calibration source fingerprint does not match the frozen release"
             )
 
     host = _require_mapping(data.get("host_fingerprint"), "host_fingerprint")

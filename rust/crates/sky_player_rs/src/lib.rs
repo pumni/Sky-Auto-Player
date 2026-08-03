@@ -470,14 +470,6 @@ impl NativeDispatchSessionPy {
         dict.set_item("version", 1)?;
         dict.set_item("native_build_version", env!("CARGO_PKG_VERSION"))?;
         dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
-        dict.set_item(
-            "dirty_worktree",
-            env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
-        )?;
-        dict.set_item(
-            "native_source_fingerprint",
-            env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
-        )?;
         dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
         dict.set_item("pyo3_version", "0.29.0")?;
         dict.set_item("native_abi", env!("SKY_NATIVE_ABI"))?;
@@ -817,14 +809,6 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         })?,
     )?;
     dict.set_item("native_build_commit", env!("SKY_NATIVE_BUILD_COMMIT"))?;
-    dict.set_item(
-        "dirty_worktree",
-        env!("SKY_NATIVE_DIRTY_WORKTREE") == "true",
-    )?;
-    dict.set_item(
-        "native_source_fingerprint",
-        env!("SKY_NATIVE_SOURCE_FINGERPRINT"),
-    )?;
     dict.set_item("free_threaded", true)?;
     dict.set_item("win32_backend", sky_dispatch_win32::win32_available())?;
     Ok(dict)

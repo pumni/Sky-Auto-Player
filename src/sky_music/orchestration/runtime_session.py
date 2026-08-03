@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.orchestration.native_admission import RustBuildInfo
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,7 @@ class PlaybackOverrides:
 @dataclass(slots=True)
 class RuntimeSessionState:
     session: PlaybackSessionContext | None = None
+    rust_build_info: RustBuildInfo | None = None
     timing_policy: object | None = None
     scan_code_mode: str = "physical"
     telemetry_csv_enabled: bool = False

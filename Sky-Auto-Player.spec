@@ -15,12 +15,10 @@ datas = []
 binaries = []
 hiddenimports = [
     "sky_music.platform.win32",
-    "sky_music.platform.win32.inputs",
+    "sky_music.orchestration.native_admission",
     "sky_music.orchestration.engine",
-    "sky_music.orchestration.runtime_dispatch",
     "sky_music.orchestration.calibration",
     "sky_music.orchestration.telemetry",
-    "sky_music.infrastructure.backend",
     "sky_music.infrastructure.background",
     "sky_music.infrastructure.hotkeys",
     "sky_music.infrastructure.doctor",
@@ -45,8 +43,8 @@ datas += tmp_ret[0]
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-# The Rust dispatcher is a required release artifact even while runtime
-# selection remains opt-in. Collection must fail closed if its wheel was not
+# The Rust dispatcher is the sole production release artifact. Collection must
+# fail closed if its wheel was not
 # built by scripts/build_rust_wheel.py.
 if find_spec('sky_player_rs') is None:
     raise RuntimeError(

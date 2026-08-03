@@ -24,9 +24,12 @@ Our CI pipeline (defined in `.github/workflows/release.yml`) builds exactly thre
 **Crucial Invariant:** The Git tag version must perfectly match the version specified in `pyproject.toml`. The release workflow enforces this and will fail the build if they diverge.
 
 Release provenance is fail-closed: production packaging requires a clean Git
-worktree, `MANIFEST.json` records `git_head`, `dirty_worktree: false`, the
-native build commit, and the native source fingerprint. Native calibration and
-acceptance evidence must carry the same clean-worktree and commit contract.
+worktree, `MANIFEST.json` records the application `git_head`,
+`dirty_worktree: false`, and the native build commit. The packaged application
+compares the generated application commit with that native commit at startup;
+it does not run Git or hash the Rust source tree at runtime. Native calibration
+and acceptance evidence must carry the same clean-worktree and commit
+contract.
 
 ## 3. Updater Behaviour
 
