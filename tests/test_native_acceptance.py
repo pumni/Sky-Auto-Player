@@ -55,6 +55,21 @@ def test_mock_latency_overrides_are_preserved_for_mock_backend() -> None:
     ) == (100, 25)
 
 
+@pytest.mark.parametrize("budget_seconds", [1.0, 120.0, 300.0, 600.0])
+def test_long_benchmark_budget_is_allowed_for_native_sample_runs(
+    budget_seconds: float,
+) -> None:
+    assert (
+        ACCEPTANCE.MIN_BENCHMARK_BUDGET_SECONDS
+        <= budget_seconds
+        <= ACCEPTANCE.MAX_BENCHMARK_BUDGET_SECONDS
+    )
+
+
+def test_benchmark_budget_cap_leaves_room_for_release_command_samples() -> None:
+    assert ACCEPTANCE.MAX_BENCHMARK_BUDGET_SECONDS >= 300.0
+
+
 @pytest.mark.parametrize(
     ("base_latency_us", "per_key_latency_us"),
     [(0, 1), (1, 0), (80, 40)],

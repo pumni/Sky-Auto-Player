@@ -38,6 +38,8 @@ from sky_music.orchestration.telemetry import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+MIN_BENCHMARK_BUDGET_SECONDS = 1.0
+MAX_BENCHMARK_BUDGET_SECONDS = 600.0
 
 
 def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
@@ -635,7 +637,7 @@ def _parse_args() -> argparse.Namespace:
         "--budget-seconds",
         type=float,
         default=120.0,
-        help="hard whole-command budget in seconds (1..120; default: 120)",
+        help="hard whole-command budget in seconds (1..600; default: 120)",
     )
     parser.add_argument("--label", default="native")
     parser.add_argument("--output", type=Path)
@@ -811,9 +813,11 @@ def main() -> int:
     if (
         isinstance(args.budget_seconds, bool)
         or not math.isfinite(args.budget_seconds)
-        or not 1.0 <= args.budget_seconds <= 120.0
+        or not MIN_BENCHMARK_BUDGET_SECONDS
+        <= args.budget_seconds
+        <= MAX_BENCHMARK_BUDGET_SECONDS
     ):
-        raise SystemExit("--budget-seconds must be between 1 and 120 seconds")
+        raise SystemExit("--budget-seconds must be between 1 and 600 seconds")
     if args.backend == "sendinput" and not args.allow_real_input:
         raise SystemExit("--backend sendinput requires --allow-real-input")
     mock_base_latency_us, mock_per_key_latency_us = _resolve_mock_latency_values(
