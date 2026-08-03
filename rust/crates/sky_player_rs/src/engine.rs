@@ -1441,14 +1441,15 @@ impl NativeDispatchSession {
     }
 }
 
-fn mock_platform_send_result(
+fn mock_platform_send_result_from_started_ticks(
     qpc_clock: QpcClock,
+    started_ticks: Result<QpcTicks, QpcError>,
     requested: u32,
     inserted: u32,
     win32_error: u32,
     latency_ticks: u64,
 ) -> PlatformSendResult {
-    let started_ticks = match qpc_clock.now() {
+    let started_ticks = match started_ticks {
         Ok(ticks) => ticks,
         Err(error) => {
             return PlatformSendResult {
@@ -1552,34 +1553,53 @@ fn run_worker(
             // Base per-call latency (mirrors old mock_latency_base_us / per_key).
             let base_latency_us = latency_base_us
                 .saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
+            let sender_started_ticks = match qpc_clock.now() {
+                Ok(ticks) => ticks,
+                Err(error) => {
+                    return mock_platform_send_result_from_started_ticks(
+                        qpc_clock,
+                        Err(error),
+                        codes.len() as u32,
+                        0,
+                        0,
+                        0,
+                    );
+                }
+            };
             if base_latency_us > 0 {
-                // Legacy latency path: real sleep (matches old mock behaviour).
+                // Keep the artificial sender work after the sender start
+                // boundary so test-support timing matches the real seam.
                 std::thread::sleep(Duration::from_micros(base_latency_us));
             }
 
             match script_emitter.resolve(idx) {
                 None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => {
                     // Fast path: full success, no extra latency.
-                    mock_platform_send_result(
+                    mock_platform_send_result_from_started_ticks(
                         qpc_clock,
+                        Ok(sender_started_ticks),
                         codes.len() as u32,
                         codes.len() as u32,
                         0,
                         0,
                     )
                 }
-                Some(InjectedSendOutcome::Full { latency_ticks }) => mock_platform_send_result(
-                    qpc_clock,
-                    codes.len() as u32,
-                    codes.len() as u32,
-                    0,
-                    *latency_ticks,
-                ),
+                Some(InjectedSendOutcome::Full { latency_ticks }) => {
+                    mock_platform_send_result_from_started_ticks(
+                        qpc_clock,
+                        Ok(sender_started_ticks),
+                        codes.len() as u32,
+                        codes.len() as u32,
+                        0,
+                        *latency_ticks,
+                    )
+                }
                 Some(InjectedSendOutcome::Zero {
                     latency_ticks,
                     win32_error,
-                }) => mock_platform_send_result(
+                }) => mock_platform_send_result_from_started_ticks(
                     qpc_clock,
+                    Ok(sender_started_ticks),
                     codes.len() as u32,
                     0,
                     *win32_error,
@@ -1591,8 +1611,9 @@ fn run_worker(
                     win32_error,
                 }) => {
                     let inserted = (*inserted as u32).min(codes.len() as u32);
-                    mock_platform_send_result(
+                    mock_platform_send_result_from_started_ticks(
                         qpc_clock,
+                        Ok(sender_started_ticks),
                         codes.len() as u32,
                         inserted,
                         *win32_error,
@@ -1603,11 +1624,19 @@ fn run_worker(
                     // Spin-stall: hold the emitter without sending any key.
                     // This simulates a scheduler stall or OS freeze without
                     // actually blocking the thread (consistent with RT discipline).
-                    mock_platform_send_result(qpc_clock, codes.len() as u32, 0, 0, *duration_ticks)
+                    mock_platform_send_result_from_started_ticks(
+                        qpc_clock,
+                        Ok(sender_started_ticks),
+                        codes.len() as u32,
+                        0,
+                        0,
+                        *duration_ticks,
+                    )
                 }
                 Some(InjectedSendOutcome::PanicAfterSend) => {
-                    let _ = mock_platform_send_result(
+                    let _ = mock_platform_send_result_from_started_ticks(
                         qpc_clock,
+                        Ok(sender_started_ticks),
                         codes.len() as u32,
                         codes.len() as u32,
                         0,
@@ -1616,8 +1645,9 @@ fn run_worker(
                     panic!("fault injection: panic after send before commit");
                 }
                 Some(InjectedSendOutcome::QpcFailureAfterSend) => {
-                    let mut result = mock_platform_send_result(
+                    let mut result = mock_platform_send_result_from_started_ticks(
                         qpc_clock,
+                        Ok(sender_started_ticks),
                         codes.len() as u32,
                         codes.len() as u32,
                         0,
