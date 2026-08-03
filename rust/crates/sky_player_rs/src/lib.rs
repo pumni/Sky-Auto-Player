@@ -418,6 +418,37 @@ impl NativeDispatchSessionPy {
         self.session.pause().map_err(PyRuntimeError::new_err)
     }
 
+    #[cfg(feature = "test-support")]
+    fn pause_with_timing_token(&self) -> PyResult<u64> {
+        self.session
+            .pause_with_timing_token()
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn pause_timing_result<'py>(
+        &self,
+        py: Python<'py>,
+        generation: StrictU64,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(result) = self
+            .session
+            .pause_timing_result(generation.0)
+            .map_err(PyRuntimeError::new_err)?
+        else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("generation", result.generation)?;
+        dict.set_item("requested_ticks", result.requested_ticks.as_u64())?;
+        dict.set_item("observed_ticks", result.observed_ticks.as_u64())?;
+        dict.set_item("acknowledged_ticks", result.acknowledged_ticks.as_u64())?;
+        dict.set_item("observation_latency_us", result.observation_latency_us)?;
+        dict.set_item("completion_latency_us", result.completion_latency_us)?;
+        dict.set_item("cleanup_cost_us", result.cleanup_cost_us)?;
+        Ok(Some(dict))
+    }
+
     fn resume(&self) -> PyResult<()> {
         self.session.resume().map_err(PyRuntimeError::new_err)
     }
@@ -747,6 +778,35 @@ impl TestDispatchSessionPy {
 
     fn pause(&self) -> PyResult<()> {
         self.session.pause().map_err(PyRuntimeError::new_err)
+    }
+
+    fn pause_with_timing_token(&self) -> PyResult<u64> {
+        self.session
+            .pause_with_timing_token()
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    fn pause_timing_result<'py>(
+        &self,
+        py: Python<'py>,
+        generation: StrictU64,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(result) = self
+            .session
+            .pause_timing_result(generation.0)
+            .map_err(PyRuntimeError::new_err)?
+        else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("generation", result.generation)?;
+        dict.set_item("requested_ticks", result.requested_ticks.as_u64())?;
+        dict.set_item("observed_ticks", result.observed_ticks.as_u64())?;
+        dict.set_item("acknowledged_ticks", result.acknowledged_ticks.as_u64())?;
+        dict.set_item("observation_latency_us", result.observation_latency_us)?;
+        dict.set_item("completion_latency_us", result.completion_latency_us)?;
+        dict.set_item("cleanup_cost_us", result.cleanup_cost_us)?;
+        Ok(Some(dict))
     }
 
     fn quit(&self) -> PyResult<()> {

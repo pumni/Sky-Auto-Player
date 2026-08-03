@@ -544,7 +544,7 @@ def _measure_command_interrupt(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
-) -> int:
+) -> dict[str, int]:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
     actions = [(0, "down", 10_000_000, [int(SKY_15_SCAN_CODES[0])], "interrupt")]
@@ -571,19 +571,42 @@ def _measure_command_interrupt(
             raise RuntimeError("native worker did not finish startup admission")
         time.sleep(0.001)
 
-    started_ns = time.perf_counter_ns()
-    session.pause()
-    while not bool(dict(session.snapshot()).get("is_paused")):
+    pause_with_timing_token = getattr(session, "pause_with_timing_token", None)
+    pause_timing_result = getattr(session, "pause_timing_result", None)
+    if not callable(pause_with_timing_token) or not callable(pause_timing_result):
+        session.quit()
+        session.join(timeout_ms=5_000)
+        raise RuntimeError(
+            "native command timing requires a test-support wheel with QPC pause instrumentation"
+        )
+    generation = int(pause_with_timing_token())
+    while True:
+        native_result = pause_timing_result(generation)
+        if native_result is not None:
+            result = dict(native_result)
+            break
         if time.perf_counter() >= deadline + 2.0:
             session.quit()
             session.join(timeout_ms=5_000)
             raise RuntimeError("native pause command was not observed")
         time.sleep(0.001)
-    elapsed_us = (time.perf_counter_ns() - started_ns) // 1_000
     session.quit()
     if not session.join(timeout_ms=5_000):
         raise RuntimeError("native command-interrupt session did not terminate")
-    return elapsed_us
+    required = (
+        "generation",
+        "requested_ticks",
+        "observed_ticks",
+        "acknowledged_ticks",
+        "observation_latency_us",
+        "completion_latency_us",
+        "cleanup_cost_us",
+    )
+    if result.get("generation") != generation or any(
+        key not in result for key in required
+    ):
+        raise RuntimeError("native pause timing result is incomplete")
+    return {key: int(result[key]) for key in required}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1005,7 +1028,19 @@ def main() -> int:
             [run["peak_rss_bytes"] for run in dispatch_runs if run["peak_rss_bytes"] is not None],
             "peak_rss_bytes",
         ),
-        "command_interrupt_latency_us": _stats(interrupt_runs),
+        "command_interrupt_latency_us": _stats(
+            [run["completion_latency_us"] for run in interrupt_runs]
+        ),
+        "command_observation_latency_us": _stats(
+            [run["observation_latency_us"] for run in interrupt_runs]
+        ),
+        "command_completion_latency_us": _stats(
+            [run["completion_latency_us"] for run in interrupt_runs]
+        ),
+        "command_cleanup_cost_us": _stats(
+            [run["cleanup_cost_us"] for run in interrupt_runs]
+        ),
+        "command_timing_domain": "native_qpc",
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
         "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
         "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),

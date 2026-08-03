@@ -43,6 +43,83 @@ const STRICT_SATURATION_ABORT_STREAK: u8 = 3;
 const STARTUP_WAKE_GUARD_US: u64 = 1_000;
 const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Default)]
+struct CommandTimingState {
+    next_generation: AtomicU64,
+    pause_request_generation: AtomicU64,
+    pause_request_ticks: AtomicU64,
+    pause_observed_generation: AtomicU64,
+    pause_observed_ticks: AtomicU64,
+    pause_ack_generation: AtomicU64,
+    pause_ack_ticks: AtomicU64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandTimingResult {
+    pub generation: u64,
+    pub requested_ticks: QpcTicks,
+    pub observed_ticks: QpcTicks,
+    pub acknowledged_ticks: QpcTicks,
+    pub observation_latency_us: u64,
+    pub completion_latency_us: u64,
+    pub cleanup_cost_us: u64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl CommandTimingState {
+    fn allocate_generation(&self) -> u64 {
+        loop {
+            let current = self.next_generation.load(Ordering::Relaxed);
+            let next = current.wrapping_add(1).max(1);
+            if self
+                .next_generation
+                .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return next;
+            }
+        }
+    }
+
+    fn observe_pause_request(
+        &self,
+        qpc_clock: QpcClock,
+        observed_generation: &mut u64,
+    ) -> Result<Option<u64>, QpcError> {
+        let generation = self.pause_request_generation.load(Ordering::Acquire);
+        if generation == 0 || generation == *observed_generation {
+            return Ok(None);
+        }
+        let observed_ticks = qpc_clock.now()?;
+        self.pause_observed_ticks
+            .store(observed_ticks.as_u64(), Ordering::Relaxed);
+        self.pause_observed_generation
+            .store(generation, Ordering::Release);
+        *observed_generation = generation;
+        Ok(Some(generation))
+    }
+
+    fn acknowledge_pause(
+        &self,
+        qpc_clock: QpcClock,
+        observed_generation: u64,
+    ) -> Result<bool, QpcError> {
+        if observed_generation == 0
+            || self.pause_request_generation.load(Ordering::Acquire) != observed_generation
+        {
+            return Ok(false);
+        }
+        let acknowledged_ticks = qpc_clock.now()?;
+        self.pause_ack_ticks
+            .store(acknowledged_ticks.as_u64(), Ordering::Relaxed);
+        self.pause_ack_generation
+            .store(observed_generation, Ordering::Release);
+        Ok(true)
+    }
+}
+
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
 ///
@@ -810,6 +887,8 @@ pub struct NativeDispatchSession {
     priority_acquired: Arc<Mutex<String>>,
     estimator_output: Arc<Mutex<Option<String>>>,
     supervisor_heartbeat_ticks: Arc<AtomicU64>,
+    #[cfg(any(test, feature = "test-support"))]
+    command_timing: Arc<CommandTimingState>,
 }
 
 impl NativeDispatchSession {
@@ -907,6 +986,8 @@ impl NativeDispatchSession {
             priority_acquired: Arc::new(Mutex::new("pending".to_string())),
             estimator_output: Arc::new(Mutex::new(None)),
             supervisor_heartbeat_ticks: Arc::new(AtomicU64::new(initial_heartbeat_ticks.as_u64())),
+            #[cfg(any(test, feature = "test-support"))]
+            command_timing: Arc::new(CommandTimingState::default()),
         })
     }
 
@@ -949,6 +1030,8 @@ impl NativeDispatchSession {
         let priority_acquired = Arc::clone(&self.priority_acquired);
         let estimator_output = Arc::clone(&self.estimator_output);
         let supervisor_heartbeat_ticks = Arc::clone(&self.supervisor_heartbeat_ticks);
+        #[cfg(any(test, feature = "test-support"))]
+        let command_timing = Arc::clone(&self.command_timing);
         supervisor_heartbeat_ticks.store(heartbeat_ticks.as_u64(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
@@ -970,6 +1053,8 @@ impl NativeDispatchSession {
                         &priority_acquired,
                         &estimator_output,
                         &supervisor_heartbeat_ticks,
+                        #[cfg(any(test, feature = "test-support"))]
+                        &command_timing,
                     )
                 }));
                 let (worker_outcome, panic_message) = match worker_result {
@@ -1030,12 +1115,102 @@ impl NativeDispatchSession {
     }
 
     pub fn pause(&self) -> Result<(), String> {
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.pause_with_timing_token().map(|_| ())
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
+                return Err("session commands require a running worker".to_string());
+            }
+            self.desired_pause.store(true, Ordering::Release);
+            let _ = self.interrupt.signal();
+            Ok(())
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pause_with_timing_token(&self) -> Result<u64, String> {
         if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
         }
+        let request_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .map_err(|error| format!("QPC pause request failed: {error:?}"))?;
+        let generation = self.command_timing.allocate_generation();
+        self.command_timing
+            .pause_request_ticks
+            .store(request_ticks.as_u64(), Ordering::Relaxed);
+        self.command_timing
+            .pause_request_generation
+            .store(generation, Ordering::Release);
         self.desired_pause.store(true, Ordering::Release);
         let _ = self.interrupt.signal();
-        Ok(())
+        Ok(generation)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pause_timing_result(
+        &self,
+        generation: u64,
+    ) -> Result<Option<CommandTimingResult>, String> {
+        if generation == 0 {
+            return Err("pause timing generation must be non-zero".to_string());
+        }
+        if self
+            .command_timing
+            .pause_ack_generation
+            .load(Ordering::Acquire)
+            != generation
+        {
+            return Ok(None);
+        }
+        if self
+            .command_timing
+            .pause_observed_generation
+            .load(Ordering::Acquire)
+            != generation
+        {
+            return Ok(None);
+        }
+        let requested_ticks = QpcTicks::from_raw(
+            self.command_timing
+                .pause_request_ticks
+                .load(Ordering::Relaxed),
+        );
+        let observed_ticks = QpcTicks::from_raw(
+            self.command_timing
+                .pause_observed_ticks
+                .load(Ordering::Relaxed),
+        );
+        let acknowledged_ticks =
+            QpcTicks::from_raw(self.command_timing.pause_ack_ticks.load(Ordering::Relaxed));
+        let observation_ticks = observed_ticks
+            .checked_duration_since(requested_ticks)
+            .map_err(|error| format!("pause observation QPC ordering failed: {error}"))?;
+        let completion_ticks = acknowledged_ticks
+            .checked_duration_since(requested_ticks)
+            .map_err(|error| format!("pause completion QPC ordering failed: {error}"))?;
+        let cleanup_ticks = acknowledged_ticks
+            .checked_duration_since(observed_ticks)
+            .map_err(|error| format!("pause cleanup QPC ordering failed: {error}"))?;
+        let qpc_clock = QpcClock::initialize()
+            .map_err(|error| format!("QPC pause timing conversion failed: {error:?}"))?;
+        Ok(Some(CommandTimingResult {
+            generation,
+            requested_ticks,
+            observed_ticks,
+            acknowledged_ticks,
+            observation_latency_us: qpc_clock
+                .duration_to_us(observation_ticks)
+                .map_err(|error| format!("pause observation conversion failed: {error:?}"))?,
+            completion_latency_us: qpc_clock
+                .duration_to_us(completion_ticks)
+                .map_err(|error| format!("pause completion conversion failed: {error:?}"))?,
+            cleanup_cost_us: qpc_clock
+                .duration_to_us(cleanup_ticks)
+                .map_err(|error| format!("pause cleanup conversion failed: {error:?}"))?,
+        }))
     }
 
     pub fn resume(&self) -> Result<(), String> {
@@ -1333,6 +1508,7 @@ fn run_worker(
     priority_acquired: &Mutex<String>,
     estimator_output: &Mutex<Option<String>>,
     supervisor_heartbeat_ticks: &AtomicU64,
+    #[cfg(any(test, feature = "test-support"))] command_timing: &CommandTimingState,
 ) -> u8 {
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
@@ -1863,6 +2039,8 @@ fn run_worker(
             return;
         }
         let mut allow_pre_epoch_startup_dispatch = false;
+        #[cfg(any(test, feature = "test-support"))]
+        let mut observed_pause_generation = 0u64;
         while !coordinator.is_finished() {
             let loop_start_ticks = qpc_ticks_or_terminal!();
             let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
@@ -1939,6 +2117,17 @@ fn run_worker(
             let mut now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
+            #[cfg(any(test, feature = "test-support"))]
+            let pause_observed_this_iteration = match command_timing
+                .observe_pause_request(qpc_clock, &mut observed_pause_generation)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("QPC pause observation failed: {error:?}"));
+                    break;
+                }
+            };
 
             if !focus_ok {
                 verified_target = None;
@@ -2113,6 +2302,17 @@ fn run_worker(
                     // partially resumed session.
                     verified_target = None;
                 }
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            if pause_observed_this_iteration.is_some()
+                && clock_state.is_paused()
+                && let Err(error) =
+                    command_timing.acknowledge_pause(qpc_clock, observed_pause_generation)
+            {
+                force_full_cleanup = true;
+                terminal_error = Some(format!("QPC pause acknowledgment failed: {error:?}"));
+                break;
             }
 
             let paused = clock_state.is_paused();
@@ -4525,10 +4725,10 @@ fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        DownAdmission, FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
-        NativeDispatchSession, PlatformSendResult, RtTraceRecord, SharedMetrics,
-        TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode,
-        TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats,
+        CommandTimingState, DownAdmission, FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY,
+        InjectedSendOutcome, NativeDispatchSession, PlatformSendResult, RtTraceRecord,
+        SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector,
+        TelemetryMode, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats,
         WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
         classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
         derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
@@ -4559,6 +4759,69 @@ mod tests {
             ),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn command_timing_generations_never_use_zero_and_skip_wrap() {
+        let timing = CommandTimingState::default();
+        assert_eq!(timing.allocate_generation(), 1);
+        timing.next_generation.store(u64::MAX, Ordering::Relaxed);
+        assert_eq!(timing.allocate_generation(), 1);
+        assert_eq!(timing.allocate_generation(), 2);
+    }
+
+    #[test]
+    fn command_timing_publishes_observation_before_matching_ack() {
+        let timing = CommandTimingState::default();
+        let generation = timing.allocate_generation();
+        timing.pause_request_ticks.store(1, Ordering::Relaxed);
+        timing
+            .pause_request_generation
+            .store(generation, Ordering::Release);
+        let clock = QpcClock::initialize().expect("QPC clock must be available");
+        let mut observed_generation = 0;
+
+        assert_eq!(
+            timing
+                .observe_pause_request(clock, &mut observed_generation)
+                .expect("observation must succeed"),
+            Some(generation)
+        );
+        assert_eq!(
+            timing.pause_observed_generation.load(Ordering::Acquire),
+            generation
+        );
+        assert!(
+            timing.pause_observed_ticks.load(Ordering::Relaxed)
+                >= timing.pause_request_ticks.load(Ordering::Relaxed)
+        );
+        assert!(
+            timing
+                .acknowledge_pause(clock, generation)
+                .expect("acknowledgment must succeed")
+        );
+        assert_eq!(
+            timing.pause_ack_generation.load(Ordering::Acquire),
+            generation
+        );
+        assert!(
+            timing.pause_ack_ticks.load(Ordering::Relaxed)
+                >= timing.pause_observed_ticks.load(Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn command_timing_does_not_acknowledge_a_stale_generation() {
+        let timing = CommandTimingState::default();
+        timing.pause_request_generation.store(2, Ordering::Release);
+        let clock = QpcClock::initialize().expect("QPC clock must be available");
+
+        assert!(
+            !timing
+                .acknowledge_pause(clock, 1)
+                .expect("stale acknowledgment check must succeed")
+        );
+        assert_eq!(timing.pause_ack_generation.load(Ordering::Acquire), 0);
     }
 
     #[test]
