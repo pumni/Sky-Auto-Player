@@ -677,8 +677,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rt-priority-mode",
         choices=("auto", "mmcss", "time_critical", "highest", "off"),
-        default="off",
-        help="real-time priority policy (default: off)",
+        default="auto",
+        help="real-time priority policy (default: auto)",
     )
     parser.add_argument(
         "--baseline",

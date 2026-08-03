@@ -70,6 +70,13 @@ def test_benchmark_budget_cap_leaves_room_for_release_command_samples() -> None:
     assert ACCEPTANCE.MAX_BENCHMARK_BUDGET_SECONDS >= 300.0
 
 
+def test_benchmark_default_priority_policy_is_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["bench_native_acceptance.py"])
+    assert ACCEPTANCE._parse_args().rt_priority_mode == "auto"
+
+
 @pytest.mark.parametrize(
     ("base_latency_us", "per_key_latency_us"),
     [(0, 1), (1, 0), (80, 40)],
