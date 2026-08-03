@@ -27,6 +27,7 @@ import os
 import platform
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,53 @@ class TelemetryIntegrityError(RuntimeError):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class BenchmarkRunResult:
+    """Outcome of one requested repetition; failed runs are never statistics."""
+
+    run_index: int
+    polyphony: int
+    result: dict[str, Any] | None
+    failure: dict[str, Any] | None
+
+
+class BenchmarkRunFailure(RuntimeError):
+    """A repetition failed with the raw session evidence attached."""
+
+    def __init__(
+        self,
+        *,
+        original: BaseException,
+        snapshot: dict[str, Any] | None,
+        telemetry: dict[str, Any] | None,
+        diagnostics: dict[str, Any] | None,
+    ) -> None:
+        self.original = original
+        self.snapshot = snapshot
+        self.telemetry = telemetry
+        self.diagnostics = diagnostics
+        super().__init__(str(original))
+
+
+def _run_validity_summary(
+    requested_runs: int, results: list[BenchmarkRunResult]
+) -> dict[str, Any]:
+    """Return the explicit validity contract for a repetition set."""
+
+    successful_runs = sum(
+        1 for result in results if result.result is not None and result.failure is None
+    )
+    failed_runs = sum(1 for result in results if result.failure is not None)
+    return {
+        "requested_runs": requested_runs,
+        "successful_runs": successful_runs,
+        "failed_runs": failed_runs,
+        "run_validity": "complete"
+        if requested_runs == successful_runs and failed_runs == 0
+        else "invalid",
+    }
+
+
 def _validate_telemetry_integrity(
     *,
     actions: list[tuple[int, str, int, list[int], str]],
@@ -109,6 +157,10 @@ def _validate_telemetry_integrity(
 
     expected_indices = [int(action[0]) for action in actions]
     expected_kinds = {int(action[0]): str(action[1]) for action in actions}
+    expected_counts = collections.Counter(expected_indices)
+    expected_duplicate_indices = sorted(
+        index for index, count in expected_counts.items() if count > 1
+    )
     actual_indices = [int(record.event_index) for record in records]
     counts = collections.Counter(actual_indices)
     duplicate_indices = sorted(index for index, count in counts.items() if count > 1)
@@ -135,6 +187,7 @@ def _validate_telemetry_integrity(
         "dropped": telemetry.get("dropped"),
         "truncated": telemetry.get("truncated"),
         "expected_indices": expected_indices,
+        "expected_duplicate_indices": expected_duplicate_indices,
         "actual_indices": actual_indices,
         "missing_indices": missing_indices,
         "duplicate_indices": duplicate_indices,
@@ -147,6 +200,7 @@ def _validate_telemetry_integrity(
         and diagnostics["dropped"] == 0
         and diagnostics["truncated"] is False
         and len(records) == len(actions)
+        and not expected_duplicate_indices
         and not missing_indices
         and not duplicate_indices
         and not unexpected_indices
@@ -394,67 +448,93 @@ def _run_dispatch(
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
     )
-    started_ns = time.perf_counter_ns()
-    session.start()
-    if not session.join(timeout_ms=timeout_ms):
-        session.panic_release()
-        session.quit()
-        session.join(timeout_ms=5_000)
-        raise RuntimeError("native acceptance session exceeded its hard budget")
-    wall_us = (time.perf_counter_ns() - started_ns) // 1_000
-    snapshot = dict(session.snapshot())
-    telemetry = json.loads(session.take_telemetry_json())
-    records = materialize_native_trace(telemetry)
-    _validate_telemetry_integrity(
-        actions=actions,
-        telemetry=telemetry,
-        records=records,
-        polyphony=polyphony,
-    )
-    sender_errors = [
-        record.sender_completion_error_us
-        for record in records
-        if isinstance(record.sender_completion_error_us, int)
-        and not isinstance(record.sender_completion_error_us, bool)
-    ]
-    if len(sender_errors) != len(records):
-        raise RuntimeError("required sender telemetry has missing exact completion errors")
-    lead_by_polyphony = {
-        str(record.native_polyphony): int(record.applied_lead_us)
-        for record in records
-        if record.kind == "down" and record.native_polyphony is not None
-    }
-    peak_rss = _peak_working_set_bytes()
-    result: dict[str, Any] = {
-        "polyphony": polyphony,
-        "wall_us": wall_us,
-        "_sender_error_values": sender_errors,
-        "_records": records,
-        "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
-        "completion_error_us": _completion_error_report(records),
-        "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
-        "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
-        "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
-        "playback_wall_time_us": int(snapshot.get("playback_wall_time_us", 0)),
-        "spin_duty_cycle_ppm": int(snapshot.get("spin_duty_cycle_ppm", 0)),
-        "peak_rss_bytes": peak_rss,
-        "keys_dropped": int(snapshot.get("keys_dropped", 0)),
-        "failed_release_count": int(snapshot.get("failed_release_count", 0)),
-        "chord_split_events": int(snapshot.get("chord_split_events", 0)),
-        "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
-        "sendinput_zero_progress_failures": int(
-            snapshot.get("sendinput_zero_progress_failures", 0)
-        ),
-        "lead_saturation_count_down": list(
-            snapshot.get("lead_saturation_count_down", [])
-        ),
-        "lead_saturation_count_up": list(snapshot.get("lead_saturation_count_up", [])),
-        "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
-        "lead_by_polyphony": lead_by_polyphony,
-        "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
-        "outcome": snapshot.get("outcome"),
-    }
-    return result
+    snapshot: dict[str, Any] | None = None
+    telemetry: dict[str, Any] | None = None
+    diagnostics: dict[str, Any] | None = None
+    try:
+        started_ns = time.perf_counter_ns()
+        session.start()
+        if not session.join(timeout_ms=timeout_ms):
+            session.panic_release()
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise RuntimeError("native acceptance session exceeded its hard budget")
+        wall_us = (time.perf_counter_ns() - started_ns) // 1_000
+        snapshot = dict(session.snapshot())
+        telemetry = json.loads(session.take_telemetry_json())
+        records = materialize_native_trace(telemetry)
+        diagnostics = _validate_telemetry_integrity(
+            actions=actions,
+            telemetry=telemetry,
+            records=records,
+            polyphony=polyphony,
+        )
+        sender_errors = [
+            record.sender_completion_error_us
+            for record in records
+            if isinstance(record.sender_completion_error_us, int)
+            and not isinstance(record.sender_completion_error_us, bool)
+        ]
+        if len(sender_errors) != len(records):
+            raise RuntimeError("required sender telemetry has missing exact completion errors")
+        lead_by_polyphony = {
+            str(record.native_polyphony): int(record.applied_lead_us)
+            for record in records
+            if record.kind == "down" and record.native_polyphony is not None
+        }
+        peak_rss = _peak_working_set_bytes()
+        result: dict[str, Any] = {
+            "polyphony": polyphony,
+            "wall_us": wall_us,
+            "_sender_error_values": sender_errors,
+            "_records": records,
+            "_snapshot": snapshot,
+            "_telemetry": telemetry,
+            "_telemetry_integrity": diagnostics,
+            "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
+            "completion_error_us": _completion_error_report(records),
+            "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
+            "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
+            "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
+            "playback_wall_time_us": int(snapshot.get("playback_wall_time_us", 0)),
+            "spin_duty_cycle_ppm": int(snapshot.get("spin_duty_cycle_ppm", 0)),
+            "peak_rss_bytes": peak_rss,
+            "keys_dropped": int(snapshot.get("keys_dropped", 0)),
+            "failed_release_count": int(snapshot.get("failed_release_count", 0)),
+            "chord_split_events": int(snapshot.get("chord_split_events", 0)),
+            "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
+            "sendinput_zero_progress_failures": int(
+                snapshot.get("sendinput_zero_progress_failures", 0)
+            ),
+            "lead_saturation_count_down": list(
+                snapshot.get("lead_saturation_count_down", [])
+            ),
+            "lead_saturation_count_up": list(snapshot.get("lead_saturation_count_up", [])),
+            "positive_residual_at_cap": int(snapshot.get("positive_residual_at_cap", 0)),
+            "lead_by_polyphony": lead_by_polyphony,
+            "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
+            "outcome": snapshot.get("outcome"),
+        }
+        return result
+    except Exception as exc:
+        if snapshot is None:
+            try:
+                snapshot = dict(session.snapshot())
+            except Exception:
+                snapshot = None
+        if telemetry is None:
+            try:
+                telemetry = json.loads(session.take_telemetry_json())
+            except Exception:
+                telemetry = None
+        if diagnostics is None and isinstance(exc, TelemetryIntegrityError):
+            diagnostics = exc.diagnostics
+        raise BenchmarkRunFailure(
+            original=exc,
+            snapshot=snapshot,
+            telemetry=telemetry,
+            diagnostics=diagnostics,
+        ) from exc
 
 
 def _measure_command_interrupt(
@@ -510,6 +590,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--actions", type=int, default=128)
     parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument(
+        "--continue-after-failure",
+        action="store_true",
+        help="run remaining repetitions for diagnostics, but still exit non-zero",
+    )
     parser.add_argument(
         "--budget-seconds",
         type=float,
@@ -603,9 +688,9 @@ def _resolve_mock_latency_values(
 
 def _assert_correctness(run: dict[str, Any]) -> None:
     if run["outcome"] != "finished":
-        raise SystemExit(f"native acceptance outcome was {run['outcome']!r}")
+        raise RuntimeError(f"native acceptance outcome was {run['outcome']!r}")
     if run["keys_dropped"] or run["failed_release_count"] or run["chord_split_events"]:
-        raise SystemExit(
+        raise RuntimeError(
             "native acceptance correctness failure: "
             f"polyphony={run['polyphony']} "
             f"keys_dropped={run['keys_dropped']} "
@@ -615,7 +700,7 @@ def _assert_correctness(run: dict[str, Any]) -> None:
     statuses = run["generation_status_counts"]
     nonterminal = sum(int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending"))
     if nonterminal:
-        raise SystemExit(
+        raise RuntimeError(
             f"native acceptance left {nonterminal} nonterminal generations "
             f"for polyphony={run['polyphony']}"
         )
@@ -719,25 +804,141 @@ def main() -> int:
             raise RuntimeError("native acceptance budget expired before cleanup reserve")
         return max(1_000, min(60_000, math.ceil(remaining * 1_000)))
 
-    dispatch_runs: list[dict[str, Any]] = []
-    by_polyphony: dict[str, Any] = {}
-    for polyphony in polyphonies:
-        actions = _actions(args.actions, polyphony)
-        runs = [
-            _run_dispatch(
-                actions,
-                polyphony,
+    successful_suites: list[dict[str, Any]] = []
+    suite_results: list[BenchmarkRunResult] = []
+    failures: list[dict[str, Any]] = []
+    for run_index in range(args.repeats):
+        suite_runs: dict[str, dict[str, Any]] = {}
+        current_polyphony = polyphonies[0]
+        current_actions = _actions(args.actions, current_polyphony)
+        try:
+            for polyphony in polyphonies:
+                current_polyphony = polyphony
+                current_actions = _actions(args.actions, polyphony)
+                run = _run_dispatch(
+                    current_actions,
+                    polyphony,
+                    backend=args.backend,
+                    mock_base_latency_us=mock_base_latency_us,
+                    mock_per_key_latency_us=mock_per_key_latency_us,
+                    adaptive_spin=not args.no_adaptive_spin,
+                    rt_priority_mode=args.rt_priority_mode,
+                    timeout_ms=next_timeout_ms(),
+                )
+                _assert_correctness(run)
+                suite_runs[str(polyphony)] = run
+
+            if run_deadline - time.monotonic() <= 5.0:
+                raise RuntimeError("native acceptance budget expired before interrupt checks")
+            interrupt = _measure_command_interrupt(
                 backend=args.backend,
                 mock_base_latency_us=mock_base_latency_us,
                 mock_per_key_latency_us=mock_per_key_latency_us,
                 adaptive_spin=not args.no_adaptive_spin,
                 rt_priority_mode=args.rt_priority_mode,
-                timeout_ms=next_timeout_ms(),
             )
-            for _ in range(args.repeats)
-        ]
-        for run in runs:
-            _assert_correctness(run)
+            successful_suites.append({"dispatch": suite_runs, "interrupt": interrupt})
+            suite_results.append(
+                BenchmarkRunResult(
+                    run_index=run_index,
+                    polyphony=0,
+                    result={"dispatch": suite_runs, "interrupt": interrupt},
+                    failure=None,
+                )
+            )
+        except Exception as exc:
+            snapshot: dict[str, Any] | None = None
+            telemetry: dict[str, Any] | None = None
+            diagnostics: dict[str, Any] | None = None
+            original: BaseException = exc
+            if isinstance(exc, BenchmarkRunFailure):
+                snapshot = exc.snapshot
+                telemetry = exc.telemetry
+                diagnostics = exc.diagnostics
+                original = exc.original
+            elif suite_runs:
+                last_run = suite_runs.get(str(current_polyphony))
+                if last_run is not None:
+                    snapshot = last_run.get("_snapshot")
+                    telemetry = last_run.get("_telemetry")
+                    diagnostics = last_run.get("_telemetry_integrity")
+            artifact_path = _failed_run_artifact_path(args.output, run_index)
+            _write_failed_run_artifact(
+                artifact_path,
+                git_info=git_info,
+                native_info=native_info,
+                host_info=host_info,
+                run_index=run_index,
+                polyphony=current_polyphony,
+                actions=current_actions,
+                snapshot=snapshot,
+                telemetry=telemetry,
+                diagnostics=diagnostics,
+                exception=original,
+            )
+            failure = {
+                "run_index": run_index,
+                "polyphony": current_polyphony,
+                "artifact": str(artifact_path),
+                "error": f"{type(original).__name__}: {original}",
+                "validation_diagnostics": diagnostics,
+            }
+            failures.append(failure)
+            suite_results.append(
+                BenchmarkRunResult(
+                    run_index=run_index,
+                    polyphony=current_polyphony,
+                    result=None,
+                    failure=failure,
+                )
+            )
+            if not args.continue_after_failure:
+                break
+
+    validity = _run_validity_summary(args.repeats, suite_results)
+    if failures:
+        invalid_report: dict[str, Any] = {
+            "label": args.label,
+            "backend": args.backend,
+            "actions_per_polyphony": args.actions * 2,
+            "polyphony": polyphonies,
+            "repeats": args.repeats,
+            "budget_seconds": args.budget_seconds,
+            **validity,
+            "unattempted_runs": args.repeats - len(suite_results),
+            "statistics_eligible": False,
+            "excluded_runs": 0,
+            "failures": failures,
+            "mock_latency_model": {
+                "base_us": mock_base_latency_us,
+                "per_key_us": mock_per_key_latency_us,
+            }
+            if args.backend == "mock"
+            else None,
+            "git_sha": git_info["git_sha"],
+            "native_build_commit": native_info["native_build_commit"],
+            "rustc_version": native_info["rustc_version"],
+            "schema_version": native_info["schema_version"],
+            "host_fingerprint": host_info,
+            "dirty_worktree": git_info["dirty_worktree"],
+            "command_line": list(os.sys.argv),
+        }
+        encoded = json.dumps(invalid_report, indent=2)
+        print(encoded)
+        if args.output is not None:
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+        return 1
+
+    dispatch_runs = [
+        run
+        for suite in successful_suites
+        for run in suite["dispatch"].values()
+    ]
+    interrupt_runs = [suite["interrupt"] for suite in successful_suites]
+    by_polyphony: dict[str, Any] = {}
+    for polyphony in polyphonies:
+        actions = _actions(args.actions, polyphony)
+        runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         values = [value for run in runs for value in run["_sender_error_values"]]
         poly_report = {
             "polyphony": polyphony,
@@ -770,28 +971,12 @@ def main() -> int:
                 run["positive_residual_at_cap"] for run in runs
             ),
             "lead_by_polyphony": {
-                key: max(
-                    int(run["lead_by_polyphony"].get(key, 0)) for run in runs
-                )
+                key: max(int(run["lead_by_polyphony"].get(key, 0)) for run in runs)
                 for key in {str(polyphony)}
             },
             "outcomes": sorted({run["outcome"] for run in runs}),
         }
         by_polyphony[str(polyphony)] = poly_report
-        dispatch_runs.extend(runs)
-    interrupt_runs = []
-    for _ in range(args.repeats):
-        if run_deadline - time.monotonic() <= 5.0:
-            raise RuntimeError("native acceptance budget expired before interrupt checks")
-        interrupt_runs.append(
-            _measure_command_interrupt(
-                backend=args.backend,
-                mock_base_latency_us=mock_base_latency_us,
-                mock_per_key_latency_us=mock_per_key_latency_us,
-                adaptive_spin=not args.no_adaptive_spin,
-                rt_priority_mode=args.rt_priority_mode,
-            )
-        )
     sender_errors = [
         value
         for run in dispatch_runs
@@ -804,6 +989,10 @@ def main() -> int:
         "polyphony": polyphonies,
         "repeats": args.repeats,
         "budget_seconds": args.budget_seconds,
+        **validity,
+        "statistics_eligible": True,
+        "excluded_runs": 0,
+        "failures": [],
         "sender_completion_error_us": {
             key: _stats(sender_errors)[key]
             for key in ("p50", "p95", "p99", "max")
