@@ -173,11 +173,10 @@ fn instrument_physical_state_for_mask(
     }
 }
 
-fn mask_for_scan_codes(scan_codes: &[u16]) -> u16 {
-    scan_codes
-        .iter()
-        .filter_map(|&scan_code| key_mask(scan_code))
-        .fold(0, |mask, bit| mask | bit)
+fn mask_for_scan_codes(scan_codes: &[u16]) -> Option<u16> {
+    scan_codes.iter().try_fold(0u16, |mask, &scan_code| {
+        key_mask(scan_code).map(|bit| mask | bit)
+    })
 }
 
 /// Single-scan verification retained for the calibration harness. Playback
@@ -1301,7 +1300,14 @@ impl TrackedKeyState {
             for delay_ms in [50, 100] {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 let _ = self.do_emit_up(&stuck);
-                match instrument_physical_state_for_mask(target_hwnd, mask_for_scan_codes(&stuck)) {
+                let retry_mask = match mask_for_scan_codes(&stuck) {
+                    Some(mask) => mask,
+                    None => {
+                        verification_inconclusive = true;
+                        break;
+                    }
+                };
+                match instrument_physical_state_for_mask(target_hwnd, retry_mask) {
                     InstrumentPhysicalState::AllUp => stuck.clear(),
                     InstrumentPhysicalState::Held(held) => {
                         stuck.retain(|scan_code| held.contains(scan_code));
@@ -1386,10 +1392,14 @@ impl TrackedKeyState {
                 if self.custom_emitter.is_some() {
                     stuck.retain(|scan_code| !retry_sent.contains(scan_code));
                 } else {
-                    match instrument_physical_state_for_mask(
-                        target_hwnd,
-                        mask_for_scan_codes(&stuck),
-                    ) {
+                    let retry_mask = match mask_for_scan_codes(&stuck) {
+                        Some(mask) => mask,
+                        None => {
+                            verification_inconclusive = true;
+                            break;
+                        }
+                    };
+                    match instrument_physical_state_for_mask(target_hwnd, retry_mask) {
                         InstrumentPhysicalState::AllUp => {
                             stuck.retain(|scan_code| !retry_sent.contains(scan_code))
                         }
@@ -1700,7 +1710,7 @@ mod tests {
         assert_eq!(FULL_INSTRUMENT_MASK, 0x7fff);
         assert_eq!(
             mask_for_scan_codes(&PHYSICAL_INSTRUMENT_SCAN_CODES),
-            FULL_INSTRUMENT_MASK
+            Some(FULL_INSTRUMENT_MASK)
         );
         assert_eq!(
             PHYSICAL_INSTRUMENT_SCAN_CODES
@@ -1721,9 +1731,14 @@ mod tests {
 
     #[test]
     fn physical_verification_masks_are_bounded_and_subset_specific() {
-        assert_eq!(mask_for_scan_codes(&[0x15]), 1);
-        assert_eq!(mask_for_scan_codes(&[0x15, 0x35]), (1 << 0) | (1 << 14));
-        assert_eq!(mask_for_scan_codes(&[0xffff]), 0);
+        assert_eq!(mask_for_scan_codes(&[]), Some(0));
+        assert_eq!(mask_for_scan_codes(&[0x15]), Some(1));
+        assert_eq!(
+            mask_for_scan_codes(&[0x15, 0x35]),
+            Some((1 << 0) | (1 << 14))
+        );
+        assert_eq!(mask_for_scan_codes(&[0xffff]), None);
+        assert_eq!(mask_for_scan_codes(&[0x15, 0xffff]), None);
         assert_eq!(
             instrument_physical_state_for_mask(0, 0),
             InstrumentPhysicalState::AllUp
