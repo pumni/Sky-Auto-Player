@@ -57,9 +57,11 @@ not reinterpret native timing.
   cleanup. Uncertain cleanup is an error, never a successful finish.
 - Partial `SendInput` is not success; zero progress and recovery are handled
   by Rust and remain visible in the final report.
-- Physical preflight and cleanup verification map each instrument scan code
-  through the keyboard layout of the current target window thread using
-  `MapVirtualKeyExW`. A zero/invalid target window, unavailable layout, or failed
+- Physical preflight and cleanup verification map the requested instrument
+  scan-code mask through the keyboard layout of the current target window
+  thread using `MapVirtualKeyExW`. Full admission and full terminal cleanup use
+  all 15 allowlisted keys; tracked cleanup and stuck-key retries use only their
+  bounded masks. A zero/invalid target window, unavailable layout, or failed
   scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
   emitters remain exempt from host physical-state verification.
 - No Python callback runs in the native real-time worker.
@@ -79,16 +81,20 @@ mapping exists only for checking physical state and is not part of the hot
 codes.
 
 Physical-key preflight is an admission boundary for every initial playback,
-manual resume, focus restoration, and target-HWND generation. A target change
-invalidates the previous verification before the worker processes the next
-chord. Cleanup/preflight runs while the playback clock remains paused; only
-after a successful, still-current verification does the worker take a new QPC
-sample and leave the pause. Immediately before a Down, the worker rechecks
-both the target generation and focus, so a focus or target change during the
-Win32 verification window cannot send an unverified chord.
+manual resume, focus restoration, and target-HWND generation. The worker
+stores verification as a typed `(HWND, target-generation)` stamp, and clears
+that stamp at every new manual/focus admission epoch; therefore resuming the
+same HWND still requires a fresh preflight. A target change invalidates the
+previous verification before the worker processes the next chord.
+Cleanup/preflight runs while the playback clock remains paused; only after a
+successful, still-current verification does the worker take a new QPC sample
+and leave the pause. Immediately before a Down, the worker checks focus
+against the exact stamped HWND, rechecks the target stamp, and gates quit,
+skip, panic, and pause state before `SendInput`, so a change during the Win32
+verification window cannot send an unverified chord.
 
 Each physical-state pass resolves the target thread and keyboard layout once,
-maps the fixed 15 scan-code allowlist once, and then reads the aggregate key
+maps only the requested fixed scan-code mask, and then reads the aggregate key
 state. Mapping or state ambiguity remains fail-closed. The resulting layout
 work is therefore limited to admission/cleanup boundaries and is not repeated
 for each healthy chord.
@@ -105,9 +111,11 @@ does not establish game receipt.
 
 ## Healthy worker path
 
-The final wait spin observes an event signal generation and QPC only; it does
-not issue a zero-time Win32 event wait on each spin iteration. The event handle
-remains authoritative for long waits and command interruption. Estimator
+The final wait spin observes an event signal generation and QPC ticks only; it
+does not convert ticks to microseconds or issue a zero-time Win32 event wait on
+each spin iteration. The event handle remains authoritative for long waits and
+command interruption, with at most one final zero-time handoff probe before a
+deadline is reported. Estimator
 lead-cache refreshes update the preallocated cache in place, and one clean
 observation refreshes the affected cache once. CPU-time telemetry is sampled
 on a bounded 100 ms interval with a final worker sample, while healthy shared
