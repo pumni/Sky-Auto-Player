@@ -113,7 +113,8 @@ def check_native_dispatch() -> dict[str, Any]:
     from sky_music.orchestration.native_admission import (
         NativeAdmissionError,
         inspect_rust_core,
-        validate_rust_build_info,
+        validate_native_runtime_info,
+        validate_release_commit,
     )
 
     status: dict[str, Any] = {
@@ -125,6 +126,8 @@ def check_native_dispatch() -> dict[str, Any]:
     }
     inspection = inspect_rust_core()
     status["native_module_path"] = inspection.module_path
+    frozen = bool(getattr(sys, "frozen", False))
+    status["mode"] = "frozen production" if frozen else "source development"
     if inspection.info is None:
         status["msg"] = f"Rust dispatch module is unavailable and is required: {inspection.error}"
         return status
@@ -133,29 +136,34 @@ def check_native_dispatch() -> dict[str, Any]:
     status.update(info)
     status["available"] = True
     try:
-        from sky_music._native_build import (
-            APP_BUILD_COMMIT,  # type: ignore[reportMissingImports]
-        )
-
-        status["application_build_commit"] = APP_BUILD_COMMIT
         runtime_gil_probe = getattr(sys, "_is_gil_enabled", None)
         if not callable(runtime_gil_probe) or runtime_gil_probe():
             raise NativeAdmissionError("active Python runtime is not free-threaded")
-        validated = validate_rust_build_info(
-            app_commit=APP_BUILD_COMMIT,
-            native_info=info,
-        )
+        validated = validate_native_runtime_info(native_info=info)
+        if frozen:
+            from sky_music.orchestration.native_admission import (
+                _packaged_application_commit,
+            )
+
+            app_commit = _packaged_application_commit()
+            status["application_build_commit"] = app_commit
+            validate_release_commit(
+                app_commit=app_commit,
+                native_commit=validated.native_build_commit,
+            )
+            status["release_contract"] = "PASS"
+            status["commit_match"] = True
+        else:
+            status["release_contract"] = "not applicable"
+            status["commit_match"] = None
         status["ok"] = True
-        status["commit_match"] = (
-            validated.app_build_commit == validated.native_build_commit
-        )
         status["msg"] = (
-            "Rust native core: "
-            f"application commit={validated.app_build_commit}, "
+            f"Mode: {status['mode']}; Rust native core: "
             f"native commit={validated.native_build_commit}, "
             f"rustc={validated.rustc_version}, ABI={validated.native_abi}, "
             f"schema={validated.schema_version}, "
-            f"Win32 backend={'available' if validated.win32_backend else 'missing'}."
+            f"Win32 backend={'available' if validated.win32_backend else 'missing'}; "
+            f"runtime contract=PASS; release contract={status['release_contract']}."
         )
     except (ImportError, NativeAdmissionError, TypeError, ValueError) as exc:
         status["msg"] = f"Rust native admission failed: {exc}"

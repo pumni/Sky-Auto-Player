@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
@@ -18,7 +18,6 @@ _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 class RustBuildInfo:
     """Validated native metadata retained by the application startup path."""
 
-    app_build_commit: str
     native_build_commit: str
     schema_version: int
     native_abi: str
@@ -26,6 +25,8 @@ class RustBuildInfo:
     rustc_version: str
     module_path: str
     win32_backend: bool
+    app_build_commit: str | None = None
+    release_commit_match: bool | None = None
 
 
 class NativeAdmissionError(RuntimeError):
@@ -68,13 +69,12 @@ def _require_sha(value: object, field: str) -> str:
     return commit
 
 
-def validate_rust_build_info(
-    *, app_commit: str, native_info: Mapping[str, object]
+def validate_native_runtime_info(
+    *, native_info: Mapping[str, object]
 ) -> RustBuildInfo:
-    """Validate the immutable production admission contract without imports or I/O."""
+    """Validate native compatibility without release provenance checks."""
 
-    expected_commit = _require_sha(app_commit, "application commit")
-    native_commit = _require_sha(native_info.get("native_build_commit"), "native commit")
+    native_commit = _require_text(native_info.get("native_build_commit"), "native commit")
     schema_version = _require_int(native_info.get("schema_version"), "schema_version")
     native_schema_version = _require_int(
         native_info.get("native_schema_version"), "native_schema_version"
@@ -85,11 +85,6 @@ def validate_rust_build_info(
     free_threaded = _require_bool(native_info.get("free_threaded"), "free_threaded")
     win32_backend = _require_bool(native_info.get("win32_backend"), "win32_backend")
 
-    if native_commit != expected_commit:
-        raise NativeAdmissionError(
-            "native commit does not match application commit: "
-            f"expected {expected_commit}, actual {native_commit}"
-        )
     if schema_version != RUST_DISPATCH_SCHEMA_VERSION:
         raise NativeAdmissionError(
             f"schema mismatch: expected {RUST_DISPATCH_SCHEMA_VERSION}, actual {schema_version}"
@@ -109,7 +104,6 @@ def validate_rust_build_info(
         raise NativeAdmissionError("native extension does not expose the Win32 SendInput backend")
 
     return RustBuildInfo(
-        app_build_commit=expected_commit,
         native_build_commit=native_commit,
         schema_version=schema_version,
         native_abi=native_abi,
@@ -120,7 +114,21 @@ def validate_rust_build_info(
     )
 
 
-def _application_build_commit() -> str:
+def validate_release_commit(*, app_commit: str, native_commit: str) -> None:
+    """Validate exact application/native provenance for frozen production."""
+
+    expected = _require_sha(app_commit, "application commit")
+    actual = _require_sha(native_commit, "native commit")
+    if actual != expected:
+        raise NativeAdmissionError(
+            "native commit does not match application commit: "
+            f"expected {expected}, actual {actual}"
+        )
+
+
+def _packaged_application_commit() -> str:
+    """Load application provenance embedded by the frozen build pipeline."""
+
     try:
         from sky_music._native_build import (
             APP_BUILD_COMMIT,  # type: ignore[reportMissingImports]
@@ -172,7 +180,6 @@ def inspect_rust_core() -> NativeInspection:
 def require_rust_core() -> RustBuildInfo:
     """Admit the Rust core once at application startup, or fail closed."""
 
-    app_commit = _application_build_commit()
     inspection = inspect_rust_core()
     if inspection.error is not None or inspection.info is None:
         raise NativeAdmissionError(inspection.error or "native metadata is unavailable")
@@ -182,7 +189,20 @@ def require_rust_core() -> RustBuildInfo:
         raise NativeAdmissionError("active Python runtime is not free-threaded")
 
     try:
-        return validate_rust_build_info(app_commit=app_commit, native_info=inspection.info)
+        result = validate_native_runtime_info(native_info=inspection.info)
+        if not getattr(sys, "frozen", False):
+            return result
+
+        app_commit = _packaged_application_commit()
+        validate_release_commit(
+            app_commit=app_commit,
+            native_commit=result.native_build_commit,
+        )
+        return replace(
+            result,
+            app_build_commit=app_commit,
+            release_commit_match=True,
+        )
     except NativeAdmissionError as exc:
         module_path = inspection.module_path or "<unknown>"
         raise NativeAdmissionError(f"{exc} (module: {module_path})") from exc
@@ -195,5 +215,6 @@ __all__ = [
     "RustBuildInfo",
     "inspect_rust_core",
     "require_rust_core",
-    "validate_rust_build_info",
+    "validate_native_runtime_info",
+    "validate_release_commit",
 ]

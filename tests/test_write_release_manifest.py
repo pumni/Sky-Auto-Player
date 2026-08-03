@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -67,3 +68,27 @@ def test_get_git_head_rejects_dirty_release_checkout(monkeypatch: pytest.MonkeyP
     with pytest.raises(RuntimeError, match="clean Git worktree"):
         build_app.get_git_head()
     assert build_app.get_git_head(require_clean=False) == "abc123-dirty"
+
+
+def test_verify_native_build_info_requires_matching_release_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import build_app
+
+    expected_commit = "a" * 40
+    native_info = {
+        "native_build_commit": expected_commit,
+        "native_abi": build_app.EXPECTED_NATIVE_ABI,
+        "schema_version": build_app.RUST_DISPATCH_SCHEMA_VERSION,
+        "native_schema_version": build_app.RUST_DISPATCH_SCHEMA_VERSION,
+        "free_threaded": True,
+        "win32_backend": True,
+    }
+    fake_native = SimpleNamespace(build_info=lambda: native_info)
+    monkeypatch.setitem(sys.modules, "sky_player_rs", fake_native)
+
+    build_app.verify_native_build_info(expected_commit)
+
+    native_info["native_build_commit"] = "b" * 40
+    with pytest.raises(RuntimeError, match="native_build_commit"):
+        build_app.verify_native_build_info(expected_commit)

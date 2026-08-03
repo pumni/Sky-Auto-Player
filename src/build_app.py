@@ -9,7 +9,11 @@ import sys
 import tomllib
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
+
+from sky_music.orchestration.native_admission import EXPECTED_NATIVE_ABI
+from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
 
 
 def find_project_root(start: Path) -> Path:
@@ -80,6 +84,48 @@ def generate_native_build_py(
         f'APP_BUILD_COMMIT: str = "{app_commit}"\n',
         encoding="utf-8",
     )
+
+
+def _restore_native_build_metadata_after_build[**P, R](
+    func: Callable[P, R],
+) -> Callable[P, R]:
+    """Restore ignored release metadata after success or a failed build."""
+
+    @wraps(func)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        metadata_existed = NATIVE_BUILD_PY.exists()
+        previous_content = NATIVE_BUILD_PY.read_bytes() if metadata_existed else None
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if metadata_existed and previous_content is not None:
+                NATIVE_BUILD_PY.write_bytes(previous_content)
+            else:
+                NATIVE_BUILD_PY.unlink(missing_ok=True)
+
+    return wrapped
+
+
+def verify_native_build_info(expected_commit: str) -> None:
+    """Verify the wheel installed by the application build pipeline."""
+
+    import sky_player_rs  # type: ignore[import-not-found]
+
+    info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
+    checks = {
+        "native_build_commit": expected_commit,
+        "native_abi": EXPECTED_NATIVE_ABI,
+        "schema_version": RUST_DISPATCH_SCHEMA_VERSION,
+        "native_schema_version": RUST_DISPATCH_SCHEMA_VERSION,
+        "free_threaded": True,
+        "win32_backend": True,
+    }
+    for field, expected in checks.items():
+        if info.get(field) != expected:
+            raise RuntimeError(
+                f"native build metadata mismatch for {field}: "
+                f"expected {expected!r}, actual {info.get(field)!r}"
+            )
 
 def get_project_version() -> str:
     path = PROJECT_ROOT / "pyproject.toml"
@@ -332,6 +378,7 @@ def kill_hanging_selftest(release_dir: Path) -> None:
         pass
 
 
+@_restore_native_build_metadata_after_build
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("[!] Error: This project only supports building on Windows.")
@@ -384,6 +431,7 @@ def main() -> None:
             check=True,
             cwd=str(PROJECT_ROOT),
         )
+        verify_native_build_info(git_head)
         calibration_manifest = rust_dir / "crates" / "sky_dispatch_win32" / "Cargo.toml"
         print("[+] Building the process-isolated native calibration binary...")
         native_build_commit = git_head

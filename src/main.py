@@ -539,8 +539,12 @@ def _run_optimize_selftest() -> int:
 
 def _run_rust_selftest() -> int:
     """Verify production native admission with an empty native schedule."""
+    frozen = bool(getattr(sys, "frozen", False))
+    runtime_contract = False
+    empty_session = False
     try:
         rust_build = require_rust_core()
+        runtime_contract = True
         import sky_player_rs  # type: ignore[import-not-found]
 
         from sky_music.orchestration.native_admission import EXPECTED_NATIVE_ABI
@@ -562,24 +566,36 @@ def _run_rust_selftest() -> int:
         snapshot = session.snapshot()
         if snapshot.get("status") != "finished":
             raise RuntimeError(f"unexpected native terminal snapshot: {snapshot!r}")
+        empty_session = True
     except NativeAdmissionError as exc:
-        print("sha_match=false")
+        print(f"runtime_contract={str(runtime_contract).lower()}")
+        print(f"release_contract={'fail' if frozen else 'not_applicable'}")
         print("rust_selftest=fail")
         print(f"Rust selftest failed: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
+        print(f"runtime_contract={str(runtime_contract).lower()}")
+        print(f"release_contract={'pass' if frozen else 'not_applicable'}")
+        print(f"empty_session={str(empty_session).lower()}")
         print("rust_selftest=fail")
         print(f"Rust selftest failed: {exc}", file=sys.stderr)
         return 1
-    print(f"app_build_commit={rust_build.app_build_commit}")
-    print(f"native_build_commit={rust_build.native_build_commit}")
-    print("sha_match=true")
+    print("runtime_contract=true")
+    if frozen:
+        print("release_contract=true")
+        print(f"application_commit={rust_build.app_build_commit}")
+        print(f"native_commit={rust_build.native_build_commit}")
+        print("sha_match=true")
+    else:
+        print("release_contract=not_applicable")
+        print(f"native_commit={rust_build.native_build_commit}")
     print(
         "schema_match="
         f"{str(rust_build.schema_version == RUST_DISPATCH_SCHEMA_VERSION).lower()}"
     )
     print(f"abi_match={str(rust_build.native_abi == EXPECTED_NATIVE_ABI).lower()}")
     print(f"win32_backend={str(rust_build.win32_backend).lower()}")
+    print(f"empty_session={str(empty_session).lower()}")
     print("rust_selftest=pass")
     print("Rust selftest OK: native module admitted and empty schedule terminated cleanly.")
     return 0

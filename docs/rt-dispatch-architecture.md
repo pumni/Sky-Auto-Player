@@ -73,10 +73,12 @@ Preview is a separate no-input simulation path. It is not a backend, scheduler,
 timing oracle, or fallback. Calibration runs in its dedicated native process
 and is not part of the playback session contract.
 
-Native admission is startup-only and fail-closed. After the free-threaded
-runtime check, the application validates generated `APP_BUILD_COMMIT` against
-the exact native commit, schema, ABI, and Win32 backend metadata once before
-opening playback UI. Playback never probes again, runs Git, hashes the Rust
-source tree, or accepts a SHA environment override. Removing or invalidating
-the extension never selects Python. Rollback is an application release
-rollback, not a second dispatch engine in the same binary.
+Native admission is startup-only and fail-closed. In source development,
+admission validates the native commit is present plus the runtime schema, ABI,
+free-threaded, and Win32 backend metadata; a dirty native commit is allowed.
+In frozen production, admission additionally validates generated
+`APP_BUILD_COMMIT` against the exact lowercase native commit once before
+opening the playback UI. Playback never probes again, runs Git, hashes the
+Rust source tree, or accepts a SHA environment override. Removing or
+invalidating the extension never selects Python. Rollback is an application
+release rollback, not a second dispatch engine in the same binary.
