@@ -1783,9 +1783,7 @@ fn run_worker(
         .copied()
         .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
     let mut focus_restore_started_ticks: Option<QpcTicks> = None;
-    let mut physical_key_preflight_required = true;
-    let mut last_preflight_hwnd = 0isize;
-    let mut last_preflight_generation = u64::MAX;
+    let mut verified_target: Option<TargetStamp> = None;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
@@ -1907,6 +1905,7 @@ fn run_worker(
                 break;
             }
             if panic_requested.swap(false, Ordering::AcqRel) {
+                verified_target = None;
                 let panic_release =
                     backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
                 if !release_state_verified(&backend, &panic_release) {
@@ -1942,8 +1941,10 @@ fn run_worker(
             let manual_pause = desired_pause.load(Ordering::Acquire);
 
             if !focus_ok {
+                verified_target = None;
                 focus_restore_started_ticks = None;
                 if !clock_state.has_pause_reason("focus") {
+                    verified_target = None;
                     if let Err(error) = suspend_live_input(
                         &mut backend,
                         &mut coordinator,
@@ -1980,36 +1981,38 @@ fn run_worker(
                 if focus_grace_elapsed >= focus_restore_grace_ticks {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
-                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
-                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    let preflight_target = load_target_stamp(target_hwnd, target_generation);
+                    verified_target = None;
                     if let Err(error) =
-                        suspend_live_input(&mut backend, &mut coordinator, preflight_hwnd)
+                        suspend_live_input(&mut backend, &mut coordinator, preflight_target.hwnd)
                     {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!("focus restoration failed: {error}"));
                         break;
                     }
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
-                        preflight_hwnd,
-                        preflight_generation,
-                        &mut physical_key_preflight_required,
-                        &mut last_preflight_hwnd,
-                        &mut last_preflight_generation,
+                        preflight_target,
+                        &mut verified_target,
                     ) {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!(
                             "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
                     }
-                    if !preflight_target_still_current(
+                    if !focus_matches_hwnd(
+                        config.require_focus,
+                        focus_active,
+                        preflight_target.hwnd,
+                    ) || !target_stamp_still_current(
                         target_hwnd,
                         target_generation,
-                        preflight_hwnd,
-                        preflight_generation,
+                        preflight_target,
                     ) {
-                        physical_key_preflight_required = true;
+                        verified_target = None;
                         focus_restore_started_ticks = None;
                         continue;
                     }
@@ -2019,9 +2022,16 @@ fn run_worker(
                     // playback clock.
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = clock_state.exit_pause("focus", resumed_ticks) {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
+                    }
+                    if desired_pause.load(Ordering::Acquire) {
+                        // Focus restoration is not the final admission when
+                        // manual pause is still active. Require a separate
+                        // manual-resume preflight for that epoch.
+                        verified_target = None;
                     }
                     focus_restore_started_ticks = None;
                     publish_backend_metrics(
@@ -2035,6 +2045,7 @@ fn run_worker(
             }
 
             if manual_pause && !clock_state.has_pause_reason("manual") {
+                verified_target = None;
                 if !clock_state.is_paused() {
                     if let Err(error) = suspend_live_input(
                         &mut backend,
@@ -2064,41 +2075,43 @@ fn run_worker(
                     // Manual resume is a new admission boundary. Keep the
                     // authored clock paused while physical cleanup/preflight
                     // runs and sample QPC only after those operations finish.
-                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
-                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
-                        preflight_hwnd,
-                        preflight_generation,
-                        &mut physical_key_preflight_required,
-                        &mut last_preflight_hwnd,
-                        &mut last_preflight_generation,
+                        preflight_target,
+                        &mut verified_target,
                     ) {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!(
                             "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
                     }
-                    if !preflight_target_still_current(
+                    if !focus_matches_hwnd(
+                        config.require_focus,
+                        focus_active,
+                        preflight_target.hwnd,
+                    ) || !target_stamp_still_current(
                         target_hwnd,
                         target_generation,
-                        preflight_hwnd,
-                        preflight_generation,
+                        preflight_target,
                     ) {
-                        physical_key_preflight_required = true;
+                        verified_target = None;
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = clock_state.exit_pause("manual", resumed_ticks) {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                } else if let Err(error) = clock_state.exit_pause("manual", now_ticks) {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("playback clock failure: {error}"));
-                    break;
+                } else {
+                    // Keep the manual pause reason until focus restoration
+                    // has completed; an old QPC sample must not admit a
+                    // partially resumed session.
+                    verified_target = None;
                 }
             }
 
@@ -2702,6 +2715,7 @@ fn run_worker(
                     !clean_up_sample || recovery_required,
                 );
                 if recovery_required {
+                    verified_target = None;
                     force_full_cleanup = true;
                     terminal_error = Some(format!(
                         "note-off recovery exhausted after {} retries{}",
@@ -2894,29 +2908,22 @@ fn run_worker(
                         );
                         break;
                     }
-                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
-                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
-                        preflight_hwnd,
-                        preflight_generation,
-                        &mut physical_key_preflight_required,
-                        &mut last_preflight_hwnd,
-                        &mut last_preflight_generation,
+                        preflight_target,
+                        &mut verified_target,
                     ) {
+                        verified_target = None;
                         force_full_cleanup = true;
                         terminal_error = Some(format!(
                             "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
                     }
-                    if !preflight_target_still_current(
-                        target_hwnd,
-                        target_generation,
-                        preflight_hwnd,
-                        preflight_generation,
-                    ) {
-                        physical_key_preflight_required = true;
+                    if !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
+                    {
+                        verified_target = None;
                         continue;
                     }
                     if effective_now_ticks
@@ -2975,13 +2982,13 @@ fn run_worker(
                         // both target identity and foreground ownership at the
                         // final boundary so a focus change during verification
                         // cannot turn into an unowned Down.
-                        if !preflight_target_still_current(
+                        if !target_stamp_still_current(
                             target_hwnd,
                             target_generation,
-                            preflight_hwnd,
-                            preflight_generation,
+                            preflight_target,
                         ) || !focus_matches(config.require_focus, focus_active, target_hwnd)
                         {
+                            verified_target = None;
                             let focus_ticks = qpc_ticks_or_terminal!();
                             if let Err(error) = suspend_live_input(
                                 &mut backend,
@@ -2999,7 +3006,6 @@ fn run_worker(
                                 ));
                                 break;
                             }
-                            physical_key_preflight_required = true;
                             focus_restore_started_ticks = None;
                             publish_backend_metrics(
                                 &backend,
@@ -3346,6 +3352,7 @@ fn run_worker(
                             &mut local_metrics,
                         );
                         if result_chord_integrity_lost {
+                            verified_target = None;
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "SendInput split authored chord at action {}",
@@ -3893,55 +3900,71 @@ fn supervisor_lease_expired(
     Ok(elapsed > timeout_ticks)
 }
 
-fn focus_matches(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TargetStamp {
+    hwnd: isize,
+    generation: u64,
+}
+
+fn load_target_stamp(target_hwnd: &AtomicIsize, target_generation: &AtomicU64) -> TargetStamp {
+    TargetStamp {
+        hwnd: target_hwnd.load(Ordering::Acquire),
+        generation: target_generation.load(Ordering::Acquire),
+    }
+}
+
+fn focus_matches_hwnd(
     require_focus: bool,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
+    expected_hwnd: isize,
 ) -> bool {
     if !require_focus {
         return true;
     }
     let validated_focus_active = focus_active.load(Ordering::Acquire);
-    let target = target_hwnd.load(Ordering::Acquire);
     let foreground_matches =
-        target == 0 || sky_dispatch_win32::focus::foreground_window_matches(target);
+        expected_hwnd == 0 || sky_dispatch_win32::focus::foreground_window_matches(expected_hwnd);
     focus_gate_matches(
         require_focus,
         validated_focus_active,
-        target,
+        expected_hwnd,
         foreground_matches,
+    )
+}
+
+fn focus_matches(
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    target_hwnd: &AtomicIsize,
+) -> bool {
+    focus_matches_hwnd(
+        require_focus,
+        focus_active,
+        target_hwnd.load(Ordering::Acquire),
     )
 }
 
 fn ensure_preflight_for_target(
     backend: &TrackedKeyState,
-    target_hwnd: isize,
-    target_generation: u64,
-    required: &mut bool,
-    last_hwnd: &mut isize,
-    last_generation: &mut u64,
+    current: TargetStamp,
+    verified_target: &mut Option<TargetStamp>,
 ) -> Result<(), sky_dispatch_win32::input::PhysicalKeyPreflightError> {
-    if target_hwnd != *last_hwnd || target_generation != *last_generation {
-        *required = true;
-    }
-    if !*required {
+    if *verified_target == Some(current) {
         return Ok(());
     }
-    backend.ensure_instrument_keys_physically_up(target_hwnd)?;
-    *last_hwnd = target_hwnd;
-    *last_generation = target_generation;
-    *required = false;
+    *verified_target = None;
+    backend.ensure_instrument_keys_physically_up(current.hwnd)?;
+    *verified_target = Some(current);
     Ok(())
 }
 
-fn preflight_target_still_current(
+fn target_stamp_still_current(
     target_hwnd: &AtomicIsize,
     target_generation: &AtomicU64,
-    expected_hwnd: isize,
-    expected_generation: u64,
+    expected: TargetStamp,
 ) -> bool {
-    target_generation.load(Ordering::Acquire) == expected_generation
-        && target_hwnd.load(Ordering::Acquire) == expected_hwnd
+    target_generation.load(Ordering::Acquire) == expected.generation
+        && target_hwnd.load(Ordering::Acquire) == expected.hwnd
 }
 
 fn record_lateness(
@@ -4447,14 +4470,15 @@ mod tests {
     use super::{
         FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
         NativeDispatchSession, PlatformSendResult, RtTraceRecord, SharedMetrics,
-        TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TelemetryCollector, TelemetryMode, TraceContext,
-        TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats, WorkerMetricsLocal,
-        adjust_spin_threshold, anchored_dispatch_target_ticks, classify_latency_class,
-        cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
-        ensure_preflight_for_target, exact_sender_durations, focus_gate_matches,
-        preflight_target_still_current, record_input_path_health, record_termination_error,
+        TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode,
+        TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats,
+        WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+        classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
+        derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
+        focus_gate_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
         release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-        trace_outcome_code, try_publish_metrics, update_estimator_after_send, wake_lateness_ticks,
+        target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+        update_estimator_after_send, wake_lateness_ticks,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4556,7 +4580,7 @@ mod tests {
     }
 
     #[test]
-    fn target_generation_rearms_preflight_without_rechecking_steady_state() {
+    fn target_stamp_rearms_preflight_without_rechecking_steady_state() {
         let backend = TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
             requested: codes.len() as u32,
             inserted: codes.len() as u32,
@@ -4566,63 +4590,81 @@ mod tests {
             win32_error: 0,
             timing_error: None,
         });
-        let mut required = true;
-        let mut last_hwnd = 0;
-        let mut last_generation = u64::MAX;
-        ensure_preflight_for_target(
-            &backend,
-            123,
-            1,
-            &mut required,
-            &mut last_hwnd,
-            &mut last_generation,
-        )
-        .unwrap();
-        assert!(!required);
-        assert_eq!((last_hwnd, last_generation), (123, 1));
+        let stamp = TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        };
+        let mut verified = None;
+        ensure_preflight_for_target(&backend, stamp, &mut verified).unwrap();
+        assert_eq!(verified, Some(stamp));
 
-        ensure_preflight_for_target(
-            &backend,
-            123,
-            1,
-            &mut required,
-            &mut last_hwnd,
-            &mut last_generation,
-        )
-        .unwrap();
-        assert_eq!((last_hwnd, last_generation), (123, 1));
+        ensure_preflight_for_target(&backend, stamp, &mut verified).unwrap();
+        assert_eq!(verified, Some(stamp));
 
-        ensure_preflight_for_target(
-            &backend,
-            123,
-            2,
-            &mut required,
-            &mut last_hwnd,
-            &mut last_generation,
-        )
-        .unwrap();
-        assert_eq!((last_hwnd, last_generation), (123, 2));
+        let next_generation = TargetStamp {
+            generation: 2,
+            ..stamp
+        };
+        ensure_preflight_for_target(&backend, next_generation, &mut verified).unwrap();
+        assert_eq!(verified, Some(next_generation));
+    }
+
+    #[test]
+    fn admission_epoch_invalidation_requires_new_preflight_even_for_same_stamp() {
+        let backend = TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: codes.len() as u32,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 0,
+            win32_error: 0,
+            timing_error: None,
+        });
+        let stamp = TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        };
+        let mut verified = Some(stamp);
+        assert_eq!(verified, Some(stamp));
+        verified = None;
+        ensure_preflight_for_target(&backend, stamp, &mut verified).unwrap();
+        assert_eq!(verified, Some(stamp));
+    }
+
+    #[test]
+    fn failed_preflight_does_not_cache_a_stamp() {
+        let backend = TrackedKeyState::new();
+        let stamp = TargetStamp {
+            hwnd: 0,
+            generation: 1,
+        };
+        let mut verified = Some(TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        });
+        assert!(ensure_preflight_for_target(&backend, stamp, &mut verified).is_err());
+        assert_eq!(verified, None);
     }
 
     #[test]
     fn target_change_is_rejected_at_the_final_send_boundary() {
         let target = AtomicIsize::new(123);
         let generation = AtomicU64::new(1);
-        assert!(preflight_target_still_current(&target, &generation, 123, 1));
+        let stamp = TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        };
+        assert!(target_stamp_still_current(&target, &generation, stamp));
         generation.store(2, Ordering::Release);
-        assert!(!preflight_target_still_current(
-            &target,
-            &generation,
-            123,
-            1
-        ));
+        assert!(!target_stamp_still_current(&target, &generation, stamp));
         target.store(456, Ordering::Release);
-        assert!(!preflight_target_still_current(
-            &target,
-            &generation,
-            456,
-            1
-        ));
+        assert!(!target_stamp_still_current(&target, &generation, stamp));
+    }
+
+    #[test]
+    fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
+        let focus_active = std::sync::atomic::AtomicBool::new(false);
+        assert!(focus_matches_hwnd(false, &focus_active, 123));
     }
 
     #[test]
