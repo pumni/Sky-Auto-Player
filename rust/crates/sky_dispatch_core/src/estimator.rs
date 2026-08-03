@@ -379,6 +379,17 @@ struct ResidualEma {
 }
 
 impl ResidualEma {
+    fn ensure_update(&self, sample: i64) -> Result<(), EstimatorStateError> {
+        let clamped = sample.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
+        self.count
+            .checked_add(1)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("residual count"))?;
+        self.sum
+            .checked_add(clamped)
+            .ok_or(EstimatorStateError::ArithmeticOverflow("residual sum"))?;
+        Ok(())
+    }
+
     fn update(&mut self, alpha: f64, sample: i64) -> Result<(), EstimatorStateError> {
         let clamped = sample.clamp(-MAX_RESIDUAL_US, MAX_RESIDUAL_US * 2);
         let next_count = self
@@ -640,9 +651,11 @@ pub struct SendLatencyEstimator {
     delivery_proxy_us: [Vec<u64>; 4],
 
     /// Cached normal/strict estimates indexed by polyphony, channel and
-    /// policy. The cache is rebuilt after a sample or calibration update;
-    /// dispatch only indexes it.
+    /// policy. The cache is refreshed in place after a sample or calibration
+    /// update; dispatch only indexes it.
     lead_cache: Vec<[[LeadEstimate; 2]; 4]>,
+    #[cfg(test)]
+    refresh_count: u64,
 }
 
 fn residual_index(kind: ActionKind, class: LatencyClass) -> usize {
@@ -692,53 +705,55 @@ impl SendLatencyEstimator {
             residuals: Default::default(),
             delivery_proxy_us: std::array::from_fn(|_| vec![0u64; size]),
             lead_cache: vec![[[empty; 2]; 4]; size],
+            #[cfg(test)]
+            refresh_count: 0,
         };
         estimator.refresh_lead_cache();
         estimator
     }
 
     fn refresh_lead_cache(&mut self) {
-        let mut cache = self.lead_cache.clone();
-        for (n, poly_cache) in cache.iter_mut().enumerate().take(self.max_poly + 1).skip(1) {
-            for (channel, channel_cache) in poly_cache.iter_mut().enumerate() {
-                let (kind, class) = match channel {
-                    0 => (ActionKind::Down, LatencyClass::Hot),
-                    1 => (ActionKind::Down, LatencyClass::Cold),
-                    2 => (ActionKind::Up, LatencyClass::Hot),
-                    3 => (ActionKind::Up, LatencyClass::Cold),
-                    _ => unreachable!(),
-                };
-                for (strict_index, estimate) in channel_cache.iter_mut().enumerate() {
-                    let strict = strict_index == 1;
-                    let mut best_components = LeadComponents::default();
-                    let mut best_uncapped = 0u64;
-                    let mut best_confidence = LeadConfidence::PriorOnly;
-                    for bucket in 1..=n {
-                        let (components, confidence) =
-                            self.build_components(kind, bucket, class, strict);
-                        let uncapped = components.total_uncapped();
-                        if uncapped >= best_uncapped {
-                            best_uncapped = uncapped;
-                            best_components = components;
-                            best_confidence = confidence;
-                        }
-                    }
-                    let saturated = best_uncapped > self.max_lead_us;
-                    *estimate = LeadEstimate {
-                        applied_us: best_uncapped.min(self.max_lead_us),
-                        uncapped_us: best_uncapped,
-                        saturated,
-                        components: best_components,
-                        confidence: if saturated {
-                            LeadConfidence::Saturated
-                        } else {
-                            best_confidence
-                        },
-                    };
+        self.refresh_channel(ActionKind::Down, LatencyClass::Hot);
+        self.refresh_channel(ActionKind::Down, LatencyClass::Cold);
+        self.refresh_channel(ActionKind::Up, LatencyClass::Hot);
+        self.refresh_channel(ActionKind::Up, LatencyClass::Cold);
+    }
+
+    fn refresh_channel(&mut self, kind: ActionKind, class: LatencyClass) {
+        #[cfg(test)]
+        {
+            self.refresh_count = self.refresh_count.saturating_add(1);
+        }
+        let channel = residual_index(kind, class);
+        for strict_index in 0..2 {
+            let strict = strict_index == 1;
+            let mut best_components = LeadComponents::default();
+            let mut best_uncapped = 0u64;
+            let mut best_confidence = LeadConfidence::PriorOnly;
+            for n in 1..=self.max_poly {
+                let (components, confidence) = self.build_components(kind, n, class, strict);
+                let uncapped = components.total_uncapped();
+                // `>=` preserves the previous deterministic tie-break:
+                // an equal estimate from the latest bucket wins.
+                if uncapped >= best_uncapped {
+                    best_uncapped = uncapped;
+                    best_components = components;
+                    best_confidence = confidence;
                 }
+                let saturated = best_uncapped > self.max_lead_us;
+                self.lead_cache[n][channel][strict_index] = LeadEstimate {
+                    applied_us: best_uncapped.min(self.max_lead_us),
+                    uncapped_us: best_uncapped,
+                    saturated,
+                    components: best_components,
+                    confidence: if saturated {
+                        LeadConfidence::Saturated
+                    } else {
+                        best_confidence
+                    },
+                };
             }
         }
-        self.lead_cache = cache;
     }
 
     #[cfg(test)]
@@ -765,23 +780,50 @@ impl SendLatencyEstimator {
         n_keys: usize,
         latency_class: LatencyClass,
     ) -> Result<(), EstimatorStateError> {
+        self.update_observation(kind, latency_class, duration_us, n_keys, None)
+    }
+
+    /// Record one clean sender observation and refresh the affected lead cache
+    /// exactly once. The optional residual is validated before any histogram
+    /// mutation so overflow remains atomic from the caller's perspective.
+    pub fn update_observation(
+        &mut self,
+        kind: ActionKind,
+        class: LatencyClass,
+        duration_us: u64,
+        polyphony: usize,
+        completion_error_us: Option<i64>,
+    ) -> Result<(), EstimatorStateError> {
         let duration_us = duration_us.min(MAX_SAMPLE_US);
-        let n = 1.max(self.max_poly.min(n_keys));
+        let n = 1.max(self.max_poly.min(polyphony));
         match kind {
             ActionKind::Down => {
-                self.down.ensure_push(n, duration_us, latency_class)?;
-                self.down_totals.ensure_push(duration_us, latency_class)?;
-                self.down.push(n, duration_us, latency_class)?;
-                self.down_totals.push(duration_us, latency_class)?;
+                self.down.ensure_push(n, duration_us, class)?;
+                self.down_totals.ensure_push(duration_us, class)?;
             }
             ActionKind::Up => {
-                self.up.ensure_push(n, duration_us, latency_class)?;
-                self.up_totals.ensure_push(duration_us, latency_class)?;
-                self.up.push(n, duration_us, latency_class)?;
-                self.up_totals.push(duration_us, latency_class)?;
+                self.up.ensure_push(n, duration_us, class)?;
+                self.up_totals.ensure_push(duration_us, class)?;
             }
         }
-        self.refresh_lead_cache();
+        if let Some(error_us) = completion_error_us {
+            self.residuals[residual_index(kind, class)].ensure_update(error_us)?;
+        }
+        match kind {
+            ActionKind::Down => {
+                self.down.push(n, duration_us, class)?;
+                self.down_totals.push(duration_us, class)?;
+            }
+            ActionKind::Up => {
+                self.up.push(n, duration_us, class)?;
+                self.up_totals.push(duration_us, class)?;
+            }
+        }
+        if let Some(error_us) = completion_error_us {
+            let alpha = self.alpha;
+            self.residuals[residual_index(kind, class)].update(alpha, error_us)?;
+        }
+        self.refresh_channel(kind, class);
         Ok(())
     }
 
@@ -807,7 +849,7 @@ impl SendLatencyEstimator {
     ) -> Result<(), EstimatorStateError> {
         let alpha = self.alpha;
         self.residuals[residual_index(kind, class)].update(alpha, error_us)?;
-        self.refresh_lead_cache();
+        self.refresh_channel(kind, class);
         Ok(())
     }
 
@@ -838,7 +880,7 @@ impl SendLatencyEstimator {
         }
         let n = 1.max(self.max_poly.min(n_keys));
         self.delivery_proxy_us[residual_index(kind, class)][n] = value_us;
-        self.refresh_lead_cache();
+        self.refresh_channel(kind, class);
         Ok(())
     }
 
@@ -1244,6 +1286,78 @@ mod tests {
             down_3 > cold_prior_us_helper(3) + WAKE_RESERVE_US - 50,
             "down_3={down_3} should be data-driven above cold prior"
         );
+    }
+
+    #[test]
+    fn observation_update_matches_separate_histogram_and_residual_updates() {
+        let mut combined = SendLatencyEstimator::new(0.2, 10_000, 4);
+        let mut separate = combined.clone();
+        for (kind, class, duration, polyphony, residual) in [
+            (ActionKind::Down, LatencyClass::Hot, 120, 1, Some(80)),
+            (ActionKind::Down, LatencyClass::Cold, 2_400, 3, Some(-120)),
+            (ActionKind::Up, LatencyClass::Hot, 260, 2, None),
+        ] {
+            combined
+                .update_observation(kind, class, duration, polyphony, residual)
+                .unwrap();
+            separate
+                .update_with_class(kind, duration, polyphony, class)
+                .unwrap();
+            if let Some(residual) = residual {
+                separate
+                    .update_completion_error_with_class(kind, residual, class)
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            serde_json::to_string(&combined.export_state()).unwrap(),
+            serde_json::to_string(&separate.export_state()).unwrap()
+        );
+        for kind in [ActionKind::Down, ActionKind::Up] {
+            for class in [LatencyClass::Hot, LatencyClass::Cold] {
+                for strict in [false, true] {
+                    for polyphony in 1..=4 {
+                        assert_eq!(
+                            combined.estimate_lead_with_class_and_policy(
+                                kind, polyphony, class, strict
+                            ),
+                            separate.estimate_lead_with_class_and_policy(
+                                kind, polyphony, class, strict
+                            )
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn observation_refreshes_the_cache_once() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
+        let initial_refreshes = estimator.refresh_count;
+        estimator
+            .update_observation(ActionKind::Down, LatencyClass::Hot, 100, 2, Some(50))
+            .unwrap();
+        assert_eq!(estimator.refresh_count, initial_refreshes + 1);
+    }
+
+    #[test]
+    fn observation_refreshes_only_its_direction_and_class_channel() {
+        let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 4);
+        let up_cold_before = estimator
+            .lead_cache
+            .iter()
+            .map(|poly_cache| poly_cache[residual_index(ActionKind::Up, LatencyClass::Cold)])
+            .collect::<Vec<_>>();
+        estimator
+            .update_observation(ActionKind::Down, LatencyClass::Hot, 100, 2, Some(50))
+            .unwrap();
+        let up_cold_after = estimator
+            .lead_cache
+            .iter()
+            .map(|poly_cache| poly_cache[residual_index(ActionKind::Up, LatencyClass::Cold)])
+            .collect::<Vec<_>>();
+        assert_eq!(up_cold_before, up_cold_after);
     }
 
     /// Thin wrapper so tests can call `cold_prior_us` without going through an impl block.

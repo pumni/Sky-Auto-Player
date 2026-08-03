@@ -35,6 +35,7 @@ const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const PAUSED_POLL_US: u64 = 2_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
+const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
@@ -615,22 +616,22 @@ impl TelemetryCollector {
         }
     }
 
-    fn push<F>(&mut self, build: F)
+    fn try_push<F>(&mut self, build: F) -> Result<(), TimeArithmeticError>
     where
-        F: FnOnce() -> RtTraceRecord,
+        F: FnOnce() -> Result<RtTraceRecord, TimeArithmeticError>,
     {
         self.output.attempted = self.output.attempted.saturating_add(1);
         if self.mode == TelemetryMode::Off {
-            return;
+            return Ok(());
         }
 
         if self.output.records.len() == self.capacity {
             self.output.dropped = self.output.dropped.saturating_add(1);
             self.output.truncated = true;
-            return;
+            return Ok(());
         }
 
-        let record = build();
+        let record = build()?;
         self.output.summary.observe(&record);
 
         match self.mode {
@@ -640,6 +641,7 @@ impl TelemetryCollector {
                 self.output.accepted = self.output.accepted.saturating_add(1);
             }
         }
+        Ok(())
     }
 }
 
@@ -733,6 +735,8 @@ struct SharedMetrics {
     generation_status_counts: Mutex<HashMap<String, u64>>,
     abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
+    #[cfg(test)]
+    publish_count: AtomicU64,
 }
 
 fn try_publish_metrics(
@@ -747,7 +751,13 @@ fn try_publish_metrics(
     {
         *guard = local.clone();
         shared.last_publish_us.store(now_us, Ordering::Relaxed);
+        #[cfg(test)]
+        shared.publish_count.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_us: u64) -> bool {
+    now_us.saturating_sub(last_sample_us) >= interval_us
 }
 
 struct WorkerConfig {
@@ -790,6 +800,7 @@ pub struct NativeDispatchSession {
     panic_requested: Arc<AtomicBool>,
     focus_active: Arc<AtomicBool>,
     target_hwnd: Arc<AtomicIsize>,
+    target_generation: Arc<AtomicU64>,
     lifecycle: Arc<AtomicU8>,
     terminal_outcome: Arc<AtomicU8>,
     metrics: Arc<SharedMetrics>,
@@ -886,6 +897,7 @@ impl NativeDispatchSession {
             // worker. Python no longer publishes a second focus boolean.
             focus_active: Arc::new(AtomicBool::new(true)),
             target_hwnd: Arc::new(AtomicIsize::new(0)),
+            target_generation: Arc::new(AtomicU64::new(0)),
             lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_NEW)),
             terminal_outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
             metrics,
@@ -928,6 +940,7 @@ impl NativeDispatchSession {
         let panic_requested = Arc::clone(&self.panic_requested);
         let focus_active = Arc::clone(&self.focus_active);
         let target_hwnd = Arc::clone(&self.target_hwnd);
+        let target_generation = Arc::clone(&self.target_generation);
         let lifecycle = Arc::clone(&self.lifecycle);
         let terminal_outcome = Arc::clone(&self.terminal_outcome);
         let metrics = Arc::clone(&self.metrics);
@@ -951,6 +964,7 @@ impl NativeDispatchSession {
                         &panic_requested,
                         &focus_active,
                         &target_hwnd,
+                        &target_generation,
                         &metrics,
                         &telemetry_output,
                         &priority_acquired,
@@ -1078,6 +1092,7 @@ impl NativeDispatchSession {
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
         if self.target_hwnd.swap(hwnd, Ordering::AcqRel) != hwnd {
+            self.target_generation.fetch_add(1, Ordering::AcqRel);
             let _ = self.interrupt.signal();
         }
     }
@@ -1312,6 +1327,7 @@ fn run_worker(
     panic_requested: &AtomicBool,
     focus_active: &AtomicBool,
     target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
     metrics: &SharedMetrics,
     telemetry_output: &Mutex<Option<NativeTelemetryOutput>>,
     priority_acquired: &Mutex<String>,
@@ -1768,9 +1784,12 @@ fn run_worker(
         .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
     let mut focus_restore_started_ticks: Option<QpcTicks> = None;
     let mut physical_key_preflight_required = true;
+    let mut last_preflight_hwnd = 0isize;
+    let mut last_preflight_generation = u64::MAX;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
+    let mut last_cpu_metrics_sample_us = start_wall_time_us;
     let qpc_admission_error = qpc_frequency_checked()
         .err()
         .map(|error| format!("QPC frequency unavailable: {error:?}"))
@@ -1850,10 +1869,17 @@ fn run_worker(
             let loop_start_ticks = qpc_ticks_or_terminal!();
             let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
             local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
-            local_metrics.worker_cpu_time_us =
-                current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
-            local_metrics.process_cpu_time_us =
-                current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+            if cpu_metrics_sample_due(
+                loop_start_us,
+                last_cpu_metrics_sample_us,
+                CPU_METRICS_SAMPLE_INTERVAL_US,
+            ) {
+                local_metrics.worker_cpu_time_us =
+                    current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+                local_metrics.process_cpu_time_us =
+                    current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+                last_cpu_metrics_sample_us = loop_start_us;
+            }
             if local_metrics.playback_wall_time_us > 0 {
                 local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
                     / local_metrics.playback_wall_time_us as u128)
@@ -1954,14 +1980,38 @@ fn run_worker(
                 if focus_grace_elapsed >= focus_restore_grace_ticks {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
-                    if let Err(error) = suspend_live_input(
-                        &mut backend,
-                        &mut coordinator,
-                        target_hwnd.load(Ordering::Acquire),
-                    ) {
+                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
+                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    if let Err(error) =
+                        suspend_live_input(&mut backend, &mut coordinator, preflight_hwnd)
+                    {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("focus restoration failed: {error}"));
                         break;
+                    }
+                    if let Err(error) = ensure_preflight_for_target(
+                        &backend,
+                        preflight_hwnd,
+                        preflight_generation,
+                        &mut physical_key_preflight_required,
+                        &mut last_preflight_hwnd,
+                        &mut last_preflight_generation,
+                    ) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
+                        ));
+                        break;
+                    }
+                    if !preflight_target_still_current(
+                        target_hwnd,
+                        target_generation,
+                        preflight_hwnd,
+                        preflight_generation,
+                    ) {
+                        physical_key_preflight_required = true;
+                        focus_restore_started_ticks = None;
+                        continue;
                     }
                     // Cleanup can include bounded backend retries. Re-sample
                     // QPC after it completes so that the cleanup interval is
@@ -1974,7 +2024,6 @@ fn run_worker(
                         break;
                     }
                     focus_restore_started_ticks = None;
-                    physical_key_preflight_required = true;
                     publish_backend_metrics(
                         &backend,
                         &mut local_metrics,
@@ -2010,13 +2059,47 @@ fn run_worker(
                     terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
-            } else if !manual_pause
-                && clock_state.has_pause_reason("manual")
-                && let Err(error) = clock_state.exit_pause("manual", now_ticks)
-            {
-                force_full_cleanup = true;
-                terminal_error = Some(format!("playback clock failure: {error}"));
-                break;
+            } else if !manual_pause && clock_state.has_pause_reason("manual") {
+                if !clock_state.has_pause_reason("focus") {
+                    // Manual resume is a new admission boundary. Keep the
+                    // authored clock paused while physical cleanup/preflight
+                    // runs and sample QPC only after those operations finish.
+                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
+                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    if let Err(error) = ensure_preflight_for_target(
+                        &backend,
+                        preflight_hwnd,
+                        preflight_generation,
+                        &mut physical_key_preflight_required,
+                        &mut last_preflight_hwnd,
+                        &mut last_preflight_generation,
+                    ) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
+                        ));
+                        break;
+                    }
+                    if !preflight_target_still_current(
+                        target_hwnd,
+                        target_generation,
+                        preflight_hwnd,
+                        preflight_generation,
+                    ) {
+                        physical_key_preflight_required = true;
+                        continue;
+                    }
+                    let resumed_ticks = qpc_ticks_or_terminal!();
+                    if let Err(error) = clock_state.exit_pause("manual", resumed_ticks) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
+                } else if let Err(error) = clock_state.exit_pause("manual", now_ticks) {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("playback clock failure: {error}"));
+                    break;
+                }
             }
 
             let paused = clock_state.is_paused();
@@ -2527,40 +2610,38 @@ fn run_worker(
                 if release_outcome != "sent" {
                     trace_flags |= TRACE_FLAG_ANOMALY;
                 }
-                let trace_record = match RtTraceRecord::dispatched(
-                    TraceContext {
-                        event_index: first.source_action_index,
-                        kind: TRACE_KIND_UP,
-                        outcome: trace_outcome_code(release_outcome),
-                        polyphony: scan_codes.len(),
-                        flags: trace_flags,
-                        win32_error: result.last_win32_error.unwrap_or(0),
-                    },
-                    TraceTiming {
-                        authored_ticks: scheduled_ticks,
-                        effective_deadline_ticks,
-                        wake_ticks: actual_ticks,
-                        send_started_ticks: result.send_started_ticks,
-                        send_completed_ticks: result.send_completed_ticks,
-                        completion_error_ticks: up_completion_error_ticks,
-                        authored_completion_error_ticks: up_authored_completion_error_ticks,
-                        applied_lead_ticks: lead_up_ticks,
-                    },
-                    TraceDelivery {
-                        requested: scan_codes.len(),
-                        sent: result.sent.len(),
-                        skipped: result.skipped_duplicates.len(),
-                        send_attempts: usize::from(result.send_attempts),
-                    },
-                ) {
-                    Ok(record) => record,
-                    Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("native telemetry record overflow: {error}"));
-                        break;
-                    }
-                };
-                telemetry.push(|| trace_record);
+                if let Err(error) = telemetry.try_push(|| {
+                    RtTraceRecord::dispatched(
+                        TraceContext {
+                            event_index: first.source_action_index,
+                            kind: TRACE_KIND_UP,
+                            outcome: trace_outcome_code(release_outcome),
+                            polyphony: scan_codes.len(),
+                            flags: trace_flags,
+                            win32_error: result.last_win32_error.unwrap_or(0),
+                        },
+                        TraceTiming {
+                            authored_ticks: scheduled_ticks,
+                            effective_deadline_ticks,
+                            wake_ticks: actual_ticks,
+                            send_started_ticks: result.send_started_ticks,
+                            send_completed_ticks: result.send_completed_ticks,
+                            completion_error_ticks: up_completion_error_ticks,
+                            authored_completion_error_ticks: up_authored_completion_error_ticks,
+                            applied_lead_ticks: lead_up_ticks,
+                        },
+                        TraceDelivery {
+                            requested: scan_codes.len(),
+                            sent: result.sent.len(),
+                            skipped: result.skipped_duplicates.len(),
+                            send_attempts: usize::from(result.send_attempts),
+                        },
+                    )
+                }) {
+                    force_full_cleanup = true;
+                    terminal_error = Some(format!("native telemetry record overflow: {error}"));
+                    break;
+                }
                 if config.enable_adaptive_lead
                     && pending_plan
                         .as_ref()
@@ -2614,7 +2695,12 @@ fn run_worker(
                     metrics,
                     &mut last_published_error,
                 );
-                try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                try_publish_metrics(
+                    &local_metrics,
+                    metrics,
+                    qpc_us_or_terminal!(),
+                    !clean_up_sample || recovery_required,
+                );
                 if recovery_required {
                     force_full_cleanup = true;
                     terminal_error = Some(format!(
@@ -2733,6 +2819,7 @@ fn run_worker(
                 let scan_batch = batch_view.scan_code_batch_excluding_mask(conflict_mask);
                 // --- End of borrow scope: all data is now in stack-local copies ---
 
+                let mut force_dispatch_publish = false;
                 if batch_kind == ActionKind::Down {
                     // Repeat the foreground comparison at the final boundary
                     // immediately before SendInput. If focus changed after
@@ -2757,41 +2844,39 @@ fn run_worker(
                             break;
                         }
                         focus_restore_started_ticks = None;
-                        let trace_record = match RtTraceRecord::dispatched(
-                            TraceContext {
-                                event_index: batch_source_action_index,
-                                kind: TRACE_KIND_DOWN,
-                                outcome: trace_outcome_code("blocked_unfocused"),
-                                polyphony: batch_intent_count,
-                                flags: TRACE_FLAG_ANOMALY,
-                                win32_error: 0,
-                            },
-                            TraceTiming {
-                                authored_ticks: authored_batch_scheduled_ticks,
-                                effective_deadline_ticks: batch_scheduled_ticks,
-                                wake_ticks: effective_now_ticks,
-                                send_started_ticks: None,
-                                send_completed_ticks: None,
-                                completion_error_ticks: 0,
-                                authored_completion_error_ticks: 0,
-                                applied_lead_ticks: lead_down_ticks,
-                            },
-                            TraceDelivery {
-                                requested: 0,
-                                sent: 0,
-                                skipped: 0,
-                                send_attempts: 0,
-                            },
-                        ) {
-                            Ok(record) => record,
-                            Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("native telemetry record overflow: {error}"));
-                                break;
-                            }
-                        };
-                        telemetry.push(|| trace_record);
+                        if let Err(error) = telemetry.try_push(|| {
+                            RtTraceRecord::dispatched(
+                                TraceContext {
+                                    event_index: batch_source_action_index,
+                                    kind: TRACE_KIND_DOWN,
+                                    outcome: trace_outcome_code("blocked_unfocused"),
+                                    polyphony: batch_intent_count,
+                                    flags: TRACE_FLAG_ANOMALY,
+                                    win32_error: 0,
+                                },
+                                TraceTiming {
+                                    authored_ticks: authored_batch_scheduled_ticks,
+                                    effective_deadline_ticks: batch_scheduled_ticks,
+                                    wake_ticks: effective_now_ticks,
+                                    send_started_ticks: None,
+                                    send_completed_ticks: None,
+                                    completion_error_ticks: 0,
+                                    authored_completion_error_ticks: 0,
+                                    applied_lead_ticks: lead_down_ticks,
+                                },
+                                TraceDelivery {
+                                    requested: 0,
+                                    sent: 0,
+                                    skipped: 0,
+                                    send_attempts: 0,
+                                },
+                            )
+                        }) {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("native telemetry record overflow: {error}"));
+                            break;
+                        }
                         publish_backend_metrics(
                             &backend,
                             &mut local_metrics,
@@ -2809,17 +2894,30 @@ fn run_worker(
                         );
                         break;
                     }
-                    if physical_key_preflight_required {
-                        if let Err(error) = backend.ensure_instrument_keys_physically_up(
-                            target_hwnd.load(Ordering::Acquire),
-                        ) {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
-                                "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
-                            ));
-                            break;
-                        }
-                        physical_key_preflight_required = false;
+                    let preflight_hwnd = target_hwnd.load(Ordering::Acquire);
+                    let preflight_generation = target_generation.load(Ordering::Acquire);
+                    if let Err(error) = ensure_preflight_for_target(
+                        &backend,
+                        preflight_hwnd,
+                        preflight_generation,
+                        &mut physical_key_preflight_required,
+                        &mut last_preflight_hwnd,
+                        &mut last_preflight_generation,
+                    ) {
+                        force_full_cleanup = true;
+                        terminal_error = Some(format!(
+                            "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
+                        ));
+                        break;
+                    }
+                    if !preflight_target_still_current(
+                        target_hwnd,
+                        target_generation,
+                        preflight_hwnd,
+                        preflight_generation,
+                    ) {
+                        physical_key_preflight_required = true;
+                        continue;
                     }
                     if effective_now_ticks
                         .checked_duration_since(batch_scheduled_ticks)
@@ -2873,6 +2971,50 @@ fn run_worker(
                                 break;
                             }
                         };
+                        // Preflight can perform multiple Win32 calls. Recheck
+                        // both target identity and foreground ownership at the
+                        // final boundary so a focus change during verification
+                        // cannot turn into an unowned Down.
+                        if !preflight_target_still_current(
+                            target_hwnd,
+                            target_generation,
+                            preflight_hwnd,
+                            preflight_generation,
+                        ) || !focus_matches(config.require_focus, focus_active, target_hwnd)
+                        {
+                            let focus_ticks = qpc_ticks_or_terminal!();
+                            if let Err(error) = suspend_live_input(
+                                &mut backend,
+                                &mut coordinator,
+                                target_hwnd.load(Ordering::Acquire),
+                            ) {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!("focus suspension failed: {error}"));
+                                break;
+                            }
+                            if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!(
+                                    "playback clock failure after final focus check: {error}"
+                                ));
+                                break;
+                            }
+                            physical_key_preflight_required = true;
+                            focus_restore_started_ticks = None;
+                            publish_backend_metrics(
+                                &backend,
+                                &mut local_metrics,
+                                metrics,
+                                &mut last_published_error,
+                            );
+                            try_publish_metrics(
+                                &local_metrics,
+                                metrics,
+                                qpc_us_or_terminal!(),
+                                true,
+                            );
+                            continue;
+                        }
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
                         if let Some(error) = backend.timing_error.take() {
@@ -3114,6 +3256,9 @@ fn run_worker(
                         } else {
                             "partial_note_on"
                         };
+                        force_dispatch_publish = !result_success
+                            || result_retried_after_zero_progress
+                            || result_chord_integrity_lost;
                         let mut trace_flags = 0;
                         if result_sent.len() == scan_batch.len() {
                             trace_flags |= TRACE_FLAG_SENT_FULL;
@@ -3124,42 +3269,40 @@ fn run_worker(
                         if down_outcome != "sent" {
                             trace_flags |= TRACE_FLAG_ANOMALY;
                         }
-                        let trace_record = match RtTraceRecord::dispatched(
-                            TraceContext {
-                                event_index: batch_source_action_index,
-                                kind: TRACE_KIND_DOWN,
-                                outcome: trace_outcome_code(down_outcome),
-                                polyphony: batch_intent_count,
-                                flags: trace_flags,
-                                win32_error: result_last_win32_error.unwrap_or(0),
-                            },
-                            TraceTiming {
-                                authored_ticks: authored_batch_scheduled_ticks,
-                                effective_deadline_ticks: batch_scheduled_ticks,
-                                wake_ticks: actual_ticks,
-                                send_started_ticks: result_started_ticks,
-                                send_completed_ticks: result_completed_ticks,
-                                completion_error_ticks: completion_error_ticks_value,
-                                authored_completion_error_ticks:
-                                    authored_completion_error_ticks_value,
-                                applied_lead_ticks: lead_down_ticks,
-                            },
-                            TraceDelivery {
-                                requested: batch_intent_count,
-                                sent: result_sent.len(),
-                                skipped: result_skipped_duplicates.len(),
-                                send_attempts: usize::from(result_send_attempts),
-                            },
-                        ) {
-                            Ok(record) => record,
-                            Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("native telemetry record overflow: {error}"));
-                                break;
-                            }
-                        };
-                        telemetry.push(|| trace_record);
+                        if let Err(error) = telemetry.try_push(|| {
+                            RtTraceRecord::dispatched(
+                                TraceContext {
+                                    event_index: batch_source_action_index,
+                                    kind: TRACE_KIND_DOWN,
+                                    outcome: trace_outcome_code(down_outcome),
+                                    polyphony: batch_intent_count,
+                                    flags: trace_flags,
+                                    win32_error: result_last_win32_error.unwrap_or(0),
+                                },
+                                TraceTiming {
+                                    authored_ticks: authored_batch_scheduled_ticks,
+                                    effective_deadline_ticks: batch_scheduled_ticks,
+                                    wake_ticks: actual_ticks,
+                                    send_started_ticks: result_started_ticks,
+                                    send_completed_ticks: result_completed_ticks,
+                                    completion_error_ticks: completion_error_ticks_value,
+                                    authored_completion_error_ticks:
+                                        authored_completion_error_ticks_value,
+                                    applied_lead_ticks: lead_down_ticks,
+                                },
+                                TraceDelivery {
+                                    requested: batch_intent_count,
+                                    sent: result_sent.len(),
+                                    skipped: result_skipped_duplicates.len(),
+                                    send_attempts: usize::from(result_send_attempts),
+                                },
+                            )
+                        }) {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("native telemetry record overflow: {error}"));
+                            break;
+                        }
                         if config.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
                                 &mut local_metrics.lead_saturation_count_down,
@@ -3294,41 +3437,40 @@ fn run_worker(
                         }
                     };
                     if !suppressed.is_empty() {
-                        let trace_record = match RtTraceRecord::dispatched(
-                            TraceContext {
-                                event_index: batch_source_action_index,
-                                kind: TRACE_KIND_UP,
-                                outcome: trace_outcome_code("suppressed_stale_up"),
-                                polyphony: suppressed.len(),
-                                flags: TRACE_FLAG_ANOMALY,
-                                win32_error: 0,
-                            },
-                            TraceTiming {
-                                authored_ticks: authored_batch_scheduled_ticks,
-                                effective_deadline_ticks: batch_scheduled_ticks,
-                                wake_ticks: effective_now_ticks,
-                                send_started_ticks: None,
-                                send_completed_ticks: None,
-                                completion_error_ticks: 0,
-                                authored_completion_error_ticks: 0,
-                                applied_lead_ticks: lead_up_ticks,
-                            },
-                            TraceDelivery {
-                                requested: 0,
-                                sent: 0,
-                                skipped: 0,
-                                send_attempts: 0,
-                            },
-                        ) {
-                            Ok(record) => record,
-                            Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("native telemetry record overflow: {error}"));
-                                break;
-                            }
-                        };
-                        telemetry.push(|| trace_record);
+                        force_dispatch_publish = true;
+                        if let Err(error) = telemetry.try_push(|| {
+                            RtTraceRecord::dispatched(
+                                TraceContext {
+                                    event_index: batch_source_action_index,
+                                    kind: TRACE_KIND_UP,
+                                    outcome: trace_outcome_code("suppressed_stale_up"),
+                                    polyphony: suppressed.len(),
+                                    flags: TRACE_FLAG_ANOMALY,
+                                    win32_error: 0,
+                                },
+                                TraceTiming {
+                                    authored_ticks: authored_batch_scheduled_ticks,
+                                    effective_deadline_ticks: batch_scheduled_ticks,
+                                    wake_ticks: effective_now_ticks,
+                                    send_started_ticks: None,
+                                    send_completed_ticks: None,
+                                    completion_error_ticks: 0,
+                                    authored_completion_error_ticks: 0,
+                                    applied_lead_ticks: lead_up_ticks,
+                                },
+                                TraceDelivery {
+                                    requested: 0,
+                                    sent: 0,
+                                    skipped: 0,
+                                    send_attempts: 0,
+                                },
+                            )
+                        }) {
+                            force_full_cleanup = true;
+                            terminal_error =
+                                Some(format!("native telemetry record overflow: {error}"));
+                            break;
+                        }
                     }
                 }
                 publish_backend_metrics(
@@ -3337,7 +3479,12 @@ fn run_worker(
                     metrics,
                     &mut last_published_error,
                 );
-                try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                try_publish_metrics(
+                    &local_metrics,
+                    metrics,
+                    qpc_us_or_terminal!(),
+                    force_dispatch_publish,
+                );
                 continue;
             }
 
@@ -3766,6 +3913,37 @@ fn focus_matches(
     )
 }
 
+fn ensure_preflight_for_target(
+    backend: &TrackedKeyState,
+    target_hwnd: isize,
+    target_generation: u64,
+    required: &mut bool,
+    last_hwnd: &mut isize,
+    last_generation: &mut u64,
+) -> Result<(), sky_dispatch_win32::input::PhysicalKeyPreflightError> {
+    if target_hwnd != *last_hwnd || target_generation != *last_generation {
+        *required = true;
+    }
+    if !*required {
+        return Ok(());
+    }
+    backend.ensure_instrument_keys_physically_up(target_hwnd)?;
+    *last_hwnd = target_hwnd;
+    *last_generation = target_generation;
+    *required = false;
+    Ok(())
+}
+
+fn preflight_target_still_current(
+    target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
+    expected_hwnd: isize,
+    expected_generation: u64,
+) -> bool {
+    target_generation.load(Ordering::Acquire) == expected_generation
+        && target_hwnd.load(Ordering::Acquire) == expected_hwnd
+}
+
 fn record_lateness(
     lateness_us: i64,
     is_release: bool,
@@ -3964,11 +4142,13 @@ fn update_estimator_after_send_class(
     if !clean_sample || sent_count == 0 {
         return Ok(());
     }
-    estimator.update_with_class(kind, duration_us, authored_polyphony, latency_class)?;
-    if applied_lead_us > 0 {
-        estimator.update_completion_error_with_class(kind, completion_error_us, latency_class)?;
-    }
-    Ok(())
+    estimator.update_observation(
+        kind,
+        latency_class,
+        duration_us,
+        authored_polyphony,
+        (applied_lead_us > 0).then_some(completion_error_us),
+    )
 }
 
 fn record_lead_saturation(
@@ -4266,13 +4446,15 @@ fn publish_backend_metrics(
 mod tests {
     use super::{
         FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
-        NativeDispatchSession, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TelemetryMode,
-        TraceContext, TraceDelivery, TraceTiming, WakeErrorStats, adjust_spin_threshold,
-        anchored_dispatch_target_ticks, classify_latency_class, deadline_target_ticks,
-        derive_spin_threshold_us, exact_sender_durations, focus_gate_matches,
-        record_input_path_health, record_termination_error, release_runtime_outcome,
-        signed_timeline_delta_ticks, supervisor_lease_expired, trace_outcome_code,
-        update_estimator_after_send, wake_lateness_ticks,
+        NativeDispatchSession, PlatformSendResult, RtTraceRecord, SharedMetrics,
+        TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TelemetryCollector, TelemetryMode, TraceContext,
+        TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats, WorkerMetricsLocal,
+        adjust_spin_threshold, anchored_dispatch_target_ticks, classify_latency_class,
+        cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
+        ensure_preflight_for_target, exact_sender_durations, focus_gate_matches,
+        preflight_target_still_current, record_input_path_health, record_termination_error,
+        release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
+        trace_outcome_code, try_publish_metrics, update_estimator_after_send, wake_lateness_ticks,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4282,7 +4464,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
     use std::time::Duration;
 
     #[test]
@@ -4296,6 +4478,151 @@ mod tests {
             ),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn telemetry_off_does_not_build_trace_records() {
+        let mut telemetry = TelemetryCollector::new(TelemetryMode::Off, 4);
+        let mut builds = 0;
+        telemetry
+            .try_push(|| {
+                builds += 1;
+                Err(sky_dispatch_core::time::TimeArithmeticError::Overflow)
+            })
+            .expect("telemetry off must not evaluate the builder");
+        assert_eq!(builds, 0);
+        assert_eq!(telemetry.output.attempted, 1);
+        assert!(telemetry.output.records.is_empty());
+    }
+
+    #[test]
+    fn telemetry_ring_builds_once_and_propagates_build_error() {
+        let mut telemetry = TelemetryCollector::new(TelemetryMode::Ring, 4);
+        let mut builds = 0;
+        telemetry
+            .try_push(|| {
+                builds += 1;
+                Ok(RtTraceRecord {
+                    event_index: 0,
+                    kind: TRACE_KIND_DOWN,
+                    outcome: 0,
+                    polyphony: 1,
+                    flags: TRACE_FLAG_SENT_FULL,
+                    authored_ticks: 0,
+                    effective_deadline_ticks: 0,
+                    wake_ticks: 0,
+                    send_started_ticks: 0,
+                    send_completed_ticks: 0,
+                    completion_error_ticks: 0,
+                    authored_completion_error_ticks: 0,
+                    applied_lead_ticks: 0,
+                    win32_error: 0,
+                    requested_count: 1,
+                    sent_count: 1,
+                    skipped_count: 0,
+                    send_attempts: 1,
+                })
+            })
+            .unwrap();
+        assert_eq!(builds, 1);
+        assert_eq!(telemetry.output.accepted, 1);
+
+        let result =
+            telemetry.try_push(|| Err(sky_dispatch_core::time::TimeArithmeticError::Overflow));
+        assert!(result.is_err());
+        assert_eq!(telemetry.output.accepted, 1);
+    }
+
+    #[test]
+    fn cpu_metrics_sampling_is_due_only_at_the_interval_boundary() {
+        assert!(!cpu_metrics_sample_due(99_999, 0, 100_000));
+        assert!(cpu_metrics_sample_due(100_000, 0, 100_000));
+        assert!(cpu_metrics_sample_due(100_001, 0, 100_000));
+        assert!(!cpu_metrics_sample_due(u64::MAX, u64::MAX, 100_000));
+        assert!(cpu_metrics_sample_due(u64::MAX, 0, 100_000));
+    }
+
+    #[test]
+    fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
+        let shared = SharedMetrics::default();
+        let local = WorkerMetricsLocal::default();
+        try_publish_metrics(&local, &shared, 0, false);
+        try_publish_metrics(&local, &shared, 49_999, false);
+        assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
+        try_publish_metrics(&local, &shared, 50_000, false);
+        assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
+        try_publish_metrics(&local, &shared, 50_001, true);
+        assert_eq!(shared.publish_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn target_generation_rearms_preflight_without_rechecking_steady_state() {
+        let backend = TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: codes.len() as u32,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 0,
+            win32_error: 0,
+            timing_error: None,
+        });
+        let mut required = true;
+        let mut last_hwnd = 0;
+        let mut last_generation = u64::MAX;
+        ensure_preflight_for_target(
+            &backend,
+            123,
+            1,
+            &mut required,
+            &mut last_hwnd,
+            &mut last_generation,
+        )
+        .unwrap();
+        assert!(!required);
+        assert_eq!((last_hwnd, last_generation), (123, 1));
+
+        ensure_preflight_for_target(
+            &backend,
+            123,
+            1,
+            &mut required,
+            &mut last_hwnd,
+            &mut last_generation,
+        )
+        .unwrap();
+        assert_eq!((last_hwnd, last_generation), (123, 1));
+
+        ensure_preflight_for_target(
+            &backend,
+            123,
+            2,
+            &mut required,
+            &mut last_hwnd,
+            &mut last_generation,
+        )
+        .unwrap();
+        assert_eq!((last_hwnd, last_generation), (123, 2));
+    }
+
+    #[test]
+    fn target_change_is_rejected_at_the_final_send_boundary() {
+        let target = AtomicIsize::new(123);
+        let generation = AtomicU64::new(1);
+        assert!(preflight_target_still_current(&target, &generation, 123, 1));
+        generation.store(2, Ordering::Release);
+        assert!(!preflight_target_still_current(
+            &target,
+            &generation,
+            123,
+            1
+        ));
+        target.store(456, Ordering::Release);
+        assert!(!preflight_target_still_current(
+            &target,
+            &generation,
+            456,
+            1
+        ));
     }
 
     #[test]

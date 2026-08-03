@@ -78,6 +78,21 @@ mapping exists only for checking physical state and is not part of the hot
 `SendInput` path. The current 15-key allowlist has no E0/E1 extended scan
 codes.
 
+Physical-key preflight is an admission boundary for every initial playback,
+manual resume, focus restoration, and target-HWND generation. A target change
+invalidates the previous verification before the worker processes the next
+chord. Cleanup/preflight runs while the playback clock remains paused; only
+after a successful, still-current verification does the worker take a new QPC
+sample and leave the pause. Immediately before a Down, the worker rechecks
+both the target generation and focus, so a focus or target change during the
+Win32 verification window cannot send an unverified chord.
+
+Each physical-state pass resolves the target thread and keyboard layout once,
+maps the fixed 15 scan-code allowlist once, and then reads the aggregate key
+state. Mapping or state ambiguity remains fail-closed. The resulting layout
+work is therefore limited to admission/cleanup boundaries and is not repeated
+for each healthy chord.
+
 The UI/control polling loop publishes the supervisor heartbeat. There is no
 separate heartbeat thread: if the control loop stops, native lease liveness
 reflects that failure.
@@ -87,6 +102,18 @@ resume, pause, and panic-release checks under English US, German, and French
 layouts, recording the layout identifier and result. A receiver/probe may
 count scan-code events and QPC order, but its result is host-side evidence and
 does not establish game receipt.
+
+## Healthy worker path
+
+The final wait spin observes an event signal generation and QPC only; it does
+not issue a zero-time Win32 event wait on each spin iteration. The event handle
+remains authoritative for long waits and command interruption. Estimator
+lead-cache refreshes update the preallocated cache in place, and one clean
+observation refreshes the affected cache once. CPU-time telemetry is sampled
+on a bounded 100 ms interval with a final worker sample, while healthy shared
+metrics publication is rate-limited and anomaly/terminal transitions publish
+immediately. When telemetry is disabled, trace-record construction is not
+performed.
 
 ## Preview, calibration, and rollback
 
