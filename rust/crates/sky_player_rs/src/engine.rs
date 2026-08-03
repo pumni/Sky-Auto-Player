@@ -3176,27 +3176,6 @@ fn run_worker(
                     }
 
                     if !scan_batch.is_empty() {
-                        let started_ticks = match qpc_clock.now() {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
-                                    Some(format!("QPC failure before note-on: {error:?}"));
-                                break;
-                            }
-                        };
-                        let started_us = qpc_ticks_to_us_or_terminal!(started_ticks);
-                        let actual_ticks = match clock_state.get_elapsed_allow_pre_epoch(
-                            started_ticks,
-                            allow_pre_epoch_startup_dispatch,
-                        ) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(format!("playback clock failure: {error}"));
-                                break;
-                            }
-                        };
                         // Preflight can perform multiple Win32 calls. Keep
                         // the final admission bound to the exact stamp that
                         // was verified and let command races return to the
@@ -3363,6 +3342,21 @@ fn run_worker(
                             break;
                         }
 
+                        // The sender owns the exact syscall boundary. The
+                        // admission QPC sample was intentionally removed so
+                        // coordinator activation and sender-duration metrics
+                        // cannot use a timestamp taken before final checks.
+                        let sender_started_ticks = match result_started_ticks {
+                            Some(ticks) => ticks,
+                            None => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(
+                                    "SendInput note-on succeeded without a QPC start boundary"
+                                        .to_string(),
+                                );
+                                break;
+                            }
+                        };
                         let completed_qpc_ticks = match result_completed_ticks {
                             Some(ticks) => ticks,
                             None => {
@@ -3371,6 +3365,40 @@ fn run_worker(
                                     "SendInput note-on completed without a QPC completion boundary"
                                         .to_string(),
                                 );
+                                break;
+                            }
+                        };
+                        let sender_duration_ticks = match completed_qpc_ticks
+                            .checked_duration_since(sender_started_ticks)
+                        {
+                            Ok(duration) => duration,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("note-on QPC ordering failure: {error}"));
+                                break;
+                            }
+                        };
+                        let sender_duration_us =
+                            match qpc_clock.duration_to_us(sender_duration_ticks) {
+                                Ok(duration) => duration,
+                                Err(error) => {
+                                    force_full_cleanup = true;
+                                    terminal_error = Some(format!(
+                                        "note-on sender duration conversion failure: {error:?}"
+                                    ));
+                                    break;
+                                }
+                            };
+                        let sender_started_effective_ticks = match clock_state
+                            .get_elapsed_allow_pre_epoch(
+                                sender_started_ticks,
+                                allow_pre_epoch_startup_dispatch,
+                            ) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error = Some(format!("playback clock failure: {error}"));
                                 break;
                             }
                         };
@@ -3392,7 +3420,7 @@ fn run_worker(
                         if let Err(error) = coordinator.commit_down_success(
                             prepared_batch,
                             &result_sent,
-                            actual_ticks,
+                            sender_started_effective_ticks,
                             completed_effective_ticks,
                         ) {
                             force_full_cleanup = true;
@@ -3469,7 +3497,7 @@ fn run_worker(
                             && let Err(error) = update_estimator_after_send_class(
                                 &mut estimator,
                                 ActionKind::Down,
-                                result_completed_us.saturating_sub(started_us),
+                                sender_duration_us,
                                 result_sent.len(),
                                 batch_intent_count,
                                 lead_down,
@@ -3520,8 +3548,8 @@ fn run_worker(
                                 TraceTiming {
                                     authored_ticks: authored_batch_scheduled_ticks,
                                     effective_deadline_ticks: batch_scheduled_ticks,
-                                    wake_ticks: actual_ticks,
-                                    send_started_ticks: result_started_ticks,
+                                    wake_ticks: effective_now_ticks,
+                                    send_started_ticks: Some(sender_started_ticks),
                                     send_completed_ticks: result_completed_ticks,
                                     completion_error_ticks: completion_error_ticks_value,
                                     authored_completion_error_ticks:
@@ -3550,8 +3578,10 @@ fn run_worker(
                             );
                         }
                         pending_pre_send_spin_us = 0;
+                        let bookkeeping_after_send_us =
+                            bookkeeping_completed_us.saturating_sub(result_completed_us);
                         record_input_path_health(
-                            bookkeeping_completed_us.saturating_sub(started_us),
+                            sender_duration_us.saturating_add(bookkeeping_after_send_us),
                             completed_effective,
                             config.input_path_warn_us,
                             &mut send_duration_window,
@@ -3560,7 +3590,7 @@ fn run_worker(
                             &mut local_metrics.input_path_degraded,
                         );
                         record_input_path_health(
-                            result_completed_us.saturating_sub(started_us),
+                            sender_duration_us,
                             completed_effective,
                             config.input_path_warn_us,
                             &mut send_pure_window,
@@ -3569,7 +3599,7 @@ fn run_worker(
                             &mut local_metrics.sendinput_path_degraded,
                         );
                         record_input_path_health(
-                            bookkeeping_completed_us.saturating_sub(result_completed_us),
+                            bookkeeping_after_send_us,
                             completed_effective,
                             config.input_path_warn_us,
                             &mut bookkeeping_window,
