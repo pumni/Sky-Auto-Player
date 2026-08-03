@@ -13,6 +13,8 @@ pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
     0x31, 0x32, 0x33, 0x34, 0x35, // N M , . /
 ];
 
+// The current instrument allowlist contains no E0/E1 extended scan codes.
+
 fn key_mask(scan_code: u16) -> Option<u16> {
     PHYSICAL_INSTRUMENT_SCAN_CODES
         .iter()
@@ -28,31 +30,55 @@ fn scan_codes_from_mask(mask: u16) -> Vec<u16> {
         .collect()
 }
 
-fn virtual_key_for_scan_code(scan_code: u16) -> Option<i32> {
-    Some(match scan_code {
-        0x15 => 0x59, // Y
-        0x16 => 0x55, // U
-        0x17 => 0x49, // I
-        0x18 => 0x4F, // O
-        0x19 => 0x50, // P
-        0x23 => 0x48, // H
-        0x24 => 0x4A, // J
-        0x25 => 0x4B, // K
-        0x26 => 0x4C, // L
-        0x27 => 0xBA, // ;
-        0x31 => 0x4E, // N
-        0x32 => 0x4D, // M
-        0x33 => 0xBC, // ,
-        0x34 => 0xBE, // .
-        0x35 => 0xBF, // /
-        _ => return None,
-    })
+#[cfg(windows)]
+fn keyboard_layout_for_target(
+    target_hwnd: isize,
+) -> Option<windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL> {
+    let thread_id = if target_hwnd == 0 {
+        0
+    } else {
+        let mut process_id = 0u32;
+        // SAFETY: The HWND is supplied by the validated focus/target path;
+        // the process-id output points to a local scalar for the duration of
+        // this call.
+        let thread_id = unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                target_hwnd as windows_sys::Win32::Foundation::HWND,
+                &mut process_id,
+            )
+        };
+        if thread_id == 0 {
+            return None;
+        }
+        thread_id
+    };
+
+    // SAFETY: GetKeyboardLayout returns a borrowed layout handle and does not
+    // retain pointers supplied by the caller.
+    let layout =
+        unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout(thread_id) };
+    (!layout.is_null()).then_some(layout)
 }
 
-pub(crate) fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
-    let virtual_key = virtual_key_for_scan_code(scan_code)?;
+#[cfg(windows)]
+fn virtual_key_for_scan_code(scan_code: u16, target_hwnd: isize) -> Option<i32> {
+    let layout = keyboard_layout_for_target(target_hwnd)?;
+    // SAFETY: MapVirtualKeyExW reads only the scalar scan code and borrowed
+    // layout handle; it does not retain either value.
+    let virtual_key = unsafe {
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyExW(
+            u32::from(scan_code),
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::MAPVK_VSC_TO_VK_EX,
+            layout,
+        )
+    };
+    (virtual_key != 0).then_some(virtual_key as i32)
+}
+
+pub(crate) fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Option<bool> {
     #[cfg(windows)]
     {
+        let virtual_key = virtual_key_for_scan_code(scan_code, target_hwnd)?;
         // SAFETY: GetAsyncKeyState accepts any virtual-key integer and does not
         // retain pointers or transfer ownership.
         let state = unsafe {
@@ -62,7 +88,7 @@ pub(crate) fn is_scan_code_physically_down(scan_code: u16) -> Option<bool> {
     }
     #[cfg(not(windows))]
     {
-        let _ = virtual_key;
+        let _ = (scan_code, target_hwnd);
         None
     }
 }
@@ -557,7 +583,7 @@ where
             .or(last_win32_error);
         rollback_timing_error = rollback.timing_error;
         keys_rolled_back = rollback_inserted as u8;
-        rollback_residue_keys = u8::from(rollback_inserted < n).saturating_mul(n as u8);
+        rollback_residue_keys = n.saturating_sub(rollback_inserted) as u8;
     }
     let timing_error = retry
         .timing_error
@@ -774,15 +800,21 @@ impl TrackedKeyState {
     /// Admit a real playback start/resume only when the user is not holding an
     /// instrument key. Mock emitters do not represent physical keyboard state,
     /// so they are explicitly exempt from this host preflight.
-    pub fn ensure_instrument_keys_physically_up(&self) -> Result<(), PhysicalKeyPreflightError> {
+    pub fn ensure_instrument_keys_physically_up(
+        &self,
+        target_hwnd: isize,
+    ) -> Result<(), PhysicalKeyPreflightError> {
         if self.custom_emitter.is_some() {
             return Ok(());
+        }
+        if target_hwnd == 0 {
+            return Err(PhysicalKeyPreflightError::VerificationInconclusive);
         }
         #[cfg(windows)]
         {
             let mut held = Vec::new();
             for &scan_code in &PHYSICAL_INSTRUMENT_SCAN_CODES {
-                match is_scan_code_physically_down(scan_code) {
+                match is_scan_code_physically_down(scan_code, target_hwnd) {
                     Some(true) => held.push(scan_code),
                     Some(false) => {}
                     None => return Err(PhysicalKeyPreflightError::VerificationInconclusive),
@@ -796,7 +828,8 @@ impl TrackedKeyState {
         }
         #[cfg(not(windows))]
         {
-            Ok(())
+            let _ = target_hwnd;
+            Err(PhysicalKeyPreflightError::VerificationInconclusive)
         }
     }
 
@@ -1114,7 +1147,7 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn release_all(&mut self) -> ReleaseAllOutcome {
+    pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
         let tracked_mask = self.active_mask | self.possibly_active_mask | self.failed_release_mask;
         if tracked_mask == 0 {
             return ReleaseAllOutcome {
@@ -1142,9 +1175,11 @@ impl TrackedKeyState {
 
         let mut verification_inconclusive = false;
         let mut stuck = Vec::new();
-        if self.custom_emitter.is_none() {
+        if self.custom_emitter.is_none() && target_hwnd == 0 {
+            verification_inconclusive = true;
+        } else if self.custom_emitter.is_none() {
             for &scan_code in &attempted {
-                match is_scan_code_physically_down(scan_code) {
+                match is_scan_code_physically_down(scan_code, target_hwnd) {
                     Some(true) => stuck.push(scan_code),
                     Some(false) => {}
                     None => verification_inconclusive = true,
@@ -1157,7 +1192,7 @@ impl TrackedKeyState {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 let _ = self.do_emit_up(&stuck);
                 stuck.retain(|&scan_code| {
-                    is_scan_code_physically_down(scan_code).unwrap_or_else(|| {
+                    is_scan_code_physically_down(scan_code, target_hwnd).unwrap_or_else(|| {
                         verification_inconclusive = true;
                         true
                     })
@@ -1169,7 +1204,7 @@ impl TrackedKeyState {
             }
         }
 
-        if released_successfully && stuck.is_empty() {
+        if released_successfully && stuck.is_empty() && !verification_inconclusive {
             self.active_mask = 0;
             self.possibly_active_mask = 0;
             self.failed_release_mask = 0;
@@ -1203,8 +1238,8 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn release_all_full_instrument(&mut self) -> ReleaseAllOutcome {
-        let _tracked_outcome = self.release_all();
+    pub fn release_all_full_instrument(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
+        let _tracked_outcome = self.release_all(target_hwnd);
         let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
         let emitted = self.do_emit_up(&attempted);
         let sent = emitted.sent;
@@ -1217,9 +1252,11 @@ impl TrackedKeyState {
             .filter(|scan_code| !sent.contains(scan_code))
             .collect();
 
-        if self.custom_emitter.is_none() {
+        if self.custom_emitter.is_none() && target_hwnd == 0 {
+            verification_inconclusive = true;
+        } else if self.custom_emitter.is_none() {
             for &scan_code in &attempted {
-                match is_scan_code_physically_down(scan_code) {
+                match is_scan_code_physically_down(scan_code, target_hwnd) {
                     Some(true) if !stuck.contains(&scan_code) => stuck.push(scan_code),
                     Some(_) => {}
                     None => verification_inconclusive = true,
@@ -1238,7 +1275,7 @@ impl TrackedKeyState {
                     if self.custom_emitter.is_some() {
                         return false;
                     }
-                    is_scan_code_physically_down(*scan_code).unwrap_or_else(|| {
+                    is_scan_code_physically_down(*scan_code, target_hwnd).unwrap_or_else(|| {
                         verification_inconclusive = true;
                         true
                     })
@@ -1250,7 +1287,7 @@ impl TrackedKeyState {
             }
         }
 
-        if release_successful && stuck.is_empty() {
+        if release_successful && stuck.is_empty() && !verification_inconclusive {
             self.active_mask = 0;
             self.possibly_active_mask = 0;
             self.failed_release_mask = 0;
@@ -1365,7 +1402,7 @@ mod tests {
             let inserted = match calls.len() {
                 1 => 0,
                 2 if !key_up => 1,
-                _ if key_up => codes.len() as u32,
+                _ if key_up => 2,
                 _ => 0,
             };
             scripted_result(codes.len(), inserted, calls.len() as u64)
@@ -1381,6 +1418,9 @@ mod tests {
                 (vec![2, 3, 4], true),
             ]
         );
+        assert_eq!(emitted.keys_inserted_before_failure, 1);
+        assert_eq!(emitted.keys_rolled_back, 2);
+        assert_eq!(emitted.rollback_residue_keys, 1);
     }
 
     #[test]
@@ -1398,6 +1438,24 @@ mod tests {
         assert_eq!(emitted.zero_progress_retries, 1);
         assert!(emitted.retried_after_zero_progress);
         assert!(!emitted.chord_integrity_lost);
+    }
+
+    #[test]
+    fn complete_rollback_reports_no_residue_after_zero_retry() {
+        let mut calls = 0;
+        let emitted = emit_down_with(&[2, 3, 4], |codes, key_up| {
+            calls += 1;
+            let inserted = match calls {
+                1 => 0,
+                2 if !key_up => 1,
+                3 if key_up => codes.len() as u32,
+                _ => 0,
+            };
+            scripted_result(codes.len(), inserted, calls)
+        });
+
+        assert!(!emitted.success);
+        assert_eq!(emitted.rollback_residue_keys, 0);
     }
 
     #[test]
@@ -1510,7 +1568,7 @@ mod tests {
     }
 
     #[test]
-    fn instrument_scan_codes_and_virtual_key_mapping_match_python_layout() {
+    fn instrument_scan_codes_are_the_physical_allowlist() {
         assert_eq!(
             PHYSICAL_INSTRUMENT_SCAN_CODES,
             [
@@ -1518,17 +1576,19 @@ mod tests {
                 0x35,
             ]
         );
-        let virtual_keys: Vec<i32> = PHYSICAL_INSTRUMENT_SCAN_CODES
-            .iter()
-            .map(|&scan_code| virtual_key_for_scan_code(scan_code).unwrap())
-            .collect();
-        assert_eq!(
-            virtual_keys,
-            [
-                0x59, 0x55, 0x49, 0x4F, 0x50, 0x48, 0x4A, 0x4B, 0x4C, 0xBA, 0x4E, 0x4D, 0xBC, 0xBE,
-                0xBF,
-            ]
-        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_layout_maps_all_instrument_scan_codes() {
+        assert!(keyboard_layout_for_target(0).is_some());
+        for &scan_code in &PHYSICAL_INSTRUMENT_SCAN_CODES {
+            assert_ne!(
+                virtual_key_for_scan_code(scan_code, 0),
+                None,
+                "scan code {scan_code:#x} must map in the current layout"
+            );
+        }
     }
 
     #[test]
@@ -1555,7 +1615,7 @@ mod tests {
             win32_error: 5,
             timing_error: None,
         });
-        let outcome = state.release_all_full_instrument();
+        let outcome = state.release_all_full_instrument(0);
         assert!(!outcome.released_successfully);
         assert_eq!(outcome.attempted, PHYSICAL_INSTRUMENT_SCAN_CODES);
         assert_eq!(outcome.stuck_keys, PHYSICAL_INSTRUMENT_SCAN_CODES);

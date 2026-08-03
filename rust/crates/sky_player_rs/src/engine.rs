@@ -33,7 +33,6 @@ const OUTCOME_FINISHED: u8 = 1;
 const OUTCOME_QUIT: u8 = 2;
 const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
-const OUTCOME_SHUTDOWN_TIMEOUT: u8 = 5;
 const PAUSED_POLL_US: u64 = 2_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
@@ -833,6 +832,9 @@ impl NativeDispatchSession {
         strict_up_completion_late_us: u64,
         supervisor_lease_timeout_us: u64,
     ) -> Result<Self, String> {
+        if !cfg!(windows) && !mock_backend {
+            return Err("production native dispatch is supported only on Windows".to_string());
+        }
         let initial_heartbeat_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let interrupt = OwnedEvent::new_auto_reset()
@@ -971,15 +973,11 @@ impl NativeDispatchSession {
                 if let Some(message) = panic_message {
                     *metrics.terminal_error.lock() = Some(message);
                 }
-                if terminal_outcome.load(Ordering::Acquire) != OUTCOME_SHUTDOWN_TIMEOUT {
-                    terminal_outcome.store(worker_outcome, Ordering::Release);
-                }
+                terminal_outcome.store(worker_outcome, Ordering::Release);
                 metrics.panicked.store(panicked, Ordering::Release);
                 if panicked {
                     lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
                 } else {
-                    // A join timeout poisons the session permanently; a late
-                    // worker exit must not make that session look healthy.
                     let _ = lifecycle.compare_exchange(
                         LIFECYCLE_RUNNING,
                         LIFECYCLE_FINISHED,
@@ -1178,9 +1176,6 @@ impl NativeDispatchSession {
             .wait_timeout_while(done, timeout, |done| !*done)
             .map_err(|_| "session completion wait was poisoned".to_string())?;
         if !*done {
-            self.lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
-            self.terminal_outcome
-                .store(OUTCOME_SHUTDOWN_TIMEOUT, Ordering::Release);
             return Ok(false);
         }
         drop(done);
@@ -1217,7 +1212,6 @@ impl NativeDispatchSession {
             OUTCOME_QUIT => Some("quit"),
             OUTCOME_SKIPPED => Some("skipped"),
             OUTCOME_ERROR => Some("error"),
-            OUTCOME_SHUTDOWN_TIMEOUT => Some("shutdown_timeout"),
             _ => Some("error"),
         }
     }
@@ -1306,24 +1300,6 @@ fn mock_platform_send_result(
             }
         }
     }
-}
-
-fn admission_failure(
-    backend: &mut TrackedKeyState,
-    metrics: &SharedMetrics,
-    primary_error: String,
-) -> u8 {
-    let cleanup = backend.release_all_full_instrument();
-    let message = if release_state_verified(backend, &cleanup) {
-        primary_error
-    } else {
-        format!(
-            "{primary_error}; admission cleanup failed: {}",
-            describe_release_outcome(&cleanup)
-        )
-    };
-    *metrics.last_error.lock() = Some(message);
-    1
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1444,6 +1420,21 @@ fn run_worker(
     } else {
         TrackedKeyState::with_qpc_clock(qpc_clock)
     };
+    let admission_failure =
+        |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
+            let verification_hwnd = target_hwnd.load(Ordering::Acquire);
+            let cleanup = backend.release_all_full_instrument(verification_hwnd);
+            let message = if release_state_verified(backend, &cleanup) {
+                primary_error
+            } else {
+                format!(
+                    "{primary_error}; admission cleanup failed: {}",
+                    describe_release_outcome(&cleanup)
+                )
+            };
+            *metrics.last_error.lock() = Some(message);
+            1
+        };
     let mut local_metrics = WorkerMetricsLocal::default();
     let mut force_full_cleanup = false;
     let mut terminal_error: Option<String> = None;
@@ -1890,7 +1881,8 @@ fn run_worker(
                 break;
             }
             if panic_requested.swap(false, Ordering::AcqRel) {
-                let panic_release = backend.release_all_full_instrument();
+                let panic_release =
+                    backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
                 if !release_state_verified(&backend, &panic_release) {
                     record_termination_error(
                         &mut terminal_error,
@@ -1926,7 +1918,11 @@ fn run_worker(
             if !focus_ok {
                 focus_restore_started_ticks = None;
                 if !clock_state.has_pause_reason("focus") {
-                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                    if let Err(error) = suspend_live_input(
+                        &mut backend,
+                        &mut coordinator,
+                        target_hwnd.load(Ordering::Acquire),
+                    ) {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("focus suspension failed: {error}"));
                         break;
@@ -1958,7 +1954,11 @@ fn run_worker(
                 if focus_grace_elapsed >= focus_restore_grace_ticks {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
-                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                    if let Err(error) = suspend_live_input(
+                        &mut backend,
+                        &mut coordinator,
+                        target_hwnd.load(Ordering::Acquire),
+                    ) {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("focus restoration failed: {error}"));
                         break;
@@ -1987,7 +1987,11 @@ fn run_worker(
 
             if manual_pause && !clock_state.has_pause_reason("manual") {
                 if !clock_state.is_paused() {
-                    if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                    if let Err(error) = suspend_live_input(
+                        &mut backend,
+                        &mut coordinator,
+                        target_hwnd.load(Ordering::Acquire),
+                    ) {
                         force_full_cleanup = true;
                         terminal_error = Some(format!("manual pause suspension failed: {error}"));
                         break;
@@ -2620,7 +2624,8 @@ fn run_worker(
                             .last_win32_error
                             .map_or(String::new(), |error| format!(" (Win32 error {error})"))
                     ));
-                    let recovery_cleanup = backend.release_all_full_instrument();
+                    let recovery_cleanup =
+                        backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
                     if !release_state_verified(&backend, &recovery_cleanup) {
                         record_termination_error(
                             &mut terminal_error,
@@ -2737,7 +2742,11 @@ fn run_worker(
                         // The batch was only prepared. Leave the cursor and generation
                         // ledger untouched so the same authored chord can be prepared again
                         // after focus restoration.
-                        if let Err(error) = suspend_live_input(&mut backend, &mut coordinator) {
+                        if let Err(error) = suspend_live_input(
+                            &mut backend,
+                            &mut coordinator,
+                            target_hwnd.load(Ordering::Acquire),
+                        ) {
                             force_full_cleanup = true;
                             terminal_error = Some(format!("focus suspension failed: {error}"));
                             break;
@@ -2801,7 +2810,9 @@ fn run_worker(
                         break;
                     }
                     if physical_key_preflight_required {
-                        if let Err(error) = backend.ensure_instrument_keys_physically_up() {
+                        if let Err(error) = backend.ensure_instrument_keys_physically_up(
+                            target_hwnd.load(Ordering::Acquire),
+                        ) {
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
@@ -3001,7 +3012,7 @@ fn run_worker(
                         if let Err(error) = coordinator.commit_down_success(
                             prepared_batch,
                             &result_sent,
-                            effective_now_ticks,
+                            actual_ticks,
                             completed_effective_ticks,
                         ) {
                             force_full_cleanup = true;
@@ -3413,8 +3424,6 @@ fn run_worker(
                         break;
                     }
                 };
-                let target_sample_elapsed_us =
-                    qpc_ticks_to_us_or_terminal!(target_sample_elapsed_ticks);
                 if deadline_ticks > target_sample_elapsed_ticks {
                     let target_qpc = match clock_state
                         .epoch
@@ -3499,12 +3508,21 @@ fn run_worker(
                             break;
                         }
                     };
-                    let wake_elapsed_us = qpc_ticks_to_us_or_terminal!(wake_elapsed_ticks);
+                    let wake_error_ticks =
+                        match wake_lateness_ticks(wake_elapsed_ticks, deadline_ticks) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                force_full_cleanup = true;
+                                terminal_error =
+                                    Some(format!("wait target arithmetic failure: {error}"));
+                                break;
+                            }
+                        };
+                    let wake_error_us = qpc_ticks_to_us_or_terminal!(wake_error_ticks);
                     match wait_result.outcome {
                         WaitOutcome::Deadline => {
-                            local_metrics.wait_target_error_us = local_metrics
-                                .wait_target_error_us
-                                .max(wake_elapsed_us.saturating_sub(target_sample_elapsed_us));
+                            local_metrics.wait_target_error_us =
+                                local_metrics.wait_target_error_us.max(wake_error_us);
                         }
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
@@ -3519,10 +3537,7 @@ fn run_worker(
                         }
                         WaitOutcome::Interrupted => {}
                     }
-                    if config.input_path_warn_us > 0
-                        && wake_elapsed_us
-                            > target_sample_elapsed_us.saturating_add(config.input_path_warn_us)
-                    {
+                    if config.input_path_warn_us > 0 && wake_error_us > config.input_path_warn_us {
                         local_metrics.wait_path_degraded = true;
                     }
                     if wait_result.outcome == WaitOutcome::Interrupted {
@@ -3561,16 +3576,16 @@ fn run_worker(
     // unexpected panic crosses the orchestration/backend seam.
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
         let outcome = if worker_result.is_err() || force_full_cleanup {
-            backend.release_all_full_instrument()
+            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
         } else {
-            backend.release_all()
+            backend.release_all(target_hwnd.load(Ordering::Acquire))
         };
         if release_state_verified(&backend, &outcome) {
             outcome
         } else {
             // A normal-path release that cannot be verified gets one bounded
             // full-instrument recovery attempt before the result is published.
-            backend.release_all_full_instrument()
+            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
         }
     }));
     if let Ok(outcome) = &cleanup_result {
@@ -3865,12 +3880,13 @@ fn record_termination_error(
 fn suspend_live_input(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
+    target_hwnd: isize,
 ) -> Result<Vec<u64>, String> {
-    let initial = backend.release_all();
+    let initial = backend.release_all(target_hwnd);
     let release = if release_state_verified(backend, &initial) {
         initial
     } else {
-        let full = backend.release_all_full_instrument();
+        let full = backend.release_all_full_instrument(target_hwnd);
         if !release_state_verified(backend, &full) {
             return Err(format!(
                 "release verification failed (initial: {}; full: {})",
@@ -3991,6 +4007,17 @@ fn signed_timeline_delta_ticks(
         return Ok(i64::MIN);
     }
     Err(TimeArithmeticError::Overflow)
+}
+
+fn wake_lateness_ticks(
+    wake: TimelineTicks,
+    deadline: TimelineTicks,
+) -> Result<DurationTicks, TimeArithmeticError> {
+    match wake.checked_duration_since(deadline) {
+        Ok(duration) => Ok(duration),
+        Err(TimeArithmeticError::NegativeOrder) => Ok(DurationTicks::ZERO),
+        Err(error) => Err(error),
+    }
 }
 
 fn signed_ticks_to_us(qpc_clock: QpcClock, delta_ticks: i64) -> Result<i64, String> {
@@ -4245,7 +4272,7 @@ mod tests {
         derive_spin_threshold_us, exact_sender_durations, focus_gate_matches,
         record_input_path_health, record_termination_error, release_runtime_outcome,
         signed_timeline_delta_ticks, supervisor_lease_expired, trace_outcome_code,
-        update_estimator_after_send,
+        update_estimator_after_send, wake_lateness_ticks,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4413,6 +4440,37 @@ mod tests {
         assert_eq!(
             signed_timeline_delta_ticks(completed, authored_deadline),
             Ok(-50)
+        );
+    }
+
+    #[test]
+    fn wait_error_is_relative_to_deadline() {
+        assert_eq!(
+            wake_lateness_ticks(
+                TimelineTicks::from_raw(20_000),
+                TimelineTicks::from_raw(20_000),
+            )
+            .expect("on-time wake")
+            .as_u64(),
+            0
+        );
+        assert_eq!(
+            wake_lateness_ticks(
+                TimelineTicks::from_raw(20_500),
+                TimelineTicks::from_raw(20_000),
+            )
+            .expect("late wake")
+            .as_u64(),
+            500
+        );
+        assert_eq!(
+            wake_lateness_ticks(
+                TimelineTicks::from_raw(19_900),
+                TimelineTicks::from_raw(20_000),
+            )
+            .expect("early wake")
+            .as_u64(),
+            0
         );
     }
 
@@ -4831,5 +4889,123 @@ mod tests {
                 record["event_index"] == 2 && record["runtime_outcome"] == "sent"
             })
         );
+    }
+
+    #[test]
+    fn join_timeout_does_not_poison_running_session() {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ];
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+            .expect("valid lifecycle test schedule");
+        let session = NativeDispatchSession::new(
+            schedule,
+            0,
+            2_000,
+            0,
+            vec![0x15],
+            true,
+            100_000,
+            0,
+            FaultInjectionScript::none(),
+            false,
+            100_000,
+            150,
+            0,
+            TelemetryMode::Ring,
+            64,
+            sky_dispatch_win32::mmcss::PriorityMode::Off,
+            true,
+            true,
+            false,
+            700,
+            None,
+            false,
+            300,
+            false,
+            2_000,
+            2_000,
+            0,
+        )
+        .expect("test session admission");
+
+        session.start().expect("worker start");
+        assert!(!session.join(Duration::from_millis(1)).expect("timed join"));
+        assert!(session.snapshot().is_running);
+        session.pause().expect("pause after join timeout");
+        session.resume().expect("resume after join timeout");
+        session.quit().expect("quit after join timeout");
+        assert!(session.join(Duration::from_secs(5)).expect("final join"));
+        assert!(session.join(Duration::from_millis(1)).expect("second join"));
+        assert_eq!(session.terminal_outcome(), Some("quit"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn production_session_rejects_non_windows() {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ];
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+            .expect("valid platform admission schedule");
+        let result = NativeDispatchSession::new(
+            schedule,
+            0,
+            2_000,
+            0,
+            vec![0x15],
+            false,
+            0,
+            0,
+            FaultInjectionScript::none(),
+            false,
+            100_000,
+            150,
+            0,
+            TelemetryMode::Ring,
+            64,
+            sky_dispatch_win32::mmcss::PriorityMode::Off,
+            true,
+            true,
+            false,
+            700,
+            None,
+            false,
+            300,
+            false,
+            2_000,
+            2_000,
+            0,
+        );
+        assert!(matches!(
+            result,
+            Err(error) if error == "production native dispatch is supported only on Windows"
+        ));
     }
 }

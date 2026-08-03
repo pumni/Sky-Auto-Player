@@ -24,6 +24,10 @@ QPC tick domains for control-path arithmetic and only converts at API or
 telemetry boundaries. Completion timing is measured at the `SendInput` return
 boundary; it is not a claim about game polling, rendering, or audio onset.
 
+`SendInput` completion is sender-side evidence. It is not proof that the game
+consumed the event. Any receiver/probe window used for acceptance is an
+app-owned delivery proxy and must not be described as game receipt.
+
 ## Session contract
 
 `SessionConfig` exposes only session/user inputs: `min_hold_us`,
@@ -53,6 +57,11 @@ not reinterpret native timing.
   cleanup. Uncertain cleanup is an error, never a successful finish.
 - Partial `SendInput` is not success; zero progress and recovery are handled
   by Rust and remain visible in the final report.
+- Physical preflight and cleanup verification map each instrument scan code
+  through the keyboard layout of the current target window thread using
+  `MapVirtualKeyExW`. A zero/invalid target window, unavailable layout, or failed
+  scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
+  emitters remain exempt from host physical-state verification.
 - No Python callback runs in the native real-time worker.
 - A successful terminal result requires no active, pending, possibly-active, or
   residue key.
@@ -63,9 +72,21 @@ Python owns process-name validation and target discovery. It sends one HWND
 with `set_target_hwnd`; Rust compares it to `GetForegroundWindow()` immediately
 before dispatch. Python does not send a second focus boolean.
 
+The HWND is also passed directly to preflight and cleanup verification. The
+sender continues to inject the same physical scan codes; the layout-aware VK
+mapping exists only for checking physical state and is not part of the hot
+`SendInput` path. The current 15-key allowlist has no E0/E1 extended scan
+codes.
+
 The UI/control polling loop publishes the supervisor heartbeat. There is no
 separate heartbeat thread: if the control loop stops, native lease liveness
 reflects that failure.
+
+Layout acceptance is a Windows manual matrix, not a CI claim: run preflight,
+resume, pause, and panic-release checks under English US, German, and French
+layouts, recording the layout identifier and result. A receiver/probe may
+count scan-code events and QPC order, but its result is host-side evidence and
+does not establish game receipt.
 
 ## Preview, calibration, and rollback
 

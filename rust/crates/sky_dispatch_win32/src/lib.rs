@@ -57,7 +57,7 @@ mod tests {
         assert!(res_up.success);
         assert_eq!(state.active_mask.count_ones(), 1);
 
-        let outcome = state.release_all();
+        let outcome = state.release_all(0);
         assert!(outcome.released_successfully);
         assert_eq!(state.active_mask, 0);
     }

@@ -1248,7 +1248,7 @@ mod platform {
             let mut stuck_keys = Vec::new();
             let mut verification_inconclusive = false;
             for &scan_code in &attempted {
-                match crate::input::is_scan_code_physically_down(scan_code) {
+                match crate::input::is_scan_code_physically_down(scan_code, 0) {
                     Some(true) => stuck_keys.push(scan_code),
                     Some(false) => {}
                     None => verification_inconclusive = true,

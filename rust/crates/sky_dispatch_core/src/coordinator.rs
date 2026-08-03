@@ -342,6 +342,58 @@ mod tests {
     }
 
     #[test]
+    fn down_commit_uses_pre_send_timestamp() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let prepared = coordinator
+            .prepare_next_due_authored(
+                crate::time::TimelineTicks::from_raw(100),
+                crate::time::DurationTicks::ZERO,
+            )
+            .expect("prepare down")
+            .expect("down is due");
+
+        coordinator
+            .commit_down_success(
+                prepared,
+                &[0x15],
+                crate::time::TimelineTicks::from_raw(120),
+                crate::time::TimelineTicks::from_raw(150),
+            )
+            .expect("commit down");
+
+        let active = coordinator.active_for_slot(0).expect("active generation");
+        assert_eq!(
+            active.down_dispatch_started_ticks,
+            crate::time::TimelineTicks::from_raw(120)
+        );
+        assert_eq!(
+            active.down_dispatch_completed_ticks,
+            crate::time::TimelineTicks::from_raw(150)
+        );
+    }
+
+    #[test]
     fn same_key_down_waits_for_recovery_and_timeline_does_not_catch_up() {
         let schedule = compile_runtime_intents(
             &[

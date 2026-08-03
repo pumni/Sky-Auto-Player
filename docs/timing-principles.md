@@ -154,6 +154,14 @@ for the authoritative values):
 ### Online Audience Considerations
 At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94 ms at 144 FPS). If online listeners are running at 60 FPS, their clients sample at 16.67 ms intervals and will miss these brief events. Thus, when playing in online rooms, users should use `audience_safe` or calibrate their local FPS to match the audience (typically 60 FPS) to ensure remote registration.
 
+### Production vs Strict Timing Diagnostic
+
+The production profile prioritizes continuity when the sender still reports
+complete input operations, while recording timing degradation in telemetry.
+`strict_timing` is a diagnostic mode: it prioritizes completion-SLO enforcement
+and ends the session after the configured timing contract is exceeded. It is
+not the production default and must not be treated as game-observed receipt.
+
 ---
 
 ## 5. Investigation Findings & Historical Validation
