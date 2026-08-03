@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "evidence_kind": "injected_raw_input_delivery_proxy",
+  "source_formula_version": 1,
+  "down_us": {
+    "p50": 69,
+    "p90": 125,
+    "p99": 160
+  },
+  "up_us": {
+    "p50": 32,
+    "p90": 54,
+    "p99": 111
+  },
+  "n": 20,
+  "sample_count": 20,
+  "native_calibration_version": 8,
+  "measurement_protocol_version": 3,
+  "source_git_sha": "4ed30912a3c5baf004f2b92b485945006f5b538c",
+  "native_build_id": "4ed30912a3c5baf004f2b92b485945006f5b538c",
+  "dirty_worktree": false,
+  "host_fingerprint": {
+    "qpc_frequency_hz": 10000000,
+    "win32_build": "6.2.9200"
+  },
+  "anomaly_counts": {
+    "warmup": 0,
+    "measured": 0,
+    "setup": 0,
+    "total": 0
+  }
+}
