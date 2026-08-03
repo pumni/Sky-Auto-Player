@@ -2978,48 +2978,65 @@ fn run_worker(
                                 break;
                             }
                         };
-                        // Preflight can perform multiple Win32 calls. Recheck
-                        // both target identity and foreground ownership at the
-                        // final boundary so a focus change during verification
-                        // cannot turn into an unowned Down.
-                        if !target_stamp_still_current(
+                        // Preflight can perform multiple Win32 calls. Keep
+                        // the final admission bound to the exact stamp that
+                        // was verified and let command races return to the
+                        // worker control path without becoming send failures.
+                        match final_down_admission(
+                            preflight_target,
+                            config.require_focus,
+                            focus_active,
                             target_hwnd,
                             target_generation,
-                            preflight_target,
-                        ) || !focus_matches(config.require_focus, focus_active, target_hwnd)
-                        {
-                            verified_target = None;
-                            let focus_ticks = qpc_ticks_or_terminal!();
-                            if let Err(error) = suspend_live_input(
-                                &mut backend,
-                                &mut coordinator,
-                                target_hwnd.load(Ordering::Acquire),
-                            ) {
-                                force_full_cleanup = true;
-                                terminal_error = Some(format!("focus suspension failed: {error}"));
-                                break;
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                        ) {
+                            DownAdmission::Allowed => {}
+                            DownAdmission::FocusLost => {
+                                verified_target = None;
+                                let focus_ticks = qpc_ticks_or_terminal!();
+                                if let Err(error) = suspend_live_input(
+                                    &mut backend,
+                                    &mut coordinator,
+                                    target_hwnd.load(Ordering::Acquire),
+                                ) {
+                                    force_full_cleanup = true;
+                                    terminal_error =
+                                        Some(format!("focus suspension failed: {error}"));
+                                    break;
+                                }
+                                if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
+                                    force_full_cleanup = true;
+                                    terminal_error = Some(format!(
+                                        "playback clock failure after final focus check: {error}"
+                                    ));
+                                    break;
+                                }
+                                focus_restore_started_ticks = None;
+                                publish_backend_metrics(
+                                    &backend,
+                                    &mut local_metrics,
+                                    metrics,
+                                    &mut last_published_error,
+                                );
+                                try_publish_metrics(
+                                    &local_metrics,
+                                    metrics,
+                                    qpc_us_or_terminal!(),
+                                    true,
+                                );
+                                continue;
                             }
-                            if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
-                                force_full_cleanup = true;
-                                terminal_error = Some(format!(
-                                    "playback clock failure after final focus check: {error}"
-                                ));
-                                break;
+                            DownAdmission::TargetChanged
+                            | DownAdmission::PauseRequested
+                            | DownAdmission::QuitRequested
+                            | DownAdmission::SkipRequested
+                            | DownAdmission::PanicRequested => {
+                                verified_target = None;
+                                continue;
                             }
-                            focus_restore_started_ticks = None;
-                            publish_backend_metrics(
-                                &backend,
-                                &mut local_metrics,
-                                metrics,
-                                &mut last_published_error,
-                            );
-                            try_publish_metrics(
-                                &local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
-                            continue;
                         }
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
@@ -3944,6 +3961,50 @@ fn focus_matches(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownAdmission {
+    Allowed,
+    TargetChanged,
+    FocusLost,
+    PauseRequested,
+    QuitRequested,
+    SkipRequested,
+    PanicRequested,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn final_down_admission(
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    target_hwnd: &AtomicIsize,
+    target_generation: &AtomicU64,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    desired_pause: &AtomicBool,
+) -> DownAdmission {
+    if !focus_matches_hwnd(require_focus, focus_active, expected.hwnd) {
+        return DownAdmission::FocusLost;
+    }
+    if !target_stamp_still_current(target_hwnd, target_generation, expected) {
+        return DownAdmission::TargetChanged;
+    }
+    if quit_requested.load(Ordering::Acquire) {
+        return DownAdmission::QuitRequested;
+    }
+    if skip_requested.load(Ordering::Acquire) {
+        return DownAdmission::SkipRequested;
+    }
+    if panic_requested.load(Ordering::Acquire) {
+        return DownAdmission::PanicRequested;
+    }
+    if desired_pause.load(Ordering::Acquire) {
+        return DownAdmission::PauseRequested;
+    }
+    DownAdmission::Allowed
+}
+
 fn ensure_preflight_for_target(
     backend: &TrackedKeyState,
     current: TargetStamp,
@@ -4468,17 +4529,17 @@ fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
+        DownAdmission, FaultInjectionScript, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
         NativeDispatchSession, PlatformSendResult, RtTraceRecord, SharedMetrics,
         TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode,
         TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WakeErrorStats,
         WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
         classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
         derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
-        focus_gate_matches, focus_matches_hwnd, record_input_path_health, record_termination_error,
-        release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-        target_stamp_still_current, trace_outcome_code, try_publish_metrics,
-        update_estimator_after_send, wake_lateness_ticks,
+        final_down_admission, focus_gate_matches, focus_matches_hwnd, record_input_path_health,
+        record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+        supervisor_lease_expired, target_stamp_still_current, trace_outcome_code,
+        try_publish_metrics, update_estimator_after_send, wake_lateness_ticks,
     };
     use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -4488,7 +4549,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
     use std::time::Duration;
 
     #[test]
@@ -4663,8 +4724,110 @@ mod tests {
 
     #[test]
     fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
-        let focus_active = std::sync::atomic::AtomicBool::new(false);
+        let focus_active = AtomicBool::new(false);
         assert!(focus_matches_hwnd(false, &focus_active, 123));
+    }
+
+    #[test]
+    fn final_down_admission_rejects_target_change_before_send() {
+        let target = AtomicIsize::new(456);
+        let generation = AtomicU64::new(2);
+        let focus_active = AtomicBool::new(false);
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        let desired_pause = AtomicBool::new(false);
+        let expected = TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        };
+
+        assert_eq!(
+            final_down_admission(
+                expected,
+                false,
+                &focus_active,
+                &target,
+                &generation,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &desired_pause,
+            ),
+            DownAdmission::TargetChanged
+        );
+    }
+
+    #[test]
+    fn final_down_admission_checks_expected_focus_before_target() {
+        let target = AtomicIsize::new(456);
+        let generation = AtomicU64::new(2);
+        let focus_active = AtomicBool::new(false);
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        let desired_pause = AtomicBool::new(false);
+        let expected = TargetStamp {
+            hwnd: 0,
+            generation: 1,
+        };
+
+        assert_eq!(
+            final_down_admission(
+                expected,
+                true,
+                &focus_active,
+                &target,
+                &generation,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &desired_pause,
+            ),
+            DownAdmission::FocusLost
+        );
+    }
+
+    #[test]
+    fn final_down_admission_rejects_each_command_state() {
+        let target = AtomicIsize::new(123);
+        let generation = AtomicU64::new(1);
+        let focus_active = AtomicBool::new(false);
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        let desired_pause = AtomicBool::new(false);
+        let expected = TargetStamp {
+            hwnd: 123,
+            generation: 1,
+        };
+
+        let admission = || {
+            final_down_admission(
+                expected,
+                false,
+                &focus_active,
+                &target,
+                &generation,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &desired_pause,
+            )
+        };
+
+        assert_eq!(admission(), DownAdmission::Allowed);
+        quit_requested.store(true, Ordering::Release);
+        assert_eq!(admission(), DownAdmission::QuitRequested);
+        quit_requested.store(false, Ordering::Release);
+        skip_requested.store(true, Ordering::Release);
+        assert_eq!(admission(), DownAdmission::SkipRequested);
+        skip_requested.store(false, Ordering::Release);
+        panic_requested.store(true, Ordering::Release);
+        assert_eq!(admission(), DownAdmission::PanicRequested);
+        panic_requested.store(false, Ordering::Release);
+        desired_pause.store(true, Ordering::Release);
+        assert_eq!(admission(), DownAdmission::PauseRequested);
     }
 
     #[test]
