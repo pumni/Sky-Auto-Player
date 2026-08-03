@@ -46,6 +46,7 @@ const RELEASE_RETRY_BACKOFF_US: [u64; 4] = [2_000, 5_000, 10_000, 20_000];
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
 struct CommandTimingState {
+    request_lock: Mutex<()>,
     next_generation: AtomicU64,
     pause_request_generation: AtomicU64,
     pause_request_ticks: AtomicU64,
@@ -1135,6 +1136,20 @@ impl NativeDispatchSession {
         if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
         }
+        let _request_guard = self.command_timing.request_lock.lock();
+        let pending_generation = self
+            .command_timing
+            .pause_request_generation
+            .load(Ordering::Acquire);
+        let acknowledged_generation = self
+            .command_timing
+            .pause_ack_generation
+            .load(Ordering::Acquire);
+        if pending_generation != 0 && pending_generation != acknowledged_generation {
+            self.desired_pause.store(true, Ordering::Release);
+            let _ = self.interrupt.signal();
+            return Ok(pending_generation);
+        }
         let request_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .map_err(|error| format!("QPC pause request failed: {error:?}"))?;
         let generation = self.command_timing.allocate_generation();
@@ -1217,6 +1232,10 @@ impl NativeDispatchSession {
         if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.command_timing
+            .pause_request_generation
+            .store(0, Ordering::Release);
         self.desired_pause.store(false, Ordering::Release);
         let _ = self.interrupt.signal();
         Ok(())
