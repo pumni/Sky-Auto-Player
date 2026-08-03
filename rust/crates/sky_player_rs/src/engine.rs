@@ -3059,7 +3059,7 @@ fn run_worker(
                             _result_first_win32_error,
                             result_last_win32_error,
                             result_success,
-                        ) = match &result {
+                        ) = match result {
                             sky_dispatch_win32::input::DownSendOutcome::Complete {
                                 started_ticks,
                                 completed_us,
@@ -3071,14 +3071,14 @@ fn run_worker(
                                 retried_after_zero_progress,
                                 ..
                             } => (
-                                *started_ticks,
-                                *completed_us,
-                                *completed_ticks,
-                                sent.clone(),
-                                skipped_duplicates.clone(),
-                                *send_attempts,
-                                *zero_progress_retries,
-                                *retried_after_zero_progress,
+                                started_ticks,
+                                completed_us,
+                                completed_ticks,
+                                sent,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                retried_after_zero_progress,
                                 false,
                                 None,
                                 None,
@@ -3095,17 +3095,17 @@ fn run_worker(
                                 last_error,
                                 ..
                             } => (
-                                *started_ticks,
-                                *completed_us,
-                                *completed_ticks,
+                                started_ticks,
+                                completed_us,
+                                completed_ticks,
                                 smallvec::SmallVec::<[u16; 15]>::new(),
-                                skipped_duplicates.clone(),
-                                *send_attempts,
-                                *zero_progress_retries,
-                                *zero_progress_retries > 0,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                zero_progress_retries > 0,
                                 false,
-                                *first_error,
-                                *last_error,
+                                first_error,
+                                last_error,
                                 false,
                             ),
                             sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
@@ -3120,26 +3120,22 @@ fn run_worker(
                                 last_error,
                                 ..
                             } => (
-                                *started_ticks,
-                                *completed_us,
-                                *completed_ticks,
-                                sent.clone(),
-                                skipped_duplicates.clone(),
-                                *send_attempts,
-                                *zero_progress_retries,
-                                *zero_progress_retries > 0,
+                                started_ticks,
+                                completed_us,
+                                completed_ticks,
+                                sent,
+                                skipped_duplicates,
+                                send_attempts,
+                                zero_progress_retries,
+                                zero_progress_retries > 0,
                                 true,
-                                *first_error,
-                                *last_error,
+                                first_error,
+                                last_error,
                                 false,
                             ),
                         };
 
-                        if matches!(
-                            &result,
-                            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress { .. }
-                                | sky_dispatch_win32::input::DownSendOutcome::IntegrityLost { .. }
-                        ) {
+                        if !result_success {
                             force_full_cleanup = true;
                             terminal_error = Some(format!(
                                 "authored Down send integrity failure at action {}",
