@@ -12,6 +12,7 @@ pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
     0x23, 0x24, 0x25, 0x26, 0x27, // H J K L ;
     0x31, 0x32, 0x33, 0x34, 0x35, // N M , . /
 ];
+pub const FULL_INSTRUMENT_MASK: u16 = (1u16 << PHYSICAL_INSTRUMENT_SCAN_CODES.len()) - 1;
 
 // The current instrument allowlist contains no E0/E1 extended scan codes.
 
@@ -33,7 +34,6 @@ fn scan_codes_from_mask(mask: u16) -> Vec<u16> {
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug)]
 struct TargetKeyboardContext {
-    thread_id: u32,
     layout: windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL,
 }
 
@@ -42,14 +42,13 @@ fn keyboard_context_for_target(target_hwnd: isize) -> Option<TargetKeyboardConte
     let thread_id = if target_hwnd == 0 {
         0
     } else {
-        let mut process_id = 0u32;
         // SAFETY: The HWND is supplied by the validated focus/target path;
-        // the process-id output points to a local scalar for the duration of
-        // this call.
+        // a null process-id output is permitted because only the target thread
+        // ID is needed for the following keyboard-layout query.
         let thread_id = unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
                 target_hwnd as windows_sys::Win32::Foundation::HWND,
-                &mut process_id,
+                std::ptr::null_mut(),
             )
         };
         if thread_id == 0 {
@@ -62,14 +61,19 @@ fn keyboard_context_for_target(target_hwnd: isize) -> Option<TargetKeyboardConte
     // retain pointers supplied by the caller.
     let layout =
         unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout(thread_id) };
-    (!layout.is_null()).then_some(TargetKeyboardContext { thread_id, layout })
+    (!layout.is_null()).then_some(TargetKeyboardContext { layout })
 }
 
 #[cfg(windows)]
-fn map_instrument_virtual_keys(context: &TargetKeyboardContext) -> Option<[i32; 15]> {
-    let _ = context.thread_id;
+fn map_instrument_virtual_keys(
+    context: &TargetKeyboardContext,
+    requested_mask: u16,
+) -> Option<[i32; PHYSICAL_INSTRUMENT_SCAN_CODES.len()]> {
     let mut virtual_keys = [0i32; PHYSICAL_INSTRUMENT_SCAN_CODES.len()];
     for (index, &scan_code) in PHYSICAL_INSTRUMENT_SCAN_CODES.iter().enumerate() {
+        if requested_mask & (1u16 << index) == 0 {
+            continue;
+        }
         // SAFETY: MapVirtualKeyExW reads only the scalar scan code and the
         // borrowed HKL handle; it does not retain either value.
         let virtual_key = unsafe {
@@ -94,7 +98,16 @@ enum InstrumentPhysicalState {
     Inconclusive,
 }
 
-fn instrument_physical_state(target_hwnd: isize) -> InstrumentPhysicalState {
+fn instrument_physical_state_for_mask(
+    target_hwnd: isize,
+    requested_mask: u16,
+) -> InstrumentPhysicalState {
+    if requested_mask == 0 {
+        return InstrumentPhysicalState::AllUp;
+    }
+    if requested_mask & !FULL_INSTRUMENT_MASK != 0 {
+        return InstrumentPhysicalState::Inconclusive;
+    }
     #[cfg(windows)]
     {
         if target_hwnd == 0 {
@@ -103,11 +116,14 @@ fn instrument_physical_state(target_hwnd: isize) -> InstrumentPhysicalState {
         let Some(context) = keyboard_context_for_target(target_hwnd) else {
             return InstrumentPhysicalState::Inconclusive;
         };
-        let Some(virtual_keys) = map_instrument_virtual_keys(&context) else {
+        let Some(virtual_keys) = map_instrument_virtual_keys(&context, requested_mask) else {
             return InstrumentPhysicalState::Inconclusive;
         };
         let mut held = SmallVec::new();
         for (index, &virtual_key) in virtual_keys.iter().enumerate() {
+            if requested_mask & (1u16 << index) == 0 {
+                continue;
+            }
             // SAFETY: GetAsyncKeyState accepts the validated virtual-key
             // scalar and does not retain pointers or transfer ownership.
             let state = unsafe {
@@ -125,14 +141,21 @@ fn instrument_physical_state(target_hwnd: isize) -> InstrumentPhysicalState {
     }
     #[cfg(not(windows))]
     {
-        let _ = target_hwnd;
+        let _ = (target_hwnd, requested_mask);
         InstrumentPhysicalState::Inconclusive
     }
 }
 
+fn mask_for_scan_codes(scan_codes: &[u16]) -> u16 {
+    scan_codes
+        .iter()
+        .filter_map(|&scan_code| key_mask(scan_code))
+        .fold(0, |mask, bit| mask | bit)
+}
+
 /// Single-scan verification retained for the calibration harness. Playback
-/// preflight and cleanup use `instrument_physical_state` so they resolve the
-/// target keyboard context only once per pass.
+/// preflight and cleanup use `instrument_physical_state_for_mask` so they
+/// resolve the target keyboard context only once per pass.
 pub(crate) fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Option<bool> {
     #[cfg(windows)]
     {
@@ -880,7 +903,7 @@ impl TrackedKeyState {
         if target_hwnd == 0 {
             return Err(PhysicalKeyPreflightError::VerificationInconclusive);
         }
-        match instrument_physical_state(target_hwnd) {
+        match instrument_physical_state_for_mask(target_hwnd, FULL_INSTRUMENT_MASK) {
             InstrumentPhysicalState::AllUp => Ok(()),
             InstrumentPhysicalState::Held(held) => {
                 Err(PhysicalKeyPreflightError::UserHeld(held.into_vec()))
@@ -1234,7 +1257,7 @@ impl TrackedKeyState {
         let mut verification_inconclusive = false;
         let mut stuck = Vec::new();
         if self.custom_emitter.is_none() {
-            match instrument_physical_state(target_hwnd) {
+            match instrument_physical_state_for_mask(target_hwnd, tracked_mask) {
                 InstrumentPhysicalState::AllUp => {}
                 InstrumentPhysicalState::Held(held) => {
                     for scan_code in held {
@@ -1251,7 +1274,7 @@ impl TrackedKeyState {
             for delay_ms in [50, 100] {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 let _ = self.do_emit_up(&stuck);
-                match instrument_physical_state(target_hwnd) {
+                match instrument_physical_state_for_mask(target_hwnd, mask_for_scan_codes(&stuck)) {
                     InstrumentPhysicalState::AllUp => stuck.clear(),
                     InstrumentPhysicalState::Held(held) => {
                         stuck.retain(|scan_code| held.contains(scan_code));
@@ -1316,7 +1339,7 @@ impl TrackedKeyState {
             .collect();
 
         if self.custom_emitter.is_none() {
-            match instrument_physical_state(target_hwnd) {
+            match instrument_physical_state_for_mask(target_hwnd, FULL_INSTRUMENT_MASK) {
                 InstrumentPhysicalState::AllUp => {}
                 InstrumentPhysicalState::Held(held) => {
                     for scan_code in held {
@@ -1336,7 +1359,10 @@ impl TrackedKeyState {
                 if self.custom_emitter.is_some() {
                     stuck.retain(|scan_code| !retry_sent.contains(scan_code));
                 } else {
-                    match instrument_physical_state(target_hwnd) {
+                    match instrument_physical_state_for_mask(
+                        target_hwnd,
+                        mask_for_scan_codes(&stuck),
+                    ) {
                         InstrumentPhysicalState::AllUp => {
                             stuck.retain(|scan_code| !retry_sent.contains(scan_code))
                         }
@@ -1644,13 +1670,34 @@ mod tests {
                 0x35,
             ]
         );
+        assert_eq!(FULL_INSTRUMENT_MASK, 0x7fff);
+        assert_eq!(
+            mask_for_scan_codes(&PHYSICAL_INSTRUMENT_SCAN_CODES),
+            FULL_INSTRUMENT_MASK
+        );
+    }
+
+    #[test]
+    fn physical_verification_masks_are_bounded_and_subset_specific() {
+        assert_eq!(mask_for_scan_codes(&[0x15]), 1);
+        assert_eq!(mask_for_scan_codes(&[0x15, 0x35]), (1 << 0) | (1 << 14));
+        assert_eq!(mask_for_scan_codes(&[0xffff]), 0);
+        assert_eq!(
+            instrument_physical_state_for_mask(0, 0),
+            InstrumentPhysicalState::AllUp
+        );
+        assert_eq!(
+            instrument_physical_state_for_mask(0, FULL_INSTRUMENT_MASK | (1 << 15)),
+            InstrumentPhysicalState::Inconclusive
+        );
     }
 
     #[cfg(windows)]
     #[test]
     fn current_layout_maps_all_instrument_scan_codes() {
         let context = keyboard_context_for_target(0).expect("current keyboard layout");
-        let virtual_keys = map_instrument_virtual_keys(&context).expect("instrument mappings");
+        let virtual_keys = map_instrument_virtual_keys(&context, FULL_INSTRUMENT_MASK)
+            .expect("instrument mappings");
         assert!(virtual_keys.iter().all(|&virtual_key| virtual_key != 0));
     }
 
