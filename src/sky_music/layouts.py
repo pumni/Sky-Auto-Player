@@ -19,7 +19,7 @@ PHYSICAL_SCAN_CODES = {
 
 # Inverse map physical scan code -> VK code, built once. Frozen names + values at module load
 # — VK_CODES and PHYSICAL_SCAN_CODES are both process-wide constants, so the inverse is a true
-# constant too. Caller (WinSendInputBackend.release_all) used to rebuild this on every panic
+# constant too. Native cleanup uses this canonical tuple for panic release.
 # release; exposing it here makes that release path O(keys) without the per-call dict-build.
 SCAN_TO_VK: dict[int, int] = {
     sc: VK_CODES[char]
@@ -34,7 +34,7 @@ SCAN_TO_VK: dict[int, int] = {
 SKY_15_SCAN_CODES: tuple[int, ...] = tuple(PHYSICAL_SCAN_CODES.values())
 
 def _map_virtual_key(vk: int) -> int:
-    from sky_music.platform.win32.inputs import map_virtual_key
+    from sky_music.platform.win32.window_target import map_virtual_key
 
     return map_virtual_key(vk)
 

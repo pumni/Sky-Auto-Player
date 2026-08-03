@@ -1,5 +1,8 @@
 # 04 — PyO3 contract và Python adapter
 
+> HISTORICAL: This migration note predates the consolidated PyO3 boundary.
+> The current production contract is Rust-only; see `README.md`.
+
 ## 1. Module declaration
 
 Dùng PyO3 0.29 và khai báo free-thread safety rõ ràng:

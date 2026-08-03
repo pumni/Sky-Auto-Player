@@ -27,12 +27,11 @@ from sky_music.domain.session_context import (
     merge_session_with_overrides,
 )
 from sky_music.infrastructure.hotkeys import PlaybackControls
-from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.runtime_session import (
     RUNTIME_STATE,
     PlaybackOverrides,
 )
-from sky_music.platform.win32 import inputs as _inputs
+from sky_music.platform.win32 import window_target as _window_target
 from sky_music.platform.win32.console import virtual_terminal_processing_enabled
 from sky_music.ui.hud import (
     PLAYBACK_QUIT,
@@ -204,10 +203,10 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
             else:
                 return False
 
-    _inputs.focusWindow()
+    _window_target.focus_window()
     time.sleep(0.25)
 
-    focus_ok = _inputs.is_sky_active()
+    focus_ok = _window_target.is_sky_active()
     if not focus_ok:
         while True:
             dry_str = "ON" if is_dry_run else "OFF"
@@ -238,9 +237,9 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
             except (EOFError, KeyboardInterrupt):
                 return False
             if choice == "r":
-                _inputs.focusWindow()
+                _window_target.focus_window()
                 time.sleep(0.25)
-                if _inputs.is_sky_active():
+                if _window_target.is_sky_active():
                     break
             elif choice == "d":
                 _console.print("  → Use --dry-run to simulate without Sky.")
@@ -386,7 +385,6 @@ def play_selected_song(
 ) -> str:
     from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
     from sky_music.domain.song_repository import get_shared_song_repository
-    from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
     from sky_music.orchestration.engine import PlaybackEngine
     from sky_music.ui.textual_app import TEXTUAL_THEME_TOKENS
     from sky_music.ui.textual_app.playback_app import (
@@ -405,7 +403,6 @@ def play_selected_song(
     force_profile = overrides.profile if overrides else None
     force_tempo = overrides.tempo if overrides else None
     force_fps = overrides.fps if overrides else None
-    dispatch_lead_us = overrides.dispatch_lead_us if overrides else 0
     if force_profile is not None:
         force_profile = canonical_profile_name(force_profile)
 
@@ -427,8 +424,6 @@ def play_selected_song(
     current_tempo = session.tempo_scale
 
     active_policy = session.resolve_effective_policy(user_cfg)
-    _spin_us, _poll_s = session.resolve_sleep_policy(user_cfg)
-    active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
 
     # build_key_actions builds DefaultNoteResolver(profile) when resolver is None; that
     # single resolver now handles both physical and mapped scan-code modes.
@@ -505,8 +500,6 @@ def play_selected_song(
         if new_profile is not None and canonical_profile_name(new_profile) != session.profile_name:
             session = session.with_profile(new_profile)
             active_policy = session.resolve_effective_policy(user_cfg)
-            _spin_us, _poll_s = session.resolve_sleep_policy(user_cfg)
-            active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
             current_profile = session.display_profile_label()
 
             sched_meta = build_schedule(session, active_policy, current_tempo)
@@ -565,9 +558,8 @@ def play_selected_song(
 
     user_cfg = load_config()
     verbose_hud_mode = user_cfg.verbose_hud
-    telemetry_enabled = RUNTIME_STATE.telemetry_csv_enabled or user_cfg.telemetry_enabled_by_default or _inputs.PLAYBACK_DEBUG or force_dry_run
+    telemetry_enabled = RUNTIME_STATE.telemetry_csv_enabled or user_cfg.telemetry_enabled_by_default or _window_target.PLAYBACK_DEBUG or force_dry_run
 
-    backend = DryRunBackend() if is_dry_run else WinSendInputBackend()
     # Resolve the accent colour for the active theme so the HUD borders match
     # the picker's colour scheme rather than always rendering in bright-cyan.
     _active_theme_name = (user_cfg.theme or "aurora").casefold()
@@ -593,42 +585,17 @@ def play_selected_song(
     # output from _mini_preflight would otherwise remain visible above the HUD.
     clear_terminal()
 
-    spin_floor_val = getattr(RUNTIME_STATE, "spin_floor_us", None)
-    spin_floor_us = spin_floor_val if spin_floor_val is not None else 700
-
     engine = PlaybackEngine(
         song=song,
         actions=actions,
-        backend=backend,
+        dry_run=is_dry_run,
         controls=controls,
         renderer=renderer,
         telemetry_enabled=telemetry_enabled,
         require_focus=not is_dry_run,
         profile_name=current_profile,
         tempo_scale=current_tempo,
-        sleep_policy=active_sleep_policy,
-        focus_restore_grace_us=active_policy.focus_restore_grace_us,
-        fps=getattr(active_policy, "fps", None),
         min_hold_us=int(active_policy.min_hold_us),
-        chord_stagger_us=int(getattr(active_policy, "chord_stagger_us", 0)),
-        same_key_conflict_policy=active_policy.same_key_conflict_policy,
-        use_dispatch_thread=RUNTIME_STATE.use_dispatch_thread,
-        input_path_warn_us=user_cfg.input_path_warn_us if RUNTIME_STATE.check_input_path else 0,
-        enable_timer_guard=RUNTIME_STATE.enable_timer_guard,
-        enable_waitable_timer=RUNTIME_STATE.enable_waitable_timer,
-        enable_gc_pause=RUNTIME_STATE.enable_gc_pause,
-        enable_switch_interval_tuning=RUNTIME_STATE.enable_switch_interval_tuning,
-        enable_adaptive_lead=RUNTIME_STATE.enable_adaptive_lead,
-        enable_adaptive_spin=RUNTIME_STATE.enable_adaptive_spin,
-        enable_event_wait=RUNTIME_STATE.enable_event_wait,
-        enable_epoch_rebase=RUNTIME_STATE.enable_epoch_rebase,
-        rt_priority_mode=RUNTIME_STATE.rt_priority_mode,
-        dispatch_lead_us=dispatch_lead_us,
-        spin_floor_us=spin_floor_us,
-        lead_cache_path=".cache/lead_estimator.json",
-        # Phase F.3: margin transparency
-        min_hold_margin_us=int(getattr(active_policy, "min_hold_margin_us", 0)),
-        min_hold_margin_source=getattr(active_policy, "min_hold_margin_source", "default_500"),
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 

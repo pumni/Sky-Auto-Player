@@ -1,5 +1,8 @@
 # 05 — Crate layout và data-oriented design
 
+> HISTORICAL: This migration note records an earlier design review. The
+> current production contract is Rust-only; see `README.md`.
+
 ## 1. Workspace đề xuất
 
 ```text

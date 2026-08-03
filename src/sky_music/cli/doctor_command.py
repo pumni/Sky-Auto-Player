@@ -33,8 +33,8 @@ def run_doctor_command(
         print("=" * 60)
         print("    SKY MUSIC PLAYER — INPUT DELIVERY LATENCY CALIBRATION")
         print("=" * 60)
-        from sky_music.platform.win32 import inputs
-        if inputs.get_sky_window() is not None:
+        from sky_music.platform.win32 import window_target
+        if window_target.get_sky_window() is not None:
             print("Error: Sky process is currently running.")
             print("Please close the game entirely before running input calibration.")
             print("=" * 60)
@@ -44,10 +44,11 @@ def run_doctor_command(
         print("Injecting down/up keystrokes and measuring host-side Raw Input delivery...")
         print("This is a SendInput -> app-owned WM_INPUT delivery proxy, not game/audio onset truth.")
         try:
-            from sky_music.platform.win32.calibration import (
-                calibrate_input_latency_harness,
+            from sky_music.platform.win32.native_calibration import (
+                run_native_calibration,
             )
-            res = calibrate_input_latency_harness()
+
+            res = run_native_calibration()
             print("Calibration complete successfully!")
             print(f"Sampled Down Latency (us): p50={res['down_us']['p50']}, p90={res['down_us']['p90']}, p99={res['down_us']['p99']}")
             print(f"Sampled Up Latency   (us): p50={res['up_us']['p50']}, p90={res['up_us']['p90']}, p99={res['up_us']['p99']}")

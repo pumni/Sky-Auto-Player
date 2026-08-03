@@ -1,5 +1,8 @@
 # 09 — Build, wheel, uv và PyInstaller
 
+> HISTORICAL: This migration packaging note predates the final production
+> boundary. The current production contract is Rust-only; see `README.md`.
+
 ## 1. Giữ root Python build ổn định
 
 Root `pyproject.toml` hiện dùng setuptools. Không bắt buộc đổi toàn dự án sang maturin. Khuyến nghị build native wheel riêng trong `rust/`, install vào cùng uv environment trước test/freeze.

@@ -1,5 +1,8 @@
 # 03 — Kiến trúc Rust đích
 
+> HISTORICAL: This migration note records the target proposal. The current
+> production contract is Rust-only; see `README.md`.
+
 ## 1. Boundary
 
 Python chỉ giữ application orchestration. Rust session nhận dữ liệu immutable, tự spawn worker, và expose thread-safe control/snapshot methods.

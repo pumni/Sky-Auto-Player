@@ -1,5 +1,8 @@
 # 10 — Telemetry, progress và UI integration
 
+> HISTORICAL: This migration note predates the final snapshot/report split.
+> The current production contract is Rust-only; see `README.md`.
+
 ## 1. Giữ UI contract, thay nguồn dữ liệu
 
 Renderer hiện cần:

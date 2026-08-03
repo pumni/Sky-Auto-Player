@@ -1,231 +1,38 @@
+"""Interpreter admission checks retained at application startup."""
+
 from __future__ import annotations
 
-import contextlib
 import gc
 import sys
 import time
-from dataclasses import dataclass
-from types import TracebackType
-from typing import ClassVar, Self
-
-from sky_music.infrastructure.timing import Sleeper
-from sky_music.platform.win32 import inputs
-
-
-@dataclass(slots=True)
-class WaitableTimerSleeper:
-    # Capability flag consumed by HybridWaitStrategy: wakes with sub-millisecond accuracy, so the
-    # timer-aware ladder may sleep straight to target - guard. ClassVar, not a dataclass field.
-    is_high_resolution: ClassVar[bool] = True
-
-    handle: int
-    fallback: Sleeper
-
-    @classmethod
-    def create(cls, fallback: Sleeper) -> WaitableTimerSleeper | None:
-        handle = inputs.create_high_resolution_waitable_timer()
-        if handle is None:
-            return None
-        return cls(handle=handle, fallback=fallback)
-
-    def sleep(self, seconds: float) -> None:
-        if seconds <= 0:
-            self.fallback.sleep(seconds)
-            return
-        delay_us = max(1, int(seconds * 1_000_000))
-        if not inputs.set_waitable_timer_relative_us(self.handle, delay_us):
-            self.fallback.sleep(seconds)
-            return
-        inputs.wait_for_timer(self.handle)
-
-    def close(self) -> None:
-        if self.handle:
-            inputs.close_handle(self.handle)
-            self.handle = 0
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-
-# Cap GIL handoff latency while the Textual dashboard renders in parallel with dispatch
-# (the accepted live-dashboard design). Default CPython switch interval is 5 ms — a UI thread mid-
-# bytecode can deny the spinning dispatch thread the GIL for up to ~5 ms.
-# ctypes WinDLL calls release the GIL during the foreign call, so SendInput itself never blocks
-# the UI and vice versa; this knob only shortens bytecode-vs-bytecode handoff.
-DISPATCH_SWITCH_INTERVAL_S = 0.001
 
 
 def collect_gc_with_stats(phase: str) -> dict[str, int | str]:
-    """Collect cyclic garbage and return bounded lifecycle instrumentation.
-
-    ``collected`` is an object count, not a byte/RSS measurement. Working-set
-    behavior remains a benchmark concern, especially on free-threaded mimalloc.
-    """
     started_ns = time.perf_counter_ns()
-    collected = gc.collect()
     return {
         "phase": phase,
         "duration_us": (time.perf_counter_ns() - started_ns) // 1_000,
-        "collected": collected,
+        "collected": gc.collect(),
     }
 
 
 def _gil_enabled() -> bool:
-    """Return True when the GIL is active in the current interpreter.
-
-    ``sys._is_gil_enabled()`` exists from CPython 3.13+ and returns False
-    only on free-threaded builds (``python3.14t``).  On older builds the GIL
-    is always present, so we default to True.
-    """
     probe = getattr(sys, "_is_gil_enabled", None)
     return bool(probe()) if probe is not None else True
 
 
 class FreeThreadedRuntimeError(RuntimeError):
-    """Raised when the running interpreter is not a true free-threaded runtime.
-
-    Architecture invariant (AGENTS.md): ``.python-version`` ↔
-    ``pyproject.toml requires-python`` pin the free-threaded build because the
-    dispatch loop and the Textual UI thread must not contend on the GIL. This
-    guard verifies both halves of the invariant at startup:
-      * the BUILD is free-threaded (``Py_GIL_DISABLED`` == 1);
-      * the RUNTIME has the GIL disabled (``sys._is_gil_enabled()`` is False).
-    A free-threaded build can still enable the GIL at runtime (a startup flag, an
-    incompatible C extension that re-enables it, or even a script that toggles it
-    via ``_gil_enabled._internal_set_enabled``). Telemetry-only handling lets those
-    cases run silently under the GIL, defeating the pair invariant; we instead refuse
-    before constructing the UI or backend so the user gets a clear actionable error.
-    """
+    """Raised when playback is started on an unsupported interpreter."""
 
 
 def assert_free_threaded_runtime() -> None:
-    """Abort playback startup unless the interpreter is genuinely GIL-disabled.
-
-    Called from ``main()`` once, before the UI / backend are constructed. Raises
-    ``FreeThreadedRuntimeError`` (which the caller converts to a banner + non-zero exit)
-    when either half of the free-threaded invariant fails:
-      * build is not free-threaded (``Py_GIL_DISABLED`` missing or != 1), OR
-      * build is free-threaded but the GIL was re-enabled at runtime.
-    """
     import sysconfig
 
-    build_disabled = sysconfig.get_config_var("Py_GIL_DISABLED")
-    if build_disabled != 1:
+    if sysconfig.get_config_var("Py_GIL_DISABLED") != 1:
         raise FreeThreadedRuntimeError(
-            "Sky Auto-Player requires a free-threaded CPython build "
-            "(Py_GIL_DISABLED == 1); the current interpreter is not one. "
-            "Install Python 3.14t (free-threaded) — see docs/architecture.md."
+            "Sky Auto Player requires a free-threaded CPython build (Py_GIL_DISABLED == 1)."
         )
     if _gil_enabled():
         raise FreeThreadedRuntimeError(
-            "Sky Auto-Player requires the GIL to be disabled at runtime, but "
-            "sys._is_gil_enabled() returned True. The interpreter is a free-threaded "
-            "build but the GIL was re-enabled (startup flag, an incompatible extension, "
-            "or an explicit toggle). Re-launch without forcing the GIL back on."
+            "Sky Auto Player requires the GIL to be disabled at runtime; it may have been re-enabled."
         )
-
-
-class RealtimeProcessScope:
-    """Pause cyclic GC for the duration of dispatch, reverting on exit.
-
-    No process-wide priority class or MMCSS boost is touched, so other apps and the OS are not
-    starved.  One source of jitter we can address in Python is cyclic garbage collection firing on
-    the dispatch thread mid-send, so we collect accumulated picker-era garbage once up front and
-    then pause GC until playback ends.
-
-    This scope also tunes the CPython GIL switch interval (if enabled) to minimize handoff latency
-    between the Textual UI/dashboard thread and the spinning dispatch thread.
-
-    GC is re-enabled and GIL switch interval restored in ``__exit__`` so the picker/idle phases
-    keep normal behaviour.
-    """
-
-    __slots__ = (
-        "_enable_switch_interval_tuning",
-        "_enabled",
-        "_gc_collections",
-        "_gc_was_enabled",
-        "_old_switch_interval",
-    )
-
-    def __init__(
-        self,
-        *,
-        enabled: bool = True,
-        enable_switch_interval_tuning: bool = True,
-    ) -> None:
-        self._enabled = enabled
-        self._enable_switch_interval_tuning = enable_switch_interval_tuning
-        self._gc_was_enabled = False
-        self._gc_collections: list[dict[str, int | str]] = []
-        self._old_switch_interval: float | None = None
-
-    def __enter__(self) -> Self:
-        # 1. GC Pause
-        if self._enabled:
-            self._gc_was_enabled = gc.isenabled()
-            if self._gc_was_enabled:
-                with contextlib.suppress(Exception):
-                    self._gc_collections.append(collect_gc_with_stats("pre_play"))
-                gc.disable()
-                inputs.debug_log("[realtime] cyclic GC paused for dispatch")
-        else:
-            inputs.debug_log("[realtime] cyclic GC pause disabled for dispatch")
-
-        # 2. GIL Switch-Interval Tuning
-        if self._enable_switch_interval_tuning and _gil_enabled():
-            self._old_switch_interval = sys.getswitchinterval()
-            sys.setswitchinterval(DISPATCH_SWITCH_INTERVAL_S)
-            inputs.debug_log(f"[realtime] GIL switch interval tuned to {DISPATCH_SWITCH_INTERVAL_S}s")
-        elif self._enable_switch_interval_tuning:
-            inputs.debug_log("[realtime] free-threaded build: switch-interval tuning skipped (no GIL)")
-        else:
-            inputs.debug_log("[realtime] GIL switch interval tuning disabled")
-
-        return self
-
-    def _restore(self) -> None:
-        """Re-enable GC and restore switch interval. Idempotent."""
-        if self._gc_was_enabled:
-            with contextlib.suppress(Exception):
-                gc.enable()
-            self._gc_was_enabled = False
-        if self._old_switch_interval is not None:
-            with contextlib.suppress(Exception):
-                sys.setswitchinterval(self._old_switch_interval)
-            self._old_switch_interval = None
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self._restore()
-
-    def __del__(self) -> None:
-        # Best-effort fallback if __exit__ was never called (scope abandoned).
-        # __del__ must not raise under free-threaded finalization.
-        with contextlib.suppress(Exception):
-            self._restore()
-
-
-def create_realtime_sleeper(fallback: Sleeper) -> Sleeper:
-    try:
-        sleeper = WaitableTimerSleeper.create(fallback)
-    except Exception as exc:
-        inputs.debug_log(f"[realtime] high-resolution waitable timer unavailable: {exc}")
-        sleeper = None
-    if sleeper is None:
-        inputs.debug_log("[realtime] using existing precise sleeper fallback")
-        return fallback
-    inputs.debug_log("[realtime] using high-resolution waitable timer")
-    return sleeper

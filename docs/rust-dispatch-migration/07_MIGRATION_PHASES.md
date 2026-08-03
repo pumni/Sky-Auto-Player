@@ -1,5 +1,8 @@
 # 07 — Kế hoạch triển khai theo PR/phase
 
+> HISTORICAL: This migration plan has been superseded by the completed
+> consolidation. The current production contract is Rust-only; see `README.md`.
+
 Mỗi phase phải merge được độc lập, có rollback rõ, và không thay đổi default production trước phase 6.
 
 ## Phase 0 — Freeze contract và loại bỏ doc conflict

@@ -43,7 +43,7 @@ from sky_music.orchestration.runtime_session import (
 )
 
 # Imports from specialised modules
-from sky_music.platform.win32 import inputs
+from sky_music.platform.win32 import window_target
 from sky_music.ui.hud import PLAYBACK_QUIT, PLAYBACK_SKIPPED, clear_terminal
 from sky_music.ui.picker import SongPickerResult
 from sky_music.ui.picker_helpers import (
@@ -89,8 +89,8 @@ def flush_debug_log() -> None:
     finally:
         DEBUG_LOG_BUFFER.clear()
 
-# Bridge main.py's debug_log into inputs.py for unified logging
-inputs._debug_log_callback = debug_log
+# Bridge main.py's debug_log into the window-target diagnostics seam.
+window_target._debug_log_callback = debug_log
 
 
 
@@ -160,21 +160,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override minimum key hold duration in ms (overrides profile)",
     )
     timing.add_argument(
-        "--spin-threshold-us",
-        type=int,
-        help="Override CPU spin threshold in microseconds (precise=800, balanced=500, battery_safe=200/0) (overrides profile)",
-    )
-    timing.add_argument(
-        "--spin-floor-us",
-        type=int,
-        help="Override adaptive sleep spin floor threshold in microseconds (default: 700)",
-    )
-    timing.add_argument(
-        "--focus-restore-grace-ms",
-        type=float,
-        help="Override focus restoration grace period in ms (precise=50, balanced=100, remote/safe=150-200) (overrides profile)",
-    )
-    timing.add_argument(
         "--scan-code-mode",
         choices=["physical", "mapped"],
         default="physical",
@@ -184,12 +169,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--same-key-conflict-policy",
         choices=["drop_chord", "degraded", "strict"],
         help="drop_chord = preserve chord fidelity (default), degraded = legacy partial chord, strict = reject and abort playback",
-    )
-    timing.add_argument(
-        "--dispatch-lead-us",
-        type=int,
-        default=0,
-        help="Fixed lead time in microseconds to trigger input dispatch earlier (default: 0)",
     )
     timing.add_argument(
         "--chord-stagger-us",
@@ -207,16 +186,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Cap on total intra-chord spread in microseconds (default 15000 = ~15ms, below the "
             "perceptual simultaneity threshold). Only used when --chord-stagger-us > 0."
         ),
-    )
-    timing.add_argument(
-        "--no-adaptive-lead",
-        action="store_true",
-        help="debug only: disable adaptive dispatch lead prediction (default: on)",
-    )
-    timing.add_argument(
-        "--no-adaptive-spin",
-        action="store_true",
-        help="debug only: disable adaptive sleep spin threshold tuning (default: on)",
     )
     timing.add_argument(
         "--fps",
@@ -266,47 +235,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow hotkeys that overlap with note keys (not recommended)",
     )
-    ctrl.add_argument(
-        "--no-dispatch-thread",
-        action="store_true",
-        help="run playback on the legacy single-thread dispatch path for debugging",
-    )
-    ctrl.add_argument(
-        "--no-timer-guard",
-        action="store_true",
-        help="debug only: do not assert the 1ms timer-resolution guard in the dispatch thread",
-    )
-    ctrl.add_argument(
-        "--no-waitable-timer",
-        action="store_true",
-        help="debug only: use the sleep/yield/spin sleeper instead of the high-resolution waitable timer",
-    )
-    ctrl.add_argument(
-        "--no-gc-pause",
-        action="store_true",
-        help="debug only: do not collect and pause cyclic GC during playback",
-    )
-    ctrl.add_argument(
-        "--no-switch-interval-tuning",
-        action="store_true",
-        help="debug only: do not tune the CPython GIL switch interval during playback",
-    )
-    ctrl.add_argument(
-        "--rt-priority-mode",
-        choices=["auto", "mmcss", "time_critical", "highest", "off"],
-        default=None,
-        help="control real-time thread priority ladder (default: loaded from config, falls back to auto)",
-    )
-    ctrl.add_argument(
-        "--no-event-wait",
-        action="store_true",
-        help="debug only: disable event-driven dispatch waits and fall back to 1ms polling",
-    )
-    ctrl.add_argument(
-        "--no-epoch-rebase",
-        action="store_true",
-        help="debug only: keep playback epoch anchored on the control thread",
-    )
 
     # ── Safety & Diagnostics ──────────────────────────────────────────────────
     diag = parser.add_argument_group("Safety and diagnostics")
@@ -335,11 +263,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--doctor-calibrate",
         action="store_true",
         help="run input delivery latency calibration and save to .cache/input_latency.json",
-    )
-    diag.add_argument(
-        "--check-input-path",
-        action="store_true",
-        help="monitor input path duration and warn if degraded (OS-side/Filter Keys)",
     )
     diag.add_argument(
         "--selftest-textual",
@@ -463,7 +386,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) -> None:
     global PLAYBACK_DEBUG, DEBUG_LOG_PATH
-    from sky_music.platform.win32 import inputs
+    from sky_music.platform.win32 import window_target
     from sky_music.ui import picker as songs
     from sky_music.ui import picker_helpers
 
@@ -471,7 +394,7 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
 
     picker_helpers.SONG_DIR = args.songs_dir
     PLAYBACK_DEBUG = args.debug_playback
-    inputs.PLAYBACK_DEBUG = args.debug_playback
+    window_target.PLAYBACK_DEBUG = args.debug_playback
     RUNTIME_STATE.telemetry_csv_enabled = args.debug_csv
     RUNTIME_STATE.dry_run = args.dry_run
     RUNTIME_STATE.tempo_scale = args.tempo_scale
@@ -479,30 +402,17 @@ def configure_from_args(args: argparse.Namespace, cfg: AppConfig | None = None) 
     if RUNTIME_STATE.tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
     RUNTIME_STATE.verbose_hud = args.verbose_hud
-    RUNTIME_STATE.use_dispatch_thread = not args.no_dispatch_thread
-    RUNTIME_STATE.enable_timer_guard = not args.no_timer_guard
-    RUNTIME_STATE.enable_waitable_timer = not args.no_waitable_timer
-    RUNTIME_STATE.enable_gc_pause = not args.no_gc_pause
-    RUNTIME_STATE.enable_switch_interval_tuning = not args.no_switch_interval_tuning
-    RUNTIME_STATE.enable_adaptive_lead = False if args.no_adaptive_lead else cfg.enable_adaptive_lead
-    RUNTIME_STATE.enable_adaptive_spin = False if args.no_adaptive_spin else cfg.enable_adaptive_spin
-    RUNTIME_STATE.rt_priority_mode = args.rt_priority_mode if args.rt_priority_mode is not None else cfg.rt_priority_mode
-    RUNTIME_STATE.enable_event_wait = not args.no_event_wait
-    RUNTIME_STATE.enable_epoch_rebase = not args.no_epoch_rebase
-    RUNTIME_STATE.check_input_path = args.check_input_path
-    RUNTIME_STATE.spin_floor_us = getattr(args, "spin_floor_us", None)
 
     if PLAYBACK_DEBUG:
         init_debug_log()
 
     session = PlaybackSessionContext.from_cli_args(args, cfg)
-    spin_override = getattr(args, "spin_threshold_us", None)
-    RUNTIME_STATE.apply_session(session, cfg, spin_threshold_us=spin_override)
+    RUNTIME_STATE.apply_session(session, cfg)
 
     if args.sky_process_names:
-        inputs.set_expected_process_names(args.sky_process_names.split(","))
+        window_target.set_expected_process_names(args.sky_process_names.split(","))
 
-    inputs.ALLOW_TITLE_FALLBACK = bool(args.allow_title_fallback)
+    window_target.set_title_fallback(bool(args.allow_title_fallback))
     if args.theme is not None:
         songs.ACTIVE_THEME = args.theme
         songs.save_theme(args.theme)
@@ -624,14 +534,12 @@ def _run_optimize_selftest() -> int:
 
 
 def _run_rust_selftest() -> int:
-    """Verify production native admission and a mock worker that sends no input."""
+    """Verify production native admission with an empty native schedule."""
     try:
         import sky_player_rs  # type: ignore[import-not-found]
 
-        from sky_music.orchestration.core.ports import (
-            RUST_DISPATCH_SCHEMA_VERSION,
-        )
         from sky_music.orchestration.native_dispatch import probe_native_dispatch
+        from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
 
         probe = probe_native_dispatch(force=True)
         if not probe.available:
@@ -643,13 +551,14 @@ def _run_rust_selftest() -> int:
         ):
             raise RuntimeError(f"unexpected native build metadata: {info!r}")
         session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
-            [
-                (0, "down", 0, [0x15], "selftest"),
-                (1, "up", 1_000, [0x15], "selftest"),
-            ],
+            [],
             [0x15],
-            profile="mock_test",
-            min_hold_us=0,
+            config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                min_hold_us=0,
+                require_focus=False,
+                telemetry=False,
+                profile="production",
+            ),
         )
         session.start()
         if session.join(timeout_ms=5_000) is not True:
@@ -660,7 +569,7 @@ def _run_rust_selftest() -> int:
     except Exception as exc:
         print(f"Rust selftest failed: {exc}", file=sys.stderr)
         return 1
-    print("Rust selftest OK: native module imported and mock worker terminated cleanly.")
+    print("Rust selftest OK: native module imported and empty schedule terminated cleanly.")
     return 0
 
 
@@ -958,7 +867,7 @@ def main() -> int:
         # Holding a global 1 ms period for the whole interactive session only raised the
         # system-wide timer-interrupt rate (laptop power) for no accuracy gain. The dispatch
         # thread still installs a scoped guard as a fallback ONLY when the high-res sleeper is
-        # unavailable (old Windows) — see PlaybackSupervisor._run_threaded.
+        # unavailable on older Windows; the native session remains fail-closed.
         if args.song is not None:
             selected_song = resolve_song_selection(args.song, song_choices)
             if selected_song is None:
@@ -976,7 +885,6 @@ def main() -> int:
                     controls=controls,
                     overrides=PlaybackOverrides(
                         dry_run=RUNTIME_STATE.dry_run,
-                        dispatch_lead_us=args.dispatch_lead_us,
                     ),
                 )
                 if result == PLAYBACK_QUIT:
@@ -1014,7 +922,6 @@ def main() -> int:
                     scan_code_mode=session.scan_code_mode,
                     controls=controls,
                     countdown_seconds=args.countdown,
-                    dispatch_lead_us=args.dispatch_lead_us,
                 )
             except Exception as exc:
                 print(f"\n[ERROR] Playback aborted due to background worker cleanup failure: {exc}")
@@ -1053,7 +960,6 @@ def main() -> int:
                     profile=picker_result.profile_name,
                     tempo=picker_result.tempo_scale,
                     fps=picker_result.fps,
-                    dispatch_lead_us=args.dispatch_lead_us,
                 )
             )
             if result == PLAYBACK_QUIT:

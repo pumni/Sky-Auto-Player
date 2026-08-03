@@ -1,5 +1,8 @@
 # 12 — Runbook giao cho AI coding
 
+> HISTORICAL: This runbook predates the completed consolidation. The current
+> production contract is Rust-only; see `README.md`.
+
 ## 1. System prompt chung
 
 ```text

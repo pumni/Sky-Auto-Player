@@ -1,5 +1,8 @@
 # 00 — Baseline, phạm vi và quyết định thiết kế
 
+> HISTORICAL: This migration note records the pre-consolidation design. The
+> current production contract is Rust-only; see `README.md` in this directory.
+
 ## 1. Baseline bất biến
 
 Mọi patch phải được so sánh với commit:

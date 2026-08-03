@@ -14,11 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-# Defined here (not in infrastructure.rt_priority) so that low-level modules like
-# platform.win32.inputs can import config without creating an import cycle through the
-# platform layer. rt_priority re-exports this name.
-RtPriorityMode = Literal["auto", "mmcss", "time_critical", "highest", "off"]
-
 SCHEMA_VERSION: int = 2
 DEFAULT_GAME_FPS: int = 60
 VALID_FPS: tuple[int, ...] = (30, 60, 90, 120, 144, 165, 240)
@@ -216,16 +211,6 @@ class AppConfig:
     game_fps:                    int           = DEFAULT_GAME_FPS
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
-    use_dispatch_thread:         bool          = True
-    dispatch_backend:            Literal["auto", "rust", "python"] = "auto"
-    fidelity_mode:               Literal["normal", "strict"] = "normal"
-    input_path_warn_us:          int           = 3000
-    rt_priority_mode:            RtPriorityMode = "auto"  # Replaces dead rt_time_critical. Old "true" maps to "auto", "false" to "off".
-    # Graduated 2026-06-11 after live A/B (see docs/perf-baselines/2026-06-baseline.md §3 and
-    # the archived rt-pipeline-extreme-optimization-plan): defaults ON in production. CLI
-    # --no-adaptive-lead / --no-adaptive-spin are the kill switches.
-    enable_adaptive_lead:         bool          = True
-    enable_adaptive_spin:         bool          = True
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
     frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
@@ -390,7 +375,6 @@ def argparse_base_defaults() -> dict[str, Any]:
         "tempo_scale": 1.0,
         "debug_csv": False,
         "verbose_hud": False,
-        "no_dispatch_thread": False,
         "theme": None,
         "ui_background": None,
         "songs_dir": Path(AppConfig.songs_dir),
@@ -459,21 +443,6 @@ def _build_config_from_disk() -> AppConfig:
     default_timing_profile = canonical_profile_name(
         str(raw.get("default_timing_profile", AppConfig.default_timing_profile))
     )
-    raw_dispatch_backend = raw.get("dispatch_backend")
-    dispatch_backend = (
-        cast(Literal["auto", "rust", "python"], raw_dispatch_backend)
-        if isinstance(raw_dispatch_backend, str)
-        and raw_dispatch_backend in {"auto", "rust", "python"}
-        else AppConfig.dispatch_backend
-    )
-    raw_fidelity_mode = raw.get("fidelity_mode")
-    fidelity_mode = (
-        cast(Literal["normal", "strict"], raw_fidelity_mode)
-        if isinstance(raw_fidelity_mode, str)
-        and raw_fidelity_mode in {"normal", "strict"}
-        else AppConfig.fidelity_mode
-    )
-
     return AppConfig(
         theme                        = str(raw.get("theme", AppConfig.theme)),
         ui_background_mode           = str(raw.get("ui_background_mode", AppConfig.ui_background_mode)),
@@ -482,16 +451,6 @@ def _build_config_from_disk() -> AppConfig:
         game_fps                     = resolve_game_fps(_parse_int(raw.get("game_fps"), AppConfig.game_fps)),
         telemetry_enabled_by_default = _parse_bool(raw.get("telemetry_enabled_by_default"), AppConfig.telemetry_enabled_by_default),
         verbose_hud                  = _parse_bool(raw.get("verbose_hud"), AppConfig.verbose_hud),
-        use_dispatch_thread          = _parse_bool(raw.get("use_dispatch_thread"), AppConfig.use_dispatch_thread),
-        dispatch_backend             = dispatch_backend,
-        fidelity_mode                = fidelity_mode,
-        input_path_warn_us           = max(0, _parse_int(raw.get("input_path_warn_us"), AppConfig.input_path_warn_us)),
-        # The legacy rt_time_critical flag was DEAD config (never wired to anything), so its value
-        # carries no user intent and must not pin the new ladder off: it is ignored entirely and
-        # dropped on the next save. Only an explicit rt_priority_mode key overrides the default.
-        rt_priority_mode             = cast(RtPriorityMode, str(raw.get("rt_priority_mode", AppConfig.rt_priority_mode))),
-        enable_adaptive_lead         = _parse_bool(raw.get("enable_adaptive_lead"), AppConfig.enable_adaptive_lead),
-        enable_adaptive_spin         = _parse_bool(raw.get("enable_adaptive_spin"), AppConfig.enable_adaptive_spin),
         hotkeys                      = hotkeys,
         safety                       = safety,
         frame_timing                 = frame_timing,
@@ -544,14 +503,7 @@ def save_config(cfg: AppConfig) -> None:
         raw["game_fps"]                     = cfg.game_fps
         raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
         raw["verbose_hud"]                  = cfg.verbose_hud
-        raw["use_dispatch_thread"]          = cfg.use_dispatch_thread
-        raw["dispatch_backend"]             = cfg.dispatch_backend
-        raw["fidelity_mode"]                = cfg.fidelity_mode
-        raw["input_path_warn_us"]           = cfg.input_path_warn_us
         raw.pop("rt_time_critical", None)
-        raw["rt_priority_mode"]             = cfg.rt_priority_mode
-        raw["enable_adaptive_lead"]         = cfg.enable_adaptive_lead
-        raw["enable_adaptive_spin"]         = cfg.enable_adaptive_spin
         raw["hotkeys"] = {
             "pause":   cfg.hotkeys.pause,
             "skip":    cfg.hotkeys.skip,
@@ -630,9 +582,6 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
 
     if getattr(args, "verbose_hud", None) == parser_defaults["verbose_hud"]:
         args.verbose_hud = cfg.verbose_hud
-
-    if getattr(args, "no_dispatch_thread", None) == parser_defaults["no_dispatch_thread"]:
-        args.no_dispatch_thread = not cfg.use_dispatch_thread
 
     if getattr(args, "theme", None) == parser_defaults["theme"]:
         args.theme = cfg.theme

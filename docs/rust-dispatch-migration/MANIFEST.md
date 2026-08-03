@@ -1,5 +1,8 @@
 # Manifest
 
+> HISTORICAL: The files in this migration bundle are retained as historical
+> context. The active contract is documented in `README.md`.
+
 | File | Purpose |
 |---|---|
 | README.md | entry point and key decisions |

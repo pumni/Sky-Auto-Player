@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from sky_music.orchestration.core.ports import RUST_DISPATCH_SCHEMA_VERSION
+from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
 
 NATIVE_PROVENANCE_PATHS = (
     Path("rust") / "Cargo.lock",

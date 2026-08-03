@@ -30,31 +30,17 @@ def test_native_doctor_reports_build_metadata(monkeypatch) -> None:
             detail="test native dispatch",
         ),
     )
-    monkeypatch.setattr(native_dispatch, "native_dispatch_required", lambda: False)
-    monkeypatch.setattr(
-        native_dispatch,
-        "python_dispatch_explicitly_requested",
-        lambda: False,
-    )
 
     result = doctor.check_native_dispatch()
 
     assert result["ok"] is True
-    assert result["required"] is False
+    assert result["required"] is True
     assert "rustc 1.97.1" in result["msg"]
     assert "cp314t-win_amd64" in result["msg"]
 
 
 def test_native_doctor_marks_explicit_missing_module_as_required(monkeypatch) -> None:
     monkeypatch.delitem(sys.modules, "sky_player_rs", raising=False)
-    monkeypatch.setattr(native_dispatch, "native_dispatch_required", lambda: True)
-    monkeypatch.setattr(
-        native_dispatch,
-        "python_dispatch_explicitly_requested",
-        lambda: False,
-    )
-    monkeypatch.setattr(native_dispatch, "is_native_dispatch_available", lambda: False)
-
     real_import = __import__
 
     def reject_native(name: str, *args, **kwargs):

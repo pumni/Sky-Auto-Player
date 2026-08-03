@@ -38,9 +38,9 @@ def _playback_error_result(exc: BaseException) -> str:
 if TYPE_CHECKING:
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.domain.validation import ScheduleInvariantViolation
-    from sky_music.infrastructure.backend import BackendHealth
     from sky_music.infrastructure.hotkeys import HotkeyBinding
     from sky_music.orchestration.engine import PlaybackEngine
+    from sky_music.orchestration.native_models import BackendHealth
 
 class PlaybackCommandBridge:
     """Merges global hotkey polling with UI-originated playback commands."""
@@ -123,7 +123,6 @@ class SnapshotRenderer:
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
-        dispatch_backend: str = "auto",  # noqa: ARG002
     ) -> None:
         with self._lock:
             self.snapshot = PlaybackSnapshot(

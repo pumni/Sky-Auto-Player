@@ -1,5 +1,9 @@
 # 13 — Definition of Done
 
+> HISTORICAL: This checklist records the migration proposal and is not the
+> current acceptance result. The current production contract is Rust-only;
+> see `README.md`.
+
 > V3.0.0 status: the Rust-default implementation and explicit Python diagnostic rollback are present in the current code. Keep checklist items pending until the exact-SHA acceptance packet records the corresponding Windows, packaging, and soak evidence; this checklist must not be used to infer a PASS from code inspection alone.
 
 ## Build/ABI

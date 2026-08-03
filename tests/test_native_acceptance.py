@@ -21,10 +21,11 @@ def _load_acceptance_module() -> ModuleType:
 ACCEPTANCE = _load_acceptance_module()
 
 
-def test_native_calibration_schema_version_is_exposed_by_the_current_wheel() -> None:
-    assert sky_player_rs.calibration_schema_version() == 8  # type: ignore[attr-defined]
-    build_info = sky_player_rs.build_info  # type: ignore[attr-defined]
-    assert build_info()["calibration_schema_version"] == 8
+def test_production_wheel_omits_optional_calibration_surface() -> None:
+    names = {name for name in dir(sky_player_rs) if not name.startswith("_")}
+    assert "run_calibration_rs" not in names
+    assert "calibration_schema_version" not in names
+    assert "calibration_schema_version" not in sky_player_rs.build_info()  # type: ignore[attr-defined]
 
 
 def test_real_backend_without_mock_options_uses_zero_mock_latency() -> None:

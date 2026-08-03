@@ -55,22 +55,6 @@ def test_cli_ui_background_argument_and_config_default():
     main.apply_config_defaults(default_args, AppConfig(ui_background_mode="painted"))
     assert default_args.ui_background == "painted"
 
-def test_cli_check_input_path_argument():
-    parser = main.build_arg_parser()
-    args = parser.parse_args(["--check-input-path"])
-    assert args.check_input_path is True
-    main.configure_from_args(args, AppConfig())
-    assert main.RUNTIME_STATE.check_input_path is True
-
-
-def test_cli_no_epoch_rebase_disables_runtime_flag():
-    parser = main.build_arg_parser()
-    args = parser.parse_args(["--no-epoch-rebase"])
-    assert args.no_epoch_rebase is True
-    main.configure_from_args(args, AppConfig())
-    assert main.RUNTIME_STATE.enable_epoch_rebase is False
-
-
 class DummyStdout:
     def __init__(self, is_tty: bool) -> None:
         self.is_tty = is_tty

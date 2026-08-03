@@ -1,8 +1,6 @@
 import time
 from pathlib import Path
 
-from sky_music.platform.win32 import inputs
-
 SONG_DIR: Path = Path("songs")
 SUPPORTED_EXTENSIONS: set[str] = {".json", ".skysheet", ".txt"}
 
@@ -95,12 +93,14 @@ def countdown_before_playback(seconds: int) -> None:
         print("\r" + " " * 32 + "\r", end='', flush=True)
 
 def ensure_sky_ready() -> bool:
-    inputs.sky = inputs.get_sky_window()
-    if inputs.sky is None:
+    from sky_music.platform.win32 import window_target
+
+    window_target.reset_window_cache()
+    if window_target.get_sky_window() is None:
         print("Sky was not detected. Open Sky before playing a song.")
         return False
-    inputs.focusWindow()
-    if not inputs.is_sky_active():
+    window_target.focus_window()
+    if not window_target.is_sky_active():
         print("Sky is not focused yet. Bring Sky to the foreground, then press Enter to continue.")
         input()
     return True

@@ -37,7 +37,7 @@ Sky Auto Player doesn't replay a fixed macro. It schedules every note like a sma
 - **Learns your machine's latency** — adaptive lead reduces sender-side completion error from measurements on the current machine; telemetry reports the measured result instead of promising a universal absolute threshold.
 - **Holds keep their full duration** — long notes don't get clipped short, even when the next note is close behind.
 - **Per-song timing profiles** — fast arpeggios and slow ballads get different timing, not one global setting.
-- **A dedicated Rust timing worker** — the player and the on-screen display stay on the Python UI/orchestration boundary while the real-time sender runs natively.
+- **A dedicated Rust timing worker** — Python owns the UI and application flow while Rust alone owns compilation, timing, focus, `SendInput`, cleanup, and native telemetry.
 
 This is what "in time" actually means here.
 

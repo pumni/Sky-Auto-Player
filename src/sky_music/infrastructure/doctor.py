@@ -3,7 +3,7 @@ from typing import Any
 
 from sky_music.config import load_config
 from sky_music.layouts import PHYSICAL_SCAN_CODES, SKY_15_KEY_PROFILE, VK_CODES
-from sky_music.platform.win32 import inputs
+from sky_music.platform.win32 import window_target
 from sky_music.platform.win32.diagnostics import (
     check_timer_resolution as _check_timer_resolution,
 )
@@ -20,16 +20,16 @@ def check_sky_window() -> dict:
     """Diagnoses Sky window handle, process name, and potential UIPI elevation mismatches."""
     status: dict[str, Any] = {"ok": False, "msg": "", "hwnd": None, "process": ""}
 
-    hwnd = inputs.get_sky_window()
+    hwnd = window_target.get_sky_window()
     if hwnd is None:
         status["msg"] = "Sky window NOT found. Ensure the game is running and verify --sky-process-names."
         return status
 
-    pid = inputs.get_window_process_id(hwnd)
+    pid = window_target.get_window_process_id(hwnd)
     if pid is None:
         status["msg"] = "Sky window process id could not be queried."
         return status
-    proc_name = inputs.get_process_name_by_pid(pid)
+    proc_name = window_target.get_process_name_by_pid(pid)
 
     status["hwnd"] = hwnd
     status["process"] = proc_name or "Unknown Process"
@@ -85,7 +85,7 @@ def check_physical_keys_held() -> dict:
     
     for char, vk in VK_CODES.items():
         # GetAsyncKeyState returns negative values if key is currently down
-        if inputs.is_virtual_key_down(vk):
+        if window_target.is_virtual_key_down(vk):
             held.append(char.upper())
             
     if held:
@@ -110,18 +110,12 @@ def check_calibration_cache() -> dict:
 
 def check_native_dispatch() -> dict[str, Any]:
     """Report native module/toolchain/ABI status for the default-on sender."""
-    from sky_music.orchestration.native_dispatch import (
-        native_dispatch_required,
-        probe_native_dispatch,
-        python_dispatch_explicitly_requested,
-    )
+    from sky_music.orchestration.native_dispatch import probe_native_dispatch
 
-    rollback_enabled = python_dispatch_explicitly_requested()
-    explicitly_required = native_dispatch_required() and not rollback_enabled
     status: dict[str, Any] = {
         "ok": False,
-        "required": explicitly_required,
-        "enabled": not rollback_enabled,
+        "required": True,
+        "enabled": True,
         "available": False,
         "msg": "",
     }
@@ -136,9 +130,8 @@ def check_native_dispatch() -> dict[str, Any]:
         status["probe_detail"] = probe.detail
         status["native_module_path"] = probe.module_path
         status["ok"] = status["available"]
-        mode = "rollback forced" if rollback_enabled else "default-on"
         status["msg"] = (
-            f"Rust dispatch {mode}; core={info.get('rust_core_version', 'unknown')}, "
+            f"Rust dispatch is required; core={info.get('rust_core_version', 'unknown')}, "
             f"rustc={info.get('rustc_version', 'unknown')}, "
             f"PyO3={info.get('pyo3_version', 'unknown')}, "
             f"ABI={info.get('native_abi', 'unknown')}, "
@@ -150,7 +143,7 @@ def check_native_dispatch() -> dict[str, Any]:
     except (ImportError, AttributeError, RuntimeError, TypeError) as exc:
         status["msg"] = (
             "Rust dispatch module is unavailable"
-            + (" but is required" if explicitly_required else "")
+            + " and is required"
             + f": {exc}"
         )
     return status
@@ -160,8 +153,8 @@ def check_sky_foreground() -> dict:
     """Checks whether the Sky window is currently the foreground (active) window."""
     status = {"ok": True, "msg": ""}
     try:
-        from sky_music.platform.win32 import inputs as _inputs
-        if _inputs.is_sky_active():
+        from sky_music.platform.win32 import window_target
+        if window_target.is_sky_active():
             status["msg"] = "Sky window is currently in the foreground."
         else:
             status["ok"] = False

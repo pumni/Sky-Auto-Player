@@ -1,5 +1,8 @@
 # 02 — Behavioral invariants bắt buộc giữ nguyên
 
+> HISTORICAL: This migration note records the invariant review during the
+> migration. The current production contract is Rust-only; see `README.md`.
+
 Mọi invariant dưới đây phải có ít nhất một Rust unit test và một differential/integration test tương ứng.
 
 ## A. Timeline và hold

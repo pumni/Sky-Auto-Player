@@ -12,7 +12,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -20,21 +19,20 @@ from pathlib import Path
 from typing import Any, cast
 
 from sky_music.domain.scheduler_types import KeyAction
-from sky_music.infrastructure.backend import BackendHealth
 from sky_music.layouts import SKY_15_SCAN_CODES
-from sky_music.orchestration.core.ports import (
+from sky_music.orchestration.native_models import (
     PLAYBACK_ERROR,
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
     PLAYBACK_SHUTDOWN_TIMEOUT,
     PLAYBACK_SKIPPED,
     RUST_DISPATCH_SCHEMA_VERSION,
+    BackendHealth,
     ProgressCounters,
 )
 from sky_music.orchestration.native_provenance import native_source_fingerprint
 
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
-SUPERVISOR_LEASE_TIMEOUT_US = 3_000_000
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -140,38 +138,6 @@ def _expected_native_source_fingerprint() -> str:
         return native_source_fingerprint(_REPO_ROOT, EXPECTED_NATIVE_ABI)
     except (OSError, ValueError):
         return ""
-
-
-def python_dispatch_explicitly_requested() -> bool:
-    """Return whether the internal rollback switch explicitly selects Python."""
-    value = os.environ.get("SKY_USE_PYTHON_DISPATCH", "").strip().casefold()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    legacy = os.environ.get("SKY_USE_RUST_DISPATCH", "").strip().casefold()
-    return legacy in {"0", "false", "no", "off"}
-
-
-def native_dispatch_explicitly_requested() -> bool:
-    """Return whether the legacy Rust opt-in flag is set."""
-    value = os.environ.get("SKY_USE_RUST_DISPATCH", "").strip().casefold()
-    return value in {"1", "true", "yes", "on"}
-
-
-def native_dispatch_required() -> bool:
-    """Return whether an eligible production session must have Rust.
-
-    The real Win32 dispatch path is fidelity-first.  Python is therefore not
-    an implicit compatibility fallback: callers must opt into the diagnostic
-    rollback switch (``SKY_USE_PYTHON_DISPATCH=1``), which is checked before
-    this function is consulted.
-
-    ``SKY_REQUIRE_RUST_DISPATCH`` remains accepted as an explicit, backwards
-    compatible affirmative setting.  A false/unset value no longer weakens
-    the release policy.
-    """
-    # The legacy variable remains accepted by deployment configuration, but
-    # the safe default is now fail-closed regardless of whether it is present.
-    return True
 
 
 def _module_cache_key(
@@ -390,40 +356,6 @@ def probe_native_dispatch(*, force: bool = False) -> NativeProbeResult:
         )
 
 
-def is_native_dispatch_available() -> bool:
-    """Compatibility boolean for callers that only need admission."""
-    return probe_native_dispatch().available
-
-
-def reset_native_dispatch_availability_cache() -> None:
-    global _NATIVE_PROBE, _NATIVE_PROBE_KEY
-    _NATIVE_PROBE = None
-    _NATIVE_PROBE_KEY = None
-
-
-class NativeHeartbeatThread(threading.Thread):
-    def __init__(self, session: Any, interval_s: float = 0.1) -> None:
-        super().__init__(name="NativeHeartbeat", daemon=True)
-        self._session = session
-        self._interval_s = interval_s
-        self._stop_event = threading.Event()
-        self.error: BaseException | None = None
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-    def run(self) -> None:
-        try:
-            heartbeat = getattr(self._session, "heartbeat", None)
-            if not callable(heartbeat):
-                return
-            while not self._stop_event.wait(self._interval_s):
-                heartbeat()
-        except BaseException as exc:
-            self.error = exc
-            self._stop_event.set()
-
-
 class RustDispatchRuntime:
     """Supervisor-side adapter; never participates in the real-time hot path."""
 
@@ -431,7 +363,6 @@ class RustDispatchRuntime:
         "_controls",
         "_focus_guard",
         "_has_played",
-        "_last_focus_active",
         "_last_hwnd",
         "_manual_paused",
         "_min_hold_us",
@@ -449,34 +380,13 @@ class RustDispatchRuntime:
         actions: Sequence[KeyAction],
         song_name: str,
         min_hold_us: int,
-        max_lead_us: int,
-        focus_restore_grace_us: int,
-        spin_threshold_us: int,
-        telemetry_mode: str,
-        rt_priority_mode: str,
-        enable_waitable_timer: bool,
-        enable_event_wait: bool,
-        enable_adaptive_spin: bool,
-        spin_floor_us: int,
-        input_path_warn_us: int,
-        enable_adaptive_lead: bool,
-        estimator_state_json: str | None,
         require_focus: bool,
         focus_guard: Any,
         controls: Any,
         renderer: Any,
         poll_s: float,
-        strict_timing: bool = False,
-        strict_down_completion_late_us: int = 2_000,
-        strict_up_completion_late_us: int = 2_000,
-        core_warmup_budget_us: int = 0,
-        dispatch_lead_us: int = 0,
-        chord_stagger_us: int = 0,
+        telemetry_enabled: bool = False,
     ) -> None:
-        if chord_stagger_us != 0:
-            raise ValueError(
-                "native accuracy-first dispatch requires chord_stagger_us == 0"
-            )
         import sky_player_rs  # type: ignore[import-not-found]
 
         native_actions = (
@@ -492,31 +402,12 @@ class RustDispatchRuntime:
         self._session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             native_actions,
             list(SKY_15_SCAN_CODES),
-            profile=(
-                "strict_timing_diagnostic"
-                if strict_timing
-                else "production"
+            config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                min_hold_us=min_hold_us,
+                require_focus=require_focus,
+                telemetry=telemetry_enabled,
+                profile="production",
             ),
-            min_hold_us=min_hold_us,
-            max_lead_us=max_lead_us,
-            dispatch_lead_us=dispatch_lead_us,
-            require_focus=require_focus,
-            focus_restore_grace_us=focus_restore_grace_us,
-            spin_threshold_us=spin_threshold_us,
-            core_warmup_budget_us=core_warmup_budget_us,
-            telemetry_mode=telemetry_mode,
-            telemetry_capacity=1024,
-            rt_priority_mode=rt_priority_mode,
-            enable_waitable_timer=enable_waitable_timer,
-            enable_event_wait=enable_event_wait,
-            enable_adaptive_spin=enable_adaptive_spin,
-            spin_floor_us=spin_floor_us,
-            input_path_warn_us=input_path_warn_us,
-            enable_adaptive_lead=enable_adaptive_lead,
-            estimator_state_json=estimator_state_json,
-            strict_down_completion_late_us=strict_down_completion_late_us,
-            strict_up_completion_late_us=strict_up_completion_late_us,
-            supervisor_lease_timeout_us=SUPERVISOR_LEASE_TIMEOUT_US,
         )
         self._song_name = song_name
         self._min_hold_us = min_hold_us
@@ -527,41 +418,34 @@ class RustDispatchRuntime:
         self._sleep_s = max(0.002, min(0.05, poll_s))
         self._total_us = max((int(action.at_us) for action in actions), default=0)
         self._manual_paused = False
-        self._last_focus_active: bool | None = None
         self._last_hwnd: int | None = None
         self._has_played = False
 
-    def _publish_focus(self) -> bool:
+    def _publish_focus(self) -> None:
         if not self._require_focus:
-            if self._last_focus_active is not True:
-                self._session.update_focus(True)
-                self._last_focus_active = True
-            return True
-        active = bool(self._focus_guard.is_active())
-        if active:
-            try:
-                from sky_music.platform.win32 import inputs
+            return
+        try:
+            from sky_music.platform.win32 import window_target
 
-                hwnd = int(inputs.sky) if inputs.sky is not None else 0
-            except (AttributeError, TypeError, ValueError):
-                hwnd = 0
-            if hwnd != self._last_hwnd:
-                self._session.set_target_hwnd(hwnd)
-                self._last_hwnd = hwnd
-        if active != self._last_focus_active:
-            self._session.update_focus(active)
-            self._last_focus_active = active
-        return active
+            hwnd = window_target.cached_target_hwnd()
+        except (AttributeError, TypeError, ValueError):
+            hwnd = 0
+        if hwnd != self._last_hwnd:
+            self._session.set_target_hwnd(hwnd)
+            self._last_hwnd = hwnd
 
     def _set_initial_target(self) -> None:
         if not self._require_focus:
             return
         try:
-            from sky_music.platform.win32 import inputs
+            from sky_music.platform.win32 import window_target
 
-            inputs.reset_window_cache()
-            hwnd = inputs.get_sky_window()
-            target = 0 if hwnd is None else int(hwnd)
+            window_target.reset_window_cache()
+            target = (
+                int(window_target.cached_target_hwnd())
+                if window_target.is_sky_window_valid()
+                else 0
+            )
             self._session.set_target_hwnd(target)
             self._last_hwnd = target
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
@@ -571,8 +455,8 @@ class RustDispatchRuntime:
     def _handle_command(self, command: str | None) -> str | None:
         def terminal_race_is_done() -> bool:
             try:
-                return bool(self._session.snapshot().get("is_finished"))
-            except Exception:
+                return bool(self._session.snapshot_lite().get("is_finished"))
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 return False
 
         if command == "quit":
@@ -617,7 +501,7 @@ class RustDispatchRuntime:
         """Join the worker, escalating once if the first bounded wait expires."""
         joined = bool(self._session.join(timeout_ms=5_000))
         if not joined:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                 self._session.quit()
             joined = bool(self._session.join(timeout_ms=5_000))
         return joined
@@ -625,12 +509,12 @@ class RustDispatchRuntime:
     @staticmethod
     def _health(snapshot: dict[str, Any]) -> BackendHealth:
         return BackendHealth(
-            active_count=int(snapshot["active_count"]),
-            possibly_active_count=int(snapshot["possibly_active_count"]),
-            failed_release_count=int(snapshot["failed_release_count"]),
-            last_error=snapshot["last_error"],
-            keys_dropped=int(snapshot["keys_dropped"]),
-            chord_split_events=int(snapshot["chord_split_events"]),
+            active_count=int(snapshot.get("active_count", snapshot.get("active_keys", 0))),
+            possibly_active_count=int(snapshot.get("possibly_active_count", 0)),
+            failed_release_count=int(snapshot.get("failed_release_count", 0)),
+            last_error=snapshot.get("last_error"),
+            keys_dropped=int(snapshot.get("keys_dropped", 0)),
+            chord_split_events=int(snapshot.get("chord_split_events", 0)),
             sendinput_partial_events=int(snapshot.get("sendinput_partial_events", 0)),
             sendinput_zero_progress_failures=int(
                 snapshot.get("sendinput_zero_progress_failures", 0)
@@ -652,43 +536,36 @@ class RustDispatchRuntime:
 
         started = False
         joined = False
-        heartbeat_thread = None
         requested_outcome: str | None = None
         latest: dict[str, Any] = {}
+        report: dict[str, Any] | None = None
         try:
             self._set_initial_target()
             self._publish_focus()
             self._session.start()
             started = True
             
-            heartbeat_thread = NativeHeartbeatThread(self._session)
-            heartbeat_thread.start()
-            
-            latest = self._session.snapshot()
+            latest = dict(self._session.snapshot_lite())
 
             while not latest["is_finished"]:
-                if heartbeat_thread.error is not None:
-                    error = heartbeat_thread.error
-                    raise RuntimeError(
-                        f"native heartbeat failed: {type(error).__name__}: {error}"
-                    ) from error
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
                 self._publish_focus()
-                latest = self._session.snapshot()
+                self._session.heartbeat()
+                latest = dict(self._session.snapshot_lite())
 
                 if self._renderer is not None:
                     if hasattr(self._renderer, "update_counters_batch"):
                         self._renderer.update_counters_batch(
                             ProgressCounters(
-                                max_lateness_us=int(latest["max_lateness_us"]),
-                                late_2ms=int(latest["late_2ms"]),
-                                late_5ms=int(latest["late_5ms"]),
-                                late_10ms=int(latest["late_10ms"]),
-                                release_max_us=int(latest["release_max_us"]),
-                                release_late_2ms=int(latest["release_late_2ms"]),
+                                max_lateness_us=int(latest.get("max_completion_error_us", 0)),
+                                late_2ms=0,
+                                late_5ms=0,
+                                late_10ms=0,
+                                release_max_us=0,
+                                release_late_2ms=0,
                                 recent_latencies_us=tuple(
-                                    int(value) for value in latest["recent_latencies_us"]
+                                    int(value) for value in latest.get("recent_latencies_us", ())
                                 ),
                             )
                         )
@@ -708,25 +585,20 @@ class RustDispatchRuntime:
                         max(self._total_us, 1) / 1_000_000,
                         self._song_name,
                         status=status,
-                        input_path_degraded=bool(latest["input_path_degraded"]),
+                        input_path_degraded=bool(latest.get("input_path_degraded", False)),
                         backend_health=self._health(latest),
-                        dispatch_backend="rust",
                     )
                 time.sleep(self._sleep_s)
 
             joined = self._join_owned()
-            if heartbeat_thread.error is not None:
-                error = heartbeat_thread.error
-                raise RuntimeError(
-                    f"native heartbeat failed: {type(error).__name__}: {error}"
-                ) from error
-            latest = self._session.snapshot()
             if not joined:
                 outcome = PLAYBACK_SHUTDOWN_TIMEOUT
-            elif latest["status"] in {"panicked", "poisoned"}:
-                detail = latest.get("terminal_error") or latest["status"]
-                raise RuntimeError(f"native dispatch terminated: {detail}")
             else:
+                report = dict(self._session.session_report())
+                latest = dict(report["snapshot"])
+                if latest.get("status") in {"panicked", "poisoned"}:
+                    detail = latest.get("terminal_error") or latest["status"]
+                    raise RuntimeError(f"native dispatch terminated: {detail}")
                 outcome = str(latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED)
                 if outcome not in {
                     PLAYBACK_FINISHED,
@@ -755,28 +627,22 @@ class RustDispatchRuntime:
                     "truncated": False,
                 }
                 return outcome, latest, telemetry, None
-            telemetry = json.loads(self._session.take_telemetry_json())
-            return outcome, latest, telemetry, self._session.estimator_state_json()
+            assert report is not None
+            telemetry = json.loads(str(report["telemetry_json"]))
+            return outcome, latest, telemetry, str(report["estimator_state_json"])
         except BaseException:
             if started:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._session.panic_release()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._session.quit()
                 if not joined:
-                    with contextlib.suppress(Exception):
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                         joined = self._join_owned()
             raise
         finally:
-            if heartbeat_thread is not None:
-                heartbeat_thread.stop()
-                heartbeat_thread.join(timeout=1.0)
-                if heartbeat_thread.is_alive() and started and not joined:
-                    with contextlib.suppress(Exception):
-                        self._session.panic_release()
-            
             if started and not joined:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._session.quit()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._join_owned()

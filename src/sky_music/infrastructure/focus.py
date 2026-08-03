@@ -19,11 +19,11 @@ class NoopFocusGuard:
         return True
 
 class Win32SkyFocusGuard:
-    """Windows-specific implementation using the custom inputs user32 wrapper."""
+    """Windows-specific implementation using the validated target-window seam."""
     def is_active(self) -> bool:
-        from sky_music.platform.win32 import inputs
-        return inputs.is_sky_active()
+        from sky_music.platform.win32 import window_target
+        return window_target.is_sky_active()
         
     def focus(self) -> bool:
-        from sky_music.platform.win32 import inputs
-        return inputs.focusWindow()
+        from sky_music.platform.win32 import window_target
+        return window_target.focus_window()

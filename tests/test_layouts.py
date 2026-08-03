@@ -30,7 +30,7 @@ def test_legacy_compatibility_keys():
 def test_mapped_resolver_uses_platform_map_virtual_key(monkeypatch):
     from sky_music.domain import NoteKey
     from sky_music.layouts import DefaultNoteResolver
-    from sky_music.platform.win32 import inputs
+    from sky_music.platform.win32 import window_target
 
     calls = []
 
@@ -38,7 +38,7 @@ def test_mapped_resolver_uses_platform_map_virtual_key(monkeypatch):
         calls.append((vk, mode))
         return vk + mode + 1
 
-    monkeypatch.setattr(inputs.user32, "MapVirtualKeyW", fake_map_virtual_key)
+    monkeypatch.setattr(window_target.user32, "MapVirtualKeyW", fake_map_virtual_key)
 
     resolver = DefaultNoteResolver(SKY_15_KEY_PROFILE)
     assert resolver.resolve_scan_code(NoteKey("Key0"), mode="mapped") != 0

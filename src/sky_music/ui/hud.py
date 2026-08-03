@@ -12,8 +12,8 @@ from rich.text import Text
 
 from sky_music.config import resolve_game_fps
 from sky_music.domain.scheduler_types import FrameTimingPolicy
-from sky_music.infrastructure.backend import BackendHealth
 from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.orchestration.native_models import BackendHealth
 from sky_music.ui.picker_theme import ThemePreset, get_theme_preset
 from sky_music.ui.text_render import (
     clamp_terminal_width,
@@ -164,7 +164,6 @@ class ProgressRenderer:
         force: bool = False,
         input_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
-        dispatch_backend: str = "python",
     ) -> None:
         now = time.perf_counter()
         if not force and now - self.last_render_at < PROGRESS_RENDER_INTERVAL_SECONDS:
@@ -214,7 +213,7 @@ class ProgressRenderer:
             "  ·  theme ",
             (self.theme_name, styles["accent"]),
             "  ·  dispatch ",
-            (dispatch_backend, styles["accent"]),
+            ("Rust native", styles["accent"]),
         )
 
         # Song title

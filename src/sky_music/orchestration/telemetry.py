@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
-from sky_music.infrastructure.backend import BackendHealth
+from sky_music.orchestration.native_models import BackendHealth
 
 # Soft threshold reported by flush_if_large(). Runtime callers never export or
 # truncate here; lifecycle save() owns file I/O after timed dispatch has ended.
@@ -1661,10 +1661,9 @@ class TelemetryLogger:
             },
             # Phase 0 of SendInput lifecycle plan: per-reason abort tally.
             "abort_counts_by_reason": dict(self.abort_counts_by_reason),
-            # Count note-on dispatches whose SendInput result broke chord
-            # integrity. Native accuracy mode uses the explicit
-            # ``chord_integrity_lost`` outcome; the Python fallback retains
-            # ``partial_note_on`` for compatibility.
+            # Count note-on dispatches whose native SendInput result broke
+            # chord integrity. The older ``partial_note_on`` label is retained
+            # only when reading historical telemetry records.
             "partial_note_on_count": sum(
                 1
                 for r in rows

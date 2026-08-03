@@ -13,7 +13,6 @@ from textual.screen import Screen
 from sky_music import __version__ as VERSION
 from sky_music.config import (
     AppConfig,
-    RtPriorityMode,
     canonical_profile_name,
     load_config,
     resolve_game_fps,
@@ -92,7 +91,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         unified_mode: bool = False,
         controls: PlaybackControls | None = None,
         countdown_seconds: int = 3,
-        dispatch_lead_us: int = 0,
     ) -> None:
         super().__init__()
         self.unified_mode = unified_mode
@@ -100,7 +98,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.countdown_seconds = countdown_seconds
         self.cfg = cfg or load_config()
         self.scan_code_mode = scan_code_mode
-        self.dispatch_lead_us = dispatch_lead_us
 
         self.theme_name: str
         self.active_theme: str
@@ -417,8 +414,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         try:
             self.query_one("#appbar", GradientHeader).set_tagline(tagline)
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[app] failed to set header tagline")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[app] failed to set header tagline")
 
     def _perform_search(self) -> None:
         picker = self._find_picker_screen()
@@ -659,10 +656,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_unmount(self) -> None:
         try:
             self.picker_scope.close_all(wait=True)
-            from sky_music.platform.win32 import inputs
-            if getattr(inputs, "PLAYBACK_DEBUG", False):
+            from sky_music.platform.win32 import window_target
+            if getattr(window_target, "PLAYBACK_DEBUG", False):
                 for snap in self.picker_scope.snapshots():
-                    inputs.debug_log(
+                    window_target.debug_log(
                         f"[background] picker resource {snap.name} closed={snap.closed} "
                         f"pending={snap.pending_count} running={snap.running_count}"
                     )
@@ -683,8 +680,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 ],
             }
         except Exception as exc:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
             from sky_music.orchestration.telemetry import TelemetryLogger
             resources_list: list[dict[str, Any]] = []
             with contextlib.suppress(Exception):
@@ -720,14 +717,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
             try:
                 table.update_cell(cast(_RowKey, self._marked_row_key), "marker", t.song_icon)
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log("[app] failed to clear marker")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log("[app] failed to clear marker")
         if row_key is not None:
             try:
                 table.update_cell(cast(_RowKey, row_key), "marker", t.pointer)
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log("[app] failed to set marker")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log("[app] failed to set marker")
         self._marked_row_key = row_key
 
     # ── Playback Lifecycle ────────────────────────────────────────────
@@ -816,50 +813,18 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._show_playback_error("Cleanup Error", f"Failed to stop background workers: {error_msg}")
             return
 
-        from sky_music.infrastructure.backend import DryRunBackend, WinSendInputBackend
         from sky_music.orchestration.engine import PlaybackEngine
 
         is_dry_run = picker_result.action == "dry_run"
-        backend = DryRunBackend() if is_dry_run else WinSendInputBackend()
 
         renderer = SnapshotRenderer()
 
         main_mod = _get_main_module()
-        if main_mod:
-            telemetry_enabled = (
-                main_mod.RUNTIME_STATE.telemetry_csv_enabled
-                or self.cfg.telemetry_enabled_by_default
-                or is_dry_run
-            )
-            use_dispatch_thread = main_mod.RUNTIME_STATE.use_dispatch_thread
-            input_path_warn_us = (
-                self.cfg.input_path_warn_us if main_mod.RUNTIME_STATE.check_input_path else 0
-            )
-            enable_timer_guard = main_mod.RUNTIME_STATE.enable_timer_guard
-            enable_waitable_timer = main_mod.RUNTIME_STATE.enable_waitable_timer
-            enable_gc_pause = main_mod.RUNTIME_STATE.enable_gc_pause
-            enable_switch_interval_tuning = main_mod.RUNTIME_STATE.enable_switch_interval_tuning
-            enable_adaptive_lead = main_mod.RUNTIME_STATE.enable_adaptive_lead
-            enable_adaptive_spin = getattr(main_mod.RUNTIME_STATE, "enable_adaptive_spin", False)
-            enable_event_wait = getattr(main_mod.RUNTIME_STATE, "enable_event_wait", False)
-            enable_epoch_rebase = getattr(main_mod.RUNTIME_STATE, "enable_epoch_rebase", True)
-            rt_priority_mode = cast(RtPriorityMode, getattr(main_mod.RUNTIME_STATE, "rt_priority_mode", "auto"))
-            spin_floor_val = getattr(main_mod.RUNTIME_STATE, "spin_floor_us", None)
-            spin_floor_us = spin_floor_val if spin_floor_val is not None else 700
-        else:
-            telemetry_enabled = self.cfg.telemetry_enabled_by_default or is_dry_run
-            use_dispatch_thread = self.cfg.use_dispatch_thread
-            input_path_warn_us = self.cfg.input_path_warn_us
-            enable_timer_guard = True
-            enable_waitable_timer = True
-            enable_gc_pause = True
-            enable_switch_interval_tuning = True
-            enable_adaptive_lead = getattr(self.cfg, "enable_adaptive_lead", True)
-            enable_adaptive_spin = getattr(self.cfg, "enable_adaptive_spin", True)
-            enable_event_wait = True
-            enable_epoch_rebase = True
-            rt_priority_mode = cast(RtPriorityMode, getattr(self.cfg, "rt_priority_mode", "auto"))
-            spin_floor_us = 700
+        telemetry_enabled = (
+            bool(main_mod and main_mod.RUNTIME_STATE.telemetry_csv_enabled)
+            or self.cfg.telemetry_enabled_by_default
+            or is_dry_run
+        )
 
         command_bridge = PlaybackCommandBridge(self.controls)
         self._active_playback_commands = command_bridge
@@ -868,37 +833,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
         engine = PlaybackEngine(
             song=plan.song,
             actions=plan.actions,
-            backend=backend,
+            dry_run=is_dry_run,
             controls=command_bridge,
             renderer=renderer,
             telemetry_enabled=telemetry_enabled,
             require_focus=not is_dry_run,
             profile_name=plan.session.display_profile_label(),
             tempo_scale=plan.session.tempo_scale,
-            sleep_policy=plan.active_sleep_policy,
-            focus_restore_grace_us=plan.active_policy.focus_restore_grace_us,
-            fps=getattr(plan.active_policy, "fps", None),
             min_hold_us=int(plan.active_policy.min_hold_us),
-            chord_stagger_us=int(getattr(plan.active_policy, "chord_stagger_us", 0)),
-            same_key_conflict_policy=plan.active_policy.same_key_conflict_policy,
-            use_dispatch_thread=use_dispatch_thread,
-            dispatch_backend=getattr(self.cfg, "dispatch_backend", "auto"),
-            fidelity_mode=getattr(self.cfg, "fidelity_mode", "normal"),
-            input_path_warn_us=input_path_warn_us,
-            enable_timer_guard=enable_timer_guard,
-            enable_waitable_timer=enable_waitable_timer,
-            enable_gc_pause=enable_gc_pause,
-            enable_switch_interval_tuning=enable_switch_interval_tuning,
-            enable_adaptive_lead=enable_adaptive_lead,
-            enable_adaptive_spin=enable_adaptive_spin,
-            enable_event_wait=enable_event_wait,
-            enable_epoch_rebase=enable_epoch_rebase,
-            rt_priority_mode=rt_priority_mode,
-            dispatch_lead_us=self.dispatch_lead_us,
-            spin_floor_us=spin_floor_us,
-            lead_cache_path=".cache/lead_estimator.json",
-            min_hold_margin_us=int(getattr(plan.active_policy, "min_hold_margin_us", 0)),
-            min_hold_margin_source=getattr(plan.active_policy, "min_hold_margin_source", "default_500"),
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
@@ -1155,8 +1097,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 f"v{VERSION} \u2191", highlight=True, highlight_color=self._theme_tokens.accent
             )
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[app] failed to set update version indicator")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[app] failed to set update version indicator")
 
         from sky_music.ui.textual_app.modals import UpdateBannerModal
         modal = UpdateBannerModal(
@@ -1186,8 +1128,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
         try:
             self.query_one("#appbar", GradientHeader).set_version(f"v{VERSION}")
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[app] failed to clear update indicator")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[app] failed to clear update indicator")
 
     def _handle_update_response(self, response: str | None, release: Any) -> None:
         from sky_music.orchestration.update_service import record_skip
@@ -1265,7 +1207,6 @@ def run_sky_app_unified(
     scan_code_mode: str = "physical",
     controls: PlaybackControls | None = None,
     countdown_seconds: int = 3,
-    dispatch_lead_us: int = 0,
 ) -> int:
     from sky_music.orchestration.telemetry import TelemetryLogger
 
@@ -1280,7 +1221,6 @@ def run_sky_app_unified(
         unified_mode=True,
         controls=controls,
         countdown_seconds=countdown_seconds,
-        dispatch_lead_us=dispatch_lead_us,
     )
     TelemetryLogger.last_picker_cleanup = None
 

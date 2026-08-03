@@ -596,10 +596,6 @@ impl DispatchProfile {
         }
     }
 
-    pub(crate) fn uses_mock_backend(self) -> bool {
-        matches!(self, Self::MockTest)
-    }
-
     pub(crate) fn strict_timing(self) -> bool {
         matches!(self, Self::StrictTimingDiagnostic)
     }
@@ -884,7 +880,9 @@ impl NativeDispatchSession {
             quit_requested: Arc::new(AtomicBool::new(false)),
             skip_requested: Arc::new(AtomicBool::new(false)),
             panic_requested: Arc::new(AtomicBool::new(false)),
-            focus_active: Arc::new(AtomicBool::new(!require_focus)),
+            // Foreground ownership is derived from target_hwnd inside the
+            // worker. Python no longer publishes a second focus boolean.
+            focus_active: Arc::new(AtomicBool::new(true)),
             target_hwnd: Arc::new(AtomicIsize::new(0)),
             lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_NEW)),
             terminal_outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
@@ -1068,12 +1066,6 @@ impl NativeDispatchSession {
         }
         self.panic_requested.store(true, Ordering::Release);
         self.signal_worker()
-    }
-
-    pub fn update_focus(&self, active: bool) {
-        if self.focus_active.swap(active, Ordering::AcqRel) != active {
-            let _ = self.interrupt.signal();
-        }
     }
 
     pub fn heartbeat(&self) -> Result<(), String> {

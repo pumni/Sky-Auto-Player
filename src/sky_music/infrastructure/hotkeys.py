@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 from sky_music.layouts import SKY_15_KEY_MAP as key_maps
 from sky_music.layouts import VK_CODES
-from sky_music.platform.win32.inputs import is_virtual_key_down
+from sky_music.platform.win32.window_target import is_virtual_key_down
 
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10

@@ -94,6 +94,11 @@ def main() -> int:
         action="store_true",
         help="allow a local dirty build and mark its native commit metadata with -dirty",
     )
+    parser.add_argument(
+        "--test-support",
+        action="store_true",
+        help="build the non-production wheel with native benchmark test support",
+    )
     args = parser.parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     rust_dir = repo_root / "rust"
@@ -137,6 +142,8 @@ def main() -> int:
         "--interpreter",
         sys.executable,
     ]
+    if args.test_support:
+        cmd.extend(["--features", "test-support"])
 
     build_env = os.environ.copy()
     build_env["GITHUB_SHA"] = expected_commit

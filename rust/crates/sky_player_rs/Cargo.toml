@@ -10,7 +10,8 @@ crate-type = ["cdylib"]
 
 [features]
 default = []
-diagnostic-backend = []
+test-support = []
+calibration = []
 
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }

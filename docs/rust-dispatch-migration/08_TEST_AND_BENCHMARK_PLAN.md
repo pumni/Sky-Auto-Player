@@ -1,5 +1,8 @@
 # 08 — Test, differential verification và benchmark
 
+> HISTORICAL: This migration test plan predates the frozen Rust golden corpus.
+> The current production contract is Rust-only; see `README.md`.
+
 ## 1. Test pyramid
 
 ### Pure Rust unit tests

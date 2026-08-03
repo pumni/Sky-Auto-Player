@@ -1,17 +1,14 @@
+#[cfg(feature = "calibration")]
 pub mod calibration;
 pub mod engine;
 
 use engine::{DispatchProfile, FaultInjectionScript, NativeDispatchSession};
-#[cfg(feature = "diagnostic-backend")]
-use parking_lot::Mutex;
 use pyo3::Borrowed;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
-#[cfg(feature = "diagnostic-backend")]
-use sky_dispatch_win32::input::TrackedKeyState;
 use sky_dispatch_win32::mmcss::PriorityMode;
 use std::sync::Arc;
 
@@ -31,6 +28,97 @@ impl<'a, 'py> FromPyObject<'a, 'py> for StrictU64 {
         let value = u64::try_from(value)
             .map_err(|_| PyValueError::new_err("integer must be in 0..=u64::MAX"))?;
         Ok(Self(value))
+    }
+}
+
+#[pyclass(name = "SessionConfig", frozen, from_py_object)]
+#[derive(Clone, Copy)]
+struct NativeSessionConfigPy {
+    min_hold_us: u64,
+    require_focus: bool,
+    target_hwnd: isize,
+    telemetry: bool,
+    profile: DispatchProfile,
+}
+
+impl Default for NativeSessionConfigPy {
+    fn default() -> Self {
+        Self {
+            min_hold_us: 50_000,
+            require_focus: false,
+            target_hwnd: 0,
+            telemetry: false,
+            profile: DispatchProfile::Production,
+        }
+    }
+}
+
+#[pymethods]
+impl NativeSessionConfigPy {
+    #[new]
+    #[pyo3(signature = (
+        min_hold_us = StrictU64(50000),
+        require_focus = false,
+        target_hwnd = StrictU64(0),
+        telemetry = false,
+        profile = "production"
+    ))]
+    fn new(
+        min_hold_us: StrictU64,
+        require_focus: bool,
+        target_hwnd: StrictU64,
+        telemetry: bool,
+        profile: &str,
+    ) -> PyResult<Self> {
+        let target_hwnd = isize::try_from(target_hwnd.0)
+            .map_err(|_| PyValueError::new_err("target_hwnd is outside the platform range"))?;
+        let profile = DispatchProfile::parse(profile).map_err(PyValueError::new_err)?;
+        if profile == DispatchProfile::MockTest {
+            return Err(PyValueError::new_err(
+                "mock_test is available only to Rust test support",
+            ));
+        }
+        if min_hold_us.0 > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "min_hold_us must be at most 60000000",
+            ));
+        }
+        Ok(Self {
+            min_hold_us: min_hold_us.0,
+            require_focus,
+            target_hwnd,
+            telemetry,
+            profile,
+        })
+    }
+
+    #[getter]
+    fn min_hold_us(&self) -> u64 {
+        self.min_hold_us
+    }
+
+    #[getter]
+    fn require_focus(&self) -> bool {
+        self.require_focus
+    }
+
+    #[getter]
+    fn target_hwnd(&self) -> isize {
+        self.target_hwnd
+    }
+
+    #[getter]
+    fn telemetry(&self) -> bool {
+        self.telemetry
+    }
+
+    #[getter]
+    fn profile(&self) -> &'static str {
+        match self.profile {
+            DispatchProfile::Production => "production",
+            DispatchProfile::StrictTimingDiagnostic => "strict_timing_diagnostic",
+            DispatchProfile::MockTest => "mock_test",
+        }
     }
 }
 
@@ -197,271 +285,37 @@ fn parse_actions(
     Ok(actions)
 }
 
-#[cfg(feature = "diagnostic-backend")]
-#[pyclass(frozen)]
-struct RustInputBackend {
-    state: Arc<Mutex<TrackedKeyState>>,
+fn parse_schedule(
+    py_actions: &Bound<'_, PyAny>,
+    allowed_scan_codes: &Bound<'_, PyAny>,
+) -> PyResult<(RuntimeSchedule, Vec<u16>)> {
+    let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
+    let actions = parse_actions(py_actions, &allowed_scan_codes)?;
+    let schedule =
+        sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok((schedule, allowed_scan_codes))
 }
 
-#[cfg(feature = "diagnostic-backend")]
-#[pymethods]
-impl RustInputBackend {
-    #[new]
-    #[pyo3(signature = (mock = false))]
-    fn new(mock: bool) -> Self {
-        let state = if mock {
-            let clock = sky_dispatch_win32::clock::QpcClock::initialize().ok();
-            sky_dispatch_win32::input::TrackedKeyState::with_emitter(move |scan_codes, _key_up| {
-                let Some(clock) = clock else {
-                    return sky_dispatch_win32::input::PlatformSendResult {
-                        requested: scan_codes.len() as u32,
-                        inserted: 0,
-                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
-                        completed_ticks: None,
-                        completed_us: 0,
-                        win32_error: 0,
-                        timing_error: Some(
-                            sky_dispatch_win32::clock::QpcError::FrequencyUnavailable,
-                        ),
-                    };
-                };
-                match clock.now() {
-                    Ok(ticks) => match clock.duration_to_us(
-                        sky_dispatch_win32::clock::DurationTicks::from_raw(ticks.as_u64()),
-                    ) {
-                        Ok(completed_us) => sky_dispatch_win32::input::PlatformSendResult {
-                            requested: scan_codes.len() as u32,
-                            inserted: scan_codes.len() as u32,
-                            started_ticks: ticks,
-                            completed_ticks: Some(ticks),
-                            completed_us,
-                            win32_error: 0,
-                            timing_error: None,
-                        },
-                        Err(_) => sky_dispatch_win32::input::PlatformSendResult {
-                            requested: scan_codes.len() as u32,
-                            inserted: 0,
-                            started_ticks: ticks,
-                            completed_ticks: None,
-                            completed_us: 0,
-                            win32_error: 0,
-                            timing_error: Some(
-                                sky_dispatch_win32::clock::QpcError::ConversionOverflow,
-                            ),
-                        },
-                    },
-                    Err(error) => sky_dispatch_win32::input::PlatformSendResult {
-                        requested: scan_codes.len() as u32,
-                        inserted: 0,
-                        started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
-                        completed_ticks: None,
-                        completed_us: 0,
-                        win32_error: 0,
-                        timing_error: Some(error),
-                    },
-                }
-            })
-        } else {
-            sky_dispatch_win32::input::TrackedKeyState::new()
-        };
-        Self {
-            state: Arc::new(Mutex::new(state)),
-        }
-    }
-
-    fn key_down<'py>(
-        &self,
-        py: Python<'py>,
-        scan_codes: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let scan_codes = strict_scan_codes(
-            scan_codes,
-            "scan_codes",
-            Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
-        )?;
-        let res = self.state.lock().key_down(&scan_codes);
-        let dict = PyDict::new(py);
-        match res {
-            sky_dispatch_win32::input::DownSendOutcome::Complete {
-                completed_us,
-                sent,
-                skipped_duplicates,
-                send_attempts,
-                zero_progress_retries,
-                retried_after_zero_progress,
-                ..
-            } => {
-                dict.set_item("sent", sent.to_vec())?;
-                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
-                dict.set_item("success", true)?;
-                dict.set_item("error", None::<String>)?;
-                dict.set_item("send_completed_us", completed_us)?;
-                dict.set_item("first_win32_error", None::<u32>)?;
-                dict.set_item("last_win32_error", None::<u32>)?;
-                dict.set_item("send_attempts", send_attempts)?;
-                dict.set_item("zero_progress_retries", zero_progress_retries)?;
-                dict.set_item("first_inserted", 0)?;
-                dict.set_item("partial_progress", false)?;
-                dict.set_item("retried_after_zero_progress", retried_after_zero_progress)?;
-                dict.set_item("chord_integrity_lost", false)?;
-                dict.set_item("keys_inserted_before_failure", 0)?;
-                dict.set_item("keys_rolled_back", 0)?;
-                dict.set_item("rollback_residue_keys", 0)?;
-            }
-            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
-                error,
-                completed_us,
-                skipped_duplicates,
-                send_attempts,
-                zero_progress_retries,
-                first_error,
-                last_error,
-                ..
-            } => {
-                dict.set_item("sent", Vec::<u16>::new())?;
-                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
-                dict.set_item("success", false)?;
-                dict.set_item("error", error.map(|e| e.to_string()))?;
-                dict.set_item("send_completed_us", completed_us)?;
-                dict.set_item("first_win32_error", first_error)?;
-                dict.set_item("last_win32_error", last_error)?;
-                dict.set_item("send_attempts", send_attempts)?;
-                dict.set_item("zero_progress_retries", zero_progress_retries)?;
-                dict.set_item("first_inserted", 0)?;
-                dict.set_item("partial_progress", false)?;
-                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
-                dict.set_item("chord_integrity_lost", false)?;
-                dict.set_item("keys_inserted_before_failure", 0)?;
-                dict.set_item("keys_rolled_back", 0)?;
-                dict.set_item("rollback_residue_keys", 0)?;
-            }
-            sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
-                inserted_before_failure,
-                rolled_back,
-                rollback_residue,
-                first_error,
-                last_error,
-                completed_us,
-                sent,
-                skipped_duplicates,
-                send_attempts,
-                zero_progress_retries,
-                ..
-            } => {
-                dict.set_item("sent", sent.to_vec())?;
-                dict.set_item("skipped_duplicates", skipped_duplicates.to_vec())?;
-                dict.set_item("success", false)?;
-                dict.set_item("error", last_error.or(first_error).map(|e| e.to_string()))?;
-                dict.set_item("send_completed_us", completed_us)?;
-                dict.set_item("first_win32_error", first_error)?;
-                dict.set_item("last_win32_error", last_error)?;
-                dict.set_item("send_attempts", send_attempts)?;
-                dict.set_item("zero_progress_retries", zero_progress_retries)?;
-                dict.set_item("first_inserted", 0)?;
-                dict.set_item("partial_progress", true)?;
-                dict.set_item("retried_after_zero_progress", zero_progress_retries > 0)?;
-                dict.set_item("chord_integrity_lost", true)?;
-                dict.set_item("keys_inserted_before_failure", inserted_before_failure)?;
-                dict.set_item("keys_rolled_back", rolled_back)?;
-                dict.set_item("rollback_residue_keys", rollback_residue)?;
-            }
-        }
-        Ok(dict)
-    }
-
-    fn key_up<'py>(
-        &self,
-        py: Python<'py>,
-        scan_codes: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let scan_codes = strict_scan_codes(
-            scan_codes,
-            "scan_codes",
-            Some(&PHYSICAL_INSTRUMENT_SCAN_CODES),
-        )?;
-        let res = self.state.lock().key_up(&scan_codes);
-        let dict = PyDict::new(py);
-        dict.set_item("sent", res.sent.to_vec())?;
-        dict.set_item("skipped_duplicates", res.skipped_duplicates.to_vec())?;
-        dict.set_item("success", res.success)?;
-        dict.set_item("error", res.error)?;
-        dict.set_item("send_completed_us", res.send_completed_us)?;
-        dict.set_item("first_win32_error", res.first_win32_error)?;
-        dict.set_item("last_win32_error", res.last_win32_error)?;
-        dict.set_item("send_attempts", res.send_attempts)?;
-        dict.set_item("zero_progress_retries", res.zero_progress_retries)?;
-        dict.set_item("first_inserted", res.first_inserted)?;
-        dict.set_item("partial_progress", res.partial_progress)?;
-        dict.set_item(
-            "retried_after_zero_progress",
-            res.retried_after_zero_progress,
-        )?;
-        dict.set_item("chord_integrity_lost", res.chord_integrity_lost)?;
-        dict.set_item(
-            "keys_inserted_before_failure",
-            res.keys_inserted_before_failure,
-        )?;
-        dict.set_item("keys_rolled_back", res.keys_rolled_back)?;
-        dict.set_item("rollback_residue_keys", res.rollback_residue_keys)?;
-        Ok(dict)
-    }
-
-    fn release_all<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let outcome = self.state.lock().release_all();
-        let dict = PyDict::new(py);
-        dict.set_item("attempted", outcome.attempted)?;
-        dict.set_item("released_successfully", outcome.released_successfully)?;
-        dict.set_item("stuck_keys", outcome.stuck_keys)?;
-        dict.set_item(
-            "verification_inconclusive",
-            outcome.verification_inconclusive,
-        )?;
-        Ok(dict)
-    }
-
-    fn release_all_full_instrument<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let outcome = self.state.lock().release_all_full_instrument();
-        let dict = PyDict::new(py);
-        dict.set_item("attempted", outcome.attempted)?;
-        dict.set_item("released_successfully", outcome.released_successfully)?;
-        dict.set_item("stuck_keys", outcome.stuck_keys)?;
-        dict.set_item(
-            "verification_inconclusive",
-            outcome.verification_inconclusive,
-        )?;
-        Ok(dict)
-    }
-
-    fn get_health<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let state = self.state.lock();
-        let dict = PyDict::new(py);
-        dict.set_item("active_count", state.active_mask.count_ones())?;
-        dict.set_item(
-            "possibly_active_count",
-            state.possibly_active_mask.count_ones(),
-        )?;
-        dict.set_item(
-            "failed_release_count",
-            state.failed_release_mask.count_ones(),
-        )?;
-        dict.set_item("last_error", state.last_error.clone())?;
-        dict.set_item("keys_dropped", state.keys_dropped)?;
-        dict.set_item("chord_split_events", state.chord_split_events)?;
-        dict.set_item("sendinput_partial_events", state.sendinput_partial_events)?;
-        dict.set_item(
-            "sendinput_zero_progress_failures",
-            state.sendinput_zero_progress_failures,
-        )?;
-        dict.set_item("chords_rejected", state.chords_rejected)?;
-        dict.set_item("authored_keys_rejected", state.authored_keys_rejected)?;
-        dict.set_item(
-            "keys_inserted_before_failure",
-            state.keys_inserted_before_failure,
-        )?;
-        dict.set_item("keys_rolled_back", state.keys_rolled_back)?;
-        dict.set_item("rollback_residue_keys", state.rollback_residue_keys)?;
-        Ok(dict)
-    }
+fn validate_schedule_timing(
+    schedule: &RuntimeSchedule,
+    min_hold_us: u64,
+    max_lead_us: u64,
+    dispatch_lead_us: u64,
+) -> PyResult<()> {
+    schedule
+        .batches
+        .last()
+        .map_or(0, |batch| batch.scheduled_us)
+        .checked_add(min_hold_us)
+        .and_then(|value| value.checked_add(max_lead_us))
+        .and_then(|value| value.checked_add(dispatch_lead_us))
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "schedule and timing configuration exceed supported timestamp range",
+            )
+        })?;
+    Ok(())
 }
 
 #[pyclass(name = "DispatchSession", frozen)]
@@ -472,144 +326,43 @@ struct NativeDispatchSessionPy {
 #[pymethods]
 impl NativeDispatchSessionPy {
     #[new]
-    #[pyo3(signature = (
-        py_actions,
-        allowed_scan_codes,
-        profile = "production",
-        min_hold_us = StrictU64(50000),
-        max_lead_us = StrictU64(2000),
-        dispatch_lead_us = StrictU64(0),
-        mock_backend = false,
-        require_focus = false,
-        focus_restore_grace_us = StrictU64(100000),
-        spin_threshold_us = StrictU64(150),
-        core_warmup_budget_us = StrictU64(0),
-        telemetry_mode = None,
-        telemetry_capacity = StrictU64(1024),
-        rt_priority_mode = "auto",
-        enable_waitable_timer = true,
-        enable_event_wait = true,
-        enable_adaptive_spin = false,
-        spin_floor_us = StrictU64(700),
-        estimator_state_json = None,
-        enable_adaptive_lead = false,
-        input_path_warn_us = StrictU64(300),
-        strict_timing = false,
-        strict_down_completion_late_us = StrictU64(2000),
-        strict_up_completion_late_us = StrictU64(2000),
-        supervisor_lease_timeout_us = StrictU64(0),
-        mock_failure_mode = "none",
-        mock_latency_base_us = StrictU64(0),
-        mock_latency_per_key_us = StrictU64(0)
-    ))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (py_actions, allowed_scan_codes, config = None))]
     fn new(
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
-        profile: &str,
-        min_hold_us: StrictU64,
-        max_lead_us: StrictU64,
-        dispatch_lead_us: StrictU64,
-        mock_backend: bool,
-        require_focus: bool,
-        focus_restore_grace_us: StrictU64,
-        spin_threshold_us: StrictU64,
-        core_warmup_budget_us: StrictU64,
-        telemetry_mode: Option<&str>,
-        telemetry_capacity: StrictU64,
-        rt_priority_mode: &str,
-        enable_waitable_timer: bool,
-        enable_event_wait: bool,
-        enable_adaptive_spin: bool,
-        spin_floor_us: StrictU64,
-        estimator_state_json: Option<&str>,
-        enable_adaptive_lead: bool,
-        input_path_warn_us: StrictU64,
-        strict_timing: bool,
-        strict_down_completion_late_us: StrictU64,
-        strict_up_completion_late_us: StrictU64,
-        supervisor_lease_timeout_us: StrictU64,
-        mock_failure_mode: &str,
-        mock_latency_base_us: StrictU64,
-        mock_latency_per_key_us: StrictU64,
+        config: Option<NativeSessionConfigPy>,
     ) -> PyResult<Self> {
-        let parsed_profile = DispatchProfile::parse(profile).map_err(PyValueError::new_err)?;
-        // `mock_backend` is retained as a narrow source-compatibility input
-        // for existing diagnostic callers. New callers select MockTest via
-        // `profile="mock_test"`; production never enables it implicitly.
-        let mock_backend = mock_backend || parsed_profile.uses_mock_backend();
-        let strict_timing = strict_timing || parsed_profile.strict_timing();
-        let min_hold_us = min_hold_us.0;
-        let max_lead_us = max_lead_us.0;
-        let dispatch_lead_us = dispatch_lead_us.0;
-        let mock_latency_base_us = mock_latency_base_us.0;
-        let mock_latency_per_key_us = mock_latency_per_key_us.0;
-        let focus_restore_grace_us = focus_restore_grace_us.0;
-        let spin_threshold_us = spin_threshold_us.0;
-        let core_warmup_budget_us = core_warmup_budget_us.0;
-        let telemetry_capacity = usize::try_from(telemetry_capacity.0)
-            .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
-        let parsed_telemetry_mode = match telemetry_mode {
-            Some("off") => crate::engine::TelemetryMode::Off,
-            Some("ring") => crate::engine::TelemetryMode::Ring,
-            Some(_) => {
-                return Err(PyValueError::new_err(
-                    "telemetry_mode must be 'off' or 'ring'",
-                ));
-            }
-            None => crate::engine::TelemetryMode::Off,
+        let config = config.unwrap_or_default();
+        let parsed_profile = config.profile;
+        let min_hold_us = config.min_hold_us;
+        let max_lead_us = 2_000;
+        let dispatch_lead_us = 0;
+        let mock_backend = false;
+        let mock_latency_base_us = 0;
+        let mock_latency_per_key_us = 0;
+        let fault_script = FaultInjectionScript::none();
+        let require_focus = config.require_focus;
+        let focus_restore_grace_us = 100_000;
+        let spin_threshold_us = 150;
+        let core_warmup_budget_us = 0;
+        let parsed_telemetry_mode = if config.telemetry {
+            crate::engine::TelemetryMode::Ring
+        } else {
+            crate::engine::TelemetryMode::Off
         };
-        let spin_floor_us = spin_floor_us.0;
-        let input_path_warn_us = input_path_warn_us.0;
-        let strict_down_completion_late_us = strict_down_completion_late_us.0;
-        let strict_up_completion_late_us = strict_up_completion_late_us.0;
-        let supervisor_lease_timeout_us = supervisor_lease_timeout_us.0;
-        let fault_script = match mock_failure_mode {
-            "none" => FaultInjectionScript::none(),
-            "transient_release" if mock_backend => FaultInjectionScript::transient_release(),
-            "persistent_release" if mock_backend => FaultInjectionScript::persistent_release(),
-            "zero_progress_down_once" if mock_backend => {
-                FaultInjectionScript::zero_progress_down_once()
-            }
-            "persistent_zero_down" if mock_backend => FaultInjectionScript::persistent_zero_down(),
-            "partial_down_first_attempt" if mock_backend => {
-                FaultInjectionScript::partial_down_first_attempt()
-            }
-            "partial_down_after_zero_retry" if mock_backend => {
-                FaultInjectionScript::partial_down_after_zero_retry()
-            }
-            "persistent_zero_up" if mock_backend => FaultInjectionScript::persistent_zero_up(),
-            "panic_after_send_before_commit" if mock_backend => {
-                FaultInjectionScript::panic_after_send_before_commit()
-            }
-            "focus_loss_after_due_before_send" if mock_backend => {
-                FaultInjectionScript::focus_loss_after_due_before_send()
-            }
-            "qpc_failure_after_send" if mock_backend => {
-                FaultInjectionScript::qpc_failure_after_send()
-            }
-            "wait_failure" if mock_backend => FaultInjectionScript::wait_failure(),
-            "transient_release"
-            | "persistent_release"
-            | "zero_progress_down_once"
-            | "persistent_zero_down"
-            | "partial_down_first_attempt"
-            | "partial_down_after_zero_retry"
-            | "persistent_zero_up"
-            | "panic_after_send_before_commit"
-            | "focus_loss_after_due_before_send"
-            | "qpc_failure_after_send"
-            | "wait_failure" => {
-                return Err(PyValueError::new_err(
-                    "mock_failure_mode requires mock_backend=True",
-                ));
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "mock_failure_mode must be 'none', 'transient_release', 'persistent_release', 'zero_progress_down_once', 'persistent_zero_down', 'partial_down_first_attempt', 'partial_down_after_zero_retry', 'persistent_zero_up', 'panic_after_send_before_commit', 'focus_loss_after_due_before_send', 'qpc_failure_after_send', or 'wait_failure'",
-                ));
-            }
-        };
+        let telemetry_capacity = 1_024;
+        let priority_mode = PriorityMode::Auto;
+        let enable_waitable_timer = true;
+        let enable_event_wait = true;
+        let enable_adaptive_spin = true;
+        let spin_floor_us = 700;
+        let estimator_state_json = None;
+        let enable_adaptive_lead = true;
+        let input_path_warn_us = 300;
+        let strict_timing = parsed_profile.strict_timing();
+        let strict_down_completion_late_us = 2_000;
+        let strict_up_completion_late_us = 2_000;
+        let supervisor_lease_timeout_us = 3_000_000;
         if min_hold_us > 60_000_000 {
             return Err(PyValueError::new_err(
                 "min_hold_us must be at most 60000000",
@@ -618,99 +371,8 @@ impl NativeDispatchSessionPy {
         if max_lead_us > 10_000 {
             return Err(PyValueError::new_err("max_lead_us must be at most 10000"));
         }
-        if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
-            return Err(PyValueError::new_err(
-                "mock latency values must be at most 1000000 microseconds",
-            ));
-        }
-        if !mock_backend && (mock_latency_base_us > 0 || mock_latency_per_key_us > 0) {
-            return Err(PyValueError::new_err(
-                "mock latency values require mock_backend=True",
-            ));
-        }
-        if dispatch_lead_us > 10_000 {
-            return Err(PyValueError::new_err(
-                "dispatch_lead_us must be at most 10000",
-            ));
-        }
-        if focus_restore_grace_us > 10_000_000 {
-            return Err(PyValueError::new_err(
-                "focus_restore_grace_us must be at most 10000000",
-            ));
-        }
-        if spin_threshold_us > 10_000 {
-            return Err(PyValueError::new_err(
-                "spin_threshold_us must be at most 10000",
-            ));
-        }
-        if core_warmup_budget_us > 500 {
-            return Err(PyValueError::new_err(
-                "core_warmup_budget_us must be at most 500",
-            ));
-        }
-        if spin_floor_us > 3_000 {
-            return Err(PyValueError::new_err("spin_floor_us must be at most 3000"));
-        }
-        if input_path_warn_us > 60_000_000 {
-            return Err(PyValueError::new_err(
-                "input_path_warn_us must be at most 60000000",
-            ));
-        }
-        if estimator_state_json.is_some_and(|raw| raw.len() > 64 * 1024) {
-            return Err(PyValueError::new_err(
-                "estimator_state_json must be at most 65536 bytes",
-            ));
-        }
-        if strict_down_completion_late_us > 60_000_000 {
-            return Err(PyValueError::new_err(
-                "strict_down_completion_late_us must be at most 60000000",
-            ));
-        }
-        if strict_up_completion_late_us > 60_000_000 {
-            return Err(PyValueError::new_err(
-                "strict_up_completion_late_us must be at most 60000000",
-            ));
-        }
-        if supervisor_lease_timeout_us > 60_000_000 {
-            return Err(PyValueError::new_err(
-                "supervisor_lease_timeout_us must be at most 60000000",
-            ));
-        }
-        if telemetry_capacity == 0 || telemetry_capacity > 1_024 {
-            return Err(PyValueError::new_err(
-                "telemetry_capacity must be between 1 and 1024",
-            ));
-        }
-        let priority_mode = match rt_priority_mode {
-            "auto" => PriorityMode::Auto,
-            "mmcss" => PriorityMode::Mmcss,
-            "time_critical" => PriorityMode::TimeCritical,
-            "highest" => PriorityMode::Highest,
-            "off" => PriorityMode::Off,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "rt_priority_mode must be auto, mmcss, time_critical, highest, or off",
-                ));
-            }
-        };
-        let allowed_scan_codes = parse_allowed_scan_codes(allowed_scan_codes)?;
-        let actions = parse_actions(py_actions, &allowed_scan_codes)?;
-        let schedule =
-            sky_dispatch_core::compile::compile_runtime_intents(&actions, &allowed_scan_codes)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let schedule_end_us = schedule
-            .batches
-            .last()
-            .map_or(0, |batch| batch.scheduled_us);
-        schedule_end_us
-            .checked_add(min_hold_us)
-            .and_then(|value| value.checked_add(max_lead_us))
-            .and_then(|value| value.checked_add(dispatch_lead_us))
-            .ok_or_else(|| {
-                PyValueError::new_err(
-                    "schedule and timing configuration exceed supported timestamp range",
-                )
-            })?;
+        let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
+        validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
         let session = NativeDispatchSession::new(
             schedule,
             min_hold_us,
@@ -741,6 +403,7 @@ impl NativeDispatchSessionPy {
             supervisor_lease_timeout_us,
         )
         .map_err(PyRuntimeError::new_err)?;
+        session.set_target_hwnd(config.target_hwnd);
 
         Ok(Self {
             session: Arc::new(session),
@@ -792,17 +455,6 @@ impl NativeDispatchSessionPy {
         }
         .map_err(PyRuntimeError::new_err)?;
         Ok(true)
-    }
-
-    #[pyo3(signature = (active, hwnd = None))]
-    fn update_focus(&self, active: bool, hwnd: Option<StrictU64>) -> PyResult<()> {
-        if let Some(hwnd) = hwnd {
-            let hwnd = isize::try_from(hwnd.0)
-                .map_err(|_| PyValueError::new_err("hwnd is outside the platform range"))?;
-            self.session.set_target_hwnd(hwnd);
-        }
-        self.session.update_focus(active);
-        Ok(())
     }
 
     fn set_target_hwnd(&self, hwnd: StrictU64) -> PyResult<()> {
@@ -919,6 +571,39 @@ impl NativeDispatchSessionPy {
         Ok(dict)
     }
 
+    fn snapshot_lite<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let snap = self.session.snapshot();
+        let dict = PyDict::new(py);
+        dict.set_item("state", snap.status)?;
+        dict.set_item("elapsed_us", snap.elapsed_us)?;
+        dict.set_item("total_us", snap.total_us)?;
+        dict.set_item("max_completion_error_us", snap.max_lateness_us)?;
+        dict.set_item("active_keys", snap.active_count)?;
+        dict.set_item(
+            "health",
+            if snap.terminal_error.is_some() || snap.failed_release_count > 0 {
+                "error"
+            } else if snap.input_path_degraded {
+                "degraded"
+            } else {
+                "ok"
+            },
+        )?;
+        dict.set_item("is_running", snap.is_running)?;
+        dict.set_item("is_finished", snap.is_finished)?;
+        dict.set_item("is_paused", snap.is_paused)?;
+        dict.set_item("input_path_degraded", snap.input_path_degraded)?;
+        Ok(dict)
+    }
+
+    fn session_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let report = PyDict::new(py);
+        report.set_item("snapshot", self.snapshot(py)?)?;
+        report.set_item("telemetry_json", self.take_telemetry_json(py)?)?;
+        report.set_item("estimator_state_json", self.estimator_state_json()?)?;
+        Ok(report)
+    }
+
     fn try_result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
         let Some(outcome) = self.session.terminal_outcome() else {
             return Ok(None);
@@ -956,6 +641,159 @@ impl NativeDispatchSessionPy {
     }
 }
 
+#[cfg(feature = "test-support")]
+#[pyclass(name = "TestDispatchSession", frozen)]
+struct TestDispatchSessionPy {
+    session: Arc<NativeDispatchSession>,
+}
+
+#[cfg(feature = "test-support")]
+#[pymethods]
+impl TestDispatchSessionPy {
+    #[new]
+    #[pyo3(signature = (
+        py_actions,
+        allowed_scan_codes,
+        min_hold_us = StrictU64(100),
+        mock_latency_base_us = StrictU64(80),
+        mock_latency_per_key_us = StrictU64(40),
+        telemetry_capacity = StrictU64(1024),
+        rt_priority_mode = "off",
+        enable_waitable_timer = true,
+        enable_event_wait = true,
+        enable_adaptive_spin = true,
+        enable_adaptive_lead = true
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py_actions: &Bound<'_, PyAny>,
+        allowed_scan_codes: &Bound<'_, PyAny>,
+        min_hold_us: StrictU64,
+        mock_latency_base_us: StrictU64,
+        mock_latency_per_key_us: StrictU64,
+        telemetry_capacity: StrictU64,
+        rt_priority_mode: &str,
+        enable_waitable_timer: bool,
+        enable_event_wait: bool,
+        enable_adaptive_spin: bool,
+        enable_adaptive_lead: bool,
+    ) -> PyResult<Self> {
+        let min_hold_us = min_hold_us.0;
+        let mock_latency_base_us = mock_latency_base_us.0;
+        let mock_latency_per_key_us = mock_latency_per_key_us.0;
+        let telemetry_capacity = usize::try_from(telemetry_capacity.0)
+            .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
+        if min_hold_us > 60_000_000 {
+            return Err(PyValueError::new_err(
+                "min_hold_us must be at most 60000000",
+            ));
+        }
+        if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
+            return Err(PyValueError::new_err(
+                "mock latency values must be at most 1000000 microseconds",
+            ));
+        }
+        if telemetry_capacity == 0 || telemetry_capacity > 1_024 {
+            return Err(PyValueError::new_err(
+                "telemetry_capacity must be between 1 and 1024",
+            ));
+        }
+        let priority_mode = match rt_priority_mode {
+            "auto" => PriorityMode::Auto,
+            "mmcss" => PriorityMode::Mmcss,
+            "time_critical" => PriorityMode::TimeCritical,
+            "highest" => PriorityMode::Highest,
+            "off" => PriorityMode::Off,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "rt_priority_mode must be auto, mmcss, time_critical, highest, or off",
+                ));
+            }
+        };
+        let max_lead_us = 2_000;
+        let dispatch_lead_us = 0;
+        let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
+        validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
+        let session = NativeDispatchSession::new(
+            schedule,
+            min_hold_us,
+            max_lead_us,
+            dispatch_lead_us,
+            allowed_scan_codes,
+            true,
+            mock_latency_base_us,
+            mock_latency_per_key_us,
+            FaultInjectionScript::none(),
+            false,
+            100_000,
+            150,
+            0,
+            crate::engine::TelemetryMode::Ring,
+            telemetry_capacity,
+            priority_mode,
+            enable_waitable_timer,
+            enable_event_wait,
+            enable_adaptive_spin,
+            700,
+            None,
+            enable_adaptive_lead,
+            300,
+            false,
+            2_000,
+            2_000,
+            3_000_000,
+        )
+        .map_err(PyRuntimeError::new_err)?;
+        Ok(Self {
+            session: Arc::new(session),
+        })
+    }
+
+    fn start(&self) -> PyResult<()> {
+        self.session.start().map_err(PyRuntimeError::new_err)
+    }
+
+    fn pause(&self) -> PyResult<()> {
+        self.session.pause().map_err(PyRuntimeError::new_err)
+    }
+
+    fn quit(&self) -> PyResult<()> {
+        self.session.quit().map_err(PyRuntimeError::new_err)
+    }
+
+    fn panic_release(&self) -> PyResult<()> {
+        self.session
+            .panic_release()
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        NativeDispatchSessionPy {
+            session: Arc::clone(&self.session),
+        }
+        .snapshot(py)
+    }
+
+    #[pyo3(signature = (timeout_ms = StrictU64(5000)))]
+    fn join(&self, py: Python<'_>, timeout_ms: StrictU64) -> PyResult<bool> {
+        if timeout_ms.0 == 0 || timeout_ms.0 > 60_000 {
+            return Err(PyValueError::new_err(
+                "timeout_ms must be between 1 and 60000",
+            ));
+        }
+        py.detach(|| {
+            self.session
+                .join(std::time::Duration::from_millis(timeout_ms.0))
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
+
+    fn take_telemetry_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| self.session.take_telemetry_json())
+            .map_err(PyRuntimeError::new_err)
+    }
+}
+
 #[pyfunction]
 fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
@@ -965,6 +803,7 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     dict.set_item("rustc_version", env!("SKY_RUSTC_VERSION"))?;
     dict.set_item("schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
     dict.set_item("native_schema_version", sky_dispatch_core::SCHEMA_VERSION)?;
+    #[cfg(feature = "calibration")]
     dict.set_item(
         "calibration_schema_version",
         sky_dispatch_win32::calibration::CALIBRATION_SCHEMA_VERSION,
@@ -991,65 +830,21 @@ fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
     Ok(dict)
 }
 
-#[pyfunction]
-fn simulate_schedule_rs(
-    py_actions: &Bound<'_, PyAny>,
-    allowed_scan_codes: &Bound<'_, PyAny>,
-    min_hold_us: StrictU64,
-    send_latency_us: StrictU64,
-) -> PyResult<String> {
-    let allowed_scan_codes = strict_scan_codes(allowed_scan_codes, "allowed_scan_codes", None)?;
-    let actions = parse_actions(py_actions, &allowed_scan_codes)?;
-
-    let result = sky_dispatch_core::testing::simulate_schedule(
-        &actions,
-        &allowed_scan_codes,
-        min_hold_us.0,
-        send_latency_us.0,
-    )
-    .map_err(|error| PyValueError::new_err(error.to_string()))?;
-
-    let json = serde_json::to_string(&result)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    Ok(json)
-}
-
-#[pyfunction]
-fn sleep_until_rs(target_us: StrictU64, spin_margin_us: StrictU64) -> PyResult<u64> {
-    sky_dispatch_win32::sleeper::sleep_until_us(target_us.0, spin_margin_us.0)
-        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
-}
-
-#[pyfunction]
-fn measure_spin_overhead_rs() -> PyResult<u64> {
-    sky_dispatch_win32::sleeper::measure_spin_overhead_us()
-        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
-}
-
-#[pyfunction]
-fn qpc_now_rs() -> PyResult<u64> {
-    sky_dispatch_win32::clock::qpc_now_us_checked()
-        .map_err(|error| PyRuntimeError::new_err(format!("QPC failure: {error:?}")))
-}
-
 /// Free-threaded PyO3 extension module for Sky Auto Player dispatch engine.
 #[pyo3::pymodule(gil_used = false)]
 fn sky_player_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    #[cfg(feature = "diagnostic-backend")]
-    m.add_class::<RustInputBackend>()?;
+    m.add_class::<NativeSessionConfigPy>()?;
     m.add_class::<NativeDispatchSessionPy>()?;
-    let dispatch_session = m.getattr("DispatchSession")?;
-    m.add("NativeDispatchSessionPy", dispatch_session)?;
+    #[cfg(feature = "test-support")]
+    m.add_class::<TestDispatchSessionPy>()?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
-    m.add_function(wrap_pyfunction!(simulate_schedule_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(sleep_until_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(measure_spin_overhead_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(qpc_now_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        calibration::calibration_schema_version,
-        m
-    )?)?;
+    #[cfg(feature = "calibration")]
+    {
+        m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;
+        m.add_function(wrap_pyfunction!(
+            calibration::calibration_schema_version,
+            m
+        )?)?;
+    }
     Ok(())
 }

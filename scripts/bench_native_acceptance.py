@@ -223,22 +223,35 @@ def _new_session(
 ) -> Any:
     import sky_player_rs
 
+    if backend == "mock":
+        test_session = getattr(sky_player_rs, "TestDispatchSession", None)
+        if not callable(test_session):
+            raise RuntimeError(
+                "mock acceptance requires a test-support native wheel; "
+                "production wheels expose only DispatchSession"
+            )
+        return test_session(
+            actions,
+            list(SKY_15_SCAN_CODES),
+            min_hold_us=100,
+            mock_latency_base_us=mock_base_latency_us,
+            mock_latency_per_key_us=mock_per_key_latency_us,
+            telemetry_capacity=min(1_024, max(1, len(actions))),
+            rt_priority_mode=rt_priority_mode,
+            enable_waitable_timer=True,
+            enable_event_wait=True,
+            enable_adaptive_spin=adaptive_spin,
+            enable_adaptive_lead=True,
+        )
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         list(SKY_15_SCAN_CODES),
-        profile="mock_test" if backend == "mock" else "production",
-        min_hold_us=100,
-        max_lead_us=2_000,
-        mock_latency_base_us=mock_base_latency_us,
-        mock_latency_per_key_us=mock_per_key_latency_us,
-        require_focus=False,
-        telemetry_mode="ring",
-        telemetry_capacity=min(1_024, max(1, len(actions))),
-        rt_priority_mode=rt_priority_mode,
-        enable_waitable_timer=True,
-        enable_event_wait=True,
-        enable_adaptive_spin=adaptive_spin,
-        enable_adaptive_lead=True,
+        config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            min_hold_us=100,
+            require_focus=False,
+            telemetry=True,
+            profile="production",
+        ),
     )
 
 

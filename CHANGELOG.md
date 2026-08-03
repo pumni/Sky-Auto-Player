@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Rust dispatch worker is the production default; Python retains the UI and orchestration boundary.
+- Rust is the sole production dispatch implementation; Python retains UI, configuration, authored-action preparation, and application orchestration only.
 - The deadline-to-`SendInput` path no longer calls Python.
+- Removed the Python dispatch core, Python sender stack, low-level Rust input adapter, backend selector, runtime fallback, and migration environment flags.
+- The PyO3 surface is reduced to `SessionConfig`, `DispatchSession`, startup admission metadata, and native calibration.
 - Timing remains in the QPC tick domain until the serialization boundary.
 - Native telemetry schema remains `6`; calibration final artifact schema is `5`.
 
@@ -49,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native telemetry schema 5 artifacts are rejected by the schema 6 consumer; old native telemetry is diagnostic history, not V3 release evidence.
 - Calibration schema 4 checkpoints are rejected by the schema 5 loader; run calibration again for V3.
 - The legacy latency cache remains accepted only when it matches loader contract version 1 and its strict sample/value bounds; otherwise the loader uses its default fallback.
-- Emergency diagnostic rollback is selected with `SKY_USE_PYTHON_DISPATCH=1`; it is not the production recommendation.
+- Rollback is performed by rolling back the application release; the active binary contains no Python dispatch engine.
 
 ### Known limitations
 

@@ -67,8 +67,14 @@ Dedicated Rust dispatch worker
 - Mốc hold là completion-to-completion, không phải call-entry.
 - Rust worker là owner duy nhất của backend, timer handle, active key state và coordinator trong lúc chạy.
 
-## V3.0.0 release status
+## Consolidated production status
 
-- Rust is the production-default dispatch implementation; Python remains available only through the explicit diagnostic switch `SKY_USE_PYTHON_DISPATCH=1`.
-- The v3.0.0 acceptance packet is the authority for Windows soak, rollback, packaging, and exact-SHA sign-off. Any item without recorded evidence remains pending.
-- Sender telemetry remains bounded and ends at `SendInput` completion; `game_observed.available=false` is intentional.
+- Rust is the only production dispatch implementation.
+- The active binary has no Python sender, runtime fallback, backend selector, or
+  `SKY_USE_PYTHON_DISPATCH` switch. Rollback means rolling back the application
+  release.
+- `DispatchSession` owns scheduling, timing, focus, SendInput, cleanup, and
+  native telemetry. Python receives `snapshot_lite` during playback and one
+  final `session_report` after termination.
+- Sender telemetry ends at `SendInput` completion; `game_observed.available=false`
+  remains intentional.

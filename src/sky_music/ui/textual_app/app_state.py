@@ -45,4 +45,3 @@ class PickerConfigState:
     scan_code_mode: str = "default"
     verbose_hud: bool = False
     telemetry_enabled: bool = False
-    dispatch_lead_us: int = 0

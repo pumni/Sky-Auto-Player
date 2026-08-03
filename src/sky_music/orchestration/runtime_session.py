@@ -2,7 +2,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sky_music.config import AppConfig, RtPriorityMode
+from sky_music.config import AppConfig
 from sky_music.domain.session_context import PlaybackSessionContext
 
 
@@ -12,40 +12,24 @@ class PlaybackOverrides:
     profile: str | None = None
     tempo: float | None = None
     fps: int | None = None
-    dispatch_lead_us: int = 0
 
 
 @dataclass(slots=True)
 class RuntimeSessionState:
     session: PlaybackSessionContext | None = None
     timing_policy: object | None = None
-    sleep_policy: object | None = None
     scan_code_mode: str = "physical"
     telemetry_csv_enabled: bool = False
     dry_run: bool = False
     tempo_scale: float = 1.0
     timing_profile_name: str = "balanced"
     verbose_hud: bool = False
-    use_dispatch_thread: bool = True
-    enable_timer_guard: bool = True
-    enable_waitable_timer: bool = True
-    enable_gc_pause: bool = True
-    enable_switch_interval_tuning: bool = True
-    # Graduated defaults (2026-06-11): adaptive lead/spin, event-driven waits, and the MMCSS
-    # priority ladder all ship ON; --no-* CLI flags are the per-feature kill switches.
-    enable_adaptive_lead: bool = True
-    enable_adaptive_spin: bool = True
-    enable_event_wait: bool = True
-    enable_epoch_rebase: bool = True
-    rt_priority_mode: RtPriorityMode = "auto"
-    check_input_path: bool = False
-    spin_floor_us: int | None = None
     # When True, the launch-time auto update check is suppressed (set via
     # ``--no-update`` / ``--no-update-check``); manual checks via the ``u``
     # key still work. Honored by SkyPickerApp and the playback silent check.
     update_disabled: bool = False
 
-    def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig, *, spin_threshold_us: int | None = None) -> None:
+    def apply_session(self, session: PlaybackSessionContext, cfg: AppConfig) -> None:
         self.session = session
         # Resolve the device-calibrated margin once at session build time
         # and inject the primitives into the domain session. The
@@ -54,7 +38,6 @@ class RuntimeSessionState:
         from sky_music.infrastructure.calibration_loader import (
             load_calibrated_margin_recommendation,
         )
-        from sky_music.infrastructure.timing import SleepPolicy
         calibrated_margin_us, calibrated_margin_source = (
             load_calibrated_margin_recommendation()
         )
@@ -63,12 +46,6 @@ class RuntimeSessionState:
             calibrated_margin_us=calibrated_margin_us,
             calibrated_margin_source=calibrated_margin_source,
         )
-        # Domain returns primitives; orchestration owns the SleepPolicy materialisation
-        # so domain stays infrastructure-free.
-        spin, poll_s = session.resolve_sleep_policy(
-            cfg, spin_threshold_us=spin_threshold_us
-        )
-        self.sleep_policy = SleepPolicy(spin_threshold_us=spin, poll_s=poll_s)
         self.scan_code_mode = session.scan_code_mode
         self.tempo_scale = session.tempo_scale
         self.timing_profile_name = session.display_profile_label()
@@ -107,13 +84,11 @@ class _RuntimeStateProxy:
         self,
         session: PlaybackSessionContext,
         cfg: AppConfig,
-        *,
-        spin_threshold_us: int | None = None,
     ) -> None:
         state = object.__getattribute__(self, '_state')
         lock: threading.Lock = object.__getattribute__(self, '_lock')
         with lock:
-            state.apply_session(session, cfg, spin_threshold_us=spin_threshold_us)
+            state.apply_session(session, cfg)
 
     def clear_session(self) -> None:
         """Drop the last PlaybackSessionContext after playback ends (RAM hygiene)."""

@@ -1,5 +1,8 @@
 # 11 — Risk register, rollback và anti-patterns
 
+> HISTORICAL: This risk register predates the final Rust-only rollback policy.
+> The current production contract is Rust-only; see `README.md`.
+
 ## 1. Risk: “port nhanh” làm thay đổi semantics
 
 Dấu hiệu:

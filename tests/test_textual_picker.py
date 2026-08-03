@@ -894,81 +894,15 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
     assert app.return_value is None
 
 
-def test_dispatch_lead_us_propagates_to_playback_engine(monkeypatch) -> None:
-    FakeMetadataCoordinator.instances.clear()
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
-
-    captured_kwargs = {}
-
-    class MockPlaybackEngine:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            captured_kwargs.update(kwargs)
-            class MockTelemetry:
-                def record_schedule_metadata(self, meta: Any) -> None:
-                    pass
-            self.telemetry = MockTelemetry()
-
-        def play(self) -> str:
-            return "done"
-
-    monkeypatch.setattr("sky_music.orchestration.engine.PlaybackEngine", MockPlaybackEngine)
-
-    async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        from sky_music.domain import Millis, Note, NoteKey, Song
-        from sky_music.domain.session_context import PlaybackSessionContext
-        from sky_music.ui.picker import SongPickerResult
-        from sky_music.ui.textual_app.playback_controller import (
-            PlaybackError,
-            prepare_playback,
-        )
-
-        song = Song(
-            name="Test Song",
-            notes=(
-                Note(time_ms=Millis(0), key=NoteKey("Key0")),
-                Note(time_ms=Millis(100), key=NoteKey("Key1")),
-            ),
-        )
-        session = PlaybackSessionContext.balanced()
-        plan = prepare_playback(song, session, app.cfg, is_dry_run=True)
-        assert not isinstance(plan, PlaybackError)
-
-        picker_result = SongPickerResult(
-            song_path=SONGS[0],
-            action="dry_run",
-            profile_name="balanced",
-            tempo_scale=1.0,
-            fps=60,
-        )
-
-        app.execute_playback_plan(plan, picker_result)
-        await pilot.pause()
-
-        assert captured_kwargs.get("dispatch_lead_us") == 45600
-
-        await pilot.press("escape")
-
-    async def _run_app_with_lead_us(actions_fn: Any) -> SkyPickerApp:
-        app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig(), dispatch_lead_us=45600)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await actions_fn(app, pilot)
-        return app
-
-    app = run_picker(_run_app_with_lead_us(actions))
-    assert app.return_value is None
-
-
 def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
-    from sky_music.platform.win32 import inputs
-    monkeypatch.setattr(inputs, "get_sky_window", lambda: None)
+    from sky_music.platform.win32 import window_target
+    monkeypatch.setattr(window_target, "get_sky_window", lambda: None)
 
-    import sky_music.platform.win32.calibration as calibration_module
+    import sky_music.platform.win32.native_calibration as calibration_module
     harness_called = False
 
     def dummy_harness():
@@ -979,7 +913,7 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
             "up_us": {"p50": 100, "p90": 200, "p99": 300},
         }
 
-    monkeypatch.setattr(calibration_module, "calibrate_input_latency_harness", dummy_harness)
+    monkeypatch.setattr(calibration_module, "run_native_calibration", dummy_harness)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         from sky_music.ui.textual_app.screens.picker import PickerScreen

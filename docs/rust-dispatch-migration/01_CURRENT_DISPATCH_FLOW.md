@@ -1,5 +1,8 @@
 # 01 — Phân tích luồng dispatch hiện tại
 
+> HISTORICAL: This migration note describes the superseded pre-consolidation
+> flow. The current production contract is Rust-only; see `README.md`.
+
 ## 1. Luồng tổng thể
 
 ```text

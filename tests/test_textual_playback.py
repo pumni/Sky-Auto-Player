@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 from textual.widgets import Static
 
-from sky_music.orchestration.core.ports import ProgressCounters
+from sky_music.orchestration.native_models import ProgressCounters
 from sky_music.ui.textual_app.playback_app import (
     PlaybackApp,
     PlaybackCard,
@@ -1643,7 +1643,6 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
 
 
 def test_debug_stats_calculation() -> None:
-    from sky_music.orchestration.core.ports import ProgressCounters
     from sky_music.ui.textual_app.playback_app import PlaybackSnapshot, SnapshotRenderer
 
     renderer = SnapshotRenderer()

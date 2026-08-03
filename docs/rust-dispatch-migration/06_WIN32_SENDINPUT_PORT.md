@@ -1,5 +1,8 @@
 # 06 — Port Win32 SendInput, wait và real-time scope
 
+> HISTORICAL: This migration note predates the final Rust-owned Win32 path.
+> The current production contract is Rust-only; see `README.md`.
+
 ## 1. windows-sys features
 
 Tối thiểu rà soát các feature:

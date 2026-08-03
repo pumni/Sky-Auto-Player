@@ -313,7 +313,6 @@ class PickerScreen(Screen[SongPickerResult]):
         cfg: AppConfig | None = None,
         verbose_hud: bool = False,
         telemetry_enabled: bool = False,
-        dispatch_lead_us: int = 0,
     ) -> None:
         super().__init__(name=name, id=id)
         self.profile_name = profile_name
@@ -330,7 +329,6 @@ class PickerScreen(Screen[SongPickerResult]):
         self.show_notes = True
         self.show_risk = True
         self.show_suggested = True
-        self.dispatch_lead_us = dispatch_lead_us
         self.session = PlaybackSessionContext(
             profile_name=self.profile_name,
             tempo_scale=self.tempo_scale,
@@ -389,13 +387,13 @@ class PickerScreen(Screen[SongPickerResult]):
                 t.gradient, t.foreground, t.detail, t.foreground, lead=t.header_lead
             )
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to apply header theme")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to apply header theme")
         try:
             self.query_one(CustomFooter).set_theme(t.key, t.muted)
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to apply footer theme")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to apply footer theme")
         try:
             from sky_music.ui.textual_app.playback_app import PlaybackCard
             self.query_one("#playback-card", PlaybackCard).styles.display = "none"
@@ -408,8 +406,8 @@ class PickerScreen(Screen[SongPickerResult]):
         try:
             self.query_one("#appbar", GradientHeader).set_tagline(tagline)
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to set header tagline")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to set header tagline")
 
     def compose(self) -> ComposeResult:
         with Container(id="root"):
@@ -549,10 +547,10 @@ class PickerScreen(Screen[SongPickerResult]):
     def on_unmount(self) -> None:
         try:
             self.picker_scope.close_all(wait=True)
-            from sky_music.platform.win32 import inputs
-            if getattr(inputs, "PLAYBACK_DEBUG", False):
+            from sky_music.platform.win32 import window_target
+            if getattr(window_target, "PLAYBACK_DEBUG", False):
                 for snap in self.picker_scope.snapshots():
-                    inputs.debug_log(
+                    window_target.debug_log(
                         f"[background] picker resource {snap.name} closed={snap.closed} "
                         f"pending={snap.pending_count} running={snap.running_count}"
                     )
@@ -573,8 +571,8 @@ class PickerScreen(Screen[SongPickerResult]):
                 ]
             }
         except Exception as exc:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
             from sky_music.orchestration.telemetry import TelemetryLogger
             resources_list = []
             with contextlib.suppress(Exception):
@@ -681,14 +679,14 @@ class PickerScreen(Screen[SongPickerResult]):
             try:
                 table.update_cell(cast(RowKey, self._marked_row_key), "marker", t.song_icon)
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log("[picker] failed to clear marker")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log("[picker] failed to clear marker")
         if row_key is not None:
             try:
                 table.update_cell(cast(RowKey, row_key), "marker", t.pointer)
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log("[picker] failed to set marker")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log("[picker] failed to set marker")
         self._marked_row_key = row_key
 
     def _sync_marker(self) -> None:
@@ -711,8 +709,8 @@ class PickerScreen(Screen[SongPickerResult]):
         try:
             self.app.query_one("#appbar", GradientHeader).set_tagline(tagline)
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to update header tagline")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to update header tagline")
 
     def _render_status(self) -> None:
         fps_str = f"{self.fps}fps"
@@ -727,13 +725,13 @@ class PickerScreen(Screen[SongPickerResult]):
         try:
             self.app.query_one("#appbar", GradientHeader).set_status(chips)
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to set status")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to set status")
         try:
             self.app.query_one(CustomFooter).refresh()
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to refresh footer")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to refresh footer")
         table = self.app.query_one("#songs", SongTable)
         table.border_subtitle = f"{len(self.filtered)}/{len(self.choices)}"
 
@@ -841,8 +839,8 @@ class PickerScreen(Screen[SongPickerResult]):
                 w.disabled = True
                 w.styles.display = "none"
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log(f"[picker] failed to hide {selector}")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log(f"[picker] failed to hide {selector}")
         # Song table: keep VISIBLE so the user can see what is playing and
         # what comes next, but disable interaction (focus + key bindings).
         # The Screen.playback-active CSS class dims the table visually.
@@ -850,8 +848,8 @@ class PickerScreen(Screen[SongPickerResult]):
             songs = self.app.query_one("#songs")
             songs.disabled = True
         except Exception:
-            from sky_music.platform.win32 import inputs
-            inputs.debug_log("[picker] failed to disable song table")
+            from sky_music.platform.win32 import window_target
+            window_target.debug_log("[picker] failed to disable song table")
 
     def _show_detail_and_table(self) -> None:
         for selector in ("#detail", "#songs", "#search", CustomFooter):
@@ -860,8 +858,8 @@ class PickerScreen(Screen[SongPickerResult]):
                 w.disabled = False
                 w.styles.display = "block"
             except Exception:
-                from sky_music.platform.win32 import inputs
-                inputs.debug_log(f"[picker] failed to show {selector}")
+                from sky_music.platform.win32 import window_target
+                window_target.debug_log(f"[picker] failed to show {selector}")
         self._render_detail()
         self._focus_table()
 
@@ -1131,8 +1129,8 @@ class PickerScreen(Screen[SongPickerResult]):
         )
 
     def action_calibrate_input_latency(self) -> None:
-        from sky_music.platform.win32 import inputs
-        if inputs.get_sky_window() is not None:
+        from sky_music.platform.win32 import window_target
+        if window_target.get_sky_window() is not None:
             self.app.push_screen(
                 InfoModal(
                     "Calibration Blocked",
@@ -1172,11 +1170,11 @@ class PickerScreen(Screen[SongPickerResult]):
     async def _run_latency_calibration_worker(self) -> None:
         import asyncio
 
-        from sky_music.platform.win32.calibration import calibrate_input_latency_harness
+        from sky_music.platform.win32.native_calibration import run_native_calibration
         
         try:
             loop = asyncio.get_running_loop()
-            res = await loop.run_in_executor(None, calibrate_input_latency_harness)
+            res = await loop.run_in_executor(None, run_native_calibration)
             
             self.app.push_screen(
                 InfoModal(
