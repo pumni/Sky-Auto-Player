@@ -321,7 +321,7 @@ def _host_fingerprint(native_info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
+def _completion_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any]:
     """Return signed, absolute, early and late error distributions.
 
     Signed aggregate percentiles are retained for report compatibility, but
@@ -330,10 +330,9 @@ def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
     other half of the timeline.
     """
 
-    def values_for(rows: list[dict[str, Any]]) -> list[int]:
+    def values_for(rows: list[tuple[str, int]]) -> list[int]:
         values: list[int] = []
-        for record in rows:
-            value = record.sender_completion_error_us
+        for _, value in rows:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise RuntimeError(
                     "sender telemetry is missing exact sender_completion_error_us"
@@ -341,7 +340,7 @@ def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
             values.append(value)
         return values
 
-    if not records:
+    if not rows:
         raise RuntimeError("required sender telemetry has no records")
 
     def report_for(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
@@ -354,12 +353,23 @@ def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
         }
 
     by_kind = {
-        kind: report_for([record for record in records if record.kind == kind], kind)
+        kind: report_for([row for row in rows if row[0] == kind], kind)
         for kind in ("down", "up")
     }
-    result = report_for(records, "all")
+    result = report_for(rows, "all")
     result["by_kind"] = by_kind
     return result
+
+
+def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
+    return _completion_error_report_pairs(
+        [
+            (record.kind, record.sender_completion_error_us)
+            for record in records
+            if isinstance(record.sender_completion_error_us, int)
+            and not isinstance(record.sender_completion_error_us, bool)
+        ]
+    )
 
 
 def _peak_working_set_bytes() -> int | None:
@@ -482,17 +492,20 @@ def _run_dispatch(
             for record in records
             if record.kind == "down" and record.native_polyphony is not None
         }
+        completion_error_rows = [
+            (record.kind, int(record.sender_completion_error_us)) for record in records
+        ]
         peak_rss = _peak_working_set_bytes()
         result: dict[str, Any] = {
             "polyphony": polyphony,
             "wall_us": wall_us,
             "_sender_error_values": sender_errors,
-            "_records": records,
+            "_completion_error_rows": completion_error_rows,
             "_snapshot": snapshot,
             "_telemetry": telemetry,
             "_telemetry_integrity": diagnostics,
             "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
-            "completion_error_us": _completion_error_report(records),
+            "completion_error_us": _completion_error_report_pairs(completion_error_rows),
             "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
             "worker_cpu_time_us": int(snapshot.get("worker_cpu_time_us", 0)),
             "process_cpu_time_us": int(snapshot.get("process_cpu_time_us", 0)),
@@ -849,6 +862,8 @@ def main() -> int:
                     timeout_ms=next_timeout_ms(),
                 )
                 _assert_correctness(run)
+                run.pop("_snapshot", None)
+                run.pop("_telemetry", None)
                 suite_runs[str(polyphony)] = run
 
             if run_deadline - time.monotonic() <= 5.0:
@@ -969,8 +984,8 @@ def main() -> int:
             "sender_completion_error_us": {
                 key: _stats(values)[key] for key in ("p50", "p95", "p99", "max")
             },
-            "completion_error_us": _completion_error_report(
-                [record for run in runs for record in run["_records"]]
+            "completion_error_us": _completion_error_report_pairs(
+                [row for run in runs for row in run["_completion_error_rows"]]
             ),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
@@ -1020,8 +1035,8 @@ def main() -> int:
             key: _stats(sender_errors)[key]
             for key in ("p50", "p95", "p99", "max")
         },
-        "completion_error_us": _completion_error_report(
-            [record for run in dispatch_runs for record in run["_records"]]
+        "completion_error_us": _completion_error_report_pairs(
+            [row for run in dispatch_runs for row in run["_completion_error_rows"]]
         ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
         "peak_rss_bytes": _required_stats(
