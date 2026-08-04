@@ -1,4 +1,6 @@
-use super::*;
+use super::{TrackedKeyState, focus_gate_matches};
+use sky_dispatch_win32::input::PhysicalKeyPreflightError;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetStamp {
@@ -95,7 +97,7 @@ pub(crate) fn ensure_preflight_for_target(
     backend: &TrackedKeyState,
     current: TargetStamp,
     verified_target: &mut Option<TargetStamp>,
-) -> Result<(), sky_dispatch_win32::input::PhysicalKeyPreflightError> {
+) -> Result<(), PhysicalKeyPreflightError> {
     if *verified_target == Some(current) {
         return Ok(());
     }
