@@ -39,7 +39,10 @@ pub(crate) use timing::{
     signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
     wake_lateness_ticks,
 };
-use wait::{WaitBoundary, WaitBoundaryContext, wait_for_next_boundary};
+use wait::{
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
+    wait_for_next_boundary,
+};
 
 use super::shared::SessionShared;
 use super::*;

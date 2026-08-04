@@ -2288,25 +2288,33 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     break;
                 }
             };
-            match wait_for_next_boundary(WaitBoundaryContext {
-                deadline_ticks,
-                qpc_clock,
-                clock_state,
-                allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
-                last_send_qpc_ticks: runtime.last_send_qpc_ticks,
-                core_warmup_ticks: timing.core_warmup_ticks,
-                cold_threshold_ticks: timing.cold_threshold_ticks,
-                effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                waiter,
-                lease_timeout_ticks: timing.lease_timeout_ticks,
-                supervisor_heartbeat_ticks,
-                interrupt,
-                strict_timing: config.strict_timing,
-                input_path_warn_us: config.input_path_warn_us,
-                local_metrics: &mut local_metrics,
-                pending_pre_send_spin_us: &mut runtime.pending_pre_send_spin_us,
-                force_full_cleanup: &mut runtime.force_full_cleanup,
-                terminal_error: &mut runtime.terminal_error,
+            match wait_for_next_boundary(WaitBoundaryInput {
+                deadline: WaitDeadline {
+                    deadline_ticks,
+                    qpc_clock,
+                    clock_state,
+                    allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
+                    last_send_qpc_ticks: runtime.last_send_qpc_ticks,
+                },
+                timing: WaitTiming {
+                    core_warmup_ticks: timing.core_warmup_ticks,
+                    cold_threshold_ticks: timing.cold_threshold_ticks,
+                    effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                    lease_timeout_ticks: timing.lease_timeout_ticks,
+                    supervisor_heartbeat_ticks,
+                },
+                signals: WaitSignals {
+                    waiter,
+                    interrupt,
+                    strict_timing: config.strict_timing,
+                    input_path_warn_us: config.input_path_warn_us,
+                },
+                mutable: WaitMutable {
+                    local_metrics: &mut local_metrics,
+                    pending_pre_send_spin_us: &mut runtime.pending_pre_send_spin_us,
+                    force_full_cleanup: &mut runtime.force_full_cleanup,
+                    terminal_error: &mut runtime.terminal_error,
+                },
             }) {
                 WaitBoundary::Ready => {}
                 WaitBoundary::Continue => continue,

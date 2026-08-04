@@ -6,48 +6,76 @@ pub(super) enum WaitBoundary {
     Exit,
 }
 
-pub(super) struct WaitBoundaryContext<'a> {
+pub(super) struct WaitDeadline<'a> {
     pub(super) deadline_ticks: Option<TimelineTicks>,
     pub(super) qpc_clock: QpcClock,
     pub(super) clock_state: &'a mut PlaybackClockState,
     pub(super) allow_pre_epoch_startup_dispatch: bool,
     pub(super) last_send_qpc_ticks: Option<QpcTicks>,
+}
+
+pub(super) struct WaitTiming<'a> {
     pub(super) core_warmup_ticks: DurationTicks,
     pub(super) cold_threshold_ticks: DurationTicks,
     pub(super) effective_spin_threshold_ticks: DurationTicks,
-    pub(super) waiter: &'a HybridWaiter,
     pub(super) lease_timeout_ticks: DurationTicks,
     pub(super) supervisor_heartbeat_ticks: &'a AtomicU64,
+}
+
+pub(super) struct WaitSignals<'a> {
+    pub(super) waiter: &'a HybridWaiter,
     pub(super) interrupt: &'a OwnedEvent,
     pub(super) strict_timing: bool,
     pub(super) input_path_warn_us: u64,
+}
+
+pub(super) struct WaitMutable<'a> {
     pub(super) local_metrics: &'a mut WorkerMetricsLocal,
     pub(super) pending_pre_send_spin_us: &'a mut u64,
     pub(super) force_full_cleanup: &'a mut bool,
     pub(super) terminal_error: &'a mut Option<String>,
 }
 
-pub(super) fn wait_for_next_boundary(context: WaitBoundaryContext<'_>) -> WaitBoundary {
-    let WaitBoundaryContext {
+pub(super) struct WaitBoundaryInput<'a> {
+    pub(super) deadline: WaitDeadline<'a>,
+    pub(super) timing: WaitTiming<'a>,
+    pub(super) signals: WaitSignals<'a>,
+    pub(super) mutable: WaitMutable<'a>,
+}
+
+pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
+    let WaitBoundaryInput {
+        deadline,
+        timing,
+        signals,
+        mutable,
+    } = context;
+    let WaitDeadline {
         deadline_ticks,
         qpc_clock,
         clock_state,
         allow_pre_epoch_startup_dispatch,
         last_send_qpc_ticks,
+    } = deadline;
+    let WaitTiming {
         core_warmup_ticks,
         cold_threshold_ticks,
         effective_spin_threshold_ticks,
-        waiter,
         lease_timeout_ticks,
         supervisor_heartbeat_ticks,
+    } = timing;
+    let WaitSignals {
+        waiter,
         interrupt,
         strict_timing,
         input_path_warn_us,
+    } = signals;
+    let WaitMutable {
         local_metrics,
         pending_pre_send_spin_us,
         force_full_cleanup,
         terminal_error,
-    } = context;
+    } = mutable;
 
     let Some(deadline_ticks) = deadline_ticks else {
         return WaitBoundary::Exit;
