@@ -203,6 +203,48 @@ fn worker_takes_runtime_schedule_only_once() {
 }
 
 #[test]
+fn large_runtime_schedule_starts_and_quits_cleanly() {
+    const AUTHORED_ACTIONS: usize = 100_000;
+    let mut actions = Vec::with_capacity(AUTHORED_ACTIONS);
+    for action_index in 0..AUTHORED_ACTIONS {
+        actions.push(KeyActionInput {
+            source_action_index: action_index as u32,
+            kind: if action_index % 2 == 0 {
+                ActionKind::Down
+            } else {
+                ActionKind::Up
+            },
+            scheduled_us: action_index as u64,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "large-schedule".to_string().into(),
+        });
+    }
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("large schedule must compile");
+    assert_eq!(schedule.batches.len(), AUTHORED_ACTIONS);
+    assert_eq!(schedule.intents.len(), AUTHORED_ACTIONS);
+
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("large schedule session admission");
+    session.start().expect("large schedule worker start");
+    session.quit().expect("large schedule quit request");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("large schedule join")
+    );
+    assert!(session.snapshot().is_finished);
+}
+
+#[test]
 fn retry_backoff_values_use_exact_qpc_conversion() {
     let clock = QpcClock::initialize().expect("QPC clock");
     let expected_us = [2_000, 5_000, 10_000, 20_000];
