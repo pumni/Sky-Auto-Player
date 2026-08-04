@@ -252,6 +252,7 @@ def check_repository(repository_root: Path) -> CheckReport:
                 _record(report, Violation("unsafe_boundary", relative, "unsafe code outside allowlist"), allowlist)
             if ("pyo3::" in joined or "use pyo3" in joined) and not (
                 relative.startswith("rust/crates/sky_player_rs/src/python/")
+                or relative == "rust/crates/sky_player_rs/src/python.rs"
                 or relative == "rust/crates/sky_player_rs/src/lib.rs"
             ):
                 _record(report, Violation("pyo3_boundary", relative, "PyO3 import outside Python boundary"), allowlist)

@@ -45,3 +45,16 @@ def test_checker_accepts_explicit_temporary_allowlist(tmp_path):
 
     assert not report.errors
     assert any("temporary allowlist" in item.message for item in report.warnings)
+
+
+def test_checker_treats_python_root_as_ffi_boundary(tmp_path):
+    source = tmp_path / "rust" / "crates" / "sky_player_rs" / "src"
+    source.mkdir(parents=True)
+    (source / "python.rs").write_text(
+        "use pyo3::prelude::*;\n",
+        encoding="utf-8",
+    )
+
+    report = _checker().check_repository(tmp_path)
+
+    assert not any(item.rule == "pyo3_boundary" for item in report.errors)
