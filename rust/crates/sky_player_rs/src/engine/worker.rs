@@ -142,7 +142,7 @@ impl<'a> Worker<'a> {
         }
     }
 
-    pub(super) fn run(self) -> u8 {
-        orchestration::run(self)
+    pub(super) fn run(mut self) -> u8 {
+        orchestration::run(&mut self)
     }
 }

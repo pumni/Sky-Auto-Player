@@ -1,9 +1,9 @@
 use super::*;
 
-pub(super) fn run(worker: Worker<'_>) -> u8 {
-    let config = worker.config;
+pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
+    let config = &worker.config;
     let shared = worker.shared;
-    let mut core = worker.core;
+    let core = &mut worker.core;
     let local_metrics = &mut core.metrics;
     let runtime = &mut core.runtime;
     let secondary_errors = &mut core.errors.secondary;
@@ -235,7 +235,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         };
     let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
-        config.schedule,
+        config.schedule.clone(),
         config.timing.min_hold_us,
         min_hold_ticks,
         0,
