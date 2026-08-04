@@ -6,6 +6,7 @@ mod physical;
 mod raw;
 mod scan_code;
 mod tracked;
+mod up_transaction;
 
 pub use down_transaction::{emit_down, emit_down_with};
 pub use outcome::{
@@ -17,10 +18,11 @@ pub use raw::{send_input_raw, send_input_raw_with_clock};
 pub use scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE};
 #[cfg(any(test, feature = "test-support"))]
 pub use tracked::CustomEmitterFn;
-pub use tracked::{TrackedKeyState, emit_up, emit_up_with};
+pub use tracked::TrackedKeyState;
+pub use up_transaction::{emit_up, emit_up_with};
 
 #[cfg(test)]
-pub(crate) use tracked::emit_up_with_immediate;
+pub(crate) use up_transaction::emit_up_with_immediate;
 
 #[cfg(test)]
 mod tests;
