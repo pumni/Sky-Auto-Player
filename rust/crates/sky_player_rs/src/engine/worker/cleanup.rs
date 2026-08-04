@@ -1,4 +1,207 @@
 use super::*;
+use std::any::Any;
+
+pub(super) struct FinalizeContext<'a> {
+    pub(super) worker_result: Result<(), Box<dyn Any + Send>>,
+    pub(super) backend: TrackedKeyState,
+    pub(super) coordinator: RuntimeDispatchCoordinator,
+    pub(super) telemetry: TelemetryCollector,
+    pub(super) estimator: SendLatencyEstimator,
+    pub(super) local_metrics: WorkerMetricsLocal,
+    pub(super) abort_counts: HashMap<&'static str, u64>,
+    pub(super) force_full_cleanup: bool,
+    pub(super) terminal_error: Option<String>,
+    pub(super) secondary_errors: Vec<String>,
+    pub(super) last_published_error: Option<String>,
+    pub(super) qpc_clock: QpcClock,
+    pub(super) target_hwnd: &'a AtomicIsize,
+    pub(super) skip_requested: &'a AtomicBool,
+    pub(super) quit_requested: &'a AtomicBool,
+    pub(super) metrics: &'a SharedMetrics,
+    pub(super) telemetry_output: &'a Mutex<Option<NativeTelemetryOutput>>,
+    pub(super) estimator_output: &'a Mutex<Option<String>>,
+    pub(super) start_wall_time_us: u64,
+    pub(super) start_thread_cpu_us: u64,
+    pub(super) start_process_cpu_us: u64,
+}
+
+pub(super) fn finalize_worker(context: FinalizeContext<'_>) -> u8 {
+    let FinalizeContext {
+        worker_result,
+        mut backend,
+        mut coordinator,
+        mut telemetry,
+        estimator,
+        mut local_metrics,
+        mut abort_counts,
+        mut force_full_cleanup,
+        mut terminal_error,
+        mut secondary_errors,
+        mut last_published_error,
+        qpc_clock,
+        target_hwnd,
+        skip_requested,
+        quit_requested,
+        metrics,
+        telemetry_output,
+        estimator_output,
+        start_wall_time_us,
+        start_thread_cpu_us,
+        start_process_cpu_us,
+    } = context;
+
+    // Validate before either cleanup operation can erase the evidence of a
+    // coordinator mismatch. The first failure remains primary; later cleanup
+    // and accounting failures are retained as secondary diagnostics.
+    if let Err(error) = coordinator.check_invariants() {
+        force_full_cleanup = true;
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator pre-cleanup invariant failure: {error}"),
+        );
+    }
+
+    if worker_result.is_err() {
+        force_full_cleanup = true;
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            "worker panicked before terminal cleanup".to_string(),
+        );
+    }
+
+    // This cleanup sits outside the contained loop so it also runs when an
+    // unexpected panic crosses the orchestration/backend seam.
+    let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
+        let outcome = if worker_result.is_err() || force_full_cleanup {
+            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
+        } else {
+            backend.release_all(target_hwnd.load(Ordering::Acquire))
+        };
+        if release_state_verified(&backend, &outcome) {
+            outcome
+        } else {
+            // A normal-path release that cannot be verified gets one bounded
+            // full-instrument recovery attempt before the result is published.
+            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
+        }
+    }));
+    if let Ok(outcome) = &cleanup_result {
+        *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
+        if !release_state_verified(&backend, outcome) {
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!(
+                    "terminal release verification failed: {}",
+                    describe_release_outcome(outcome)
+                ),
+            );
+        }
+    } else {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            "terminal backend cleanup panicked".to_string(),
+        );
+    }
+
+    if terminal_error.is_none()
+        && !skip_requested.load(Ordering::Acquire)
+        && !quit_requested.load(Ordering::Acquire)
+        && !clean_completion_proven(&coordinator, &backend)
+    {
+        terminal_error = Some(
+            "clean completion contract failed: authored generations or backend state were not fully released"
+                .to_string(),
+        );
+    }
+
+    if let Err(error) = coordinator.cancel_all() {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator cancellation failure: {error}"),
+        );
+    }
+    if let Err(error) = coordinator.check_post_cleanup_invariants() {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator post-cleanup invariant failure: {error}"),
+        );
+    }
+    let end_qpc = qpc_clock.now().and_then(|ticks| {
+        qpc_clock
+            .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
+            .map_err(|_| QpcError::ConversionOverflow)
+    });
+    let end_us = match end_qpc {
+        Ok(value) => value,
+        Err(error) => {
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!("QPC runtime failure during termination: {error:?}"),
+            );
+            start_wall_time_us
+        }
+    };
+    let terminal_abort_reason =
+        if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
+            "error"
+        } else if skip_requested.load(Ordering::Acquire) {
+            "skipped"
+        } else if quit_requested.load(Ordering::Acquire) {
+            "quit"
+        } else {
+            "finished"
+        };
+    *abort_counts.entry(terminal_abort_reason).or_insert(0) += 1;
+    *metrics.abort_counts_by_reason.lock() = abort_counts
+        .into_iter()
+        .map(|(reason, count)| (reason.to_string(), count))
+        .collect();
+    *metrics.terminal_error.lock() = terminal_error.clone();
+    *metrics.secondary_errors.lock() = secondary_errors;
+    *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
+    publish_backend_metrics(
+        &backend,
+        &mut local_metrics,
+        metrics,
+        &mut last_published_error,
+    );
+
+    local_metrics.playback_wall_time_us = end_us.saturating_sub(start_wall_time_us);
+    local_metrics.worker_cpu_time_us =
+        current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+    local_metrics.process_cpu_time_us =
+        current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
+    if local_metrics.playback_wall_time_us > 0 {
+        local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
+            / local_metrics.playback_wall_time_us as u128)
+            as u64;
+    }
+    try_publish_metrics(&local_metrics, metrics, end_us, true);
+    metrics.is_paused.store(false, Ordering::Relaxed);
+    telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
+    *telemetry_output.lock() = Some(telemetry.output);
+    *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();
+    match (worker_result, cleanup_result) {
+        (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
+        (Ok(_), Ok(_)) => {}
+    }
+    if terminal_error.is_some() {
+        OUTCOME_ERROR
+    } else if skip_requested.load(Ordering::Acquire) {
+        OUTCOME_SKIPPED
+    } else if quit_requested.load(Ordering::Acquire) {
+        OUTCOME_QUIT
+    } else {
+        OUTCOME_FINISHED
+    }
+}
 
 pub(crate) fn cancel_coordinator_or_terminal(
     coordinator: &mut RuntimeDispatchCoordinator,
