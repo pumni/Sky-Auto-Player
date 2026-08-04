@@ -1323,12 +1323,9 @@ impl PendingRelease {
         &self,
         lead_up: DurationTicks,
     ) -> Result<TimelineTicks, CoordinatorError> {
-        let effective_lead =
-            if self.scheduled_release_ticks >= TimelineTicks::from_raw(lead_up.as_u64()) {
-                lead_up
-            } else {
-                DurationTicks::ZERO
-            };
+        let available_release_ticks =
+            DurationTicks::from_raw(self.scheduled_release_ticks.as_u64());
+        let effective_lead = lead_up.min(available_release_ticks);
         let led = self
             .scheduled_release_ticks
             .checked_sub_duration(effective_lead)?;

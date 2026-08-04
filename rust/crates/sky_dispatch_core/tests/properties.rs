@@ -417,6 +417,103 @@ proptest! {
 }
 
 // ==========================================================================
+#[test]
+fn release_lead_larger_than_short_hold_preserves_generation_order() {
+    let scan_codes = vec![2_u16];
+    let authored_hold_us = 478_u64;
+    let min_hold_us = 1_u64;
+    let send_latency_us = 0_u64;
+    let release_lead_us = 1_479_u64;
+    let down_scheduled_us = 1_000_u64;
+    let up_scheduled_us = down_scheduled_us + authored_hold_us;
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: down_scheduled_us,
+            scan_codes: scan_codes.clone().into(),
+            reason: "regression-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: up_scheduled_us,
+            scan_codes: scan_codes.clone().into(),
+            reason: "regression-up".to_string().into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &scan_codes).unwrap();
+    let generation_count = schedule.generation_count;
+    let mut coordinator = test_coordinator(
+        schedule,
+        min_hold_us,
+        0,
+        sky_dispatch_core::time::TimelineTicks::from_raw,
+    );
+
+    let (down, _) = coordinator
+        .pop_next_due_authored(down_scheduled_us, 0)
+        .expect("down must be due");
+    let (playable, conflicts) = coordinator
+        .split_down_intents(&down.intents)
+        .expect("valid transition");
+    assert!(conflicts.is_empty());
+    let completed_us = down_scheduled_us + send_latency_us;
+    coordinator.activate_sent_downs(
+        &playable,
+        &scan_codes,
+        down_scheduled_us,
+        sky_dispatch_core::time::TimelineTicks::from_raw(down_scheduled_us),
+        completed_us,
+        sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
+    );
+
+    let (up, _) = coordinator
+        .pop_next_due_authored(up_scheduled_us, 0)
+        .expect("up must be due");
+    let (requested, suppressed) = coordinator
+        .request_releases(&up.intents)
+        .expect("valid transition");
+    assert!(suppressed.is_empty());
+    let expected_due = up_scheduled_us
+        .saturating_sub(release_lead_us)
+        .max(completed_us + min_hold_us);
+    let actual_due = coordinator
+        .next_pending_release_ticks(DurationTicks::from_raw(release_lead_us))
+        .unwrap()
+        .expect("release must remain pending");
+    assert_eq!(
+        actual_due,
+        TimelineTicks::from_raw(expected_due),
+        "release lead must saturate at the authored release boundary"
+    );
+    let plan = PendingDispatchPlan {
+        deadline_ticks: actual_due,
+        lead_ticks: DurationTicks::from_raw(release_lead_us),
+        polyphony: 1,
+        lead_saturated: false,
+    };
+    assert!(
+        coordinator
+            .pop_due_pending_ticks(
+                TimelineTicks::from_raw(actual_due.as_u64().saturating_sub(1)),
+                &plan,
+            )
+            .unwrap()
+            .is_empty()
+    );
+    let due = coordinator
+        .pop_due_pending_ticks(actual_due, &plan)
+        .unwrap();
+    assert_eq!(due.len(), requested.len());
+    coordinator.complete_releases(&due, &scan_codes, &[]);
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.values().sum::<u64>(), generation_count);
+    assert_eq!(counts.get("released"), Some(&generation_count));
+    assert!(coordinator.is_finished());
+}
+
 // P3.2 Priority 1 — Fatal invariants
 // ==========================================================================
 
