@@ -853,8 +853,8 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
-            send_started_ticks: Some(QpcTicks::from_raw(20)),
-            send_completed_ticks: Some(QpcTicks::from_raw(25)),
+            send_started_ticks: Some(TimelineTicks::from_raw(20)),
+            send_completed_ticks: Some(TimelineTicks::from_raw(25)),
             completion_error_ticks: 1,
             authored_completion_error_ticks: 2,
             applied_lead_ticks: DurationTicks::from_raw(2),
@@ -872,6 +872,8 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.sent_count, 2);
     assert_eq!(record.skipped_count, 1);
     assert_eq!(record.send_attempts, 2);
+    assert_eq!(record.send_started_ticks, 20);
+    assert_eq!(record.send_completed_ticks, 25);
 
     let mut summary = super::NativeTelemetrySummary::default();
     summary.observe(&record);

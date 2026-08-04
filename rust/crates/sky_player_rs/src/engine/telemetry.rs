@@ -4,7 +4,6 @@ pub use metrics::WorkerMetricsLocal;
 pub(crate) use metrics::{SharedMetrics, cpu_metrics_sample_due, try_publish_metrics};
 
 use sky_dispatch_core::time::{DurationTicks, TimeArithmeticError, TimelineTicks};
-use sky_dispatch_win32::clock::QpcTicks;
 use std::collections::VecDeque;
 
 /// Fixed-size record retained on the real-time worker path.
@@ -50,8 +49,8 @@ pub(crate) struct TraceTiming {
     pub(crate) authored_ticks: TimelineTicks,
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: TimelineTicks,
-    pub(crate) send_started_ticks: Option<QpcTicks>,
-    pub(crate) send_completed_ticks: Option<QpcTicks>,
+    pub(crate) send_started_ticks: Option<TimelineTicks>,
+    pub(crate) send_completed_ticks: Option<TimelineTicks>,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
     pub(crate) applied_lead_ticks: DurationTicks,
@@ -109,8 +108,8 @@ impl RtTraceRecord {
             authored_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
             wake_ticks: timing.wake_ticks.as_u64(),
-            send_started_ticks: timing.send_started_ticks.map_or(0, QpcTicks::as_u64),
-            send_completed_ticks: timing.send_completed_ticks.map_or(0, QpcTicks::as_u64),
+            send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
+            send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks,

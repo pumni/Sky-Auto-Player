@@ -1104,6 +1104,21 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
                 };
+                let sender_started_effective_ticks = match result.send_started_ticks {
+                    Some(ticks) => match clock_state.get_elapsed_allow_pre_epoch(
+                        ticks,
+                        runtime.allow_pre_epoch_startup_dispatch,
+                    ) {
+                        Ok(value) => Some(value),
+                        Err(error) => {
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("playback clock failure: {error}"));
+                            break;
+                        }
+                    },
+                    None => None,
+                };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
                 runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
@@ -1384,8 +1399,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             authored_ticks: scheduled_ticks,
                             effective_deadline_ticks,
                             wake_ticks: actual_ticks,
-                            send_started_ticks: result.send_started_ticks,
-                            send_completed_ticks: result.send_completed_ticks,
+                            send_started_ticks: sender_started_effective_ticks,
+                            send_completed_ticks: Some(completed_effective_ticks),
                             completion_error_ticks: up_completion_error_ticks,
                             authored_completion_error_ticks: up_authored_completion_error_ticks,
                             applied_lead_ticks: lead_up_ticks,
@@ -2083,8 +2098,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     authored_ticks: authored_batch_scheduled_ticks,
                                     effective_deadline_ticks: batch_scheduled_ticks,
                                     wake_ticks: effective_now_ticks,
-                                    send_started_ticks: Some(sender_started_ticks),
-                                    send_completed_ticks: result_completed_ticks,
+                                    send_started_ticks: Some(sender_started_effective_ticks),
+                                    send_completed_ticks: Some(completed_effective_ticks),
                                     completion_error_ticks: completion_error_ticks_value,
                                     authored_completion_error_ticks:
                                         authored_completion_error_ticks_value,
