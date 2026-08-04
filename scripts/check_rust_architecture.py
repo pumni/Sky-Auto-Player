@@ -1,136 +1,306 @@
+"""Static checks for the Rust dispatch architecture.
+
+This dependency-free checker is intentionally conservative. Existing debt is
+explicit in the temporary allowlist; new violations fail ``--enforce``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
-SOFT_LIMIT = 700
-HARD_LIMIT = 1000
-FACADE_SOFT_LIMIT = 250
+FACADE_HARD_LIMIT = 250
+REGULAR_SOFT_LIMIT = 700
+REGULAR_HARD_LIMIT = 900
+WORKER_FUNCTION_HARD_LIMIT = 350
+CONTEXT_FIELD_HARD_LIMIT = 12
 FACADES = {"engine.rs", "input.rs", "wait.rs", "lib.rs"}
+ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
 
 ALLOWED_UNSAFE_MODULES = {
-    "crates/sky_dispatch_win32/src/input/raw.rs",
-    "crates/sky_dispatch_win32/src/input/physical.rs",
-    "crates/sky_dispatch_win32/src/wait/timer.rs",
-    # Allow current files before split:
-    "crates/sky_dispatch_win32/src/input.rs",
-    "crates/sky_dispatch_win32/src/wait.rs",
-    # Existing platform seams that own Win32 FFI before the planned split:
-    "crates/sky_dispatch_win32/src/calibration.rs",
-    "crates/sky_dispatch_win32/src/clock.rs",
-    "crates/sky_dispatch_win32/src/cpu.rs",
-    "crates/sky_dispatch_win32/src/event.rs",
-    "crates/sky_dispatch_win32/src/focus.rs",
-    "crates/sky_dispatch_win32/src/mmcss.rs",
-    "crates/sky_dispatch_win32/src/power.rs",
-    "crates/sky_dispatch_win32/src/timer.rs",
+    "rust/crates/sky_dispatch_win32/src/calibration.rs",
+    "rust/crates/sky_dispatch_win32/src/clock.rs",
+    "rust/crates/sky_dispatch_win32/src/cpu.rs",
+    "rust/crates/sky_dispatch_win32/src/event.rs",
+    "rust/crates/sky_dispatch_win32/src/focus.rs",
+    "rust/crates/sky_dispatch_win32/src/input.rs",
+    "rust/crates/sky_dispatch_win32/src/input/physical.rs",
+    "rust/crates/sky_dispatch_win32/src/input/raw.rs",
+    "rust/crates/sky_dispatch_win32/src/mmcss.rs",
+    "rust/crates/sky_dispatch_win32/src/power.rs",
+    "rust/crates/sky_dispatch_win32/src/timer.rs",
+    "rust/crates/sky_dispatch_win32/src/wait.rs",
+    "rust/crates/sky_dispatch_win32/src/wait/timer.rs",
 }
 
-def analyze_rust_file(filepath):
-    with open(filepath, encoding="utf-8") as f:
-        lines = f.readlines()
-    
-    num_lines = len(lines)
-    pub_items = 0
-    has_unsafe = False
-    has_pyo3 = False
-    imports_win32 = False
-    imports_player = False
-    
-    pub_pattern = re.compile(r'^\s*pub\s+(fn|struct|enum|trait|const|type|mod|static|use)\s+')
-    
-    in_comment = False
+
+@dataclass(frozen=True)
+class Violation:
+    rule: str
+    path: str
+    message: str
+
+
+@dataclass
+class CheckReport:
+    errors: list[Violation] = field(default_factory=list)
+    warnings: list[Violation] = field(default_factory=list)
+    infos: list[str] = field(default_factory=list)
+
+
+def _load_allowlist(repository_root: Path) -> dict[tuple[str, str], dict[str, str]]:
+    path = repository_root / ALLOWLIST_PATH
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for entry in payload.get("entries", []):
+        required = {"path", "rule", "reason", "expires_phase"}
+        missing = required - set(entry)
+        if missing:
+            raise ValueError(f"allowlist entry missing {sorted(missing)}: {entry!r}")
+        key = (str(entry["path"]), str(entry["rule"]))
+        result[key] = {name: str(entry[name]) for name in required}
+    return result
+
+
+def _without_comments(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    in_block_comment = False
+    for line in lines:
+        current = line
+        if in_block_comment:
+            end = current.find("*/")
+            if end < 0:
+                result.append("")
+                continue
+            current = current[end + 2 :]
+            in_block_comment = False
+        while "/*" in current:
+            start = current.find("/*")
+            end = current.find("*/", start + 2)
+            if end < 0:
+                current = current[:start]
+                in_block_comment = True
+                break
+            current = current[:start] + current[end + 2 :]
+        if "//" in current:
+            current = current.split("//", 1)[0]
+        result.append(current)
+    return result
+
+
+def _brace_end(lines: list[str], start: int) -> int | None:
+    depth = 0
+    opened = False
+    for index in range(start, len(lines)):
+        depth += lines[index].count("{") - lines[index].count("}")
+        opened |= "{" in lines[index]
+        if opened and depth <= 0:
+            return index
+    return None
+
+
+def _context_violations(lines: list[str], path: str) -> list[Violation]:
+    clean = _without_comments(lines)
+    declaration = re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)[^\{]*\{"
+    )
+    field = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?[A-Za-z_]\w*\s*:")
+    violations: list[Violation] = []
+    for index, line in enumerate(clean):
+        match = declaration.match(line)
+        if not match or not re.search(r"(?:Context|Inputs|Config|Options|Shared)$", match.group(1)):
+            continue
+        end = _brace_end(clean, index)
+        if end is None:
+            continue
+        fields = sum(1 for candidate in clean[index + 1 : end] if field.match(candidate))
+        if fields > CONTEXT_FIELD_HARD_LIMIT:
+            violations.append(
+                Violation(
+                    "context_fields",
+                    path,
+                    f"{match.group(1)} has {fields} fields (> {CONTEXT_FIELD_HARD_LIMIT})",
+                )
+            )
+    return violations
+
+
+def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
+    if not path.endswith("crates/sky_player_rs/src/engine/worker/orchestration.rs"):
+        return []
+    clean = _without_comments(lines)
+    source = "".join(clean)
+    offsets: list[int] = []
+    offset = 0
+    for line in clean:
+        offsets.append(offset)
+        offset += len(line)
+    violations: list[Violation] = []
+    for match in re.finditer(r"\bfn\s+([A-Za-z_]\w*)\s*\(", source):
+        start_line = max((index for index, value in enumerate(offsets) if value <= match.start()), default=0)
+        open_brace = source.find("{", match.end())
+        if open_brace < 0:
+            continue
+        depth = 0
+        end_offset = None
+        for index in range(open_brace, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    end_offset = index
+                    break
+        if end_offset is None:
+            continue
+        end_line = max((index for index, value in enumerate(offsets) if value <= end_offset), default=start_line)
+        line_count = end_line - start_line + 1
+        if line_count > WORKER_FUNCTION_HARD_LIMIT:
+            violations.append(
+                Violation(
+                    "worker_function_lines",
+                    path,
+                    f"{match.group(1)} has {line_count} lines (> {WORKER_FUNCTION_HARD_LIMIT})",
+                )
+            )
+    return violations
+
+
+def _top_level_glob_import(lines: list[str]) -> bool:
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("/*"):
-            in_comment = True
-        if in_comment:
-            if "*/" in stripped:
-                in_comment = False
+        if not stripped or stripped.startswith("//") or stripped.startswith("#!"):
             continue
-        if stripped.startswith("//"):
+        if stripped.startswith("#["):
             continue
-            
-        if pub_pattern.search(line):
-            pub_items += 1
-            
-        if re.search(r"\bunsafe\b", line):
-            has_unsafe = True
-            
-        if "use pyo3" in line or "pyo3::" in line:
-            has_pyo3 = True
-            
-        if "sky_dispatch_win32::" in line or "use sky_dispatch_win32" in line:
-            imports_win32 = True
-            
-        if "sky_player_rs::" in line or "use sky_player_rs" in line:
-            imports_player = True
+        return stripped == "use super::*;"
+    return False
 
-    return {
-        "num_lines": num_lines,
-        "pub_items": pub_items,
-        "has_unsafe": has_unsafe,
-        "has_pyo3": has_pyo3,
-        "imports_win32": imports_win32,
-        "imports_player": imports_player
-    }
 
-def main():
-    repository_root = Path(__file__).resolve().parents[1]
+def _test_support_is_gated(lines: list[str], path: str) -> bool:
+    if "/test_support/" not in f"/{path}/" and not path.endswith("/test_support.rs"):
+        return True
+    joined = "".join(lines)
+    return (
+        '#[cfg(any(test, feature = "test-support"))]' in joined
+        or '#![cfg(any(test, feature = "test-support"))]' in joined
+    )
+
+
+def _module_declaration_is_gated(lines: list[str], module_name: str) -> bool:
+    for index, line in enumerate(lines):
+        if re.match(rf"^\s*mod\s+{re.escape(module_name)}\s*;", line):
+            previous = "\n".join(lines[max(0, index - 3) : index])
+            return 'cfg(any(test, feature = "test-support"))' in previous
+    return True
+
+
+def _line_is_test_support_gated(lines: list[str], index: int) -> bool:
+    if any("#![cfg(any(test, feature = \"test-support\"))]" in line for line in lines[:index + 1]):
+        return True
+    previous = "\n".join(lines[max(0, index - 3) : index])
+    return '#[cfg(any(test, feature = "test-support"))]' in previous
+
+
+def _record(report: CheckReport, violation: Violation, allowlist: dict[tuple[str, str], dict[str, str]]) -> None:
+    debt = allowlist.get((violation.path, violation.rule))
+    if debt:
+        report.warnings.append(
+            Violation(
+                violation.rule,
+                violation.path,
+                f"{violation.message}; temporary allowlist: {debt['reason']} (expires {debt['expires_phase']})",
+            )
+        )
+    else:
+        report.errors.append(violation)
+
+
+def check_repository(repository_root: Path) -> CheckReport:
+    report = CheckReport()
+    allowlist = _load_allowlist(repository_root)
     workspace_root = repository_root / "rust" / "crates"
     if not workspace_root.exists():
-        print(f"Error: {workspace_root} not found.")
-        sys.exit(1)
-        
-    print("--- Rust Architecture Check ---")
-    
-    warnings = []
-    
-    for crate in ["sky_dispatch_core", "sky_dispatch_win32", "sky_player_rs"]:
+        report.errors.append(Violation("workspace", "rust/crates", "workspace not found"))
+        return report
+
+    for crate in ("sky_dispatch_core", "sky_dispatch_win32", "sky_player_rs"):
         crate_path = workspace_root / crate / "src"
         if not crate_path.exists():
             continue
-            
-        for filepath in crate_path.rglob("*.rs"):
-            rel_path = filepath.relative_to(workspace_root.parent)
-            rel_path_str = str(rel_path).replace("\\", "/")
-            
-            stats = analyze_rust_file(filepath)
-            filename = filepath.name
-            
-            print(f"{rel_path_str:50} | {stats['num_lines']:4} lines | {stats['pub_items']:3} pub items")
-            
-            if filename in FACADES:
-                if stats["num_lines"] > FACADE_SOFT_LIMIT:
-                    warnings.append(f"Soft limit exceeded (facade): {rel_path_str} has {stats['num_lines']} lines (> {FACADE_SOFT_LIMIT})")
-            else:
-                if stats["num_lines"] > HARD_LIMIT:
-                    warnings.append(f"Hard limit exceeded: {rel_path_str} has {stats['num_lines']} lines (> {HARD_LIMIT})")
-                elif stats["num_lines"] > SOFT_LIMIT:
-                    warnings.append(f"Soft limit exceeded: {rel_path_str} has {stats['num_lines']} lines (> {SOFT_LIMIT})")
-                    
-            if stats["has_unsafe"] and rel_path_str not in ALLOWED_UNSAFE_MODULES:
-                warnings.append(f"Unsafe code outside allowed modules: {rel_path_str}")
-                
-            if stats["has_pyo3"] and not (rel_path_str.startswith("crates/sky_player_rs/src/python") or rel_path_str == "crates/sky_player_rs/src/lib.rs"):
-                warnings.append(f"PyO3 import outside python boundary: {rel_path_str}")
-                
-            if crate == "sky_dispatch_core":
-                if stats["imports_win32"]:
-                    warnings.append(f"Layering violation: {rel_path_str} imports sky_dispatch_win32")
-                if stats["imports_player"]:
-                    warnings.append(f"Layering violation: {rel_path_str} imports sky_player_rs")
-            elif crate == "sky_dispatch_win32":
-                if stats["imports_player"]:
-                    warnings.append(f"Layering violation: {rel_path_str} imports sky_player_rs")
-                    
-    print("\n--- Warnings ---")
-    if not warnings:
-        print("None")
-    else:
-        for w in warnings:
-            print("- " + w)
-            
-    print("\nNote: These are currently reporting-only and will not fail the CI.")
+        for filepath in sorted(crate_path.rglob("*.rs")):
+            relative = filepath.relative_to(repository_root).as_posix()
+            lines = filepath.read_text(encoding="utf-8").splitlines(keepends=True)
+            clean = _without_comments(lines)
+            joined = "".join(clean)
+            report.infos.append(f"{relative:80} | {len(lines):4} lines")
+
+            limit = FACADE_HARD_LIMIT if filepath.name in FACADES else REGULAR_HARD_LIMIT
+            if len(lines) > limit:
+                rule = "facade_lines" if filepath.name in FACADES else "regular_module_lines"
+                _record(report, Violation(rule, relative, f"{len(lines)} lines (> {limit})"), allowlist)
+            elif filepath.name not in FACADES and len(lines) > REGULAR_SOFT_LIMIT:
+                report.warnings.append(Violation("regular_module_soft_lines", relative, f"{len(lines)} lines (> {REGULAR_SOFT_LIMIT})"))
+
+            if re.search(r"\bunsafe\b", joined) and relative not in ALLOWED_UNSAFE_MODULES:
+                _record(report, Violation("unsafe_boundary", relative, "unsafe code outside allowlist"), allowlist)
+            if ("pyo3::" in joined or "use pyo3" in joined) and not (
+                relative.startswith("rust/crates/sky_player_rs/src/python/")
+                or relative == "rust/crates/sky_player_rs/src/lib.rs"
+            ):
+                _record(report, Violation("pyo3_boundary", relative, "PyO3 import outside Python boundary"), allowlist)
+            if crate == "sky_dispatch_core" and ("sky_dispatch_win32::" in joined or "use sky_dispatch_win32" in joined):
+                _record(report, Violation("dependency_direction", relative, "core imports sky_dispatch_win32"), allowlist)
+            if crate in {"sky_dispatch_core", "sky_dispatch_win32"} and ("sky_player_rs::" in joined or "use sky_player_rs" in joined):
+                _record(report, Violation("dependency_direction", relative, "lower crate imports sky_player_rs"), allowlist)
+            if _top_level_glob_import(lines):
+                _record(report, Violation("production_glob_import", relative, "top-level use super::* in production module"), allowlist)
+            for line_index, line in enumerate(lines):
+                if "Box<dyn Fn" in line and not _line_is_test_support_gated(lines, line_index):
+                    _record(report, Violation("production_dynamic_emitter", relative, "dynamic emitter in production source"), allowlist)
+            if not _test_support_is_gated(lines, relative):
+                _record(report, Violation("test_support_cfg", relative, "test-support source is not cfg-gated"), allowlist)
+            for violation in _context_violations(lines, relative):
+                _record(report, violation, allowlist)
+            for violation in _worker_function_violations(lines, relative):
+                _record(report, violation, allowlist)
+
+    engine = repository_root / "rust/crates/sky_player_rs/src/engine.rs"
+    if engine.exists():
+        lines = engine.read_text(encoding="utf-8").splitlines(keepends=True)
+        if not _module_declaration_is_gated(lines, "test_support"):
+            _record(report, Violation("test_support_cfg", "rust/crates/sky_player_rs/src/engine.rs", "test_support module is not cfg-gated"), allowlist)
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--enforce", action="store_true", help="fail on ERROR violations")
+    args = parser.parse_args(argv)
+    try:
+        report = check_repository(Path(__file__).resolve().parents[1])
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"ERROR: architecture checker configuration failed: {error}")
+        return 1
+    print("--- Rust Architecture Check ---")
+    print("\n".join(report.infos))
+    print("\n--- INFO ---")
+    print(f"- scanned {len(report.infos)} Rust source files")
+    for title, values in (("WARNING", report.warnings), ("ERROR", report.errors)):
+        print(f"\n--- {title} ---")
+        if values:
+            for item in values:
+                print(f"- [{item.rule}] {item.path}: {item.message}")
+        else:
+            print("- none")
+    return 1 if args.enforce and report.errors else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
