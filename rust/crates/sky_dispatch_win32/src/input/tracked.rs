@@ -1,7 +1,8 @@
 use super::down_transaction::{emit_down, emit_down_with};
+#[cfg(any(test, feature = "test-support"))]
+use super::outcome::PlatformSendResult;
 use super::outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, PlatformSendResult,
-    ReleaseAllOutcome,
+    DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, ReleaseAllOutcome,
 };
 use super::physical::{
     InstrumentPhysicalState, instrument_physical_state_for_mask, mask_for_scan_codes,
