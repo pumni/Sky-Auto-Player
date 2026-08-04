@@ -188,39 +188,33 @@ class MetadataCoordinator:
         except RuntimeError:
             self._state = ResourceState.CLOSED
 
+    def _sort_by_priority(self, paths: list[Path]) -> list[Path]:
+        try:
+            get_priority = getattr(self._app, "get_metadata_priority_paths", None)
+            if callable(get_priority):
+                current_priority = set(cast(list[Path], get_priority()))
+                return sorted(paths, key=lambda p: 0 if p in current_priority else 1)
+        except Exception:
+            pass
+        return paths
+
     def _warm_and_process_all_paths(self, paths: list[Path], request_id: int) -> None:
         if self._should_stop(request_id):
             return
 
-        priority_paths: list[Path] = []
-        try:
-            get_priority = getattr(self._app, "get_metadata_priority_paths", None)
-            if callable(get_priority):
-                priority_paths = cast(list[Path], get_priority())
-        except Exception:
-            pass
-
-        ordered_paths = []
-        seen = set()
-        for p in priority_paths:
-            if p in paths and p not in seen:
-                ordered_paths.append(p)
-                seen.add(p)
-        for p in paths:
-            if p not in seen:
-                ordered_paths.append(p)
-                seen.add(p)
-        paths = ordered_paths
-
         # Step 1: Hydrate SQLite cache in small batches so shutdown/playback handoff can stop
         # promptly instead of waiting for one large library-wide cache operation.
         warm_batch_size = 25
+        pending_step1 = list(paths)
         try:
-            for i in range(0, len(paths), warm_batch_size):
+            while pending_step1:
                 if self._should_stop(request_id):
                     return
+                pending_step1 = self._sort_by_priority(pending_step1)
+                batch = pending_step1[:warm_batch_size]
+                pending_step1 = pending_step1[warm_batch_size:]
                 changed = hydrate_persistent_metadata_for_paths(
-                    paths[i : i + warm_batch_size],
+                    batch,
                     self._session,
                     self._cfg,
                 )
@@ -236,12 +230,16 @@ class MetadataCoordinator:
         # Batched so the UI receives raw duration/note count immediately for the first pages
         # without waiting for the whole library to be parsed.
         raw_batch_size = 25
+        pending_step2 = list(paths)
         try:
-            for i in range(0, len(paths), raw_batch_size):
+            while pending_step2:
                 if self._should_stop(request_id):
                     return
+                pending_step2 = self._sort_by_priority(pending_step2)
+                batch = pending_step2[:raw_batch_size]
+                pending_step2 = pending_step2[raw_batch_size:]
                 changed = populate_raw_song_ui_metadata_for_paths(
-                    paths[i : i + raw_batch_size], self._session, self._cfg
+                    batch, self._session, self._cfg
                 )
                 if changed:
                     self._refresh_ui_from_thread(request_id)

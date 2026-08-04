@@ -454,20 +454,38 @@ class PickerScreen(Screen[SongPickerResult]):
         self.call_after_refresh(self._deferred_startup)
 
     def _deferred_startup(self) -> None:
+        # Ignore type checking here since MetadataCoordinator is not imported to avoid cycles
+        coord = self.metadata
+        if hasattr(coord, "_coord_executor"):
+            coord._coord_executor.submit(self._scan_catalog_worker)  # type: ignore
+        else:
+            self._scan_catalog_worker(from_thread=False)
+
+    def _scan_catalog_worker(self, from_thread: bool = True) -> None:
         from sky_music.ui.picker_helpers import get_song_choices
         from sky_music.ui.picker_theme import remove_accents
         
         if self._provided_choices is None:
             paths = get_song_choices(force_refresh=True)
-            self.choices = [
+            new_choices = [
                 SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
                 for path in paths
             ]
-        
+        else:
+            new_choices = list(self._provided_choices)
+            
+        if from_thread:
+            self.app.call_from_thread(self._on_catalog_scanned, new_choices)
+        else:
+            self._on_catalog_scanned(new_choices)
+
+    def _on_catalog_scanned(self, choices: list[SongChoice]) -> None:
+        self.choices = choices
         self.filtered = rank_song_choices(self.choices, self.search_query)
         self._render_table()
         self._render_detail()
         self._update_header_tagline()
+        self._render_status()
         
         paths_to_refresh = [choice.path for choice in self.choices]
         self.metadata.refresh(paths_to_refresh)
@@ -630,13 +648,35 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def get_metadata_priority_paths(self) -> list[Path]:
         """Return paths prioritized by relevance: selected > visible > overscan > filtered."""
+        return self._priority_paths
+
+    def _visible_row_indices(self) -> range | None:
+        """Indices of ``self.filtered`` currently on screen (with header margin)."""
+        try:
+            table = self.app.query_one("#songs", SongTable)
+        except Exception:
+            return None
         if not self.filtered:
-            return []
+            return None
+        height = table.size.height
+        if height <= 0:
+            return None
+        y_min = max(0, int(table.scroll_y))
+        y_max = min(len(self.filtered), y_min + height + 1)
+        if y_min >= y_max:
+            return None
+        return range(y_min, y_max)
+
+    def _update_priority_paths(self) -> None:
+        if not self.filtered:
+            self._priority_paths = []
+            return
         
         try:
             table = self.app.query_one("#songs", SongTable)
         except Exception:
-            return [c.path for c in self.filtered]
+            self._priority_paths = [c.path for c in self.filtered]
+            return
             
         cursor_row = max(0, min(table.cursor_row, len(self.filtered) - 1))
         height = max(10, table.size.height)
@@ -667,27 +707,7 @@ class PickerScreen(Screen[SongPickerResult]):
                 priority.append(choice.path)
                 seen.add(choice.path)
                 
-        return priority
-
-    def _visible_row_indices(self) -> range | None:
-        """Indices of ``self.filtered`` currently on screen (with header margin)."""
-        try:
-            table = self.app.query_one("#songs", SongTable)
-        except Exception:
-            return None
-        if not self.filtered:
-            return None
-        height = table.size.height
-        if height <= 0:
-            return None
-        y_min = max(0, int(table.scroll_y))
-        y_max = min(len(self.filtered), y_min + height + 1)
-        if y_min >= y_max:
-            return None
-        return range(y_min, y_max)
-
-    def _update_priority_paths(self) -> None:
-        pass
+        self._priority_paths = priority
 
     def _perform_search(self) -> None:
         self._search_timer = None
@@ -837,6 +857,17 @@ class PickerScreen(Screen[SongPickerResult]):
         table = self.app.query_one("#songs", SongTable)
         table.border_subtitle = f"{len(self.filtered)}/{len(self.choices)}"
 
+    def _title_cell(self, choice: SongChoice) -> Text:
+        t = self._theme_tokens
+        title = Text(choice.path.stem, style=t.foreground)
+        query = remove_accents(self.search_query).casefold().strip()
+        if query:
+            norm_title = remove_accents(choice.path.stem).casefold()
+            start = norm_title.find(query)
+            if start >= 0:
+                title.stylize(f"bold {t.accent}", start, start + len(query))
+        return title
+
     def _render_table(self, *, reset_cursor: bool = False) -> None:
         table = self.app.query_one("#songs", SongTable)
         previous_row = 0 if reset_cursor else table.cursor_row
@@ -848,12 +879,26 @@ class PickerScreen(Screen[SongPickerResult]):
         table.clear()
         self._row_meta_sig.clear()
 
-        # Fix 4.6 & 4.7: Viewport materialization.
-        # Add all rows instantly with cheap string placeholders so the
-        # DataTable gets its full scrollable height immediately without
-        # constructing 5000 Rich objects or stat-ing 5000 files.
-        for choice in self.filtered:
-            row_cells = ["", choice.path.stem, ""]
+        # Chunked viewport materialization
+        self._render_chunk_idx = 0
+        self._render_chunk_size = 50
+        self._render_previous_row = previous_row
+
+        # Render first chunk immediately for fast first paint and test compatibility
+        self._render_next_chunk()
+        
+        if getattr(self, "_render_chunk_idx", 0) < len(self.filtered):
+            self._render_timer = self.set_interval(0.01, self._render_next_chunk)  # type: ignore[attr-defined]
+
+    def _render_next_chunk(self) -> None:
+        table = self.app.query_one("#songs", SongTable)
+        start = getattr(self, "_render_chunk_idx", 0)
+        chunk_size = getattr(self, "_render_chunk_size", 50)
+        end = min(start + chunk_size, len(self.filtered))
+        
+        for i in range(start, end):
+            choice = self.filtered[i]
+            row_cells = ["", self._title_cell(choice), ""]
             if self.show_notes:
                 row_cells.append("")
             if self.show_risk:
@@ -862,10 +907,15 @@ class PickerScreen(Screen[SongPickerResult]):
                 row_cells.append("")
             table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
 
-        if self.filtered:
-            table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
-            
-        self.refresh_metadata_rows()
+        self._render_chunk_idx = end  # type: ignore[attr-defined]
+        
+        if self._render_chunk_idx >= len(self.filtered):  # type: ignore[attr-defined]
+            if getattr(self, "_render_timer", None) is not None:
+                self._render_timer.stop()  # type: ignore[attr-defined]
+                self._render_timer = None
+            if self.filtered:
+                table.move_cursor(row=min(getattr(self, "_render_previous_row", 0), len(self.filtered) - 1), column=0)
+            self.refresh_metadata_rows()
 
     def refresh_metadata_rows(self) -> None:
         """Refresh metadata cells for the visible rows only.

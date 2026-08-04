@@ -261,3 +261,28 @@ def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> N
     # Hydrate from SQLite and check if it seeds path+session cache
     hydrate_persistent_metadata_for_paths([song_path], session, cfg)
     assert len(_path_session_ram_cache) == 1
+
+def test_zero_fs_io_on_render_peek_cached_song_ui_metadata(tmp_path: Path) -> None:
+    song_path = tmp_path / "zero_io_test.json"
+    song_path.write_text('{"name": "Zero IO", "songNotes": []}', encoding="utf-8")
+
+    session = PlaybackSessionContext.balanced()
+    cfg = AppConfig()
+
+    _path_session_ram_cache.clear()
+
+    # Even if it's a completely unknown song, peek should NOT call stat
+    with patch("pathlib.Path.stat") as mock_stat:
+        res = peek_cached_song_ui_metadata(song_path, session, cfg)
+        assert res is None
+        mock_stat.assert_not_called()
+
+    # Now let background worker populate it
+    from sky_music.ui.picker_metadata import populate_raw_song_ui_metadata_for_paths
+    populate_raw_song_ui_metadata_for_paths([song_path], session, cfg)
+
+    # Peek again, should hit RAM cache, still no stat
+    with patch("pathlib.Path.stat") as mock_stat:
+        res2 = peek_cached_song_ui_metadata(song_path, session, cfg)
+        assert res2 is not None
+        mock_stat.assert_not_called()

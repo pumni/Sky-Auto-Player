@@ -974,7 +974,7 @@ def get_cached_song_ui_metadata(
 def peek_cached_song_ui_metadata(
     song_path: Path,
     session: PlaybackSessionContext | None = None,
-    cfg: AppConfig | None = None,
+    cfg: AppConfig | None = None,  # noqa: ARG001
 ) -> SongUiMetadata | None:
     """Return cached metadata without parsing/analyzing the song.
 
@@ -1000,43 +1000,13 @@ def peek_cached_song_ui_metadata(
             cached = _lru_get(_metadata_cache, ram_key)
         if cached is not None:
             return cached
-        # RAM evicted but ps_key still valid – fall through to persistent check.
-        persistent = _peek_persistent_metadata(song_path, session, cfg)
-        if persistent is None:
-            return None
-        with _cache_lock:
-            _lru_set(_metadata_cache, ram_key, persistent, maxsize=_METADATA_CACHE_MAX)
-        return persistent
 
-    # Slow path (first time we see this path+session): compute the full ram_key.
-    try:
-        song_file_key = _song_repository.cache_key(song_path)
-    except Exception:
-        return None
-
-    ram_key = session.metadata_cache_key(song_file_key, cfg)
-
-    # Store in the short-circuit cache for future frames (LRU, no full-clear cliff).
-    with _path_session_ram_lock:
-        _lru_set(
-            _path_session_ram_cache,
-            ps_key,
-            ram_key,
-            maxsize=_PATH_SESSION_RAM_CACHE_MAX,
-        )
-
-    with _cache_lock:
-        cached = _lru_get(_metadata_cache, ram_key)
-    if cached is not None:
-        return cached
-
-    persistent = _peek_persistent_metadata(song_path, session, cfg, song_file_key=song_file_key)
-    if persistent is None:
-        return None
-
-    with _cache_lock:
-        _lru_set(_metadata_cache, ram_key, persistent, maxsize=_METADATA_CACHE_MAX)
-    return persistent
+    # ZERO I/O ON RENDER:
+    # Do not call _song_repository.cache_key(song_path) here because it calls stat().
+    # The background worker (MetadataCoordinator) will call hydrate_persistent_metadata_for_paths
+    # and populate_raw_song_ui_metadata_for_paths, which will compute the keys and populate
+    # _metadata_cache and _path_session_ram_cache.
+    return None
 
 
 def clear_metadata_cache(*, clear_persistent: bool = False) -> None:

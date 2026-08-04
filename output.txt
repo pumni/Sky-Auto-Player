@@ -1,0 +1,151 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-8.4.2, pluggy-1.6.0 -- D:\Dev\Sky-Auto-Player\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: D:\Dev\Sky-Auto-Player
+configfile: pyproject.toml
+plugins: benchmark-5.2.3, textual-snapshot-1.1.0, syrupy-4.8.0
+collecting ... collected 1 item
+
+tests/test_textual_picker.py::test_textual_picker_opens_with_all_songs FAILED [100%]
+
+================================== FAILURES ===================================
+__________________ test_textual_picker_opens_with_all_songs ___________________
+
+actions = <function test_textual_picker_opens_with_all_songs.<locals>.actions at 0x000004BAB60C54C0>
+
+    async def _run_app(actions: Any) -> SkyPickerApp:
+        app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+>           await actions(app, pilot)
+
+tests\test_textual_picker.py:84: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+app = SkyPickerApp(title='SkyPickerApp', classes={'-dark-mode'}, pseudo_classes={'ansi', 'dark', 'focus'})
+pilot = <Pilot app=SkyPickerApp(title='SkyPickerApp', classes={'-dark-mode'}, pseudo_classes={'ansi', 'dark', 'focus'})>
+
+    async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        table = app.query_one("#songs")
+>       assert table.row_count == len(SONGS)  # type: ignore[attr-defined]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert 0 == 3
+E        +  where 0 = SongTable(id='songs').row_count
+E        +  and   3 = len([WindowsPath('songs/Alpha.json'), WindowsPath('songs/Beta.json'), WindowsPath('songs/Gamma.json')])
+
+tests\test_textual_picker.py:95: AssertionError
+
+During handling of the above exception, another exception occurred:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000004BAB56C7A90>
+
+    def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
+        FakeMetadataCoordinator.instances.clear()
+        monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
+        monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    
+        async def actions(app: SkyPickerApp, pilot: Any) -> None:
+            table = app.query_one("#songs")
+            assert table.row_count == len(SONGS)  # type: ignore[attr-defined]
+            await pilot.pause()
+            await pilot.press("escape")
+    
+>       app = run_picker(_run_app(actions))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_textual_picker.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\test_textual_picker.py:77: in run_picker
+    return asyncio.run(coro)
+           ^^^^^^^^^^^^^^^^^
+C:\Users\pe4cE_HOA\AppData\Roaming\uv\python\cpython-3.14.3+freethreaded-windows-x86_64-none\Lib\asyncio\runners.py:204: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+C:\Users\pe4cE_HOA\AppData\Roaming\uv\python\cpython-3.14.3+freethreaded-windows-x86_64-none\Lib\asyncio\runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\pe4cE_HOA\AppData\Roaming\uv\python\cpython-3.14.3+freethreaded-windows-x86_64-none\Lib\asyncio\base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests\test_textual_picker.py:82: in _run_app
+    async with app.run_test() as pilot:
+               ^^^^^^^^^^^^^^
+C:\Users\pe4cE_HOA\AppData\Roaming\uv\python\cpython-3.14.3+freethreaded-windows-x86_64-none\Lib\contextlib.py:235: in __aexit__
+    await self.gen.athrow(value)
+.venv\Lib\site-packages\textual\app.py:2218: in run_test
+    raise self._exception
+.venv\Lib\site-packages\textual\message_pump.py:689: in _process_messages_loop
+    await invoke(method, event)
+.venv\Lib\site-packages\textual\_callback.py:96: in invoke
+    return await _invoke(callback, *params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\textual\_callback.py:58: in _invoke
+    result = await result
+             ^^^^^^^^^^^^
+.venv\Lib\site-packages\textual\screen.py:1186: in _on_idle
+    await self._invoke_and_clear_callbacks()
+.venv\Lib\site-packages\textual\screen.py:1272: in _invoke_and_clear_callbacks
+    await invoke(callback)
+.venv\Lib\site-packages\textual\_callback.py:96: in invoke
+    return await _invoke(callback, *params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\textual\_callback.py:56: in _invoke
+    result = callback(*params[:parameter_count])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\sky_music\ui\textual_app\screens\picker.py:462: in _deferred_startup
+    self._scan_catalog_worker()
+src\sky_music\ui\textual_app\screens\picker.py:477: in _scan_catalog_worker
+    self.app.call_from_thread(self._on_catalog_scanned, new_choices)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = SkyPickerApp(title='SkyPickerApp', classes={'-dark-mode'}, pseudo_classes={'ansi', 'dark', 'focus'})
+callback = <bound method PickerScreen._on_catalog_scanned of PickerScreen(id='picker', name='picker', classes='background-transparent theme-aurora')>
+args = ([SongChoice(path=WindowsPath('songs/Alpha.json'), search_key='alpha'), SongChoice(path=WindowsPath('songs/Beta.json'), search_key='beta'), SongChoice(path=WindowsPath('songs/Gamma.json'), search_key='gamma')],)
+kwargs = {}
+
+    def call_from_thread(
+        self,
+        callback: Callable[..., CallThreadReturnType | Awaitable[CallThreadReturnType]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> CallThreadReturnType:
+        """Run a callable from another thread, and return the result.
+    
+        Like asyncio apps in general, Textual apps are not thread-safe. If you call methods
+        or set attributes on Textual objects from a thread, you may get unpredictable results.
+    
+        This method will ensure that your code runs within the correct context.
+    
+        !!! tip
+    
+            Consider using [post_message][textual.message_pump.MessagePump.post_message] which is also thread-safe.
+    
+        Args:
+            callback: A callable to run.
+            *args: Arguments to the callback.
+            **kwargs: Keyword arguments for the callback.
+    
+        Raises:
+            RuntimeError: If the app isn't running or if this method is called from the same
+                thread where the app is running.
+    
+        Returns:
+            The result of the callback.
+        """
+    
+        if self._loop is None:
+            raise RuntimeError("App is not running")
+    
+        if self._thread_id == threading.get_ident():
+>           raise RuntimeError(
+                "The `call_from_thread` method must run in a different thread from the app"
+            )
+E           RuntimeError: The `call_from_thread` method must run in a different thread from the app
+
+.venv\Lib\site-packages\textual\app.py:1822: RuntimeError
+---------------------------- Captured stderr call -----------------------------
+\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Traceback (most recent call last) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2502 D:\\Dev\\Sky-Auto-Player\\src\\sky_music\\ui\\textual_app\\screens\\picker.py:462 in \n\u2502 _deferred_startup                                                            \n\u2502                                                                              \n\u2502    459 \u2502   \u2502   if hasattr(coord, "_coord_executor"):                         \n\u2502    460 \u2502   \u2502   \u2502   coord._coord_executor.submit(self._scan_catalog_worker)   \n\u2502    461 \u2502   \u2502   else:                                                         \n\u2502 \u2771  462 \u2502   \u2502   \u2502   self._scan_catalog_worker()                               \n\u2502    463 \u2502                                                                     \n\u2502    464 \u2502   def _scan_catalog_worker(self) -> None:                           \n\u2502    465 \u2502   \u2502   from sky_music.ui.picker_helpers import get_song_choices      \n\u2502                                                                              \n\u2502 \u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 locals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e \n\u2502 \u2502 coord = <test_textual_picker.FakeMetadataCoordinator object at           \u2502 \n\u2502 \u2502         0x000004BAB57D4F90>                                              \u2502 \n\u2502 \u2502  self = PickerScreen(                                                    \u2502 \n\u2502 \u2502         \u2502   id='picker',                                                 \u2502 \n\u2502 \u2502         \u2502   name='picker',                                               \u2502 \n\u2502 \u2502         \u2502   classes='background-transparent theme-aurora'                \u2502 \n\u2502 \u2502         )                                                                \u2502 \n\u2502 \u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f \n\u2502                                                                              \n\u2502 D:\\Dev\\Sky-Auto-Player\\src\\sky_music\\ui\\textual_app\\screens\\picker.py:477 in \n\u2502 _scan_catalog_worker                                                         \n\u2502                                                                              \n\u2502    474 \u2502   \u2502   else:                                                         \n\u2502    475 \u2502   \u2502   \u2502   new_choices = list(self._provided_choices)                \n\u2502    476 \u2502   \u2502                                                                 \n\u2502 \u2771  477 \u2502   \u2502   self.app.call_from_thread(self._on_catalog_scanned, new_choic \n\u2502    478 \u2502                                                                     \n\u2502    479 \u2502   def _on_catalog_scanned(self, choices: list[SongChoice]) -> None: \n\u2502    480 \u2502   \u2502   self.choices = choices                                        \n\u2502                                                                              \n\u2502 \u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 locals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e          \n\u2502 \u2502 new_choices = [                                                 \u2502          \n\u2502 \u2502               \u2502   SongChoice(                                   \u2502          \n\u2502 \u2502               \u2502   \u2502   path=WindowsPath('songs/Alpha.json'),     \u2502          \n\u2502 \u2502               \u2502   \u2502   search_key='alpha'                        \u2502          \n\u2502 \u2502               \u2502   ),                                            \u2502          \n\u2502 \u2502               \u2502   SongChoice(                                   \u2502          \n\u2502 \u2502               \u2502   \u2502   path=WindowsPath('songs/Beta.json'),      \u2502          \n\u2502 \u2502               \u2502   \u2502   search_key='beta'                         \u2502          \n\u2502 \u2502               \u2502   ),                                            \u2502          \n\u2502 \u2502               \u2502   SongChoice(                                   \u2502          \n\u2502 \u2502               \u2502   \u2502   path=WindowsPath('songs/Gamma.json'),     \u2502          \n\u2502 \u2502               \u2502   \u2502   search_key='gamma'                        \u2502          \n\u2502 \u2502               \u2502   )                                             \u2502          \n\u2502 \u2502               ]                                                 \u2502          \n\u2502 \u2502       paths = [                                                 \u2502          \n\u2502 \u2502               \u2502   WindowsPath('songs/Alpha.json'),              \u2502          \n\u2502 \u2502               \u2502   WindowsPath('songs/Beta.json'),               \u2502          \n\u2502 \u2502               \u2502   WindowsPath('songs/Gamma.json')               \u2502          \n\u2502 \u2502               ]                                                 \u2502          \n\u2502 \u2502        self = PickerScreen(                                     \u2502          \n\u2502 \u2502               \u2502   id='picker',                                  \u2502          \n\u2502 \u2502               \u2502   name='picker',                                \u2502          \n\u2502 \u2502               \u2502   classes='background-transparent theme-aurora' \u2502          \n\u2502 \u2502               )                                                 \u2502          \n\u2502 \u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f          \n\u2502                                                                              \n\u2502 D:\\Dev\\Sky-Auto-Player\\.venv\\Lib\\site-packages\\textual\\app.py:1822 in        \n\u2502 call_from_thread                                                             \n\u2502                                                                              \n\u2502   1819 \u2502   \u2502   \u2502   raise RuntimeError("App is not running")                  \n\u2502   1820 \u2502   \u2502                                                                 \n\u2502   1821 \u2502   \u2502   if self._thread_id == threading.get_ident():                  \n\u2502 \u2771 1822 \u2502   \u2502   \u2502   raise RuntimeError(                                       \n\u2502   1823 \u2502   \u2502   \u2502   \u2502   "The `call_from_thread` method must run in a differen \n\u2502   1824 \u2502   \u2502   \u2502   )                                                         \n\u2502   1825                                                                       \n\u2502                                                                              \n\u2502 \u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 locals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e \n\u2502 \u2502     args = (                                                             \u2502 \n\u2502 \u2502            \u2502   [                                                         \u2502 \n\u2502 \u2502            \u2502   \u2502   SongChoice(                                           \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   path=WindowsPath('songs/Alpha.json'),             \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   search_key='alpha'                                \u2502 \n\u2502 \u2502            \u2502   \u2502   ),                                                    \u2502 \n\u2502 \u2502            \u2502   \u2502   SongChoice(                                           \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   path=WindowsPath('songs/Beta.json'),              \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   search_key='beta'                                 \u2502 \n\u2502 \u2502            \u2502   \u2502   ),                                                    \u2502 \n\u2502 \u2502            \u2502   \u2502   SongChoice(                                           \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   path=WindowsPath('songs/Gamma.json'),             \u2502 \n\u2502 \u2502            \u2502   \u2502   \u2502   search_key='gamma'                                \u2502 \n\u2502 \u2502            \u2502   \u2502   )                                                     \u2502 \n\u2502 \u2502            \u2502   ],                                                        \u2502 \n\u2502 \u2502            )                                                             \u2502 \n\u2502 \u2502 callback = <bound method PickerScreen._on_catalog_scanned of             \u2502 \n\u2502 \u2502            PickerScreen(id='picker', name='picker',                      \u2502 \n\u2502 \u2502            classes='background-transparent theme-aurora')>               \u2502 \n\u2502 \u2502   kwargs = {}                                                            \u2502 \n\u2502 \u2502     self = SkyPickerApp(                                                 \u2502 \n\u2502 \u2502            \u2502   title='SkyPickerApp',                                     \u2502 \n\u2502 \u2502            \u2502   classes={'-dark-mode'},                                   \u2502 \n\u2502 \u2502            \u2502   pseudo_classes={'ansi', 'dark', 'focus'}                  \u2502 \n\u2502 \u2502            )                                                             \u2502 \n\u2502 \u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f \n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nRuntimeError: The `call_from_thread` method must run in a different thread from\nthe app
+=========================== short test summary info ===========================
+FAILED tests/test_textual_picker.py::test_textual_picker_opens_with_all_songs
+============================== 1 failed in 1.54s ==============================
