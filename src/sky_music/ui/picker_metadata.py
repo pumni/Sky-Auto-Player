@@ -22,7 +22,9 @@ _V = TypeVar("_V")
 
 # LRU caps (see docs/2026-07_ram-memory-hygiene-plan.md §0 Q3 / §7).
 _METADATA_CACHE_MAX = 2048
+_RAW_CACHE_MAX = 5000
 _PERSISTENT_CACHE_MAX = 3000
+_PERSISTENT_CACHE_MAX_SQLITE = 6000
 _PKEY_RAM_CACHE_MAX = 2000
 _PATH_SESSION_RAM_CACHE_MAX = 5000
 
@@ -70,6 +72,7 @@ class SongUiMetadata:
 
 
 _metadata_cache: OrderedDict[tuple[Any, ...], SongUiMetadata] = OrderedDict()
+_raw_cache: OrderedDict[tuple[Any, ...], SongUiMetadata] = OrderedDict()
 _persistent_cache: OrderedDict[str, SongUiMetadata] = OrderedDict()
 _persistent_loaded = False
 _cache_lock = RLock()
@@ -104,7 +107,6 @@ _pkey_ram_lock = RLock()
 # ---------------------------------------------------------------------------
 # Opening a new sqlite3.Connection on every write adds ~1-3 ms of overhead.
 # We keep one connection per thread (thread-local) to eliminate that cost.
-# Pruning (DELETE … ORDER BY … LIMIT 6000) is deferred: run once every
 # _PRUNE_EVERY_N_WRITES writes instead of after each UPSERT.
 _PRUNE_EVERY_N_WRITES: int = 50
 _write_counter: int = 0
@@ -120,7 +122,7 @@ _tls = threading.local()  # thread-local storage for per-thread SQLite connectio
 # 111 songs × 10+ repaints/s that adds up.  We cache the final ram_key tuple
 # keyed by (song_path_str, session_signature) so that after the first render
 # we bypass cache_key() completely on every subsequent frame.
-_path_session_ram_cache: OrderedDict[tuple[str, tuple[Any, ...]], tuple[Any, ...]] = OrderedDict()
+_path_session_ram_cache: OrderedDict[tuple[str, tuple[Any, ...]], tuple[tuple[Any, ...], tuple[Any, ...]]] = OrderedDict()
 _path_session_ram_lock = RLock()
 
 
@@ -140,6 +142,7 @@ def _update_path_session_ram_cache(
     song_path: Path,
     session: PlaybackSessionContext,
     ram_key: tuple[Any, ...],
+    song_file_key: tuple[Any, ...],
 ) -> None:
     path_str = str(song_path)
     sig = _session_signature(session)
@@ -148,7 +151,7 @@ def _update_path_session_ram_cache(
         _lru_set(
             _path_session_ram_cache,
             ps_key,
-            ram_key,
+            (ram_key, song_file_key),
             maxsize=_PATH_SESSION_RAM_CACHE_MAX,
         )
 
@@ -482,7 +485,7 @@ def hydrate_persistent_metadata_for_paths(
                 song_file_key = _song_repository.cache_key(song_path)
                 ram_key = session.metadata_cache_key(song_file_key, cfg)
                 _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
-                _update_path_session_ram_cache(song_path, session, ram_key)
+                _update_path_session_ram_cache(song_path, session, ram_key, song_file_key)
             except Exception:
                 continue
 
@@ -592,7 +595,7 @@ def store_computed_song_ui_metadata_payloads(
                 ram_key = session.metadata_cache_key(song_file_key, cfg)
                 with _cache_lock:
                     _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
-                _update_path_session_ram_cache(meta.path, session, ram_key)
+                _update_path_session_ram_cache(meta.path, session, ram_key, song_file_key)
                 
                 # Inline _store_persistent_metadata logic to run inside the batch transaction
                 if meta.analyzed:
@@ -625,12 +628,12 @@ def store_computed_song_ui_metadata_payloads(
             if should_prune:
                 try:
                     conn.execute(
-                        """
+                        f"""
                         DELETE FROM picker_metadata
                         WHERE cache_key NOT IN (
                             SELECT cache_key FROM picker_metadata
                             ORDER BY updated_at DESC
-                            LIMIT 6000
+                            LIMIT {_PERSISTENT_CACHE_MAX_SQLITE}
                         )
                         """
                     )
@@ -694,12 +697,12 @@ def _store_persistent_metadata(
         if should_prune:
             try:
                 conn.execute(
-                    """
+                    f"""
                     DELETE FROM picker_metadata
                     WHERE cache_key NOT IN (
                         SELECT cache_key FROM picker_metadata
                         ORDER BY updated_at DESC
-                        LIMIT 6000
+                        LIMIT {_PERSISTENT_CACHE_MAX_SQLITE}
                     )
                     """
                 )
@@ -912,15 +915,17 @@ def populate_raw_song_ui_metadata_for_paths(
         ram_key = session.metadata_cache_key(song_file_key, cfg)
         with _cache_lock:
             if _lru_get(_metadata_cache, ram_key) is not None:
-                _update_path_session_ram_cache(path, session, ram_key)
+                _update_path_session_ram_cache(path, session, ram_key, song_file_key)
+                continue
+            if _lru_get(_raw_cache, song_file_key) is not None:
+                _update_path_session_ram_cache(path, session, ram_key, song_file_key)
                 continue
         meta = compute_raw_song_ui_metadata(path)
         with _cache_lock:
-            current = _lru_get(_metadata_cache, ram_key)
-            if current is None or not current.analyzed:
-                _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
+            if _lru_get(_metadata_cache, ram_key) is None:
+                _lru_set(_raw_cache, song_file_key, meta, maxsize=_RAW_CACHE_MAX)
                 filled += 1
-        _update_path_session_ram_cache(path, session, ram_key)
+        _update_path_session_ram_cache(path, session, ram_key, song_file_key)
     return filled
 
 
@@ -950,12 +955,10 @@ def get_cached_song_ui_metadata(
         return get_song_ui_metadata(song_path, session, cfg)
 
     ram_key = session.metadata_cache_key(song_file_key, cfg)
-    _update_path_session_ram_cache(song_path, session, ram_key)
+    _update_path_session_ram_cache(song_path, session, ram_key, song_file_key)
     with _cache_lock:
         cached = _lru_get(_metadata_cache, ram_key)
-    # A raw-only entry (analyzed=False) is not a real hit for callers that need
-    # the risk analysis; fall through and compute the full metadata.
-    if cached is not None and cached.analyzed:
+    if cached is not None:
         return cached
 
     persistent = _peek_persistent_metadata(song_path, session, cfg, song_file_key=song_file_key)
@@ -993,13 +996,19 @@ def peek_cached_song_ui_metadata(
     # Fast path: if we already know the ram_key for this path+session, skip
     # _song_repository.cache_key() entirely.
     with _path_session_ram_lock:
-        ram_key = _lru_get(_path_session_ram_cache, ps_key)
+        keys = _lru_get(_path_session_ram_cache, ps_key)
 
-    if ram_key is not None:
+    if keys is not None:
+        ram_key, song_file_key = keys
         with _cache_lock:
             cached = _lru_get(_metadata_cache, ram_key)
         if cached is not None:
             return cached
+            
+        with _cache_lock:
+            cached_raw = _lru_get(_raw_cache, song_file_key)
+        if cached_raw is not None:
+            return cached_raw
 
     # ZERO I/O ON RENDER:
     # Do not call _song_repository.cache_key(song_path) here because it calls stat().
@@ -1013,6 +1022,7 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
     global _persistent_loaded, _write_counter
     with _cache_lock:
         _metadata_cache.clear()
+        _raw_cache.clear()
         _song_repository.clear()
         if clear_persistent:
             _persistent_cache.clear()
