@@ -49,6 +49,8 @@ windows_version_info.txt
 .cache/
 .pytest_cache/
 .uv-cache/
+# pytest transient artifacts (regenerated on every run; never source)
+.pytest_tmp/
 # pytest-benchmark storage (transient before/after measurements); committed
 # perf baselines live under docs/perf-baselines/ instead.
 .benchmarks/
