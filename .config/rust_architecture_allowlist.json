@@ -26,8 +26,6 @@
     {"path":"rust/crates/sky_dispatch_win32/src/wait/spin.rs","rule":"production_glob_import","reason":"make wait dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/shared.rs","rule":"production_glob_import","reason":"make shared-state dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker.rs","rule":"production_glob_import","reason":"make worker dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/estimator.rs","rule":"production_glob_import","reason":"make estimator dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/health.rs","rule":"production_glob_import","reason":"make health dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/orchestration.rs","rule":"production_glob_import","reason":"make orchestration dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/startup.rs","rule":"production_glob_import","reason":"make startup dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/timing.rs","rule":"production_glob_import","reason":"make timing dependencies explicit in Phase 9","expires_phase":"Phase 9"},

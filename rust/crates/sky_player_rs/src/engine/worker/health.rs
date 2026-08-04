@@ -1,4 +1,6 @@
-use super::*;
+use super::{INPUT_PATH_WINDOW_CAPACITY, TrackedKeyState};
+use crate::engine::telemetry::{SharedMetrics, WorkerMetricsLocal};
+use std::collections::VecDeque;
 
 pub(crate) fn record_lateness(
     lateness_us: i64,
