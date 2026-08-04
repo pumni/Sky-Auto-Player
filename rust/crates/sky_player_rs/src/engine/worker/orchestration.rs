@@ -311,17 +311,20 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
-    let mut down_saturation_positive_streak: u8 = 0;
-    let mut up_saturation_positive_streak: u8 = 0;
-    let mut send_duration_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
-    let mut send_over_warn_count = 0usize;
-    let mut input_path_warn_started_us = None;
-    let mut send_pure_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
-    let mut send_pure_over_warn_count = 0usize;
-    let mut send_pure_warn_started_us = None;
-    let mut bookkeeping_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
-    let mut bookkeeping_over_warn_count = 0usize;
-    let mut bookkeeping_warn_started_us = None;
+    core.health = Some(WorkerHealthState {
+        down_saturation_positive_streak: 0,
+        up_saturation_positive_streak: 0,
+        send_duration_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
+        send_over_warn_count: 0,
+        input_path_warn_started_us: None,
+        send_pure_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
+        send_pure_over_warn_count: 0,
+        send_pure_warn_started_us: None,
+        bookkeeping_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
+        bookkeeping_over_warn_count: 0,
+        bookkeeping_warn_started_us: None,
+    });
+    let health = core.health.as_mut().expect("worker health initialized");
     // Keep the logical authored timeline at zero while placing the physical
     // anchor in the future.  This gives a t=0 action a real opportunity to
     // dispatch early by its measured lead instead of being forced late by the
@@ -406,7 +409,24 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
-    let mut last_cpu_metrics_sample_us = start_wall_time_us;
+    core.timing = Some(WorkerTimingState {
+        hard_late_abort_threshold_ticks,
+        retry_late_threshold_ticks,
+        strict_down_completion_late_ticks,
+        strict_up_completion_late_ticks,
+        focus_restore_grace_ticks,
+        paused_poll_ticks,
+        cold_threshold_ticks,
+        core_warmup_ticks,
+        lease_timeout_ticks,
+        retry_backoff_ticks,
+        effective_spin_threshold_ticks,
+        start_wall_time_us,
+        start_thread_cpu_us,
+        start_process_cpu_us,
+        last_cpu_metrics_sample_us: start_wall_time_us,
+    });
+    let timing = core.timing.as_mut().expect("worker timing initialized");
     let qpc_admission_error = qpc_frequency_checked()
         .err()
         .map(|error| format!("QPC frequency unavailable: {error:?}"))
@@ -484,17 +504,18 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         while !coordinator.is_finished() {
             let loop_start_ticks = qpc_ticks_or_terminal!();
             let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
-            local_metrics.playback_wall_time_us = loop_start_us.saturating_sub(start_wall_time_us);
+            local_metrics.playback_wall_time_us =
+                loop_start_us.saturating_sub(timing.start_wall_time_us);
             if cpu_metrics_sample_due(
                 loop_start_us,
-                last_cpu_metrics_sample_us,
+                timing.last_cpu_metrics_sample_us,
                 CPU_METRICS_SAMPLE_INTERVAL_US,
             ) {
                 local_metrics.worker_cpu_time_us =
-                    current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
+                    current_thread_cpu_time_us().saturating_sub(timing.start_thread_cpu_us);
                 local_metrics.process_cpu_time_us =
-                    current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
-                last_cpu_metrics_sample_us = loop_start_us;
+                    current_process_cpu_time_us().saturating_sub(timing.start_process_cpu_us);
+                timing.last_cpu_metrics_sample_us = loop_start_us;
             }
             if local_metrics.playback_wall_time_us > 0 {
                 local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
@@ -505,7 +526,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             if let CommandControl::Exit = process_command_control(CommandControlContext {
                 loop_start_ticks,
                 qpc_clock,
-                lease_timeout_ticks,
+                lease_timeout_ticks: timing.lease_timeout_ticks,
                 supervisor_heartbeat_ticks,
                 quit_requested,
                 skip_requested,
@@ -580,7 +601,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                 };
-                if focus_grace_elapsed >= focus_restore_grace_ticks {
+                if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
@@ -735,7 +756,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             let paused = clock_state.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
-                let pause_target = match now_ticks.checked_add_duration(paused_poll_ticks) {
+                let pause_target = match now_ticks.checked_add_duration(timing.paused_poll_ticks) {
                     Ok(target) => target,
                     Err(error) => {
                         runtime.force_full_cleanup = true;
@@ -746,7 +767,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 };
                 let pause_target = match lease_bounded_ticks(
                     pause_target,
-                    lease_timeout_ticks,
+                    timing.lease_timeout_ticks,
                     supervisor_heartbeat_ticks,
                 ) {
                     Ok(target) => target,
@@ -804,7 +825,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 if target_sample_ticks < target_qpc {
                     let bounded_target_qpc = match lease_bounded_ticks(
                         target_qpc,
-                        lease_timeout_ticks,
+                        timing.lease_timeout_ticks,
                         supervisor_heartbeat_ticks,
                     ) {
                         Ok(target) => target,
@@ -818,7 +839,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
                         qpc_clock,
                         bounded_target_qpc,
-                        effective_spin_threshold_ticks,
+                        timing.effective_spin_threshold_ticks,
                         interrupt,
                     );
                     local_metrics.idle_wake_count = local_metrics.idle_wake_count.saturating_add(1);
@@ -872,7 +893,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             let latency_class = match classify_latency_class(
                 runtime.last_send_qpc_ticks,
                 now_ticks,
-                cold_threshold_ticks,
+                timing.cold_threshold_ticks,
             ) {
                 Ok(class) => class,
                 Err(error) => {
@@ -993,7 +1014,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     &result.skipped_duplicates,
                     actual_ticks,
                     completed_effective_ticks,
-                    &retry_backoff_ticks,
+                    &timing.retry_backoff_ticks,
                     result.last_win32_error,
                 ) {
                     Ok(required) => required,
@@ -1199,18 +1220,18 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let strict_up_completion_late = config.strict_timing
                     && clean_up_sample
                     && up_completion_lateness_ticks
-                        .is_some_and(|late| late > strict_up_completion_late_ticks);
+                        .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
                 let up_saturated_positive = pending_plan
                     .as_ref()
                     .is_some_and(|plan| plan.lead_saturated)
                     && up_completion_lateness_ticks.is_some();
-                up_saturation_positive_streak = if up_saturated_positive {
-                    up_saturation_positive_streak.saturating_add(1)
+                health.up_saturation_positive_streak = if up_saturated_positive {
+                    health.up_saturation_positive_streak.saturating_add(1)
                 } else {
                     0
                 };
                 let saturation_abort = config.strict_timing
-                    && up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
+                    && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
                 if config.enable_adaptive_lead
                     && let Err(error) = update_estimator_after_send_class(
                         &mut estimator,
@@ -1301,27 +1322,27 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     bookkeeping_completed_us.saturating_sub(started_us),
                     completed_effective,
                     config.input_path_warn_us,
-                    &mut send_duration_window,
-                    &mut send_over_warn_count,
-                    &mut input_path_warn_started_us,
+                    &mut health.send_duration_window,
+                    &mut health.send_over_warn_count,
+                    &mut health.input_path_warn_started_us,
                     &mut local_metrics.input_path_degraded,
                 );
                 record_input_path_health(
                     result.send_completed_us.saturating_sub(started_us),
                     completed_effective,
                     config.input_path_warn_us,
-                    &mut send_pure_window,
-                    &mut send_pure_over_warn_count,
-                    &mut send_pure_warn_started_us,
+                    &mut health.send_pure_window,
+                    &mut health.send_pure_over_warn_count,
+                    &mut health.send_pure_warn_started_us,
                     &mut local_metrics.sendinput_path_degraded,
                 );
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(result.send_completed_us),
                     completed_effective,
                     config.input_path_warn_us,
-                    &mut bookkeeping_window,
-                    &mut bookkeeping_over_warn_count,
-                    &mut bookkeeping_warn_started_us,
+                    &mut health.bookkeeping_window,
+                    &mut health.bookkeeping_over_warn_count,
+                    &mut health.bookkeeping_warn_started_us,
                     &mut local_metrics.bookkeeping_degraded,
                 );
                 let deferred_release = deferred_by_us > 0;
@@ -1561,7 +1582,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                     if effective_now_ticks
                         .checked_duration_since(batch_scheduled_ticks)
-                        .is_ok_and(|late| late > hard_late_abort_threshold_ticks)
+                        .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
                     {
                         runtime.force_full_cleanup = true;
                         runtime.terminal_error = Some(format!(
@@ -1891,25 +1912,27 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             && !result_chord_integrity_lost;
                         let recovered_retry_late = result_retried_after_zero_progress
                             && completion_lateness_ticks
-                                .is_some_and(|late| late > retry_late_threshold_ticks);
+                                .is_some_and(|late| late > timing.retry_late_threshold_ticks);
                         let retry_late_abort = config.strict_timing && recovered_retry_late;
                         let strict_down_completion_late = config.strict_timing
                             && clean_down_sample
-                            && completion_lateness_ticks
-                                .is_some_and(|late| late > strict_down_completion_late_ticks);
+                            && completion_lateness_ticks.is_some_and(|late| {
+                                late > timing.strict_down_completion_late_ticks
+                            });
                         if recovered_retry_late {
                             local_metrics.recovered_zero_progress_but_late = local_metrics
                                 .recovered_zero_progress_but_late
                                 .saturating_add(1);
                         }
-                        down_saturation_positive_streak =
+                        health.down_saturation_positive_streak =
                             if lead_down_saturated && completion_lateness_ticks.is_some() {
-                                down_saturation_positive_streak.saturating_add(1)
+                                health.down_saturation_positive_streak.saturating_add(1)
                             } else {
                                 0
                             };
                         let saturation_abort = config.strict_timing
-                            && down_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
+                            && health.down_saturation_positive_streak
+                                >= STRICT_SATURATION_ABORT_STREAK;
                         if config.enable_adaptive_lead
                             && let Err(error) = update_estimator_after_send_class(
                                 &mut estimator,
@@ -2002,27 +2025,27 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             sender_duration_us.saturating_add(bookkeeping_after_send_us),
                             completed_effective,
                             config.input_path_warn_us,
-                            &mut send_duration_window,
-                            &mut send_over_warn_count,
-                            &mut input_path_warn_started_us,
+                            &mut health.send_duration_window,
+                            &mut health.send_over_warn_count,
+                            &mut health.input_path_warn_started_us,
                             &mut local_metrics.input_path_degraded,
                         );
                         record_input_path_health(
                             sender_duration_us,
                             completed_effective,
                             config.input_path_warn_us,
-                            &mut send_pure_window,
-                            &mut send_pure_over_warn_count,
-                            &mut send_pure_warn_started_us,
+                            &mut health.send_pure_window,
+                            &mut health.send_pure_over_warn_count,
+                            &mut health.send_pure_warn_started_us,
                             &mut local_metrics.sendinput_path_degraded,
                         );
                         record_input_path_health(
                             bookkeeping_after_send_us,
                             completed_effective,
                             config.input_path_warn_us,
-                            &mut bookkeeping_window,
-                            &mut bookkeeping_over_warn_count,
-                            &mut bookkeeping_warn_started_us,
+                            &mut health.bookkeeping_window,
+                            &mut health.bookkeeping_over_warn_count,
+                            &mut health.bookkeeping_warn_started_us,
                             &mut local_metrics.bookkeeping_degraded,
                         );
                         record_lateness(
@@ -2241,11 +2264,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 clock_state: &mut clock_state,
                 allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
                 last_send_qpc_ticks: runtime.last_send_qpc_ticks,
-                core_warmup_ticks,
-                cold_threshold_ticks,
-                effective_spin_threshold_ticks,
+                core_warmup_ticks: timing.core_warmup_ticks,
+                cold_threshold_ticks: timing.cold_threshold_ticks,
+                effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
                 waiter: &waiter,
-                lease_timeout_ticks,
+                lease_timeout_ticks: timing.lease_timeout_ticks,
                 supervisor_heartbeat_ticks,
                 interrupt,
                 strict_timing: config.strict_timing,
@@ -2281,8 +2304,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         metrics,
         telemetry_output,
         estimator_output,
-        start_wall_time_us,
-        start_thread_cpu_us,
-        start_process_cpu_us,
+        start_wall_time_us: timing.start_wall_time_us,
+        start_thread_cpu_us: timing.start_thread_cpu_us,
+        start_process_cpu_us: timing.start_process_cpu_us,
     })
 }

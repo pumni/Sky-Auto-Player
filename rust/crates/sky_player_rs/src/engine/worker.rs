@@ -66,9 +66,43 @@ pub(super) struct WorkerErrorState {
     abort_counts: HashMap<&'static str, u64>,
 }
 
+pub(super) struct WorkerTimingState {
+    pub(super) hard_late_abort_threshold_ticks: DurationTicks,
+    pub(super) retry_late_threshold_ticks: DurationTicks,
+    pub(super) strict_down_completion_late_ticks: DurationTicks,
+    pub(super) strict_up_completion_late_ticks: DurationTicks,
+    pub(super) focus_restore_grace_ticks: DurationTicks,
+    pub(super) paused_poll_ticks: DurationTicks,
+    pub(super) cold_threshold_ticks: DurationTicks,
+    pub(super) core_warmup_ticks: DurationTicks,
+    pub(super) lease_timeout_ticks: DurationTicks,
+    pub(super) retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()],
+    pub(super) effective_spin_threshold_ticks: DurationTicks,
+    pub(super) start_wall_time_us: u64,
+    pub(super) start_thread_cpu_us: u64,
+    pub(super) start_process_cpu_us: u64,
+    pub(super) last_cpu_metrics_sample_us: u64,
+}
+
+pub(super) struct WorkerHealthState {
+    pub(super) down_saturation_positive_streak: u8,
+    pub(super) up_saturation_positive_streak: u8,
+    pub(super) send_duration_window: VecDeque<u64>,
+    pub(super) send_over_warn_count: usize,
+    pub(super) input_path_warn_started_us: Option<u64>,
+    pub(super) send_pure_window: VecDeque<u64>,
+    pub(super) send_pure_over_warn_count: usize,
+    pub(super) send_pure_warn_started_us: Option<u64>,
+    pub(super) bookkeeping_window: VecDeque<u64>,
+    pub(super) bookkeeping_over_warn_count: usize,
+    pub(super) bookkeeping_warn_started_us: Option<u64>,
+}
+
 #[derive(Default)]
 pub(super) struct WorkerCore {
     pub(super) metrics: WorkerMetricsLocal,
+    pub(super) health: Option<WorkerHealthState>,
+    pub(super) timing: Option<WorkerTimingState>,
     pub(super) runtime: WorkerRuntime,
     pub(super) errors: WorkerErrorState,
 }
