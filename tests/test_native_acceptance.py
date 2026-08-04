@@ -147,7 +147,21 @@ def test_test_support_pause_timing_smoke_uses_100_fresh_sessions() -> None:
         )
         assert result["requested_ticks"] <= result["observed_ticks"]
         assert result["observed_ticks"] <= result["acknowledged_ticks"]
-        assert result["generation"] > 0
+    assert result["generation"] > 0
+
+
+@pytest.mark.windows
+def test_test_support_pause_timing_waits_for_startup_ready_boundary() -> None:
+    if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        pytest.skip("requires the test-support native wheel")
+    result = ACCEPTANCE._measure_command_interrupt(
+        backend="mock",
+        mock_base_latency_us=80,
+        mock_per_key_latency_us=40,
+        adaptive_spin=True,
+        rt_priority_mode="off",
+    )
+    assert result["requested_ticks"] <= result["observed_ticks"]
 
 
 @pytest.mark.parametrize(

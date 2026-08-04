@@ -2,7 +2,7 @@ use super::super::{
     ActionKind, BackendConfig, CORE_WARMUP_SPIN_MAX_US, CPU_METRICS_SAMPLE_INTERVAL_US,
     CoordinatorError, Duration, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US,
     INPUT_PATH_WINDOW_CAPACITY, LatencyClass, PAUSED_POLL_US, PlaybackClockState, QpcClock,
-    QpcError, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, RuntimeDispatchCoordinator,
+    QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, RuntimeDispatchCoordinator,
     SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
     STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator, SharedMetrics, TRACE_FLAG_ANOMALY,
     TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
@@ -497,6 +497,47 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         estimator,
         telemetry,
     });
+
+    if runtime.terminal_error.is_none() {
+        let startup_ready_result = qpc_clock.now().and_then(|ready_ticks| {
+            let requested_raw = shared
+                .publication
+                .startup_requested_ticks
+                .load(Ordering::Acquire);
+            if requested_raw == 0 {
+                return Err(sky_dispatch_win32::clock::QpcError::CounterUnavailable);
+            }
+            let requested_ticks = QpcTicks::from_raw(requested_raw);
+            let elapsed_ticks = ready_ticks
+                .checked_duration_since(requested_ticks)
+                .map_err(|_| sky_dispatch_win32::clock::QpcError::CounterUnavailable)?;
+            let elapsed_us = qpc_clock
+                .duration_to_us(elapsed_ticks)
+                .map_err(|_| sky_dispatch_win32::clock::QpcError::CounterUnavailable)?;
+            Ok((ready_ticks, elapsed_us))
+        });
+        match startup_ready_result {
+            Ok((startup_ready_ticks, startup_latency_us)) => {
+                shared
+                    .publication
+                    .startup_ready_ticks
+                    .store(startup_ready_ticks.as_u64(), Ordering::Relaxed);
+                shared
+                    .publication
+                    .startup_latency_us
+                    .store(startup_latency_us, Ordering::Relaxed);
+                shared
+                    .publication
+                    .startup_ready
+                    .store(true, Ordering::Release);
+            }
+            Err(error) => {
+                runtime.force_full_cleanup = true;
+                runtime.terminal_error =
+                    Some(format!("QPC startup-ready publication failed: {error:?}"));
+            }
+        }
+    }
 
     // Every QPC query after admission is part of the worker's correctness
     // boundary. A failed query is terminal and must take the cleanup path;

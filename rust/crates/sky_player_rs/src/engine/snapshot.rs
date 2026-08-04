@@ -64,4 +64,6 @@ pub struct EngineSnapshot {
     pub generation_status_counts: HashMap<String, u64>,
     pub abort_counts_by_reason: HashMap<String, u64>,
     pub release_outcome: Option<ReleaseAllOutcome>,
+    pub startup_ready: bool,
+    pub startup_latency_us: Option<u64>,
 }

@@ -243,6 +243,8 @@ impl NativeDispatchSessionPy {
             snap.recovered_zero_progress_but_late,
         )?;
         dict.set_item("outcome", snap.outcome)?;
+        dict.set_item("startup_ready", snap.startup_ready)?;
+        dict.set_item("startup_latency_us", snap.startup_latency_us)?;
         dict.set_item("rt_priority_acquired", snap.rt_priority_acquired)?;
         dict.set_item(
             "effective_spin_threshold_us",

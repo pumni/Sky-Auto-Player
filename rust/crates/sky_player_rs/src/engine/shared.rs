@@ -39,6 +39,10 @@ pub(super) struct SessionPublication {
     pub(super) priority_acquired: Mutex<String>,
     pub(super) estimator_output: Mutex<Option<String>>,
     pub(super) supervisor_heartbeat_ticks: AtomicU64,
+    pub(super) startup_requested_ticks: AtomicU64,
+    pub(super) startup_ready_ticks: AtomicU64,
+    pub(super) startup_latency_us: AtomicU64,
+    pub(super) startup_ready: AtomicBool,
 }
 
 pub(super) struct SessionShared {

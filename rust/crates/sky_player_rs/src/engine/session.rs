@@ -60,6 +60,10 @@ impl NativeDispatchSession {
                 priority_acquired: Mutex::new("pending".to_string()),
                 estimator_output: Mutex::new(None),
                 supervisor_heartbeat_ticks: AtomicU64::new(initial_heartbeat_ticks.as_u64()),
+                startup_requested_ticks: AtomicU64::new(0),
+                startup_ready_ticks: AtomicU64::new(0),
+                startup_latency_us: AtomicU64::new(0),
+                startup_ready: AtomicBool::new(false),
             },
         });
         Ok(Self {
@@ -105,6 +109,10 @@ impl NativeDispatchSession {
         self.shared
             .publication
             .supervisor_heartbeat_ticks
+            .store(heartbeat_ticks.as_u64(), Ordering::Release);
+        self.shared
+            .publication
+            .startup_requested_ticks
             .store(heartbeat_ticks.as_u64(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
@@ -371,6 +379,11 @@ impl NativeDispatchSession {
             _ => "invalid",
         };
         let local = self.shared.publication.metrics.snapshot.lock().clone();
+        let startup_ready = self
+            .shared
+            .publication
+            .startup_ready
+            .load(Ordering::Acquire);
         EngineSnapshot {
             elapsed_us: local.elapsed_us,
             total_us: local.total_us,
@@ -467,7 +480,28 @@ impl NativeDispatchSession {
                 .terminal_release_outcome
                 .lock()
                 .clone(),
+            startup_ready,
+            startup_latency_us: startup_ready.then(|| {
+                self.shared
+                    .publication
+                    .startup_latency_us
+                    .load(Ordering::Relaxed)
+            }),
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn startup_ticks(&self) -> (u64, u64) {
+        (
+            self.shared
+                .publication
+                .startup_requested_ticks
+                .load(Ordering::Acquire),
+            self.shared
+                .publication
+                .startup_ready_ticks
+                .load(Ordering::Relaxed),
+        )
     }
 
     pub fn join(&self, timeout: Duration) -> Result<bool, String> {

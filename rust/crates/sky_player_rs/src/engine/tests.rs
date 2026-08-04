@@ -86,6 +86,90 @@ fn supervisor_lease_treats_future_heartbeat_as_fresh() {
     );
 }
 
+fn startup_boundary_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+    sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "startup-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 5_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "startup-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid startup boundary schedule")
+}
+
+#[test]
+fn startup_boundary_is_unpublished_before_start() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+
+    let snapshot = session.snapshot();
+    assert!(!snapshot.startup_ready);
+    assert_eq!(snapshot.startup_latency_us, None);
+}
+
+#[test]
+fn startup_boundary_publishes_after_worker_startup() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+    session.start().expect("worker start");
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert!(snapshot.startup_ready);
+    assert!(snapshot.startup_latency_us.is_some());
+    let (requested, ready) = session.startup_ticks();
+    assert!(requested <= ready);
+}
+
+#[test]
+fn startup_failure_does_not_publish_ready_boundary() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript {
+                wait_failure: true,
+                ..FaultInjectionScript::none()
+            },
+        },
+    ))
+    .expect("test session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert!(!session.snapshot().startup_ready);
+    assert_eq!(session.snapshot().startup_latency_us, None);
+}
+
 #[test]
 fn request_moves_idle_to_requested() {
     let timing = CommandTimingState::default();
