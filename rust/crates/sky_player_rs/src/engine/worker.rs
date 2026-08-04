@@ -98,8 +98,19 @@ pub(super) struct WorkerHealthState {
     pub(super) bookkeeping_warn_started_us: Option<u64>,
 }
 
+pub(super) struct WorkerResources {
+    pub(super) clock: QpcClock,
+    pub(super) waiter: HybridWaiter,
+    pub(super) backend: TrackedKeyState,
+    pub(super) coordinator: RuntimeDispatchCoordinator,
+    pub(super) playback: PlaybackClockState,
+    pub(super) estimator: SendLatencyEstimator,
+    pub(super) telemetry: TelemetryCollector,
+}
+
 #[derive(Default)]
 pub(super) struct WorkerCore {
+    pub(super) resources: Option<WorkerResources>,
     pub(super) metrics: WorkerMetricsLocal,
     pub(super) health: Option<WorkerHealthState>,
     pub(super) timing: Option<WorkerTimingState>,

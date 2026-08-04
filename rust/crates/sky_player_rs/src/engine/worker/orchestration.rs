@@ -230,7 +230,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
         };
     let delivery_margin_ticks = DurationTicks::ZERO;
-    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+    let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         config.schedule,
         config.min_hold_us,
         min_hold_ticks,
@@ -265,7 +265,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let mut telemetry = TelemetryCollector::new(config.telemetry_mode, config.telemetry_capacity);
+    let telemetry = TelemetryCollector::new(config.telemetry_mode, config.telemetry_capacity);
     abort_counts.reserve(6);
     let mut effective_spin_threshold_us = config.spin_threshold_us;
     let _ = interrupt.try_take();
@@ -388,7 +388,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let mut clock_state = match PlaybackClockState::new(
+    let clock_state = match PlaybackClockState::new(
         startup_anchor_ticks,
         sky_dispatch_core::time::DurationTicks::from_raw(0),
     ) {
@@ -451,6 +451,16 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         runtime.terminal_error = Some("wait failure injected".to_string());
     }
 
+    core.resources = Some(WorkerResources {
+        clock: qpc_clock,
+        waiter,
+        backend,
+        coordinator,
+        playback: clock_state,
+        estimator,
+        telemetry,
+    });
+
     // Every QPC query after admission is part of the worker's correctness
     // boundary. A failed query is terminal and must take the cleanup path;
     // it must never become timestamp zero or a best-effort continuation.
@@ -497,6 +507,18 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         }};
     }
 
+    let resources = core
+        .resources
+        .as_mut()
+        .expect("worker resources initialized");
+    let qpc_clock = resources.clock;
+    let waiter = &resources.waiter;
+    let backend = &mut resources.backend;
+    let coordinator = &mut resources.coordinator;
+    let clock_state = &mut resources.playback;
+    let estimator = &mut resources.estimator;
+    let telemetry = &mut resources.telemetry;
+
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         if runtime.terminal_error.is_some() {
             return;
@@ -532,8 +554,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 skip_requested,
                 panic_requested,
                 target_hwnd,
-                backend: &mut backend,
-                coordinator: &mut coordinator,
+                backend,
+                coordinator,
                 force_full_cleanup: &mut runtime.force_full_cleanup,
                 terminal_error: &mut runtime.terminal_error,
                 secondary_errors: &mut secondary_errors,
@@ -568,8 +590,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 if !clock_state.has_pause_reason("focus") {
                     runtime.verified_target = None;
                     if let Err(error) = suspend_live_input(
-                        &mut backend,
-                        &mut coordinator,
+                        backend,
+                        coordinator,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
                         runtime.force_full_cleanup = true;
@@ -583,7 +605,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                     publish_backend_metrics(
-                        &backend,
+                        backend,
                         &mut local_metrics,
                         metrics,
                         &mut last_published_error,
@@ -607,7 +629,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     runtime.verified_target = None;
                     if let Err(error) =
-                        suspend_live_input(&mut backend, &mut coordinator, preflight_target.hwnd)
+                        suspend_live_input(backend, coordinator, preflight_target.hwnd)
                     {
                         runtime.verified_target = None;
                         runtime.force_full_cleanup = true;
@@ -615,7 +637,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                     if let Err(error) = ensure_preflight_for_target(
-                        &backend,
+                        backend,
                         preflight_target,
                         &mut runtime.verified_target,
                     ) {
@@ -658,7 +680,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                     runtime.focus_restore_started_ticks = None;
                     publish_backend_metrics(
-                        &backend,
+                        backend,
                         &mut local_metrics,
                         metrics,
                         &mut last_published_error,
@@ -671,8 +693,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 runtime.verified_target = None;
                 if !clock_state.is_paused() {
                     if let Err(error) = suspend_live_input(
-                        &mut backend,
-                        &mut coordinator,
+                        backend,
+                        coordinator,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
                         runtime.force_full_cleanup = true;
@@ -682,7 +704,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
                     publish_backend_metrics(
-                        &backend,
+                        backend,
                         &mut local_metrics,
                         metrics,
                         &mut last_published_error,
@@ -701,7 +723,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     // runs and sample QPC only after those operations finish.
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
-                        &backend,
+                        backend,
                         preflight_target,
                         &mut runtime.verified_target,
                     ) {
@@ -1234,7 +1256,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
                 if config.enable_adaptive_lead
                     && let Err(error) = update_estimator_after_send_class(
-                        &mut estimator,
+                        estimator,
                         ActionKind::Up,
                         result.send_completed_us.saturating_sub(started_us),
                         result.sent.len(),
@@ -1353,7 +1375,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     &mut local_metrics,
                 );
                 publish_backend_metrics(
-                    &backend,
+                    backend,
                     &mut local_metrics,
                     metrics,
                     &mut last_published_error,
@@ -1376,7 +1398,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     ));
                     let recovery_cleanup =
                         backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
-                    if !release_state_verified(&backend, &recovery_cleanup) {
+                    if !release_state_verified(backend, &recovery_cleanup) {
                         record_termination_error(
                             &mut runtime.terminal_error,
                             &mut secondary_errors,
@@ -1387,7 +1409,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         );
                     }
                     cancel_coordinator_or_terminal(
-                        &mut coordinator,
+                        coordinator,
                         &mut runtime.force_full_cleanup,
                         &mut runtime.terminal_error,
                         &mut secondary_errors,
@@ -1496,8 +1518,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         // ledger untouched so the same authored chord can be prepared again
                         // after focus restoration.
                         if let Err(error) = suspend_live_input(
-                            &mut backend,
-                            &mut coordinator,
+                            backend,
+                            coordinator,
                             target_hwnd.load(Ordering::Acquire),
                         ) {
                             runtime.force_full_cleanup = true;
@@ -1546,7 +1568,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             break;
                         }
                         publish_backend_metrics(
-                            &backend,
+                            backend,
                             &mut local_metrics,
                             metrics,
                             &mut last_published_error,
@@ -1564,7 +1586,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
-                        &backend,
+                        backend,
                         preflight_target,
                         &mut runtime.verified_target,
                     ) {
@@ -1631,8 +1653,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 runtime.verified_target = None;
                                 let focus_ticks = qpc_ticks_or_terminal!();
                                 if let Err(error) = suspend_live_input(
-                                    &mut backend,
-                                    &mut coordinator,
+                                    backend,
+                                    coordinator,
                                     target_hwnd.load(Ordering::Acquire),
                                 ) {
                                     runtime.force_full_cleanup = true;
@@ -1649,7 +1671,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 }
                                 runtime.focus_restore_started_ticks = None;
                                 publish_backend_metrics(
-                                    &backend,
+                                    backend,
                                     &mut local_metrics,
                                     metrics,
                                     &mut last_published_error,
@@ -1935,7 +1957,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 >= STRICT_SATURATION_ABORT_STREAK;
                         if config.enable_adaptive_lead
                             && let Err(error) = update_estimator_after_send_class(
-                                &mut estimator,
+                                estimator,
                                 ActionKind::Down,
                                 sender_duration_us,
                                 result_sent.len(),
@@ -2062,7 +2084,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 batch_source_action_index
                             ));
                             publish_backend_metrics(
-                                &backend,
+                                backend,
                                 &mut local_metrics,
                                 metrics,
                                 &mut last_published_error,
@@ -2082,7 +2104,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 batch_source_action_index, completion_error_us
                             ));
                             publish_backend_metrics(
-                                &backend,
+                                backend,
                                 &mut local_metrics,
                                 metrics,
                                 &mut last_published_error,
@@ -2102,7 +2124,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 batch_source_action_index, completion_error_us
                             ));
                             publish_backend_metrics(
-                                &backend,
+                                backend,
                                 &mut local_metrics,
                                 metrics,
                                 &mut last_published_error,
@@ -2122,7 +2144,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 STRICT_SATURATION_ABORT_STREAK
                             ));
                             publish_backend_metrics(
-                                &backend,
+                                backend,
                                 &mut local_metrics,
                                 metrics,
                                 &mut last_published_error,
@@ -2184,7 +2206,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                 }
                 publish_backend_metrics(
-                    &backend,
+                    backend,
                     &mut local_metrics,
                     metrics,
                     &mut last_published_error,
@@ -2261,13 +2283,13 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             match wait_for_next_boundary(WaitBoundaryContext {
                 deadline_ticks,
                 qpc_clock,
-                clock_state: &mut clock_state,
+                clock_state,
                 allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
                 last_send_qpc_ticks: runtime.last_send_qpc_ticks,
                 core_warmup_ticks: timing.core_warmup_ticks,
                 cold_threshold_ticks: timing.cold_threshold_ticks,
                 effective_spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                waiter: &waiter,
+                waiter,
                 lease_timeout_ticks: timing.lease_timeout_ticks,
                 supervisor_heartbeat_ticks,
                 interrupt,
@@ -2285,19 +2307,24 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         }
     }));
 
+    let resources = core
+        .resources
+        .take()
+        .expect("worker resources available for finalization");
+
     finalize_worker(FinalizeContext {
         worker_result,
-        backend,
-        coordinator,
-        telemetry,
-        estimator,
+        backend: resources.backend,
+        coordinator: resources.coordinator,
+        telemetry: resources.telemetry,
+        estimator: resources.estimator,
         local_metrics,
         abort_counts,
         force_full_cleanup: runtime.force_full_cleanup,
         terminal_error: runtime.terminal_error,
         secondary_errors,
         last_published_error,
-        qpc_clock,
+        qpc_clock: resources.clock,
         target_hwnd,
         skip_requested,
         quit_requested,
