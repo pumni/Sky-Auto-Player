@@ -39,20 +39,17 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
 use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
-use sky_dispatch_core::time::{
-    DurationTicks, SEND_COLD_THRESHOLD_US, TimeArithmeticError, TimelineTicks,
-};
-#[cfg(test)]
-use sky_dispatch_win32::clock::qpc_us_to_ticks;
+use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
 use sky_dispatch_win32::input::TrackedKeyState;
-use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
-use sky_dispatch_win32::power::PowerThrottlingGuard;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WakeErrorStats};
+use sky_dispatch_win32::mmcss::PriorityMode;
+#[cfg(test)]
+pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
+use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome};
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};

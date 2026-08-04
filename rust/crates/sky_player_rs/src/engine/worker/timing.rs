@@ -1,4 +1,11 @@
-use super::*;
+use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_core::estimator::LatencyClass;
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
+#[cfg(test)]
+use sky_dispatch_win32::clock::qpc_us_to_ticks;
+use sky_dispatch_win32::clock::{QpcClock, QpcError};
+use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) fn lease_bounded_ticks(
     target: QpcTicks,

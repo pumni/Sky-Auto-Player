@@ -1,4 +1,8 @@
-use super::*;
+use crate::engine::telemetry::SharedMetrics;
+use parking_lot::Mutex;
+use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
+use sky_dispatch_win32::power::PowerThrottlingGuard;
+use sky_dispatch_win32::wait::HybridWaiter;
 
 pub(super) struct StartupResources {
     pub(super) power_guard: PowerThrottlingGuard,
