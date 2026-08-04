@@ -1,5 +1,5 @@
-use sky_dispatch_win32::clock::{QpcClock, QpcTicks, QpcError};
 use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::PlatformSendResult;
 
 pub(crate) fn mock_platform_send_result_from_started_ticks(

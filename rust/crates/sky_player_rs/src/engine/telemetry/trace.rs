@@ -1,6 +1,6 @@
-use sky_dispatch_win32::clock::QpcTicks;
-use sky_dispatch_core::time::{TimelineTicks, TimeArithmeticError, DurationTicks};
 use crate::engine::config::TelemetryMode;
+use sky_dispatch_core::time::{DurationTicks, TimeArithmeticError, TimelineTicks};
+use sky_dispatch_win32::clock::QpcTicks;
 use std::collections::VecDeque;
 /// worker has stopped.  This is the only representation kept in the bounded
 /// native ring.

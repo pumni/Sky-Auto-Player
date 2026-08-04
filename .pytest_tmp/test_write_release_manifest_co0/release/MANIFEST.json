@@ -1,0 +1,28 @@
+{
+  "app": "Sky-Auto-Player",
+  "version": "2.4.4",
+  "executable": "Sky-Auto-Player.exe",
+  "executable_sha256": "9095bdb859308b62acf04036ffd4adfe366d7f737d276eb6c46ae434f3816c9b",
+  "interpreter": {
+    "implementation": "cpython",
+    "version": "3.14.3",
+    "freethreaded": true
+  },
+  "platform": "win32",
+  "git_head": "deadbeef",
+  "dirty_worktree": false,
+  "native_build_commit": "deadbeef",
+  "build_time_utc": "2026-08-04T00:27:24Z",
+  "files": [
+    {
+      "path": "nested/data.bin",
+      "size": 4,
+      "sha256": "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    },
+    {
+      "path": "nested/MANIFEST.json",
+      "size": 7,
+      "sha256": "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5"
+    }
+  ]
+}

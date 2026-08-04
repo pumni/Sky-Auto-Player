@@ -1,6 +1,6 @@
-use std::sync::atomic::Ordering;
-use sky_dispatch_win32::input::ReleaseAllOutcome;
 use parking_lot::Mutex;
+use sky_dispatch_win32::input::ReleaseAllOutcome;
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Default)]
 pub struct WorkerMetricsLocal {

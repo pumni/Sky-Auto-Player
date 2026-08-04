@@ -1,0 +1,2 @@
+song,event_index,dispatch_id,kind,scheduled_us,actual_us,dispatch_completed_us,evidence_scope,lateness_us,send_duration_us,scan_codes,sent_scan_codes,skipped_scan_codes,generation_ids,runtime_outcome,deferred_by_us,pre_send_spin_us,idle_gap_us,reason
+test,0,0,down,100000,100000,100000,sender_completion,0,0,21,21,,0,sent,0,0,0,test

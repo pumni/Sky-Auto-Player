@@ -1,0 +1,52 @@
+{
+  "git_provenance": {
+    "git_sha": "git"
+  },
+  "native_provenance": {
+    "native_build_commit": "native"
+  },
+  "host_fingerprint": {
+    "platform": "test"
+  },
+  "run_index": 3,
+  "polyphony": 1,
+  "actions": [
+    [
+      10,
+      "down",
+      0,
+      [
+        21
+      ],
+      "down"
+    ],
+    [
+      11,
+      "up",
+      5000,
+      [
+        21
+      ],
+      "up"
+    ]
+  ],
+  "session_snapshot": {
+    "outcome": "error"
+  },
+  "raw_telemetry": {
+    "attempted": 2,
+    "accepted": 2,
+    "dropped": 0,
+    "truncated": false
+  },
+  "validation_diagnostics": {
+    "records": 2
+  },
+  "exception": "RuntimeError: synthetic failure",
+  "command_line": [
+    "D:\\Dev\\Sky-Auto-Player\\.venv\\Scripts\\pytest",
+    "-m",
+    "not slow",
+    "--basetemp=.pytest_tmp"
+  ]
+}

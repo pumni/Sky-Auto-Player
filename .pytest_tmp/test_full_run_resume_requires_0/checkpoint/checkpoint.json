@@ -1,0 +1,200 @@
+{
+  "artifact_type": "native_calibration_checkpoint",
+  "schema_version": 5,
+  "measurement_protocol_version": 3,
+  "acceptance_eligible": false,
+  "orchestration_configuration": {
+    "polyphonies": [
+      1,
+      5,
+      15
+    ],
+    "samples_per_bucket": 20,
+    "global_budget_seconds": 12.5,
+    "publication_reserve_seconds": 5.0,
+    "chunk_samples": 20
+  },
+  "provenance": {
+    "source_git_sha": "test-sha",
+    "native_build_id": "test-sha",
+    "native_source_fingerprint": "test-fingerprint",
+    "dirty_worktree": false,
+    "rustc_version": "rustc 1.97.1",
+    "host_fingerprint": {
+      "qpc_frequency_hz": 10000000,
+      "win32_build": "Windows 11 test build"
+    }
+  },
+  "chunks": [
+    {
+      "key": "down/1/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-1-hot-0.json",
+      "sha256": "a3ee26b5e19727b57642c83d569dd44a0f2f180a50e5b240c0b78c12ab6b2138"
+    },
+    {
+      "key": "down/1/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-1-cold-0.json",
+      "sha256": "1476f90aed6163017c0111b4320f0d80e34c3fbcd836334c2c25164d2366efc3"
+    },
+    {
+      "key": "up/1/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-1-hot-0.json",
+      "sha256": "87e5e2dcdeb66000ae4f177d389ba50247b362fcf5aa977f84b30908217bfdba"
+    },
+    {
+      "key": "up/1/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-1-cold-0.json",
+      "sha256": "293596146d144c25722b1c5890686a5d04b1a618e31e9aa7370b81f3eeec0075"
+    },
+    {
+      "key": "down/5/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-5-hot-0.json",
+      "sha256": "0ea19bced8a2fc84e730fec1594bcc2bbcb02b7660cdd48ea6b22d1e5dae90d3"
+    },
+    {
+      "key": "down/5/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-5-cold-0.json",
+      "sha256": "e5b8a72d38e56334ad70e6d7a567557938def177145d335a66a5c8518b2ef06a"
+    },
+    {
+      "key": "up/5/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-5-hot-0.json",
+      "sha256": "5f27bd58a3393548fc227b2b692487be6bc61449e19e17d3b9a62f2f703569c8"
+    },
+    {
+      "key": "up/5/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-5-cold-0.json",
+      "sha256": "155a171304893a8d64bd5d48b998621f1c4b2b24df5792d5e3a2ddf4c3b04502"
+    },
+    {
+      "key": "down/15/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-15-hot-0.json",
+      "sha256": "256a1356f45032b5b4a12f7427ae99090c889f79a58aa1b82f0c44dd55c6c080"
+    },
+    {
+      "key": "down/15/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/down-15-cold-0.json",
+      "sha256": "b6c8b3856634c3bd0f8950a7fb7dd3376f7917656e414297d328eeb6547d479f"
+    },
+    {
+      "key": "up/15/hot",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-15-hot-0.json",
+      "sha256": "226fb389b89c0c98fa6652dbaa50b2584991b5c76b7442416128c17369114d05"
+    },
+    {
+      "key": "up/15/cold",
+      "chunk_index": 0,
+      "sample_offset": 0,
+      "sample_count": 20,
+      "artifact": "chunks/up-15-cold-0.json",
+      "sha256": "fac85f6d6695e2823f63dda36cc49b47deb334e9ed73f21e3d6ded5dee93d025"
+    }
+  ],
+  "buckets": [
+    {
+      "key": "down/1/hot",
+      "artifact": "buckets/down-1-hot.json",
+      "sha256": "dc3cbb6781ca21457642bc531f10fe2f4db7555ed894c73f870a0909f475a2ce",
+      "chunk_count": 1
+    },
+    {
+      "key": "down/1/cold",
+      "artifact": "buckets/down-1-cold.json",
+      "sha256": "24d5f4637efd0f1a5b768e32c3cb0a64ac6c823aacaa32368aa4209e0fdf01ff",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/1/hot",
+      "artifact": "buckets/up-1-hot.json",
+      "sha256": "44c98b21c8fb665ec03db57538f346b685762eff96422a9328b7b46f7dbff57d",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/1/cold",
+      "artifact": "buckets/up-1-cold.json",
+      "sha256": "842f8f3b5cf045ac64dba9008a8a5b151894535f8b10b2220827b2cce77cd8c2",
+      "chunk_count": 1
+    },
+    {
+      "key": "down/5/hot",
+      "artifact": "buckets/down-5-hot.json",
+      "sha256": "fb1beb2af14ce35bc4651b4c2b87dc16bcaa4f6d622b40843064bbae38ddd54d",
+      "chunk_count": 1
+    },
+    {
+      "key": "down/5/cold",
+      "artifact": "buckets/down-5-cold.json",
+      "sha256": "29aa8e13ab27b1d353d95c6802bb5d5e54a762391f96a27934fe72ce52ff9087",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/5/hot",
+      "artifact": "buckets/up-5-hot.json",
+      "sha256": "5293c103d87d5e567d611bd82721f28374a229724d19bf9845ee73a1f3526517",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/5/cold",
+      "artifact": "buckets/up-5-cold.json",
+      "sha256": "11117f23947f6794dbe4d949fb102506acdc8807bb5e733d251fe52a0d9442c2",
+      "chunk_count": 1
+    },
+    {
+      "key": "down/15/hot",
+      "artifact": "buckets/down-15-hot.json",
+      "sha256": "c06066fea2f7db4c56061afa0e585dadf270f3ca3004c6c52aacd5addd20c636",
+      "chunk_count": 1
+    },
+    {
+      "key": "down/15/cold",
+      "artifact": "buckets/down-15-cold.json",
+      "sha256": "35332b3381ff2298b2bd67fe2becaebaa5305db132bb1d87e541bdf67d14440f",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/15/hot",
+      "artifact": "buckets/up-15-hot.json",
+      "sha256": "77f0d3606e01cfc1e44bc4e4ab087f71bdf854ffc9e9f986f23e6045a4a96dea",
+      "chunk_count": 1
+    },
+    {
+      "key": "up/15/cold",
+      "artifact": "buckets/up-15-cold.json",
+      "sha256": "934bdae7fc1450cb94ebd924ab056552c110d5dff0851de88bdb6fc5e14409e8",
+      "chunk_count": 1
+    }
+  ]
+}

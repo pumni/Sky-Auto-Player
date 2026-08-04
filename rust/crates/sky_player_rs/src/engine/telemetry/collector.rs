@@ -1,5 +1,5 @@
-use crate::engine::telemetry::trace::{NativeTelemetryOutput, RtTraceRecord};
 use crate::engine::config::TelemetryMode;
+use crate::engine::telemetry::trace::{NativeTelemetryOutput, RtTraceRecord};
 use sky_dispatch_core::time::TimeArithmeticError;
 
 pub(crate) struct TelemetryCollector {

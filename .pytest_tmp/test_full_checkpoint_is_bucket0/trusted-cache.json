@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "evidence_kind": "injected_raw_input_delivery_proxy",
+  "source_formula_version": 1,
+  "down_us": {
+    "p50": 10,
+    "p90": 20,
+    "p99": 40
+  },
+  "up_us": {
+    "p50": 10,
+    "p90": 20,
+    "p99": 40
+  },
+  "n": 20,
+  "sample_count": 20,
+  "native_calibration_version": 8,
+  "measurement_protocol_version": 3,
+  "source_git_sha": "test-sha",
+  "native_build_id": "test-sha",
+  "dirty_worktree": false,
+  "host_fingerprint": {
+    "qpc_frequency_hz": 10000000,
+    "win32_build": "Windows 11 test build"
+  },
+  "anomaly_counts": {
+    "warmup": 0,
+    "measured": 0,
+    "setup": 0,
+    "total": 0
+  }
+}

@@ -1,0 +1,6 @@
+song,event_index,dispatch_id,kind,scheduled_us,actual_us,dispatch_completed_us,evidence_scope,lateness_us,send_duration_us,scan_codes,sent_scan_codes,skipped_scan_codes,generation_ids,runtime_outcome,deferred_by_us,pre_send_spin_us,idle_gap_us,reason
+test,0,0,down,200000,200000,200000,sender_completion,0,0,21,21,,0,sent,0,0,0,test
+test,1,1,down,700000,700000,700000,sender_completion,0,0,21,21,,0,sent,0,0,0,test
+test,2,2,down,1200000,1200000,1200000,sender_completion,0,0,21,21,,0,sent,0,0,0,test
+test,3,3,down,1700000,1700000,1700000,sender_completion,0,0,21,21,,0,sent,0,0,0,test
+test,4,4,down,2200000,2200000,2200000,sender_completion,0,0,21,21,,0,sent,0,0,0,test

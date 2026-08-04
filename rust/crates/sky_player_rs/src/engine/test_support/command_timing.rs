@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use sky_dispatch_win32::clock::{QpcClock, QpcTicks, QpcError};
+use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
@@ -98,7 +98,10 @@ impl CommandTimingState {
         }
     }
 
-    pub(crate) fn request_pause(&self, requested_ticks: QpcTicks) -> Result<u64, CommandTimingError> {
+    pub(crate) fn request_pause(
+        &self,
+        requested_ticks: QpcTicks,
+    ) -> Result<u64, CommandTimingError> {
         let mut phase = self.phase.lock();
         match *phase {
             PauseTimingPhase::Requested { generation, .. }
