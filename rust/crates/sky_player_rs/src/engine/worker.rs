@@ -17,7 +17,10 @@ pub(crate) use cleanup::{
     cancel_coordinator_or_terminal, describe_release_outcome, record_termination_error,
     release_runtime_outcome, release_state_verified, suspend_live_input,
 };
-use control::{CommandControl, CommandControlContext, process_command_control};
+use control::{
+    CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
+    CommandControlRuntime, CommandControlSignals, process_command_control,
+};
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};

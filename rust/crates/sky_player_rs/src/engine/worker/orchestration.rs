@@ -545,24 +545,32 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     as u64;
             }
             try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
-            if let CommandControl::Exit = process_command_control(CommandControlContext {
-                loop_start_ticks,
-                qpc_clock,
-                lease_timeout_ticks: timing.lease_timeout_ticks,
-                supervisor_heartbeat_ticks,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                target_hwnd,
-                backend,
-                coordinator,
-                force_full_cleanup: &mut runtime.force_full_cleanup,
-                terminal_error: &mut runtime.terminal_error,
-                secondary_errors: &mut secondary_errors,
-                abort_counts: &mut abort_counts,
-                local_metrics: &mut local_metrics,
-                metrics,
-                last_published_error: &mut last_published_error,
+            if let CommandControl::Exit = process_command_control(CommandControlInput {
+                clock: CommandControlClock {
+                    loop_start_ticks,
+                    qpc_clock,
+                    lease_timeout_ticks: timing.lease_timeout_ticks,
+                    supervisor_heartbeat_ticks,
+                },
+                signals: CommandControlSignals {
+                    quit_requested,
+                    skip_requested,
+                    panic_requested,
+                    target_hwnd,
+                },
+                runtime: CommandControlRuntime {
+                    backend,
+                    coordinator,
+                    force_full_cleanup: &mut runtime.force_full_cleanup,
+                    terminal_error: &mut runtime.terminal_error,
+                    secondary_errors: &mut secondary_errors,
+                    abort_counts: &mut abort_counts,
+                },
+                metrics: CommandControlMetrics {
+                    local_metrics: &mut local_metrics,
+                    metrics,
+                    last_published_error: &mut last_published_error,
+                },
             }) {
                 break;
             }
