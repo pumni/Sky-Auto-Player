@@ -45,7 +45,10 @@ Current stable facades and ownership boundaries:
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
   session, and telemetry code live under `python/`.
 - `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
-  submodules; raw SendInput and timer unsafe boundaries remain platform-owned.
+  submodules. `input/raw.rs` owns packet/syscall results while
+  `input/{down_transaction,up_transaction}.rs` own bounded transaction policy;
+  tracked masks remain in `input/tracked.rs`. Raw SendInput and timer unsafe
+  boundaries remain platform-owned.
 
 ### State ownership table
 
