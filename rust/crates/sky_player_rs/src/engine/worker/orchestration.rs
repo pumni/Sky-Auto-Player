@@ -4,11 +4,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     let config = worker.config;
     let shared = worker.shared;
     let mut core = worker.core;
-    let mut local_metrics = std::mem::take(&mut core.metrics);
-    let mut runtime = std::mem::take(&mut core.runtime);
-    let mut secondary_errors = std::mem::take(&mut core.errors.secondary);
-    let mut last_published_error = std::mem::take(&mut core.errors.last_published);
-    let mut abort_counts = std::mem::take(&mut core.errors.abort_counts);
+    let local_metrics = &mut core.metrics;
+    let runtime = &mut core.runtime;
+    let secondary_errors = &mut core.errors.secondary;
+    let last_published_error = &mut core.errors.last_published;
+    let abort_counts = &mut core.errors.abort_counts;
     let interrupt = &shared.commands.interrupt;
     let desired_pause = &shared.commands.desired_pause;
     let quit_requested = &shared.commands.quit_requested;
@@ -276,7 +276,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     if config.wait.enable_adaptive_spin
         && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 10)
     {
-        publish_wake_error_stats(stats, &mut local_metrics);
+        publish_wake_error_stats(stats, local_metrics);
         effective_spin_threshold_us =
             derive_spin_threshold_us(stats.p95_us, config.timing.spin_floor_us);
     }
@@ -550,7 +550,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     / local_metrics.playback_wall_time_us as u128)
                     as u64;
             }
-            try_publish_metrics(&local_metrics, metrics, loop_start_us, false);
+            try_publish_metrics(local_metrics, metrics, loop_start_us, false);
             if let CommandControl::Exit = process_command_control(CommandControlInput {
                 clock: CommandControlClock {
                     loop_start_ticks,
@@ -569,13 +569,13 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     coordinator,
                     force_full_cleanup: &mut runtime.force_full_cleanup,
                     terminal_error: &mut runtime.terminal_error,
-                    secondary_errors: &mut secondary_errors,
-                    abort_counts: &mut abort_counts,
+                    secondary_errors,
+                    abort_counts,
                 },
                 metrics: CommandControlMetrics {
-                    local_metrics: &mut local_metrics,
+                    local_metrics,
                     metrics,
-                    last_published_error: &mut last_published_error,
+                    last_published_error,
                 },
             }) {
                 break;
@@ -618,13 +618,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                    publish_backend_metrics(
-                        backend,
-                        &mut local_metrics,
-                        metrics,
-                        &mut last_published_error,
-                    );
-                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+                    try_publish_metrics(local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
                 let restored_at = *runtime.focus_restore_started_ticks.get_or_insert(now_ticks);
@@ -693,13 +688,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         runtime.verified_target = None;
                     }
                     runtime.focus_restore_started_ticks = None;
-                    publish_backend_metrics(
-                        backend,
-                        &mut local_metrics,
-                        metrics,
-                        &mut last_published_error,
-                    );
-                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+                    try_publish_metrics(local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             }
 
@@ -717,13 +707,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
-                    publish_backend_metrics(
-                        backend,
-                        &mut local_metrics,
-                        metrics,
-                        &mut last_published_error,
-                    );
-                    try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+                    try_publish_metrics(local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
                 if let Err(error) = clock_state.enter_pause("manual", now_ticks) {
                     runtime.force_full_cleanup = true;
@@ -1387,16 +1372,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     signed_delta(completed_effective, scheduled_us),
                     true,
                     deferred_release,
-                    &mut local_metrics,
+                    local_metrics,
                 );
-                publish_backend_metrics(
-                    backend,
-                    &mut local_metrics,
-                    metrics,
-                    &mut last_published_error,
-                );
+                publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
                 try_publish_metrics(
-                    &local_metrics,
+                    local_metrics,
                     metrics,
                     qpc_us_or_terminal!(),
                     !clean_up_sample || recovery_required,
@@ -1416,7 +1396,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     if !release_state_verified(backend, &recovery_cleanup) {
                         record_termination_error(
                             &mut runtime.terminal_error,
-                            &mut secondary_errors,
+                            secondary_errors,
                             format!(
                                 "recovery cleanup release verification failed: {}",
                                 describe_release_outcome(&recovery_cleanup)
@@ -1427,7 +1407,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         coordinator,
                         &mut runtime.force_full_cleanup,
                         &mut runtime.terminal_error,
-                        &mut secondary_errors,
+                        secondary_errors,
                     );
                     break;
                 }
@@ -1584,11 +1564,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         }
                         publish_backend_metrics(
                             backend,
-                            &mut local_metrics,
+                            local_metrics,
                             metrics,
-                            &mut last_published_error,
+                            last_published_error,
                         );
-                        try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
+                        try_publish_metrics(local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
                     if focus_loss_fault && !runtime.focus_loss_fault_injected {
@@ -1687,12 +1667,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 runtime.focus_restore_started_ticks = None;
                                 publish_backend_metrics(
                                     backend,
-                                    &mut local_metrics,
+                                    local_metrics,
                                     metrics,
-                                    &mut last_published_error,
+                                    last_published_error,
                                 );
                                 try_publish_metrics(
-                                    &local_metrics,
+                                    local_metrics,
                                     metrics,
                                     qpc_us_or_terminal!(),
                                     true,
@@ -2089,7 +2069,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             signed_delta(completed_effective, batch_scheduled_us),
                             false,
                             false,
-                            &mut local_metrics,
+                            local_metrics,
                         );
                         if result_chord_integrity_lost {
                             runtime.verified_target = None;
@@ -2100,12 +2080,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             ));
                             publish_backend_metrics(
                                 backend,
-                                &mut local_metrics,
+                                local_metrics,
                                 metrics,
-                                &mut last_published_error,
+                                last_published_error,
                             );
                             try_publish_metrics(
-                                &local_metrics,
+                                local_metrics,
                                 metrics,
                                 qpc_us_or_terminal!(),
                                 true,
@@ -2120,12 +2100,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             ));
                             publish_backend_metrics(
                                 backend,
-                                &mut local_metrics,
+                                local_metrics,
                                 metrics,
-                                &mut last_published_error,
+                                last_published_error,
                             );
                             try_publish_metrics(
-                                &local_metrics,
+                                local_metrics,
                                 metrics,
                                 qpc_us_or_terminal!(),
                                 true,
@@ -2140,12 +2120,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             ));
                             publish_backend_metrics(
                                 backend,
-                                &mut local_metrics,
+                                local_metrics,
                                 metrics,
-                                &mut last_published_error,
+                                last_published_error,
                             );
                             try_publish_metrics(
-                                &local_metrics,
+                                local_metrics,
                                 metrics,
                                 qpc_us_or_terminal!(),
                                 true,
@@ -2160,12 +2140,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             ));
                             publish_backend_metrics(
                                 backend,
-                                &mut local_metrics,
+                                local_metrics,
                                 metrics,
-                                &mut last_published_error,
+                                last_published_error,
                             );
                             try_publish_metrics(
-                                &local_metrics,
+                                local_metrics,
                                 metrics,
                                 qpc_us_or_terminal!(),
                                 true,
@@ -2220,14 +2200,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         }
                     }
                 }
-                publish_backend_metrics(
-                    backend,
-                    &mut local_metrics,
-                    metrics,
-                    &mut last_published_error,
-                );
+                publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
                 try_publish_metrics(
-                    &local_metrics,
+                    local_metrics,
                     metrics,
                     qpc_us_or_terminal!(),
                     force_dispatch_publish,
@@ -2317,7 +2292,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     input_path_warn_us: config.timing.input_path_warn_us,
                 },
                 mutable: WaitMutable {
-                    local_metrics: &mut local_metrics,
+                    local_metrics,
                     pending_pre_send_spin_us: &mut runtime.pending_pre_send_spin_us,
                     force_full_cleanup: &mut runtime.force_full_cleanup,
                     terminal_error: &mut runtime.terminal_error,
@@ -2345,12 +2320,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         },
         state: FinalizeState {
             worker_result,
-            local_metrics,
-            abort_counts,
+            local_metrics: std::mem::take(local_metrics),
+            abort_counts: std::mem::take(abort_counts),
             force_full_cleanup: runtime.force_full_cleanup,
-            terminal_error: runtime.terminal_error,
-            secondary_errors,
-            last_published_error,
+            terminal_error: std::mem::take(&mut runtime.terminal_error),
+            secondary_errors: std::mem::take(secondary_errors),
+            last_published_error: std::mem::take(last_published_error),
         },
         signals: FinalizeSignals {
             target_hwnd,
