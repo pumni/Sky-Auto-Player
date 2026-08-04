@@ -11,7 +11,7 @@ def _compact_output(
     *,
     completion_error_ticks: int = 250,
     authored_completion_error_ticks: int = 250,
-    schema_version: int = 6,
+    schema_version: int = 7,
     requested_count: int = 1,
     sent_count: int = 1,
     skipped_count: int = 0,
@@ -36,6 +36,7 @@ def _compact_output(
                 "wake_ticks": 10_100,
                 "send_started_ticks": 10_110,
                 "send_completed_ticks": 10_180,
+                "bookkeeping_duration_us": 4,
                 "completion_error_ticks": completion_error_ticks,
                 "authored_completion_error_ticks": authored_completion_error_ticks,
                 "applied_lead_ticks": 1_000,
@@ -61,12 +62,21 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.native_skipped_count == 0
     assert record.wake_error_us == 10
     assert record.sender_completion_error_us == 25
+    assert record.bookkeeping_duration_us == 4
     assert record.visible_lateness_us == 25
     assert record.dispatch_lateness_us == 25
     assert record.applied_lead_us == 100
     assert record.scan_codes == ()
     assert record.sent_scan_codes == ()
     assert record.skipped_scan_codes == ()
+
+
+def test_native_trace_materializer_rejects_missing_bookkeeping_duration() -> None:
+    output = _compact_output()
+    del output["records"][0]["bookkeeping_duration_us"]
+
+    with pytest.raises(ValueError, match="bookkeeping_duration_us"):
+        materialize_native_trace(output)
 
 
 def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
@@ -77,7 +87,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["dispatch_id"] == 0
     assert row["evidence_scope"] == "sender_completion"
     assert row["send_duration_pure_us"] == 7
-    assert row["bookkeeping_us"] == 0
+    assert row["bookkeeping_us"] == 4
     assert row["scheduled_timeline_us"] == 1_000
     assert row["wake_timeline_us"] == 1_010
     assert row["wake_error_us"] == 10
@@ -88,7 +98,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["authored_completion_error_ticks"] == 250
     assert row["send_operation_duration_us"] == 7
     assert row["sendinput_call_duration_us"] == 7
-    assert row["bookkeeping_duration_us"] == 0
+    assert row["bookkeeping_duration_us"] == 4
     assert row["generation_ids"] == ""
     assert row["first_win32_error"] == 1460
     assert row["last_win32_error"] == 1460
@@ -295,7 +305,7 @@ def test_native_trace_materializer_rejects_invalid_delivery_counts(
         materialize_native_trace(output)
 
 
-@pytest.mark.parametrize("schema_version", [3, 4, 5])
+@pytest.mark.parametrize("schema_version", [3, 4, 5, 6])
 def test_native_trace_materializer_rejects_legacy_schema(schema_version: int) -> None:
     with pytest.raises(ValueError, match="schema version"):
         materialize_native_trace(_compact_output(schema_version=schema_version))
@@ -305,7 +315,7 @@ def test_native_records_are_included_in_summary_with_semantic_counts() -> None:
     logger = TelemetryLogger("native", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 6,
+            "schema_version": 7,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 2,
             "accepted": 2,
@@ -351,7 +361,7 @@ def test_native_zero_or_partial_send_is_counted_without_fake_scan_codes(
     logger = TelemetryLogger("native", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 6,
+            "schema_version": 7,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 1,
             "accepted": 1,
@@ -390,7 +400,7 @@ def test_focus_blocked_trace_is_not_counted_as_backend_dispatch() -> None:
     logger = TelemetryLogger("focus", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 6,
+            "schema_version": 7,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 2,
             "accepted": 2,
@@ -424,7 +434,7 @@ def test_suppressed_stale_up_is_not_counted_as_backend_dispatch() -> None:
     logger = TelemetryLogger("stale-up", enabled=True, retain_records_after_save=True)
     logger.ingest_native_output(
         {
-            "schema_version": 6,
+            "schema_version": 7,
             "qpc_frequency_hz": 10_000_000,
             "attempted": 2,
             "accepted": 2,

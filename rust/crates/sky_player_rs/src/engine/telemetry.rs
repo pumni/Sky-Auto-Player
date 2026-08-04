@@ -25,6 +25,7 @@ pub struct RtTraceRecord {
     pub wake_ticks: u64,
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
+    pub bookkeeping_duration_us: u64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
@@ -35,7 +36,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 6;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 7;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -51,6 +52,7 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: TimelineTicks,
     pub(crate) send_started_ticks: Option<TimelineTicks>,
     pub(crate) send_completed_ticks: Option<TimelineTicks>,
+    pub(crate) bookkeeping_duration_us: u64,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
     pub(crate) applied_lead_ticks: DurationTicks,
@@ -110,6 +112,7 @@ impl RtTraceRecord {
             wake_ticks: timing.wake_ticks.as_u64(),
             send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
+            bookkeeping_duration_us: timing.bookkeeping_duration_us,
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks,

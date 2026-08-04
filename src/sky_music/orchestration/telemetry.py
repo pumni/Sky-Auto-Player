@@ -18,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 6
+NATIVE_TELEMETRY_SCHEMA_VERSION = 7
 
 
 def _optional_int(value: Any) -> int | None:
@@ -572,6 +572,9 @@ def materialize_native_trace(
         completed_ticks = _required_nonnegative_int(
             row.get("send_completed_ticks"), "send_completed_ticks"
         )
+        bookkeeping_duration_us = _required_nonnegative_int(
+            row.get("bookkeeping_duration_us"), "bookkeeping_duration_us"
+        )
         completion_error_ticks = _required_signed_int64(
             row.get("completion_error_ticks"), "completion_error_ticks"
         )
@@ -656,6 +659,8 @@ def materialize_native_trace(
                 sender_completion_error_us=sender_completion_error_us,
                 send_operation_duration_us=send_duration_us,
                 sendinput_call_duration_us=send_duration_us,
+                bookkeeping_us=bookkeeping_duration_us,
+                bookkeeping_duration_us=bookkeeping_duration_us,
                 authored_ticks=authored_ticks,
                 effective_deadline_ticks=effective_ticks,
                 wake_ticks=wake_ticks,

@@ -1401,6 +1401,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             wake_ticks: actual_ticks,
                             send_started_ticks: sender_started_effective_ticks,
                             send_completed_ticks: Some(completed_effective_ticks),
+                            bookkeeping_duration_us: bookkeeping_completed_us
+                                .saturating_sub(result.send_completed_us),
                             completion_error_ticks: up_completion_error_ticks,
                             authored_completion_error_ticks: up_authored_completion_error_ticks,
                             applied_lead_ticks: lead_up_ticks,
@@ -1636,6 +1638,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     wake_ticks: effective_now_ticks,
                                     send_started_ticks: None,
                                     send_completed_ticks: None,
+                                    bookkeeping_duration_us: 0,
                                     completion_error_ticks: 0,
                                     authored_completion_error_ticks: 0,
                                     applied_lead_ticks: lead_down_ticks,
@@ -2100,6 +2103,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     wake_ticks: effective_now_ticks,
                                     send_started_ticks: Some(sender_started_effective_ticks),
                                     send_completed_ticks: Some(completed_effective_ticks),
+                                    bookkeeping_duration_us: bookkeeping_completed_us
+                                        .saturating_sub(result_completed_us),
                                     completion_error_ticks: completion_error_ticks_value,
                                     authored_completion_error_ticks:
                                         authored_completion_error_ticks_value,
@@ -2272,6 +2277,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     wake_ticks: effective_now_ticks,
                                     send_started_ticks: None,
                                     send_completed_ticks: None,
+                                    bookkeeping_duration_us: 0,
                                     completion_error_ticks: 0,
                                     authored_completion_error_ticks: 0,
                                     applied_lead_ticks: lead_up_ticks,
