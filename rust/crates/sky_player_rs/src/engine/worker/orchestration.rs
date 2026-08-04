@@ -169,17 +169,22 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             1
         };
     let mut local_metrics = WorkerMetricsLocal::default();
-    let mut force_full_cleanup = false;
-    let mut terminal_error: Option<String> = None;
+    let mut runtime = WorkerRuntime::default();
     let mut secondary_errors: Vec<String> = Vec::new();
     let mut last_published_error: Option<String> = None;
-    let mut focus_loss_fault_injected = false;
-    let power_guard = PowerThrottlingGuard::disable_current_thread();
-    local_metrics.power_throttling_disabled = power_guard.is_active();
-    let priority_guard = MmcssGuard::acquire(config.priority_mode);
-    *priority_acquired.lock() = priority_guard.acquired().to_string();
-    let waiter = HybridWaiter::with_options(config.enable_waitable_timer, config.enable_event_wait);
-    *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
+    let StartupResources {
+        power_guard: _power_guard,
+        priority_guard: _priority_guard,
+        waiter,
+        power_throttling_disabled,
+    } = initialize_startup(
+        config.priority_mode,
+        config.enable_waitable_timer,
+        config.enable_event_wait,
+        priority_acquired,
+        metrics,
+    );
+    local_metrics.power_throttling_disabled = power_throttling_disabled;
     let mut estimator =
         match SendLatencyEstimator::try_new(0.2, config.max_lead_us, config.allowed_count) {
             Ok(estimator) => estimator,
@@ -405,8 +410,6 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
-    let mut last_send_qpc_ticks: Option<QpcTicks> = None;
-    let mut pending_pre_send_spin_us = 0;
     let mut down_saturation_positive_streak: u8 = 0;
     let mut up_saturation_positive_streak: u8 = 0;
     let mut send_duration_window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
@@ -494,13 +497,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let mut startup_gate = coordinator
+    runtime.startup_gate = coordinator
         .batch_scheduled_ticks
         .first()
         .copied()
         .map(|scheduled_ticks| (scheduled_ticks, startup_lead_ticks));
-    let mut focus_restore_started_ticks: Option<QpcTicks> = None;
-    let mut verified_target: Option<TargetStamp> = None;
     let start_wall_time_us = initial_now_us;
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
@@ -521,12 +522,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 .flatten()
         });
     if let Some(error) = qpc_admission_error {
-        force_full_cleanup = true;
-        terminal_error = Some(error);
+        runtime.force_full_cleanup = true;
+        runtime.terminal_error = Some(error);
     }
     if wait_fault {
-        force_full_cleanup = true;
-        terminal_error = Some("wait failure injected".to_string());
+        runtime.force_full_cleanup = true;
+        runtime.terminal_error = Some("wait failure injected".to_string());
     }
 
     // Every QPC query after admission is part of the worker's correctness
@@ -541,8 +542,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }) {
                 Ok(value) => value,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                     break;
                 }
             }
@@ -554,8 +555,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             match qpc_clock.now() {
                 Ok(value) => value,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                     break;
                 }
             }
@@ -567,8 +568,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             match qpc_clock.duration_to_us(DurationTicks::from_raw($ticks.as_u64())) {
                 Ok(value) => value,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC conversion failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("QPC conversion failure: {error:?}"));
                     break;
                 }
             }
@@ -576,10 +577,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     }
 
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
-        if terminal_error.is_some() {
+        if runtime.terminal_error.is_some() {
             return;
         }
-        let mut allow_pre_epoch_startup_dispatch = false;
         while !coordinator.is_finished() {
             let loop_start_ticks = qpc_ticks_or_terminal!();
             let loop_start_us = qpc_ticks_to_us_or_terminal!(loop_start_ticks);
@@ -612,8 +612,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 target_hwnd,
                 backend: &mut backend,
                 coordinator: &mut coordinator,
-                force_full_cleanup: &mut force_full_cleanup,
-                terminal_error: &mut terminal_error,
+                force_full_cleanup: &mut runtime.force_full_cleanup,
+                terminal_error: &mut runtime.terminal_error,
                 secondary_errors: &mut secondary_errors,
                 abort_counts: &mut abort_counts,
                 local_metrics: &mut local_metrics,
@@ -631,8 +631,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let observed_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("QPC pause observation failed: {error:?}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("QPC pause observation failed: {error:?}"));
                         break;
                     }
                 };
@@ -640,23 +641,23 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
 
             if !focus_ok {
-                verified_target = None;
-                focus_restore_started_ticks = None;
+                runtime.verified_target = None;
+                runtime.focus_restore_started_ticks = None;
                 if !clock_state.has_pause_reason("focus") {
-                    verified_target = None;
+                    runtime.verified_target = None;
                     if let Err(error) = suspend_live_input(
                         &mut backend,
                         &mut coordinator,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("focus suspension failed: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("focus suspension failed: {error}"));
                         break;
                     }
                     *abort_counts.entry("focus_lost").or_insert(0) += 1;
                     if let Err(error) = clock_state.enter_pause("focus", now_ticks) {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
                     publish_backend_metrics(
@@ -668,12 +669,13 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             } else if clock_state.has_pause_reason("focus") {
-                let restored_at = *focus_restore_started_ticks.get_or_insert(now_ticks);
+                let restored_at = *runtime.focus_restore_started_ticks.get_or_insert(now_ticks);
                 let focus_grace_elapsed = match now_ticks.checked_duration_since(restored_at) {
                     Ok(elapsed) => elapsed,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("focus grace clock failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("focus grace clock failure: {error}"));
                         break;
                     }
                 };
@@ -681,23 +683,23 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     // Second idempotent release happens while the restored
                     // target is foreground, before playback can resume.
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
-                    verified_target = None;
+                    runtime.verified_target = None;
                     if let Err(error) =
                         suspend_live_input(&mut backend, &mut coordinator, preflight_target.hwnd)
                     {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("focus restoration failed: {error}"));
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("focus restoration failed: {error}"));
                         break;
                     }
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
                         preflight_target,
-                        &mut verified_target,
+                        &mut runtime.verified_target,
                     ) {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
@@ -711,8 +713,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         target_generation,
                         preflight_target,
                     ) {
-                        verified_target = None;
-                        focus_restore_started_ticks = None;
+                        runtime.verified_target = None;
+                        runtime.focus_restore_started_ticks = None;
                         continue;
                     }
                     // Cleanup can include bounded backend retries. Re-sample
@@ -721,18 +723,18 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     // playback clock.
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = clock_state.exit_pause("focus", resumed_ticks) {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
                     if desired_pause.load(Ordering::Acquire) {
                         // Focus restoration is not the final admission when
                         // manual pause is still active. Require a separate
                         // manual-resume preflight for that epoch.
-                        verified_target = None;
+                        runtime.verified_target = None;
                     }
-                    focus_restore_started_ticks = None;
+                    runtime.focus_restore_started_ticks = None;
                     publish_backend_metrics(
                         &backend,
                         &mut local_metrics,
@@ -744,15 +746,16 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
 
             if manual_pause && !clock_state.has_pause_reason("manual") {
-                verified_target = None;
+                runtime.verified_target = None;
                 if !clock_state.is_paused() {
                     if let Err(error) = suspend_live_input(
                         &mut backend,
                         &mut coordinator,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("manual pause suspension failed: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("manual pause suspension failed: {error}"));
                         break;
                     }
                     *abort_counts.entry("manual_pause").or_insert(0) += 1;
@@ -765,8 +768,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                 }
                 if let Err(error) = clock_state.enter_pause("manual", now_ticks) {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("playback clock failure: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
             } else if !manual_pause && clock_state.has_pause_reason("manual") {
@@ -778,11 +781,11 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
                         preflight_target,
-                        &mut verified_target,
+                        &mut runtime.verified_target,
                     ) {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
@@ -796,21 +799,21 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         target_generation,
                         preflight_target,
                     ) {
-                        verified_target = None;
+                        runtime.verified_target = None;
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = clock_state.exit_pause("manual", resumed_ticks) {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
                 } else {
                     // Keep the manual pause reason until focus restoration
                     // has completed; an old QPC sample must not admit a
                     // partially resumed session.
-                    verified_target = None;
+                    runtime.verified_target = None;
                 }
             }
 
@@ -819,8 +822,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
                             Some(format!("QPC pause acknowledgment failed: {error:?}"));
                         break;
                     }
@@ -834,8 +837,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let pause_target = match now_ticks.checked_add_duration(paused_poll_ticks) {
                     Ok(target) => target,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
                             Some(format!("pause deadline arithmetic failure: {error}"));
                         break;
                     }
@@ -847,8 +850,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 ) {
                     Ok(target) => target,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("pause lease deadline failure: {error:?}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("pause lease deadline failure: {error:?}"));
                         break;
                     }
                 };
@@ -863,8 +867,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 {
                     local_metrics.wait_path_degraded = true;
                     if config.strict_timing || matches!(failure, WaitFailure::Clock) {
-                        force_full_cleanup = true;
-                        terminal_error = Some(wait_failure_message(failure));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(wait_failure_message(failure));
                         break;
                     }
                     std::thread::sleep(Duration::from_micros(500));
@@ -872,12 +876,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 continue;
             }
 
-            if let Some((startup_scheduled_ticks, startup_lead_ticks)) = startup_gate {
+            if let Some((startup_scheduled_ticks, startup_lead_ticks)) = runtime.startup_gate {
                 let target_sample_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
                             Some(format!("QPC failure before startup wait: {error:?}"));
                         break;
                     }
@@ -890,8 +894,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 ) {
                     Ok(target) => target,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("startup deadline failure: {error:?}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("startup deadline failure: {error:?}"));
                         break;
                     }
                 };
@@ -903,8 +908,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     ) {
                         Ok(target) => target,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("lease deadline failure: {error:?}"));
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("lease deadline failure: {error:?}"));
                             break;
                         }
                     };
@@ -924,8 +930,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
                             if config.strict_timing || matches!(failure, WaitFailure::Clock) {
-                                force_full_cleanup = true;
-                                terminal_error = Some(wait_failure_message(failure));
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error = Some(wait_failure_message(failure));
                                 break;
                             }
                             std::thread::sleep(Duration::from_micros(500));
@@ -933,42 +939,44 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         }
                     }
                 }
-                startup_gate = None;
+                runtime.startup_gate = None;
                 // A first note at authored t=0 may be dispatched before the
                 // future physical epoch by its lead. The typed timeline has
                 // no negative value, so this one startup sample is defined as
                 // logical zero; later underflow remains terminal.
-                allow_pre_epoch_startup_dispatch = true;
+                runtime.allow_pre_epoch_startup_dispatch = true;
                 now_ticks = qpc_ticks_or_terminal!();
             }
 
-            let effective_now_ticks =
-                if allow_pre_epoch_startup_dispatch && now_ticks < clock_state.epoch {
-                    TimelineTicks::ZERO
-                } else {
-                    allow_pre_epoch_startup_dispatch = false;
-                    match clock_state
-                        .get_elapsed_allow_pre_epoch(now_ticks, allow_pre_epoch_startup_dispatch)
-                    {
-                        Ok(ticks) => ticks,
-                        Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("playback clock failure: {error}"));
-                            break;
-                        }
+            let effective_now_ticks = if runtime.allow_pre_epoch_startup_dispatch
+                && now_ticks < clock_state.epoch
+            {
+                TimelineTicks::ZERO
+            } else {
+                runtime.allow_pre_epoch_startup_dispatch = false;
+                match clock_state.get_elapsed_allow_pre_epoch(
+                    now_ticks,
+                    runtime.allow_pre_epoch_startup_dispatch,
+                ) {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+                        break;
                     }
-                };
+                }
+            };
             let effective_now_us = qpc_ticks_to_us_or_terminal!(effective_now_ticks);
             local_metrics.elapsed_us = effective_now_us;
             let latency_class = match classify_latency_class(
-                last_send_qpc_ticks,
+                runtime.last_send_qpc_ticks,
                 now_ticks,
                 cold_threshold_ticks,
             ) {
                 Ok(class) => class,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC ordering failure: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("QPC ordering failure: {error}"));
                     break;
                 }
             };
@@ -994,8 +1002,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }) {
                 Ok(plan) => plan,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("coordinator planning failure: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("coordinator planning failure: {error}"));
                     break;
                 }
             };
@@ -1006,8 +1014,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             let lead_up = match qpc_clock.duration_to_us(lead_up_ticks) {
                 Ok(lead) => lead,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("lead telemetry conversion failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
+                        Some(format!("lead telemetry conversion failure: {error:?}"));
                     break;
                 }
             };
@@ -1015,8 +1024,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 Some(plan) => match coordinator.pop_due_pending_ticks(effective_now_ticks, plan) {
                     Ok(due) => due,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("coordinator pending-pop failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("coordinator pending-pop failure: {error}"));
                         break;
                     }
                 },
@@ -1028,33 +1038,35 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let started_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("QPC failure before note-off: {error:?}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("QPC failure before note-off: {error:?}"));
                         break;
                     }
                 };
                 let started_us = qpc_ticks_to_us_or_terminal!(started_ticks);
-                let actual_ticks = match clock_state
-                    .get_elapsed_allow_pre_epoch(started_ticks, allow_pre_epoch_startup_dispatch)
-                {
+                let actual_ticks = match clock_state.get_elapsed_allow_pre_epoch(
+                    started_ticks,
+                    runtime.allow_pre_epoch_startup_dispatch,
+                ) {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
                 };
                 let result = backend.key_up(&scan_codes);
                 if let Some(error) = backend.timing_error.take() {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("QPC failure after note-off: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("QPC failure after note-off: {error:?}"));
                     break;
                 }
                 let completed_qpc_ticks = match result.send_completed_ticks {
                     Some(ticks) => ticks,
                     None => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(
                             "SendInput note-off completed without a QPC completion boundary"
                                 .to_string(),
                         );
@@ -1063,17 +1075,17 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 };
                 let completed_effective_ticks = match clock_state.get_elapsed_allow_pre_epoch(
                     completed_qpc_ticks,
-                    allow_pre_epoch_startup_dispatch,
+                    runtime.allow_pre_epoch_startup_dispatch,
                 ) {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("playback clock failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                         break;
                     }
                 };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                last_send_qpc_ticks = Some(completed_qpc_ticks);
+                runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
                     &result.sent,
@@ -1085,8 +1097,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 ) {
                     Ok(required) => required,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("coordinator recovery failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("coordinator recovery failure: {error}"));
                         break;
                     }
                 };
@@ -1095,8 +1108,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     &result.sent,
                     &result.skipped_duplicates,
                 ) {
-                    force_full_cleanup = true;
-                    terminal_error =
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
                         Some(format!("coordinator release completion failure: {error}"));
                     break;
                 }
@@ -1110,8 +1123,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 match qpc_clock.duration_to_us(recovery_pause_ticks) {
                                     Ok(value) => value,
                                     Err(error) => {
-                                        force_full_cleanup = true;
-                                        terminal_error = Some(format!(
+                                        runtime.force_full_cleanup = true;
+                                        runtime.terminal_error = Some(format!(
                                             "recovery telemetry conversion failure: {error:?}"
                                         ));
                                         break;
@@ -1122,8 +1135,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         }
                         Ok(None) => {}
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("coordinator recovery completion failure: {error}"));
                             break;
                         }
@@ -1136,8 +1149,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     let deadline = match pending.get_effective_release_ticks(lead_up_ticks) {
                         Ok(deadline) => deadline,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("pending release deadline failure: {error}"));
                             break;
                         }
@@ -1154,8 +1167,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                     )
                             }
                             None => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error = Some(
                                     "pending release first-deadline state is inconsistent"
                                         .to_string(),
                                 );
@@ -1168,18 +1181,19 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         first_deadline = Some(deadline);
                     }
                 }
-                if terminal_error.is_some() {
+                if runtime.terminal_error.is_some() {
                     break;
                 }
                 let Some(first_index) = first_index else {
-                    force_full_cleanup = true;
-                    terminal_error =
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
                         Some("coordinator returned an empty pending release batch".to_string());
                     break;
                 };
                 let Some(effective_deadline_ticks) = first_deadline else {
-                    force_full_cleanup = true;
-                    terminal_error = Some("coordinator returned no release deadline".to_string());
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
+                        Some("coordinator returned no release deadline".to_string());
                     break;
                 };
                 let first = &due_pending[first_index];
@@ -1188,16 +1202,16 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     .map(|pending| pending.scheduled_release_ticks)
                     .min()
                 else {
-                    force_full_cleanup = true;
-                    terminal_error =
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
                         Some("pending release batch has no scheduled timestamp".to_string());
                     break;
                 };
                 let scheduled_us = match qpc_clock.timeline_to_us(scheduled_ticks) {
                     Ok(value) => value,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "pending release telemetry conversion failure: {error:?}"
                         ));
                         break;
@@ -1215,8 +1229,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 DurationTicks::ZERO
                             }
                             Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error =
                                     Some(format!("pending deferral arithmetic failure: {error}"));
                                 break;
                             }
@@ -1224,15 +1238,15 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     let deferred_us = match qpc_clock.duration_to_us(deferred_ticks) {
                         Ok(value) => value,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("pending deferral conversion failure: {error:?}"));
                             break;
                         }
                     };
                     deferred_by_us = deferred_by_us.max(deferred_us);
                 }
-                if terminal_error.is_some() {
+                if runtime.terminal_error.is_some() {
                     break;
                 }
                 let mixed_source = due_pending.iter().any(|pending| {
@@ -1248,8 +1262,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 ) {
                     Ok(value) => value,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
                             Some(format!("note-off timing conversion failure: {error}"));
                         break;
                     }
@@ -1258,8 +1272,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     match signed_timeline_delta_ticks(completed_effective_ticks, scheduled_ticks) {
                         Ok(value) => value,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "note-off authored timing conversion failure: {error}"
                             ));
                             break;
@@ -1269,8 +1283,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     match signed_ticks_to_us(qpc_clock, up_completion_error_ticks) {
                         Ok(value) => value,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("note-off timing conversion failure: {error}"));
                             break;
                         }
@@ -1309,8 +1323,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         latency_class,
                     )
                 {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("estimator update failure: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("estimator update failure: {error}"));
                     break;
                 }
                 let release_outcome = if strict_up_completion_late {
@@ -1364,8 +1378,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         },
                     )
                 }) {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("native telemetry record overflow: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
+                        Some(format!("native telemetry record overflow: {error}"));
                     break;
                 }
                 if config.enable_adaptive_lead
@@ -1380,7 +1395,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         signed_delta(completed_effective, scheduled_us),
                     );
                 }
-                pending_pre_send_spin_us = 0;
+                runtime.pending_pre_send_spin_us = 0;
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(started_us),
                     completed_effective,
@@ -1428,9 +1443,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     !clean_up_sample || recovery_required,
                 );
                 if recovery_required {
-                    verified_target = None;
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!(
+                    runtime.verified_target = None;
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!(
                         "note-off recovery exhausted after {} retries{}",
                         sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES,
                         result
@@ -1441,7 +1456,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
                     if !release_state_verified(&backend, &recovery_cleanup) {
                         record_termination_error(
-                            &mut terminal_error,
+                            &mut runtime.terminal_error,
                             &mut secondary_errors,
                             format!(
                                 "recovery cleanup release verification failed: {}",
@@ -1451,23 +1466,23 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     }
                     cancel_coordinator_or_terminal(
                         &mut coordinator,
-                        &mut force_full_cleanup,
-                        &mut terminal_error,
+                        &mut runtime.force_full_cleanup,
+                        &mut runtime.terminal_error,
                         &mut secondary_errors,
                     );
                     break;
                 }
                 if strict_up_completion_late {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!(
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!(
                         "strict timing completion SLO exceeded for note-off at action {}: completion was {}us late",
                         first.source_action_index, up_completion_error_us
                     ));
                     break;
                 }
                 if saturation_abort {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!(
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!(
                         "strict timing SLO exceeded: note-off lead saturated with positive residual for {} consecutive dispatches",
                         STRICT_SATURATION_ABORT_STREAK
                     ));
@@ -1493,21 +1508,22 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
                 Ok(ticks) => ticks,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("down lead conversion failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
+                        Some(format!("down lead conversion failure: {error:?}"));
                     break;
                 }
             };
-            let prepared_batch = match coordinator
-                .prepare_next_due_authored(effective_now_ticks, lead_down_ticks)
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("coordinator authored-prepare failure: {error}"));
-                    break;
-                }
-            };
+            let prepared_batch =
+                match coordinator.prepare_next_due_authored(effective_now_ticks, lead_down_ticks) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("coordinator authored-prepare failure: {error}"));
+                        break;
+                    }
+                };
             if let Some(prepared_batch) = prepared_batch {
                 let batch_index = prepared_batch.index;
                 // --- Borrow scope: extract all scalar and stack data before any &mut call ---
@@ -1521,8 +1537,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 {
                     Ok(value) => value,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("runtime schedule view failure: {error}"));
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("runtime schedule view failure: {error}"));
                         break;
                     }
                 };
@@ -1531,8 +1548,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 let batch_scheduled_us = match qpc_clock.timeline_to_us(batch_scheduled_ticks) {
                     Ok(value) => value,
                     Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error =
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
                             Some(format!("schedule telemetry conversion failure: {error:?}"));
                         break;
                     }
@@ -1561,16 +1578,18 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             &mut coordinator,
                             target_hwnd.load(Ordering::Acquire),
                         ) {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("focus suspension failed: {error}"));
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("focus suspension failed: {error}"));
                             break;
                         }
                         if let Err(error) = clock_state.enter_pause("focus", now_ticks) {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("playback clock failure: {error}"));
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("playback clock failure: {error}"));
                             break;
                         }
-                        focus_restore_started_ticks = None;
+                        runtime.focus_restore_started_ticks = None;
                         if let Err(error) = telemetry.try_push(|| {
                             RtTraceRecord::dispatched(
                                 TraceContext {
@@ -1599,8 +1618,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 },
                             )
                         }) {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("native telemetry record overflow: {error}"));
                             break;
                         }
@@ -1613,10 +1632,10 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         try_publish_metrics(&local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
-                    if focus_loss_fault && !focus_loss_fault_injected {
-                        focus_loss_fault_injected = true;
-                        force_full_cleanup = true;
-                        terminal_error = Some(
+                    if focus_loss_fault && !runtime.focus_loss_fault_injected {
+                        runtime.focus_loss_fault_injected = true;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(
                             "focus lost after due check before SendInput boundary".to_string(),
                         );
                         break;
@@ -1625,26 +1644,26 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     if let Err(error) = ensure_preflight_for_target(
                         &backend,
                         preflight_target,
-                        &mut verified_target,
+                        &mut runtime.verified_target,
                     ) {
-                        verified_target = None;
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.verified_target = None;
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "instrument key preflight failed; release the 15 instrument keys before playback: {error}"
                         ));
                         break;
                     }
                     if !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
                     {
-                        verified_target = None;
+                        runtime.verified_target = None;
                         continue;
                     }
                     if effective_now_ticks
                         .checked_duration_since(batch_scheduled_ticks)
                         .is_ok_and(|late| late > hard_late_abort_threshold_ticks)
                     {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "authored Down exceeded hard lateness safety threshold of {}us",
                             HARD_LATE_ABORT_THRESHOLD_US
                         ));
@@ -1661,8 +1680,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         local_metrics.authored_keys_rejected = local_metrics
                             .authored_keys_rejected
                             .saturating_add(batch_intent_count as u64);
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!(
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
                             "unexpected blocked authored Down at action {}",
                             batch_source_action_index
                         ));
@@ -1687,26 +1706,26 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         ) {
                             DownAdmission::Allowed => {}
                             DownAdmission::FocusLost => {
-                                verified_target = None;
+                                runtime.verified_target = None;
                                 let focus_ticks = qpc_ticks_or_terminal!();
                                 if let Err(error) = suspend_live_input(
                                     &mut backend,
                                     &mut coordinator,
                                     target_hwnd.load(Ordering::Acquire),
                                 ) {
-                                    force_full_cleanup = true;
-                                    terminal_error =
+                                    runtime.force_full_cleanup = true;
+                                    runtime.terminal_error =
                                         Some(format!("focus suspension failed: {error}"));
                                     break;
                                 }
                                 if let Err(error) = clock_state.enter_pause("focus", focus_ticks) {
-                                    force_full_cleanup = true;
-                                    terminal_error = Some(format!(
+                                    runtime.force_full_cleanup = true;
+                                    runtime.terminal_error = Some(format!(
                                         "playback clock failure after final focus check: {error}"
                                     ));
                                     break;
                                 }
-                                focus_restore_started_ticks = None;
+                                runtime.focus_restore_started_ticks = None;
                                 publish_backend_metrics(
                                     &backend,
                                     &mut local_metrics,
@@ -1726,15 +1745,16 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             | DownAdmission::QuitRequested
                             | DownAdmission::SkipRequested
                             | DownAdmission::PanicRequested => {
-                                verified_target = None;
+                                runtime.verified_target = None;
                                 continue;
                             }
                         }
                         // SendInput uses the stack-only scan code buffer — no allocation.
                         let result = backend.key_down(scan_batch.as_slice());
                         if let Some(error) = backend.timing_error.take() {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("QPC failure after note-on: {error:?}"));
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("QPC failure after note-on: {error:?}"));
                             break;
                         }
 
@@ -1828,8 +1848,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         };
 
                         if !result_success {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "authored Down send integrity failure at action {}",
                                 batch_source_action_index
                             ));
@@ -1843,8 +1863,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         let sender_started_ticks = match result_started_ticks {
                             Some(ticks) => ticks,
                             None => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error = Some(
                                     "SendInput note-on succeeded without a QPC start boundary"
                                         .to_string(),
                                 );
@@ -1854,8 +1874,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         let completed_qpc_ticks = match result_completed_ticks {
                             Some(ticks) => ticks,
                             None => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error = Some(
                                     "SendInput note-on completed without a QPC completion boundary"
                                         .to_string(),
                                 );
@@ -1867,8 +1887,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         {
                             Ok(duration) => duration,
                             Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error =
                                     Some(format!("note-on QPC ordering failure: {error}"));
                                 break;
                             }
@@ -1877,8 +1897,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             match qpc_clock.duration_to_us(sender_duration_ticks) {
                                 Ok(duration) => duration,
                                 Err(error) => {
-                                    force_full_cleanup = true;
-                                    terminal_error = Some(format!(
+                                    runtime.force_full_cleanup = true;
+                                    runtime.terminal_error = Some(format!(
                                         "note-on sender duration conversion failure: {error:?}"
                                     ));
                                     break;
@@ -1887,38 +1907,40 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         let sender_started_effective_ticks = match clock_state
                             .get_elapsed_allow_pre_epoch(
                                 sender_started_ticks,
-                                allow_pre_epoch_startup_dispatch,
+                                runtime.allow_pre_epoch_startup_dispatch,
                             ) {
                             Ok(ticks) => ticks,
                             Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(format!("playback clock failure: {error}"));
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error =
+                                    Some(format!("playback clock failure: {error}"));
                                 break;
                             }
                         };
                         let completed_effective_ticks = match clock_state
                             .get_elapsed_allow_pre_epoch(
                                 completed_qpc_ticks,
-                                allow_pre_epoch_startup_dispatch,
+                                runtime.allow_pre_epoch_startup_dispatch,
                             ) {
                             Ok(ticks) => ticks,
                             Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error = Some(format!("playback clock failure: {error}"));
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error =
+                                    Some(format!("playback clock failure: {error}"));
                                 break;
                             }
                         };
                         let completed_effective =
                             qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
-                        last_send_qpc_ticks = Some(completed_qpc_ticks);
+                        runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
                         if let Err(error) = coordinator.commit_down_success(
                             prepared_batch,
                             &result_sent,
                             sender_started_effective_ticks,
                             completed_effective_ticks,
                         ) {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("coordinator activation failure: {error}"));
                             break;
                         }
@@ -1931,8 +1953,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         ) {
                             Ok(value) => value,
                             Err(error) => {
-                                force_full_cleanup = true;
-                                terminal_error =
+                                runtime.force_full_cleanup = true;
+                                runtime.terminal_error =
                                     Some(format!("note-on timing conversion failure: {error}"));
                                 break;
                             }
@@ -1944,8 +1966,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             ) {
                                 Ok(value) => value,
                                 Err(error) => {
-                                    force_full_cleanup = true;
-                                    terminal_error = Some(format!(
+                                    runtime.force_full_cleanup = true;
+                                    runtime.terminal_error = Some(format!(
                                         "note-on authored timing conversion failure: {error}"
                                     ));
                                     break;
@@ -1955,8 +1977,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             match signed_ticks_to_us(qpc_clock, completion_error_ticks_value) {
                                 Ok(value) => value,
                                 Err(error) => {
-                                    force_full_cleanup = true;
-                                    terminal_error =
+                                    runtime.force_full_cleanup = true;
+                                    runtime.terminal_error =
                                         Some(format!("note-on timing conversion failure: {error}"));
                                     break;
                                 }
@@ -2000,8 +2022,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 latency_class,
                             )
                         {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!("estimator update failure: {error}"));
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("estimator update failure: {error}"));
                             break;
                         }
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
@@ -2058,8 +2081,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 },
                             )
                         }) {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("native telemetry record overflow: {error}"));
                             break;
                         }
@@ -2071,7 +2094,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 signed_delta(completed_effective, batch_scheduled_us),
                             );
                         }
-                        pending_pre_send_spin_us = 0;
+                        runtime.pending_pre_send_spin_us = 0;
                         let bookkeeping_after_send_us =
                             bookkeeping_completed_us.saturating_sub(result_completed_us);
                         record_input_path_health(
@@ -2108,9 +2131,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             &mut local_metrics,
                         );
                         if result_chord_integrity_lost {
-                            verified_target = None;
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.verified_target = None;
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "SendInput split authored chord at action {}",
                                 batch_source_action_index
                             ));
@@ -2129,8 +2152,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             break;
                         }
                         if retry_late_abort {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "strict timing rejected zero-progress retry at action {}: completion was {}us late",
                                 batch_source_action_index, completion_error_us
                             ));
@@ -2149,8 +2172,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             break;
                         }
                         if strict_down_completion_late {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "strict timing completion SLO exceeded for note-on at action {}: completion was {}us late",
                                 batch_source_action_index, completion_error_us
                             ));
@@ -2169,8 +2192,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             break;
                         }
                         if saturation_abort {
-                            force_full_cleanup = true;
-                            terminal_error = Some(format!(
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
                                 "strict timing SLO exceeded: note-on lead saturated with positive residual for {} consecutive dispatches",
                                 STRICT_SATURATION_ABORT_STREAK
                             ));
@@ -2193,8 +2216,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     let (_, suppressed) = match coordinator.commit_up_request(prepared_batch) {
                         Ok(value) => value,
                         Err(error) => {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("coordinator release request failure: {error}"));
                             break;
                         }
@@ -2229,8 +2252,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 },
                             )
                         }) {
-                            force_full_cleanup = true;
-                            terminal_error =
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
                                 Some(format!("native telemetry record overflow: {error}"));
                             break;
                         }
@@ -2269,8 +2292,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
                 Ok(ticks) => ticks,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("down lead conversion failure: {error:?}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error =
+                        Some(format!("down lead conversion failure: {error:?}"));
                     break;
                 }
             };
@@ -2295,26 +2319,27 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }) {
                 Ok(plan) => plan,
                 Err(error) => {
-                    force_full_cleanup = true;
-                    terminal_error = Some(format!("coordinator planning failure: {error}"));
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("coordinator planning failure: {error}"));
                     break;
                 }
             };
-            let deadline_ticks =
-                match coordinator.next_deadline_ticks(lead_down_ticks, pending_plan.as_ref()) {
-                    Ok(deadline) => deadline,
-                    Err(error) => {
-                        force_full_cleanup = true;
-                        terminal_error = Some(format!("coordinator deadline failure: {error}"));
-                        break;
-                    }
-                };
+            let deadline_ticks = match coordinator
+                .next_deadline_ticks(lead_down_ticks, pending_plan.as_ref())
+            {
+                Ok(deadline) => deadline,
+                Err(error) => {
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("coordinator deadline failure: {error}"));
+                    break;
+                }
+            };
             match wait_for_next_boundary(WaitBoundaryContext {
                 deadline_ticks,
                 qpc_clock,
                 clock_state: &mut clock_state,
-                allow_pre_epoch_startup_dispatch,
-                last_send_qpc_ticks,
+                allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
+                last_send_qpc_ticks: runtime.last_send_qpc_ticks,
                 core_warmup_ticks,
                 cold_threshold_ticks,
                 effective_spin_threshold_ticks,
@@ -2325,9 +2350,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 strict_timing: config.strict_timing,
                 input_path_warn_us: config.input_path_warn_us,
                 local_metrics: &mut local_metrics,
-                pending_pre_send_spin_us: &mut pending_pre_send_spin_us,
-                force_full_cleanup: &mut force_full_cleanup,
-                terminal_error: &mut terminal_error,
+                pending_pre_send_spin_us: &mut runtime.pending_pre_send_spin_us,
+                force_full_cleanup: &mut runtime.force_full_cleanup,
+                terminal_error: &mut runtime.terminal_error,
             }) {
                 WaitBoundary::Ready => {}
                 WaitBoundary::Continue => continue,
@@ -2344,8 +2369,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         estimator,
         local_metrics,
         abort_counts,
-        force_full_cleanup,
-        terminal_error,
+        force_full_cleanup: runtime.force_full_cleanup,
+        terminal_error: runtime.terminal_error,
         secondary_errors,
         last_published_error,
         qpc_clock,

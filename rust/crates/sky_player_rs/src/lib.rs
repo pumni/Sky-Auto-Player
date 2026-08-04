@@ -1,4 +1,5 @@
 #[cfg(feature = "calibration")]
+#[path = "python/calibration.rs"]
 pub mod calibration;
 pub mod engine;
 mod python;

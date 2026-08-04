@@ -31,9 +31,10 @@ Current stable facades and ownership boundaries:
   re-exports; session lifecycle is in `engine/session.rs`.
 - `engine/shared.rs` owns the cross-thread command, target, lifecycle, metrics,
   telemetry, and completion resources shared by a session and its worker.
-- `engine/worker/{admission,cleanup,control,estimator,health,timing,wait}.rs`
+- `engine/worker/{admission,cleanup,control,estimator,health,startup,timing,wait}.rs`
   own focused invariant and phase boundaries. Terminal cleanup, command
   control, and wait-boundary orchestration now run through context objects;
+  `WorkerRuntime` owns mutable worker-thread state outside the panic boundary;
   Down/Up transaction extraction remains gated on a complete worker-state
   owner so operation order cannot change.
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,

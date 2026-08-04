@@ -4,6 +4,7 @@ mod control;
 mod estimator;
 mod health;
 mod orchestration;
+mod startup;
 mod timing;
 mod wait;
 
@@ -23,6 +24,7 @@ pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_c
 pub(crate) use health::{
     focus_gate_matches, publish_backend_metrics, record_input_path_health, record_lateness,
 };
+use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
@@ -126,6 +128,24 @@ pub(super) struct WorkerInputs<'a> {
     pub(super) supervisor_heartbeat_ticks: &'a AtomicU64,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: &'a CommandTimingState,
+}
+
+/// Mutable state owned exclusively by the worker thread.
+///
+/// This state deliberately lives outside the panic boundary so the worker's
+/// backend, coordinator, and telemetry can still be finalized after an
+/// injected or unexpected panic.
+#[derive(Default)]
+pub(super) struct WorkerRuntime {
+    verified_target: Option<TargetStamp>,
+    startup_gate: Option<(TimelineTicks, DurationTicks)>,
+    focus_restore_started_ticks: Option<QpcTicks>,
+    last_send_qpc_ticks: Option<QpcTicks>,
+    force_full_cleanup: bool,
+    terminal_error: Option<String>,
+    focus_loss_fault_injected: bool,
+    allow_pre_epoch_startup_dispatch: bool,
+    pending_pre_send_spin_us: u64,
 }
 
 impl<'a> WorkerInputs<'a> {
