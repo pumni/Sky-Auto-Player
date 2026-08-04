@@ -91,6 +91,7 @@ The healthy Down/Up dispatch path must not introduce:
 - `sky_dispatch_win32/input/raw.rs`
 - `sky_dispatch_win32/input/physical.rs`
 - `sky_dispatch_win32/wait/timer.rs`
+- `sky_dispatch_win32/wait/hybrid.rs`
 
 Worker orchestration, estimators, coordinators, and Python boundaries must remain 100% safe Rust. All `unsafe` blocks must be prefixed with a `// SAFETY: ...` explanation.
 

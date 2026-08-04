@@ -18,7 +18,7 @@
     {"path":"rust/crates/sky_dispatch_win32/src/mmcss.rs","rule":"unsafe_boundary","reason":"existing MMCSS Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/power.rs","rule":"unsafe_boundary","reason":"existing power Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/timer.rs","rule":"unsafe_boundary","reason":"existing timer Win32 seam","expires_phase":"Phase 12"},
-    {"path":"rust/crates/sky_dispatch_win32/src/wait.rs","rule":"unsafe_boundary","reason":"existing waitable-timer Win32 seam","expires_phase":"Phase 12"},
+    {"path":"rust/crates/sky_dispatch_win32/src/wait/hybrid.rs","rule":"unsafe_boundary","reason":"existing waitable-timer and multi-wait Win32 seam moved from wait facade","expires_phase":"Phase 12"},
 
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"production_glob_import","reason":"make physical input dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/raw.rs","rule":"production_glob_import","reason":"make raw input dependencies explicit in Phase 9","expires_phase":"Phase 9"},
