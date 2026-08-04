@@ -649,6 +649,7 @@ def materialize_native_trace(
                 authored_us=authored_us,
                 scheduled_timeline_us=effective_us,
                 wake_us=wake_us,
+                wake_error_us=wake_us - effective_us,
                 wake_timeline_us=wake_us,
                 send_started_us=started_us,
                 send_completed_us=completed_us,

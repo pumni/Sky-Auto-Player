@@ -59,6 +59,7 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.native_requested_count == 1
     assert record.native_sent_count == 1
     assert record.native_skipped_count == 0
+    assert record.wake_error_us == 10
     assert record.sender_completion_error_us == 25
     assert record.visible_lateness_us == 25
     assert record.dispatch_lateness_us == 25
@@ -79,6 +80,7 @@ def test_native_telemetry_ingest_preserves_frozen_fields() -> None:
     assert row["bookkeeping_us"] == 0
     assert row["scheduled_timeline_us"] == 1_000
     assert row["wake_timeline_us"] == 1_010
+    assert row["wake_error_us"] == 10
     assert row["sender_started_us"] == 1_011
     assert row["sender_completed_us"] == 1_018
     assert row["sender_completion_error_us"] == 25
