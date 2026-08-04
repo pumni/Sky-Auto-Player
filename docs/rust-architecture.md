@@ -37,11 +37,12 @@ Current stable facades and ownership boundaries:
 - `engine/worker/{admission,cleanup,control,estimator,health,startup,timing,wait}.rs`
   own focused invariant and phase boundaries. Terminal cleanup, command
   control, and wait-boundary orchestration currently use narrowly scoped
-  capability inputs; the remaining orchestration loop is still being reduced
-  to owner methods. `WorkerCore` owns mutable metrics, runtime, health, timing,
-  error, and dispatch resources outside the panic boundary. Down/Up
-  transaction extraction remains gated on a complete worker-state owner so
-  operation order cannot change.
+  capability inputs; terminal resource extraction and publication are assembled
+  by `Worker::finalize` outside the contained panic loop. The remaining
+  orchestration loop is still being reduced to owner methods. `WorkerCore` owns
+  mutable metrics, runtime, health, timing, error, and dispatch resources
+  outside the panic boundary. Down/Up transaction extraction remains gated on a
+  complete worker-state owner so operation order cannot change.
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
   session, and telemetry code live under `python/`.
 - `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
