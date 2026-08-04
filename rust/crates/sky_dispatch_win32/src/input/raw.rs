@@ -1,4 +1,7 @@
-use super::*;
+use super::outcome::{EmitResult, PlatformSendResult};
+use super::scan_code::{
+    PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE, valid_instrument_scan_code,
+};
 use crate::clock::{QpcClock, QpcTicks};
 use smallvec::SmallVec;
 

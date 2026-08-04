@@ -1,4 +1,4 @@
-use super::*;
+use super::scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask};
 use smallvec::SmallVec;
 
 #[cfg(windows)]

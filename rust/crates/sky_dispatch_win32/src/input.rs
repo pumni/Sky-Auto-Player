@@ -17,14 +17,18 @@ pub use scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PL
 pub use tracked::CustomEmitterFn;
 pub use tracked::{TrackedKeyState, emit_up, emit_up_with};
 
-pub(crate) use physical::*;
-pub(crate) use raw::*;
-pub(crate) use scan_code::*;
 #[cfg(test)]
 pub(crate) use tracked::emit_up_with_immediate;
 
 #[cfg(test)]
 mod tests {
+    use super::physical::{
+        InstrumentPhysicalState, instrument_physical_state_for_mask, keyboard_context_for_target,
+        map_instrument_virtual_keys, mask_for_scan_codes,
+    };
+    use super::scan_code::{
+        FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, valid_instrument_scan_code,
+    };
     use super::*;
     use crate::clock::QpcTicks;
     use std::collections::VecDeque;

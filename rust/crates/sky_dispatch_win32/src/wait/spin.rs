@@ -1,4 +1,4 @@
-use super::*;
+use super::{WaitFailure, WaitOutcome, WaitResult};
 use crate::clock::{QpcClock, QpcTicks};
 use crate::event::OwnedEvent;
 pub(crate) fn spin_duration_us(
