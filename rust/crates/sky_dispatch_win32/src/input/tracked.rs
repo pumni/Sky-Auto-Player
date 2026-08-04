@@ -1,3 +1,4 @@
+use super::down_transaction::{emit_down, emit_down_with};
 use super::outcome::{
     DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, PlatformSendResult,
     ReleaseAllOutcome,
@@ -5,10 +6,7 @@ use super::outcome::{
 use super::physical::{
     InstrumentPhysicalState, instrument_physical_state_for_mask, mask_for_scan_codes,
 };
-use super::raw::{
-    emit_down, emit_down_with, no_syscall_boundary_with_clock, send_input_raw,
-    send_input_raw_with_clock,
-};
+use super::raw::{no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock};
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, scan_codes_from_mask,
 };
