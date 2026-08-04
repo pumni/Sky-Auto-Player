@@ -8,13 +8,13 @@ use super::{
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
     RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp,
     TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
-    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, WorkerMetricsLocal,
-    adjust_spin_threshold, anchored_dispatch_target_ticks, classify_latency_class,
-    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
-    ensure_preflight_for_target, exact_sender_durations, final_down_admission, focus_gate_matches,
-    focus_matches_hwnd, record_input_path_health, record_termination_error,
-    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-    target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
+    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+    classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
+    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
+    final_down_admission, focus_gate_matches, focus_matches_hwnd, record_input_path_health,
+    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -168,6 +168,38 @@ fn startup_failure_does_not_publish_ready_boundary() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert!(!session.snapshot().startup_ready);
     assert_eq!(session.snapshot().startup_latency_us, None);
+}
+
+#[test]
+fn worker_takes_runtime_schedule_only_once() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+    let mut worker = Worker::new(
+        test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        ),
+        session.shared_for_test(),
+    );
+
+    assert!(worker.take_schedule_for_test().is_ok());
+    assert!(matches!(
+        worker.take_schedule_for_test(),
+        Err("worker runtime schedule was already consumed")
+    ));
 }
 
 #[test]

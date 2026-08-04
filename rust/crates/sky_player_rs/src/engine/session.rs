@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
 
 pub struct NativeDispatchSession {
-    config: Mutex<Option<WorkerConfig>>,
+    config: Mutex<Option<NativeSessionOptions>>,
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -502,6 +502,11 @@ impl NativeDispatchSession {
                 .startup_ready_ticks
                 .load(Ordering::Relaxed),
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn shared_for_test(&self) -> &SessionShared {
+        &self.shared
     }
 
     pub fn join(&self, timeout: Duration) -> Result<bool, String> {

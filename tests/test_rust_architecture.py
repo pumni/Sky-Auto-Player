@@ -58,3 +58,36 @@ def test_checker_treats_python_root_as_ffi_boundary(tmp_path):
     report = _checker().check_repository(tmp_path)
 
     assert not any(item.rule == "pyo3_boundary" for item in report.errors)
+
+
+def test_checker_rejects_runtime_schedule_clone_in_worker(tmp_path):
+    worker = tmp_path / "rust" / "crates" / "sky_player_rs" / "src" / "engine"
+    worker.mkdir(parents=True)
+    (worker / "worker.rs").write_text(
+        "let coordinator = RuntimeDispatchCoordinator::try_new_ticks(\n"
+        "    schedule.clone(),\n"
+        ");\n",
+        encoding="utf-8",
+    )
+
+    report = _checker().check_repository(tmp_path)
+
+    violations = [item for item in report.errors if item.rule == "runtime_schedule_clone"]
+    assert len(violations) == 1
+    assert violations[0].message == (
+        "production worker must move RuntimeSchedule into the coordinator; "
+        "cloning the schedule is forbidden"
+    )
+
+
+def test_checker_accepts_worker_schedule_move(tmp_path):
+    worker = tmp_path / "rust" / "crates" / "sky_player_rs" / "src" / "engine"
+    worker.mkdir(parents=True)
+    (worker / "worker.rs").write_text(
+        "let coordinator = RuntimeDispatchCoordinator::try_new_ticks(schedule);\n",
+        encoding="utf-8",
+    )
+
+    report = _checker().check_repository(tmp_path)
+
+    assert not any(item.rule == "runtime_schedule_clone" for item in report.errors)

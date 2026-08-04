@@ -34,8 +34,16 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
 
 pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
-    let config = &worker.config;
     let shared = worker.shared;
+
+    let schedule = match worker.take_schedule() {
+        Ok(schedule) => schedule,
+        Err(error) => {
+            *shared.publication.metrics.last_error.lock() = Some(error.to_string());
+            return 1;
+        }
+    };
+
     let core = &mut worker.core;
     let local_metrics = &mut core.metrics;
     let runtime = &mut core.runtime;
@@ -53,6 +61,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     let metrics = &shared.publication.metrics;
     let priority_acquired = &shared.publication.priority_acquired;
     let supervisor_heartbeat_ticks = &shared.publication.supervisor_heartbeat_ticks;
+
+    let config = &worker.config;
 
     #[cfg(any(test, feature = "test-support"))]
     let command_timing = &shared.commands.command_timing;
@@ -266,7 +276,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         };
     let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
-        config.schedule.clone(),
+        schedule,
         config.timing.min_hold_us,
         min_hold_ticks,
         0,

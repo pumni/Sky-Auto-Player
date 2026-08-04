@@ -53,7 +53,16 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) estimator: EstimatorOptions,
 }
 
-pub(super) type WorkerConfig = NativeSessionOptions;
+pub(super) struct WorkerConfig {
+    pub(super) backend: BackendConfig,
+    pub(super) allowed_count: usize,
+    pub(super) timing: TimingOptions,
+    pub(super) focus: FocusOptions,
+    pub(super) wait: WaitOptions,
+    pub(super) telemetry: TelemetryOptions,
+    pub(super) priority: PriorityOptions,
+    pub(super) estimator: EstimatorOptions,
+}
 
 pub(crate) struct TimingOptions {
     pub(crate) min_hold_us: u64,

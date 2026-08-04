@@ -18,6 +18,15 @@ REGULAR_SOFT_LIMIT = 700
 REGULAR_HARD_LIMIT = 900
 WORKER_FUNCTION_HARD_LIMIT = 350
 CONTEXT_FIELD_HARD_LIMIT = 12
+WORKER_SCHEDULE_CLONE_PATTERNS = (
+    "schedule.clone()",
+    "Clone::clone(&schedule",
+    "Clone::clone(&config.schedule",
+)
+WORKER_SCHEDULE_CLONE_MESSAGE = (
+    "production worker must move RuntimeSchedule into the coordinator; "
+    "cloning the schedule is forbidden"
+)
 FACADES = {"engine.rs", "input.rs", "wait.rs", "lib.rs"}
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
 
@@ -172,6 +181,16 @@ def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
     return violations
 
 
+def _worker_schedule_clone_violation(joined: str, path: str) -> Violation | None:
+    if path != "rust/crates/sky_player_rs/src/engine/worker.rs" and not path.startswith(
+        "rust/crates/sky_player_rs/src/engine/worker/"
+    ):
+        return None
+    if any(pattern in joined for pattern in WORKER_SCHEDULE_CLONE_PATTERNS):
+        return Violation("runtime_schedule_clone", path, WORKER_SCHEDULE_CLONE_MESSAGE)
+    return None
+
+
 def _top_level_glob_import(lines: list[str]) -> bool:
     for line in lines:
         stripped = line.strip()
@@ -273,6 +292,9 @@ def check_repository(repository_root: Path) -> CheckReport:
                 _record(report, violation, allowlist)
             for violation in _worker_function_violations(lines, relative):
                 _record(report, violation, allowlist)
+            schedule_clone_violation = _worker_schedule_clone_violation(joined, relative)
+            if schedule_clone_violation is not None:
+                _record(report, schedule_clone_violation, allowlist)
 
     engine = repository_root / "rust/crates/sky_player_rs/src/engine.rs"
     if engine.exists():

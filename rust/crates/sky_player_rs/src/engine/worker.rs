@@ -49,6 +49,7 @@ use wait::{
 
 use super::shared::SessionShared;
 use super::*;
+use sky_dispatch_core::model::RuntimeSchedule;
 
 /// Mutable state owned exclusively by the worker thread.
 ///
@@ -128,18 +129,51 @@ pub(super) struct WorkerCore {
 }
 
 pub(super) struct Worker<'a> {
+    schedule: Option<RuntimeSchedule>,
     config: WorkerConfig,
     shared: &'a SessionShared,
     core: WorkerCore,
 }
 
 impl<'a> Worker<'a> {
-    pub(super) fn new(config: WorkerConfig, shared: &'a SessionShared) -> Self {
+    pub(super) fn new(options: NativeSessionOptions, shared: &'a SessionShared) -> Self {
+        let NativeSessionOptions {
+            schedule,
+            backend,
+            allowed_count,
+            timing,
+            focus,
+            wait,
+            telemetry,
+            priority,
+            estimator,
+        } = options;
         Self {
-            config,
+            schedule: Some(schedule),
+            config: WorkerConfig {
+                backend,
+                allowed_count,
+                timing,
+                focus,
+                wait,
+                telemetry,
+                priority,
+                estimator,
+            },
             shared,
             core: WorkerCore::default(),
         }
+    }
+
+    fn take_schedule(&mut self) -> Result<RuntimeSchedule, &'static str> {
+        self.schedule
+            .take()
+            .ok_or("worker runtime schedule was already consumed")
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_schedule_for_test(&mut self) -> Result<RuntimeSchedule, &'static str> {
+        self.take_schedule()
     }
 
     pub(super) fn run(mut self) -> u8 {
