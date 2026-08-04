@@ -52,9 +52,7 @@ use sky_dispatch_win32::input::TrackedKeyState;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome};
-use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 

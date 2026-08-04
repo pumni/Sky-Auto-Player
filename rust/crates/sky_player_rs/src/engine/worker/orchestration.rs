@@ -1,4 +1,36 @@
-use super::*;
+use super::super::{
+    ActionKind, BackendConfig, CORE_WARMUP_SPIN_MAX_US, CPU_METRICS_SAMPLE_INTERVAL_US,
+    CoordinatorError, Duration, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US,
+    INPUT_PATH_WINDOW_CAPACITY, LatencyClass, PAUSED_POLL_US, PlaybackClockState, QpcClock,
+    QpcError, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, RuntimeDispatchCoordinator,
+    SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
+    STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator, SharedMetrics, TRACE_FLAG_ANOMALY,
+    TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
+    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
+    VecDeque, WaitFailure, WaitOutcome, current_process_cpu_time_us, current_thread_cpu_time_us,
+    qpc_frequency_checked, trace_outcome_code, try_publish_metrics,
+};
+#[cfg(any(test, feature = "test-support"))]
+use super::super::{CommandTimingCleanup, create_mock_backend};
+use super::{
+    CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
+    CommandControlRuntime, CommandControlSignals, DownAdmission, FinalizeInput,
+    FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState, FinalizeTiming,
+    StartupResources, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
+    WaitTiming, Worker, WorkerHealthState, WorkerResources, WorkerTimingState,
+    anchored_dispatch_target_ticks_typed, cancel_coordinator_or_terminal, classify_latency_class,
+    cpu_metrics_sample_due, derive_spin_threshold_us, describe_release_outcome,
+    ensure_preflight_for_target, final_down_admission, finalize_worker, focus_matches,
+    focus_matches_hwnd, initialize_startup, lease_bounded_ticks, load_target_stamp,
+    process_command_control, publish_backend_metrics, publish_wake_error_stats,
+    record_input_path_health, record_lateness, record_lead_saturation, record_termination_error,
+    release_runtime_outcome, release_state_verified, signed_delta, signed_ticks_to_us,
+    signed_timeline_delta_ticks, suspend_live_input, target_stamp_still_current,
+    update_estimator_after_send_class, wait_failure_message, wait_for_next_boundary,
+};
+use smallvec::SmallVec;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::Ordering;
 
 pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     let config = &worker.config;
