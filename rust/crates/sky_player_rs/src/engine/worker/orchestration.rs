@@ -79,15 +79,15 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         waiter,
         power_throttling_disabled,
     } = initialize_startup(
-        config.priority_mode,
-        config.enable_waitable_timer,
-        config.enable_event_wait,
+        config.priority.mode,
+        config.wait.enable_waitable_timer,
+        config.wait.enable_event_wait,
         priority_acquired,
         metrics,
     );
     local_metrics.power_throttling_disabled = power_throttling_disabled;
     let mut estimator =
-        match SendLatencyEstimator::try_new(0.2, config.max_lead_us, config.allowed_count) {
+        match SendLatencyEstimator::try_new(0.2, config.timing.max_lead_us, config.allowed_count) {
             Ok(estimator) => estimator,
             Err(error) => {
                 return admission_failure(
@@ -97,13 +97,13 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 );
             }
         };
-    if let Some(raw) = &config.estimator_state_json {
+    if let Some(raw) = &config.estimator.state_json {
         // Timing caches are disposable runtime evidence. Any schema or
         // provenance mismatch starts from the conservative prior; it must not
         // turn a playback session into a keyboard cleanup failure.
         let _ = estimator.import_state(raw);
     }
-    let min_hold_ticks = match qpc_clock.duration_from_us(config.min_hold_us) {
+    let min_hold_ticks = match qpc_clock.duration_from_us(config.timing.min_hold_us) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
@@ -136,7 +136,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
         };
     let strict_down_completion_late_ticks =
-        match qpc_clock.duration_from_us(config.strict_down_completion_late_us) {
+        match qpc_clock.duration_from_us(config.timing.strict_down_completion_late_us) {
             Ok(ticks) => ticks,
             Err(error) => {
                 return admission_failure(
@@ -147,7 +147,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
         };
     let strict_up_completion_late_ticks =
-        match qpc_clock.duration_from_us(config.strict_up_completion_late_us) {
+        match qpc_clock.duration_from_us(config.timing.strict_up_completion_late_us) {
             Ok(ticks) => ticks,
             Err(error) => {
                 return admission_failure(
@@ -157,17 +157,17 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 );
             }
         };
-    let focus_restore_grace_ticks = match qpc_clock.duration_from_us(config.focus_restore_grace_us)
-    {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("focus grace conversion failed: {error:?}"),
-            );
-        }
-    };
+    let focus_restore_grace_ticks =
+        match qpc_clock.duration_from_us(config.focus.focus_restore_grace_us) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("focus grace conversion failed: {error:?}"),
+                );
+            }
+        };
     let paused_poll_ticks = match qpc_clock.duration_from_us(PAUSED_POLL_US) {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -188,9 +188,12 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let core_warmup_ticks = match qpc_clock
-        .duration_from_us(config.core_warmup_budget_us.min(CORE_WARMUP_SPIN_MAX_US))
-    {
+    let core_warmup_ticks = match qpc_clock.duration_from_us(
+        config
+            .timing
+            .core_warmup_budget_us
+            .min(CORE_WARMUP_SPIN_MAX_US),
+    ) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
@@ -200,16 +203,17 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let lease_timeout_ticks = match qpc_clock.duration_from_us(config.supervisor_lease_timeout_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("lease timeout conversion failed: {error:?}"),
-            );
-        }
-    };
+    let lease_timeout_ticks =
+        match qpc_clock.duration_from_us(config.wait.supervisor_lease_timeout_us) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("lease timeout conversion failed: {error:?}"),
+                );
+            }
+        };
     let retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()] =
         match RELEASE_RETRY_BACKOFF_US
             .map(|delay| qpc_clock.duration_from_us(delay))
@@ -232,7 +236,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         config.schedule,
-        config.min_hold_us,
+        config.timing.min_hold_us,
         min_hold_ticks,
         0,
         delivery_margin_ticks,
@@ -265,15 +269,16 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             );
         }
     };
-    let telemetry = TelemetryCollector::new(config.telemetry_mode, config.telemetry_capacity);
+    let telemetry = TelemetryCollector::new(config.telemetry.mode, config.telemetry.capacity);
     abort_counts.reserve(6);
-    let mut effective_spin_threshold_us = config.spin_threshold_us;
+    let mut effective_spin_threshold_us = config.timing.spin_threshold_us;
     let _ = interrupt.try_take();
-    if config.enable_adaptive_spin
+    if config.wait.enable_adaptive_spin
         && let Some(stats) = waiter.probe_wake_error_stats(qpc_clock, interrupt, 10)
     {
         publish_wake_error_stats(stats, &mut local_metrics);
-        effective_spin_threshold_us = derive_spin_threshold_us(stats.p95_us, config.spin_floor_us);
+        effective_spin_threshold_us =
+            derive_spin_threshold_us(stats.p95_us, config.timing.spin_floor_us);
     }
     local_metrics.effective_spin_threshold_us = effective_spin_threshold_us;
     let initial_now_ticks = match qpc_clock.now() {
@@ -330,15 +335,15 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
     // dispatch early by its measured lead instead of being forced late by the
     // worker prologue.
     let startup_class = LatencyClass::Cold;
-    let startup_lead_us = if config.dispatch_lead_us > 0 {
-        config.dispatch_lead_us
-    } else if config.enable_adaptive_lead {
+    let startup_lead_us = if config.timing.dispatch_lead_us > 0 {
+        config.timing.dispatch_lead_us
+    } else if config.estimator.enable_adaptive_lead {
         estimator
             .estimate_lead_with_class_and_policy(
                 ActionKind::Down,
                 coordinator.next_authored_polyphony(),
                 startup_class,
-                config.strict_timing,
+                config.timing.strict_timing,
             )
             .applied_us
     } else {
@@ -438,6 +443,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         })
         .or_else(|| {
             config
+                .timing
                 .strict_timing
                 .then(|| waiter.initial_failure().map(wait_failure_message))
                 .flatten()
@@ -576,7 +582,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
 
             let mut now_ticks = qpc_ticks_or_terminal!();
-            let focus_ok = focus_matches(config.require_focus, focus_active, target_hwnd);
+            let focus_ok = focus_matches(config.focus.require_focus, focus_active, target_hwnd);
             let manual_pause = desired_pause.load(Ordering::Acquire);
             #[cfg(any(test, feature = "test-support"))]
             if command_timing.needs_observation() {
@@ -657,7 +663,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                     if !focus_matches_hwnd(
-                        config.require_focus,
+                        config.focus.require_focus,
                         focus_active,
                         preflight_target.hwnd,
                     ) || !target_stamp_still_current(
@@ -743,7 +749,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         break;
                     }
                     if !focus_matches_hwnd(
-                        config.require_focus,
+                        config.focus.require_focus,
                         focus_active,
                         preflight_target.hwnd,
                     ) || !target_stamp_still_current(
@@ -818,7 +824,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     .outcome
                 {
                     local_metrics.wait_path_degraded = true;
-                    if config.strict_timing || matches!(failure, WaitFailure::Clock) {
+                    if config.timing.strict_timing || matches!(failure, WaitFailure::Clock) {
                         runtime.force_full_cleanup = true;
                         runtime.terminal_error = Some(wait_failure_message(failure));
                         break;
@@ -881,7 +887,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         WaitOutcome::Deadline => continue,
                         WaitOutcome::Failed(failure) => {
                             local_metrics.wait_path_degraded = true;
-                            if config.strict_timing || matches!(failure, WaitFailure::Clock) {
+                            if config.timing.strict_timing || matches!(failure, WaitFailure::Clock)
+                            {
                                 runtime.force_full_cleanup = true;
                                 runtime.terminal_error = Some(wait_failure_message(failure));
                                 break;
@@ -934,14 +941,14 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             };
 
             let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
-                let (lead_us, saturated) = if config.dispatch_lead_us > 0 {
-                    (config.dispatch_lead_us, false)
-                } else if config.enable_adaptive_lead {
+                let (lead_us, saturated) = if config.timing.dispatch_lead_us > 0 {
+                    (config.timing.dispatch_lead_us, false)
+                } else if config.estimator.enable_adaptive_lead {
                     let estimate = estimator.estimate_lead_with_class_and_policy(
                         ActionKind::Up,
                         polyphony,
                         latency_class,
-                        config.strict_timing,
+                        config.timing.strict_timing,
                     );
                     (estimate.applied_us, estimate.saturated)
                 } else {
@@ -1247,7 +1254,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     && result.send_attempts == 1
                     && deferred_by_us == 0
                     && !mixed_source;
-                let strict_up_completion_late = config.strict_timing
+                let strict_up_completion_late = config.timing.strict_timing
                     && clean_up_sample
                     && up_completion_lateness_ticks
                         .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
@@ -1260,9 +1267,9 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 } else {
                     0
                 };
-                let saturation_abort = config.strict_timing
+                let saturation_abort = config.timing.strict_timing
                     && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-                if config.enable_adaptive_lead
+                if config.estimator.enable_adaptive_lead
                     && let Err(error) = update_estimator_after_send_class(
                         estimator,
                         ActionKind::Up,
@@ -1335,7 +1342,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         Some(format!("native telemetry record overflow: {error}"));
                     break;
                 }
-                if config.enable_adaptive_lead
+                if config.estimator.enable_adaptive_lead
                     && pending_plan
                         .as_ref()
                         .is_some_and(|plan| plan.lead_saturated)
@@ -1351,7 +1358,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(started_us),
                     completed_effective,
-                    config.input_path_warn_us,
+                    config.timing.input_path_warn_us,
                     &mut health.send_duration_window,
                     &mut health.send_over_warn_count,
                     &mut health.input_path_warn_started_us,
@@ -1360,7 +1367,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 record_input_path_health(
                     result.send_completed_us.saturating_sub(started_us),
                     completed_effective,
-                    config.input_path_warn_us,
+                    config.timing.input_path_warn_us,
                     &mut health.send_pure_window,
                     &mut health.send_pure_over_warn_count,
                     &mut health.send_pure_warn_started_us,
@@ -1369,7 +1376,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 record_input_path_health(
                     bookkeeping_completed_us.saturating_sub(result.send_completed_us),
                     completed_effective,
-                    config.input_path_warn_us,
+                    config.timing.input_path_warn_us,
                     &mut health.bookkeeping_window,
                     &mut health.bookkeeping_over_warn_count,
                     &mut health.bookkeeping_warn_started_us,
@@ -1444,14 +1451,14 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
 
             let next_down_polyphony = coordinator.next_authored_polyphony();
-            let (lead_down, lead_down_saturated) = if config.dispatch_lead_us > 0 {
-                (config.dispatch_lead_us, false)
-            } else if config.enable_adaptive_lead {
+            let (lead_down, lead_down_saturated) = if config.timing.dispatch_lead_us > 0 {
+                (config.timing.dispatch_lead_us, false)
+            } else if config.estimator.enable_adaptive_lead {
                 let estimate = estimator.estimate_lead_with_class_and_policy(
                     ActionKind::Down,
                     next_down_polyphony,
                     latency_class,
-                    config.strict_timing,
+                    config.timing.strict_timing,
                 );
                 (estimate.applied_us, estimate.saturated)
             } else {
@@ -1521,7 +1528,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                     // immediately before SendInput. If focus changed after
                     // the outer-loop sample, terminalize this authored batch;
                     // it must not be replayed after the focus grace period.
-                    if !focus_matches(config.require_focus, focus_active, target_hwnd) {
+                    if !focus_matches(config.focus.require_focus, focus_active, target_hwnd) {
                         // The batch was only prepared. Leave the cursor and generation
                         // ledger untouched so the same authored chord can be prepared again
                         // after focus restoration.
@@ -1647,7 +1654,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         // worker control path without becoming send failures.
                         match final_down_admission(
                             preflight_target,
-                            config.require_focus,
+                            config.focus.require_focus,
                             focus_active,
                             target_hwnd,
                             target_generation,
@@ -1943,8 +1950,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         let recovered_retry_late = result_retried_after_zero_progress
                             && completion_lateness_ticks
                                 .is_some_and(|late| late > timing.retry_late_threshold_ticks);
-                        let retry_late_abort = config.strict_timing && recovered_retry_late;
-                        let strict_down_completion_late = config.strict_timing
+                        let retry_late_abort = config.timing.strict_timing && recovered_retry_late;
+                        let strict_down_completion_late = config.timing.strict_timing
                             && clean_down_sample
                             && completion_lateness_ticks.is_some_and(|late| {
                                 late > timing.strict_down_completion_late_ticks
@@ -1960,10 +1967,10 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                             } else {
                                 0
                             };
-                        let saturation_abort = config.strict_timing
+                        let saturation_abort = config.timing.strict_timing
                             && health.down_saturation_positive_streak
                                 >= STRICT_SATURATION_ABORT_STREAK;
-                        if config.enable_adaptive_lead
+                        if config.estimator.enable_adaptive_lead
                             && let Err(error) = update_estimator_after_send_class(
                                 estimator,
                                 ActionKind::Down,
@@ -2040,7 +2047,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                                 Some(format!("native telemetry record overflow: {error}"));
                             break;
                         }
-                        if config.enable_adaptive_lead && lead_down_saturated {
+                        if config.estimator.enable_adaptive_lead && lead_down_saturated {
                             record_lead_saturation(
                                 &mut local_metrics.lead_saturation_count_down,
                                 &mut local_metrics.positive_residual_at_cap,
@@ -2054,7 +2061,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         record_input_path_health(
                             sender_duration_us.saturating_add(bookkeeping_after_send_us),
                             completed_effective,
-                            config.input_path_warn_us,
+                            config.timing.input_path_warn_us,
                             &mut health.send_duration_window,
                             &mut health.send_over_warn_count,
                             &mut health.input_path_warn_started_us,
@@ -2063,7 +2070,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         record_input_path_health(
                             sender_duration_us,
                             completed_effective,
-                            config.input_path_warn_us,
+                            config.timing.input_path_warn_us,
                             &mut health.send_pure_window,
                             &mut health.send_pure_over_warn_count,
                             &mut health.send_pure_warn_started_us,
@@ -2072,7 +2079,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                         record_input_path_health(
                             bookkeeping_after_send_us,
                             completed_effective,
-                            config.input_path_warn_us,
+                            config.timing.input_path_warn_us,
                             &mut health.bookkeeping_window,
                             &mut health.bookkeeping_over_warn_count,
                             &mut health.bookkeeping_warn_started_us,
@@ -2229,15 +2236,15 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             }
 
             let next_down_polyphony = coordinator.next_authored_polyphony();
-            let lead_down = if config.dispatch_lead_us > 0 {
-                config.dispatch_lead_us
-            } else if config.enable_adaptive_lead {
+            let lead_down = if config.timing.dispatch_lead_us > 0 {
+                config.timing.dispatch_lead_us
+            } else if config.estimator.enable_adaptive_lead {
                 estimator
                     .estimate_lead_with_class_and_policy(
                         ActionKind::Down,
                         next_down_polyphony,
                         latency_class,
-                        config.strict_timing,
+                        config.timing.strict_timing,
                     )
                     .applied_us
             } else {
@@ -2253,14 +2260,14 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 }
             };
             let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
-                let (lead_us, saturated) = if config.dispatch_lead_us > 0 {
-                    (config.dispatch_lead_us, false)
-                } else if config.enable_adaptive_lead {
+                let (lead_us, saturated) = if config.timing.dispatch_lead_us > 0 {
+                    (config.timing.dispatch_lead_us, false)
+                } else if config.estimator.enable_adaptive_lead {
                     let estimate = estimator.estimate_lead_with_class_and_policy(
                         ActionKind::Up,
                         polyphony,
                         latency_class,
-                        config.strict_timing,
+                        config.timing.strict_timing,
                     );
                     (estimate.applied_us, estimate.saturated)
                 } else {
@@ -2306,8 +2313,8 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
                 signals: WaitSignals {
                     waiter,
                     interrupt,
-                    strict_timing: config.strict_timing,
-                    input_path_warn_us: config.input_path_warn_us,
+                    strict_timing: config.timing.strict_timing,
+                    input_path_warn_us: config.timing.input_path_warn_us,
                 },
                 mutable: WaitMutable {
                     local_metrics: &mut local_metrics,

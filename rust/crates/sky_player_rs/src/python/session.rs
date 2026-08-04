@@ -1,5 +1,9 @@
 use super::conversion::*;
 use super::*;
+use crate::engine::{
+    EstimatorOptions, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
+    TimingOptions, WaitOptions,
+};
 
 #[pyclass(name = "DispatchSession", frozen)]
 pub(super) struct NativeDispatchSessionPy {
@@ -52,32 +56,44 @@ impl NativeDispatchSessionPy {
         }
         let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
-        let session = NativeDispatchSession::new(
+        let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
-            min_hold_us,
-            max_lead_us,
-            dispatch_lead_us,
-            allowed_scan_codes,
-            BackendConfig::Production,
-            require_focus,
-            focus_restore_grace_us,
-            spin_threshold_us,
-            core_warmup_budget_us,
-            parsed_telemetry_mode,
-            telemetry_capacity,
-            priority_mode,
-            enable_waitable_timer,
-            enable_event_wait,
-            enable_adaptive_spin,
-            spin_floor_us,
-            estimator_state_json.map(str::to_string),
-            enable_adaptive_lead,
-            input_path_warn_us,
-            strict_timing,
-            strict_down_completion_late_us,
-            strict_up_completion_late_us,
-            supervisor_lease_timeout_us,
-        )
+            backend: BackendConfig::Production,
+            allowed_count: allowed_scan_codes.len(),
+            timing: TimingOptions {
+                min_hold_us,
+                max_lead_us,
+                dispatch_lead_us,
+                strict_timing,
+                strict_down_completion_late_us,
+                strict_up_completion_late_us,
+                input_path_warn_us,
+                spin_threshold_us,
+                core_warmup_budget_us,
+                spin_floor_us,
+            },
+            focus: FocusOptions {
+                require_focus,
+                focus_restore_grace_us,
+            },
+            wait: WaitOptions {
+                enable_waitable_timer,
+                enable_event_wait,
+                enable_adaptive_spin,
+                supervisor_lease_timeout_us,
+            },
+            telemetry: TelemetryOptions {
+                mode: parsed_telemetry_mode,
+                capacity: telemetry_capacity,
+            },
+            priority: PriorityOptions {
+                mode: priority_mode,
+            },
+            estimator: EstimatorOptions {
+                state_json: estimator_state_json.map(str::to_string),
+                enable_adaptive_lead,
+            },
+        })
         .map_err(PyRuntimeError::new_err)?;
         session.set_target_hwnd(config.target_hwnd);
 
@@ -413,36 +429,48 @@ impl TestDispatchSessionPy {
         let dispatch_lead_us = 0;
         let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
-        let session = NativeDispatchSession::new(
+        let session = NativeDispatchSession::new(NativeSessionOptions {
             schedule,
-            min_hold_us,
-            max_lead_us,
-            dispatch_lead_us,
-            allowed_scan_codes,
-            BackendConfig::Mock {
+            backend: BackendConfig::Mock {
                 latency_base_us: mock_latency_base_us,
                 latency_per_key_us: mock_latency_per_key_us,
                 fault_script: FaultInjectionScript::none(),
             },
-            false,
-            100_000,
-            150,
-            0,
-            crate::engine::TelemetryMode::Ring,
-            telemetry_capacity,
-            priority_mode,
-            enable_waitable_timer,
-            enable_event_wait,
-            enable_adaptive_spin,
-            700,
-            None,
-            enable_adaptive_lead,
-            300,
-            false,
-            2_000,
-            2_000,
-            3_000_000,
-        )
+            allowed_count: allowed_scan_codes.len(),
+            timing: TimingOptions {
+                min_hold_us,
+                max_lead_us,
+                dispatch_lead_us,
+                strict_timing: false,
+                strict_down_completion_late_us: 2_000,
+                strict_up_completion_late_us: 2_000,
+                input_path_warn_us: 300,
+                spin_threshold_us: 150,
+                core_warmup_budget_us: 0,
+                spin_floor_us: 700,
+            },
+            focus: FocusOptions {
+                require_focus: false,
+                focus_restore_grace_us: 100_000,
+            },
+            wait: WaitOptions {
+                enable_waitable_timer,
+                enable_event_wait,
+                enable_adaptive_spin,
+                supervisor_lease_timeout_us: 3_000_000,
+            },
+            telemetry: TelemetryOptions {
+                mode: crate::engine::TelemetryMode::Ring,
+                capacity: telemetry_capacity,
+            },
+            priority: PriorityOptions {
+                mode: priority_mode,
+            },
+            estimator: EstimatorOptions {
+                state_json: None,
+                enable_adaptive_lead,
+            },
+        })
         .map_err(PyRuntimeError::new_err)?;
         Ok(Self {
             session: Arc::new(session),

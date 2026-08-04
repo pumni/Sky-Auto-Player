@@ -9,9 +9,12 @@ pub(crate) mod telemetry;
 mod test_support;
 mod worker;
 
-pub(crate) use config::BackendConfig;
 pub use config::DispatchProfile;
 use config::WorkerConfig;
+pub(crate) use config::{
+    BackendConfig, EstimatorOptions, FocusOptions, NativeSessionOptions, PriorityOptions,
+    TelemetryOptions, TimingOptions, WaitOptions,
+};
 pub use session::NativeDispatchSession;
 pub use snapshot::EngineSnapshot;
 pub use telemetry::{
@@ -38,7 +41,7 @@ use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-use sky_dispatch_core::model::{ActionKind, RuntimeSchedule};
+use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
@@ -46,7 +49,6 @@ use sky_dispatch_win32::event::OwnedEvent;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
 use sky_dispatch_win32::input::TrackedKeyState;
-use sky_dispatch_win32::mmcss::PriorityMode;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome};

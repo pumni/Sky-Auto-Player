@@ -41,29 +41,55 @@ pub(crate) enum BackendConfig {
     },
 }
 
-pub(super) struct WorkerConfig {
-    pub(super) schedule: RuntimeSchedule,
-    pub(super) min_hold_us: u64,
-    pub(super) max_lead_us: u64,
-    pub(super) dispatch_lead_us: u64,
-    pub(super) allowed_count: usize,
-    pub(super) backend: BackendConfig,
-    pub(super) require_focus: bool,
-    pub(super) focus_restore_grace_us: u64,
-    pub(super) spin_threshold_us: u64,
-    pub(super) core_warmup_budget_us: u64,
-    pub(super) telemetry_mode: TelemetryMode,
-    pub(super) telemetry_capacity: usize,
-    pub(super) priority_mode: PriorityMode,
-    pub(super) enable_waitable_timer: bool,
-    pub(super) enable_event_wait: bool,
-    pub(super) enable_adaptive_spin: bool,
-    pub(super) spin_floor_us: u64,
-    pub(super) estimator_state_json: Option<String>,
-    pub(super) enable_adaptive_lead: bool,
-    pub(super) input_path_warn_us: u64,
-    pub(super) strict_timing: bool,
-    pub(super) strict_down_completion_late_us: u64,
-    pub(super) strict_up_completion_late_us: u64,
-    pub(super) supervisor_lease_timeout_us: u64,
+pub(crate) struct NativeSessionOptions {
+    pub(crate) schedule: RuntimeSchedule,
+    pub(crate) backend: BackendConfig,
+    pub(crate) allowed_count: usize,
+    pub(crate) timing: TimingOptions,
+    pub(crate) focus: FocusOptions,
+    pub(crate) wait: WaitOptions,
+    pub(crate) telemetry: TelemetryOptions,
+    pub(crate) priority: PriorityOptions,
+    pub(crate) estimator: EstimatorOptions,
+}
+
+pub(super) type WorkerConfig = NativeSessionOptions;
+
+pub(crate) struct TimingOptions {
+    pub(crate) min_hold_us: u64,
+    pub(crate) max_lead_us: u64,
+    pub(crate) dispatch_lead_us: u64,
+    pub(crate) strict_timing: bool,
+    pub(crate) strict_down_completion_late_us: u64,
+    pub(crate) strict_up_completion_late_us: u64,
+    pub(crate) input_path_warn_us: u64,
+    pub(crate) spin_threshold_us: u64,
+    pub(crate) core_warmup_budget_us: u64,
+    pub(crate) spin_floor_us: u64,
+}
+
+pub(crate) struct FocusOptions {
+    pub(crate) require_focus: bool,
+    pub(crate) focus_restore_grace_us: u64,
+}
+
+pub(crate) struct WaitOptions {
+    pub(crate) enable_waitable_timer: bool,
+    pub(crate) enable_event_wait: bool,
+    pub(crate) enable_adaptive_spin: bool,
+    pub(crate) supervisor_lease_timeout_us: u64,
+}
+
+pub(crate) struct TelemetryOptions {
+    pub(crate) mode: TelemetryMode,
+    pub(crate) capacity: usize,
+}
+
+pub(crate) struct PriorityOptions {
+    pub(crate) mode: PriorityMode,
+}
+
+pub(crate) struct EstimatorOptions {
+    pub(crate) state_json: Option<String>,
+    pub(crate) enable_adaptive_lead: bool,
 }

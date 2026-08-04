@@ -1,3 +1,4 @@
+use super::config::NativeSessionOptions;
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
 };
@@ -15,45 +16,20 @@ pub struct NativeDispatchSession {
 }
 
 impl NativeDispatchSession {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        schedule: RuntimeSchedule,
-        min_hold_us: u64,
-        max_lead_us: u64,
-        dispatch_lead_us: u64,
-        allowed_scan_codes: Vec<u16>,
-        backend: BackendConfig,
-        require_focus: bool,
-        focus_restore_grace_us: u64,
-        spin_threshold_us: u64,
-        core_warmup_budget_us: u64,
-        telemetry_mode: TelemetryMode,
-        telemetry_capacity: usize,
-        priority_mode: PriorityMode,
-        enable_waitable_timer: bool,
-        enable_event_wait: bool,
-        enable_adaptive_spin: bool,
-        spin_floor_us: u64,
-        estimator_state_json: Option<String>,
-        enable_adaptive_lead: bool,
-        input_path_warn_us: u64,
-        strict_timing: bool,
-        strict_down_completion_late_us: u64,
-        strict_up_completion_late_us: u64,
-        supervisor_lease_timeout_us: u64,
-    ) -> Result<Self, String> {
-        if !cfg!(windows) && matches!(&backend, BackendConfig::Production) {
+    pub(crate) fn new(options: NativeSessionOptions) -> Result<Self, String> {
+        if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
         let initial_heartbeat_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let interrupt = OwnedEvent::new_auto_reset()
             .ok_or_else(|| "failed to create command event".to_string())?;
-        let total_us = schedule
+        let total_us = options
+            .schedule
             .batches
             .last()
             .map_or(0, |batch| batch.scheduled_us);
-        let generation_count = schedule.generation_count;
+        let generation_count = options.schedule.generation_count;
         let metrics = SharedMetrics::default();
         metrics.snapshot.lock().total_us = total_us;
         let shared = Arc::new(SessionShared {
@@ -87,32 +63,7 @@ impl NativeDispatchSession {
             },
         });
         Ok(Self {
-            config: Mutex::new(Some(WorkerConfig {
-                schedule,
-                min_hold_us,
-                max_lead_us,
-                dispatch_lead_us,
-                allowed_count: allowed_scan_codes.len(),
-                backend,
-                require_focus,
-                focus_restore_grace_us,
-                spin_threshold_us,
-                core_warmup_budget_us,
-                telemetry_mode,
-                telemetry_capacity,
-                priority_mode,
-                enable_waitable_timer,
-                enable_event_wait,
-                enable_adaptive_spin,
-                spin_floor_us,
-                estimator_state_json,
-                enable_adaptive_lead,
-                input_path_warn_us,
-                strict_timing,
-                strict_down_completion_late_us,
-                strict_up_completion_late_us,
-                supervisor_lease_timeout_us,
-            })),
+            config: Mutex::new(Some(options)),
             generation_count,
             shared,
             thread_handle: Mutex::new(None),

@@ -3,16 +3,18 @@ use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
 use super::{
-    BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, FaultInjectionScript,
-    INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome, NativeDispatchSession, PlatformSendResult,
+    BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, EstimatorOptions,
+    FaultInjectionScript, FocusOptions, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
+    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
     RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp,
-    TelemetryCollector, TelemetryMode, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
-    WakeErrorStats, WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
-    classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
-    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
-    final_down_admission, focus_gate_matches, focus_matches_hwnd, record_input_path_health,
-    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
-    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, WorkerMetricsLocal,
+    adjust_spin_threshold, anchored_dispatch_target_ticks, classify_latency_class,
+    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
+    ensure_preflight_for_target, exact_sender_durations, final_down_admission, focus_gate_matches,
+    focus_matches_hwnd, record_input_path_health, record_termination_error,
+    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
+    target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -25,6 +27,51 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::Duration;
+
+fn test_session_options(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    allowed_count: usize,
+    backend: BackendConfig,
+) -> NativeSessionOptions {
+    NativeSessionOptions {
+        schedule,
+        backend,
+        allowed_count,
+        timing: TimingOptions {
+            min_hold_us: 0,
+            max_lead_us: 2_000,
+            dispatch_lead_us: 0,
+            strict_timing: false,
+            strict_down_completion_late_us: 2_000,
+            strict_up_completion_late_us: 2_000,
+            input_path_warn_us: 300,
+            spin_threshold_us: 150,
+            core_warmup_budget_us: 0,
+            spin_floor_us: 700,
+        },
+        focus: FocusOptions {
+            require_focus: false,
+            focus_restore_grace_us: 100_000,
+        },
+        wait: WaitOptions {
+            enable_waitable_timer: true,
+            enable_event_wait: true,
+            enable_adaptive_spin: false,
+            supervisor_lease_timeout_us: 0,
+        },
+        telemetry: TelemetryOptions {
+            mode: TelemetryMode::Ring,
+            capacity: 64,
+        },
+        priority: PriorityOptions {
+            mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
+        },
+        estimator: EstimatorOptions {
+            state_json: None,
+            enable_adaptive_lead: false,
+        },
+    }
+}
 
 #[test]
 fn supervisor_lease_treats_future_heartbeat_as_fresh() {
@@ -1029,36 +1076,15 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
         ],
         ..FaultInjectionScript::default()
     };
-    let session = NativeDispatchSession::new(
+    let session = NativeDispatchSession::new(test_session_options(
         schedule,
-        0,
-        2_000,
-        0,
-        vec![0x15, 0x16],
+        2,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
             fault_script: script,
         },
-        false,
-        100_000,
-        150,
-        0,
-        TelemetryMode::Ring,
-        64,
-        sky_dispatch_win32::mmcss::PriorityMode::Off,
-        true,
-        true,
-        false,
-        700,
-        None,
-        false,
-        300,
-        false,
-        2_000,
-        2_000,
-        0,
-    )
+    ))
     .expect("test session admission");
 
     session.start().expect("worker start");
@@ -1097,36 +1123,15 @@ fn join_timeout_does_not_poison_running_session() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("valid lifecycle test schedule");
-    let session = NativeDispatchSession::new(
+    let session = NativeDispatchSession::new(test_session_options(
         schedule,
-        0,
-        2_000,
-        0,
-        vec![0x15],
+        1,
         BackendConfig::Mock {
             latency_base_us: 100_000,
             latency_per_key_us: 0,
             fault_script: FaultInjectionScript::none(),
         },
-        false,
-        100_000,
-        150,
-        0,
-        TelemetryMode::Ring,
-        64,
-        sky_dispatch_win32::mmcss::PriorityMode::Off,
-        true,
-        true,
-        false,
-        700,
-        None,
-        false,
-        300,
-        false,
-        2_000,
-        2_000,
-        0,
-    )
+    ))
     .expect("test session admission");
 
     session.start().expect("worker start");
@@ -1161,32 +1166,8 @@ fn production_session_rejects_non_windows() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("valid platform admission schedule");
-    let result = NativeDispatchSession::new(
-        schedule,
-        0,
-        2_000,
-        0,
-        vec![0x15],
-        BackendConfig::Production,
-        false,
-        100_000,
-        150,
-        0,
-        TelemetryMode::Ring,
-        64,
-        sky_dispatch_win32::mmcss::PriorityMode::Off,
-        true,
-        true,
-        false,
-        700,
-        None,
-        false,
-        300,
-        false,
-        2_000,
-        2_000,
-        0,
-    );
+    let result =
+        NativeDispatchSession::new(test_session_options(schedule, 1, BackendConfig::Production));
     assert!(matches!(
         result,
         Err(error) if error == "production native dispatch is supported only on Windows"
