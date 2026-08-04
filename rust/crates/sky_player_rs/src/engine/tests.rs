@@ -6,8 +6,8 @@ use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, EstimatorOptions,
     FaultInjectionScript, FocusOptions, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
-    RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp,
-    TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
+    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
+    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
     TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
     WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
     classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
@@ -200,6 +200,21 @@ fn worker_takes_runtime_schedule_only_once() {
         worker.take_schedule_for_test(),
         Err("worker runtime schedule was already consumed")
     ));
+}
+
+#[test]
+fn retry_backoff_values_use_exact_qpc_conversion() {
+    let clock = QpcClock::initialize().expect("QPC clock");
+    let expected_us = [2_000, 5_000, 10_000, 20_000];
+    for (delay_us, expected) in RELEASE_RETRY_BACKOFF_US.into_iter().zip(expected_us) {
+        let ticks = clock
+            .duration_from_us(delay_us)
+            .expect("retry delay conversion");
+        assert_eq!(
+            clock.duration_to_us(ticks).expect("round-trip conversion"),
+            expected
+        );
+    }
 }
 
 #[test]

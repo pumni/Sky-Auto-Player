@@ -255,17 +255,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 );
             }
         };
-    let retry_backoff_ticks: [DurationTicks; RELEASE_RETRY_BACKOFF_US.len()] =
-        match RELEASE_RETRY_BACKOFF_US
-            .map(|delay| qpc_clock.duration_from_us(delay))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|values| {
-                values
-                    .try_into()
-                    .map_err(|_| sky_dispatch_win32::clock::TimeConversionError::Overflow)
-            }) {
-            Ok(backoff) => backoff,
+    let mut retry_backoff_ticks = [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()];
+    for (target, delay_us) in retry_backoff_ticks.iter_mut().zip(RELEASE_RETRY_BACKOFF_US) {
+        *target = match qpc_clock.duration_from_us(delay_us) {
+            Ok(value) => value,
             Err(error) => {
                 return admission_failure(
                     &mut backend,
@@ -274,6 +267,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 );
             }
         };
+    }
     let delivery_margin_ticks = DurationTicks::ZERO;
     let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
