@@ -1,54 +1,89 @@
 use super::*;
 use std::any::Any;
 
-pub(super) struct FinalizeContext<'a> {
-    pub(super) worker_result: Result<(), Box<dyn Any + Send>>,
+pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) telemetry: TelemetryCollector,
     pub(super) estimator: SendLatencyEstimator,
+    pub(super) qpc_clock: QpcClock,
+}
+
+pub(super) struct FinalizeState {
+    pub(super) worker_result: Result<(), Box<dyn Any + Send>>,
     pub(super) local_metrics: WorkerMetricsLocal,
     pub(super) abort_counts: HashMap<&'static str, u64>,
     pub(super) force_full_cleanup: bool,
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
     pub(super) last_published_error: Option<String>,
-    pub(super) qpc_clock: QpcClock,
+}
+
+pub(super) struct FinalizeSignals<'a> {
     pub(super) target_hwnd: &'a AtomicIsize,
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) quit_requested: &'a AtomicBool,
+}
+
+pub(super) struct FinalizePublication<'a> {
     pub(super) metrics: &'a SharedMetrics,
     pub(super) telemetry_output: &'a Mutex<Option<NativeTelemetryOutput>>,
     pub(super) estimator_output: &'a Mutex<Option<String>>,
+}
+
+pub(super) struct FinalizeTiming {
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
 }
 
-pub(super) fn finalize_worker(context: FinalizeContext<'_>) -> u8 {
-    let FinalizeContext {
-        worker_result,
+pub(super) struct FinalizeInput<'a> {
+    pub(super) resources: FinalizeResources,
+    pub(super) state: FinalizeState,
+    pub(super) signals: FinalizeSignals<'a>,
+    pub(super) publication: FinalizePublication<'a>,
+    pub(super) timing: FinalizeTiming,
+}
+
+pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
+    let FinalizeInput {
+        resources,
+        state,
+        signals,
+        publication,
+        timing,
+    } = context;
+    let FinalizeResources {
         mut backend,
         mut coordinator,
         mut telemetry,
         estimator,
+        qpc_clock,
+    } = resources;
+    let FinalizeState {
+        worker_result,
         mut local_metrics,
         mut abort_counts,
         mut force_full_cleanup,
         mut terminal_error,
         mut secondary_errors,
         mut last_published_error,
-        qpc_clock,
+    } = state;
+    let FinalizeSignals {
         target_hwnd,
         skip_requested,
         quit_requested,
+    } = signals;
+    let FinalizePublication {
         metrics,
         telemetry_output,
         estimator_output,
+    } = publication;
+    let FinalizeTiming {
         start_wall_time_us,
         start_thread_cpu_us,
         start_process_cpu_us,
-    } = context;
+    } = timing;
 
     // Validate before either cleanup operation can erase the evidence of a
     // coordinator mismatch. The first failure remains primary; later cleanup

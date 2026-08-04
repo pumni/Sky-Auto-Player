@@ -12,7 +12,10 @@ pub(crate) use admission::{
     DownAdmission, TargetStamp, ensure_preflight_for_target, final_down_admission, focus_matches,
     focus_matches_hwnd, load_target_stamp, target_stamp_still_current,
 };
-use cleanup::{FinalizeContext, finalize_worker};
+use cleanup::{
+    FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
+    FinalizeTiming, finalize_worker,
+};
 pub(crate) use cleanup::{
     cancel_coordinator_or_terminal, describe_release_outcome, record_termination_error,
     release_runtime_outcome, release_state_verified, suspend_live_input,

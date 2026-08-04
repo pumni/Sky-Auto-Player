@@ -2328,27 +2328,37 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         .take()
         .expect("worker resources available for finalization");
 
-    finalize_worker(FinalizeContext {
-        worker_result,
-        backend: resources.backend,
-        coordinator: resources.coordinator,
-        telemetry: resources.telemetry,
-        estimator: resources.estimator,
-        local_metrics,
-        abort_counts,
-        force_full_cleanup: runtime.force_full_cleanup,
-        terminal_error: runtime.terminal_error,
-        secondary_errors,
-        last_published_error,
-        qpc_clock: resources.clock,
-        target_hwnd,
-        skip_requested,
-        quit_requested,
-        metrics,
-        telemetry_output,
-        estimator_output,
-        start_wall_time_us: timing.start_wall_time_us,
-        start_thread_cpu_us: timing.start_thread_cpu_us,
-        start_process_cpu_us: timing.start_process_cpu_us,
+    finalize_worker(FinalizeInput {
+        resources: FinalizeResources {
+            backend: resources.backend,
+            coordinator: resources.coordinator,
+            telemetry: resources.telemetry,
+            estimator: resources.estimator,
+            qpc_clock: resources.clock,
+        },
+        state: FinalizeState {
+            worker_result,
+            local_metrics,
+            abort_counts,
+            force_full_cleanup: runtime.force_full_cleanup,
+            terminal_error: runtime.terminal_error,
+            secondary_errors,
+            last_published_error,
+        },
+        signals: FinalizeSignals {
+            target_hwnd,
+            skip_requested,
+            quit_requested,
+        },
+        publication: FinalizePublication {
+            metrics,
+            telemetry_output,
+            estimator_output,
+        },
+        timing: FinalizeTiming {
+            start_wall_time_us: timing.start_wall_time_us,
+            start_thread_cpu_us: timing.start_thread_cpu_us,
+            start_process_cpu_us: timing.start_process_cpu_us,
+        },
     })
 }
