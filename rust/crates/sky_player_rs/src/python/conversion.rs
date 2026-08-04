@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    ActionKind, Arc, Bound, KeyActionInput, PHYSICAL_INSTRUMENT_SCAN_CODES, PyAny, PyBool, PyList,
+    PyResult, PyTuple, PyTypeError, PyValueError, RuntimeSchedule,
+};
+use pyo3::types::PyAnyMethods;
 
 pub(super) fn strict_sequence<'py>(
     value: &Bound<'py, PyAny>,
@@ -107,7 +111,7 @@ pub(super) fn parse_actions(
                  (source_action_index, kind, at_us, scan_codes, reason)"
             ))
         })?;
-        if tuple.len() != 5 {
+        if tuple.len()? != 5 {
             return Err(PyValueError::new_err(format!(
                 "actions[{position}] must contain exactly 5 items"
             )));

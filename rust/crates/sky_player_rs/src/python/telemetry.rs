@@ -1,4 +1,6 @@
-use super::*;
+use super::{Bound, PyDict, PyResult, PyRuntimeError, Python};
+use pyo3::pyfunction;
+use pyo3::types::PyDictMethods;
 
 #[pyfunction]
 pub(super) fn build_info<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
