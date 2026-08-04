@@ -29,6 +29,7 @@ use super::{
     update_estimator_after_send_class, wait_failure_message, wait_for_next_boundary,
 };
 use smallvec::SmallVec;
+use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
 
@@ -50,9 +51,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     let target_hwnd = &shared.target.target_hwnd;
     let target_generation = &shared.target.target_generation;
     let metrics = &shared.publication.metrics;
-    let telemetry_output = &shared.publication.telemetry_output;
     let priority_acquired = &shared.publication.priority_acquired;
-    let estimator_output = &shared.publication.estimator_output;
     let supervisor_heartbeat_ticks = &shared.publication.supervisor_heartbeat_ticks;
 
     #[cfg(any(test, feature = "test-support"))]
@@ -2337,42 +2336,54 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         }
     }));
 
-    let resources = core
-        .resources
-        .take()
-        .expect("worker resources available for finalization");
+    worker.finalize(worker_result)
+}
 
-    finalize_worker(FinalizeInput {
-        resources: FinalizeResources {
-            backend: resources.backend,
-            coordinator: resources.coordinator,
-            telemetry: resources.telemetry,
-            estimator: resources.estimator,
-            qpc_clock: resources.clock,
-        },
-        state: FinalizeState {
-            worker_result,
-            local_metrics: std::mem::take(local_metrics),
-            abort_counts: std::mem::take(abort_counts),
-            force_full_cleanup: runtime.force_full_cleanup,
-            terminal_error: std::mem::take(&mut runtime.terminal_error),
-            secondary_errors: std::mem::take(secondary_errors),
-            last_published_error: std::mem::take(last_published_error),
-        },
-        signals: FinalizeSignals {
-            target_hwnd,
-            skip_requested,
-            quit_requested,
-        },
-        publication: FinalizePublication {
-            metrics,
-            telemetry_output,
-            estimator_output,
-        },
-        timing: FinalizeTiming {
-            start_wall_time_us: timing.start_wall_time_us,
-            start_thread_cpu_us: timing.start_thread_cpu_us,
-            start_process_cpu_us: timing.start_process_cpu_us,
-        },
-    })
+impl Worker<'_> {
+    fn finalize(&mut self, worker_result: Result<(), Box<dyn Any + Send>>) -> u8 {
+        let shared = self.shared;
+        let core = &mut self.core;
+        let resources = core
+            .resources
+            .take()
+            .expect("worker resources available for finalization");
+        let timing = core
+            .timing
+            .as_ref()
+            .expect("worker timing available for finalization");
+
+        finalize_worker(FinalizeInput {
+            resources: FinalizeResources {
+                backend: resources.backend,
+                coordinator: resources.coordinator,
+                telemetry: resources.telemetry,
+                estimator: resources.estimator,
+                qpc_clock: resources.clock,
+            },
+            state: FinalizeState {
+                worker_result,
+                local_metrics: std::mem::take(&mut core.metrics),
+                abort_counts: std::mem::take(&mut core.errors.abort_counts),
+                force_full_cleanup: core.runtime.force_full_cleanup,
+                terminal_error: std::mem::take(&mut core.runtime.terminal_error),
+                secondary_errors: std::mem::take(&mut core.errors.secondary),
+                last_published_error: std::mem::take(&mut core.errors.last_published),
+            },
+            signals: FinalizeSignals {
+                target_hwnd: &shared.target.target_hwnd,
+                skip_requested: &shared.commands.skip_requested,
+                quit_requested: &shared.commands.quit_requested,
+            },
+            publication: FinalizePublication {
+                metrics: &shared.publication.metrics,
+                telemetry_output: &shared.publication.telemetry_output,
+                estimator_output: &shared.publication.estimator_output,
+            },
+            timing: FinalizeTiming {
+                start_wall_time_us: timing.start_wall_time_us,
+                start_thread_cpu_us: timing.start_thread_cpu_us,
+                start_process_cpu_us: timing.start_process_cpu_us,
+            },
+        })
+    }
 }
