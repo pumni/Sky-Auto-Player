@@ -61,7 +61,6 @@ from sky_music.ui.textual_app.modals import (
 from sky_music.ui.textual_app.renderers import (
     _metadata_cells,
     _risk_cell,
-    _title_cell,
     build_detail_text,
     build_empty_detail_text,
 )
@@ -179,11 +178,18 @@ def rank_song_choices(
     return [choices[index] for index in ranked_indices]
 
 
-class SongTable(DataTable[str]):
+class SongTable(DataTable[Any]):
     """DataTable wrapper for song picker rows."""
 
+    class ViewportChanged(Message):
+        pass
 
-
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        # Note: DataTable does not define watch_scroll_y itself, but we can intercept it
+        # because scroll_y is a reactive property on ScrollableContainer.
+        if hasattr(super(), "watch_scroll_y"):
+            super().watch_scroll_y(old_value, new_value)  # type: ignore
+        self.post_message(self.ViewportChanged())
 
 @dataclass(frozen=True, slots=True)
 class CalibrationChoice:
@@ -433,27 +439,39 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def on_mount(self) -> None:
         self._apply_theme_class()
-        if self._provided_choices is not None:
-            self.choices = list(self._provided_choices)
-        else:
+        
+        # Start empty to guarantee immediate first frame
+        self.choices = list(self._provided_choices) if self._provided_choices is not None else []
+        self.filtered = []
+        
+        self._render_status()
+        self._render_table()
+        self._render_detail()
+        self.set_focus(self.app.query_one("#songs", SongTable))
+        self._update_header_tagline()
+        
+        # Defer all expensive operations (filesystem, SQLite, parsing) until after first paint
+        self.call_after_refresh(self._deferred_startup)
+
+    def _deferred_startup(self) -> None:
+        from sky_music.ui.picker_helpers import get_song_choices
+        from sky_music.ui.picker_theme import remove_accents
+        
+        if self._provided_choices is None:
             paths = get_song_choices(force_refresh=True)
             self.choices = [
                 SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
                 for path in paths
             ]
+        
         self.filtered = rank_song_choices(self.choices, self.search_query)
-        self._render_status()
         self._render_table()
         self._render_detail()
-        self.set_focus(self.app.query_one("#songs", SongTable))
-        if self._provided_choices is not None:
-            paths = [choice.path for choice in self.choices]
-        else:
-            paths = get_song_choices(force_refresh=False)
-            if not paths:
-                paths = [choice.path for choice in self.choices]
-        self.metadata.refresh(paths)
         self._update_header_tagline()
+        
+        paths_to_refresh = [choice.path for choice in self.choices]
+        self.metadata.refresh(paths_to_refresh)
+        
         self.call_after_refresh(self._apply_responsive_columns)
 
     def on_resize(self, _event: events.Resize) -> None:
@@ -611,16 +629,45 @@ class PickerScreen(Screen[SongPickerResult]):
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
     def get_metadata_priority_paths(self) -> list[Path]:
-        """Return the cached visible-window paths for the background worker.
-
-        ``_priority_paths`` is recomputed on the UI thread (in
-        ``_render_table`` and on cursor movement) so the worker thread never
-        touches Textual widget state. Reading the plain attribute here is
-        safe: it is a reference to an immutable-by-convention list; the worst
-        case is a slightly stale window, which the worker only uses for
-        prioritisation.
-        """
-        return self._priority_paths
+        """Return paths prioritized by relevance: selected > visible > overscan > filtered."""
+        if not self.filtered:
+            return []
+        
+        try:
+            table = self.app.query_one("#songs", SongTable)
+        except Exception:
+            return [c.path for c in self.filtered]
+            
+        cursor_row = max(0, min(table.cursor_row, len(self.filtered) - 1))
+        height = max(10, table.size.height)
+        y_min = max(0, int(table.scroll_y))
+        y_max = min(len(self.filtered), y_min + height + 1)
+        
+        overscan = 50
+        o_min = max(0, y_min - overscan)
+        o_max = min(len(self.filtered), y_max + overscan)
+        
+        priority: list[Path] = []
+        seen: set[Path] = set()
+        
+        def _add(idx: int) -> None:
+            if 0 <= idx < len(self.filtered):
+                p = self.filtered[idx].path
+                if p not in seen:
+                    priority.append(p)
+                    seen.add(p)
+        
+        _add(cursor_row)
+        for i in range(y_min, y_max):
+            _add(i)
+        for i in range(o_min, o_max):
+            _add(i)
+        for choice in self.filtered:
+            if choice.path not in seen:
+                priority.append(choice.path)
+                seen.add(choice.path)
+                
+        return priority
 
     def _visible_row_indices(self) -> range | None:
         """Indices of ``self.filtered`` currently on screen (with header margin)."""
@@ -640,10 +687,7 @@ class PickerScreen(Screen[SongPickerResult]):
         return range(y_min, y_max)
 
     def _update_priority_paths(self) -> None:
-        indices = self._visible_row_indices()
-        if indices is None:
-            return
-        self._priority_paths = [self.filtered[i].path for i in indices]
+        pass
 
     def _perform_search(self) -> None:
         self._search_timer = None
@@ -683,6 +727,11 @@ class PickerScreen(Screen[SongPickerResult]):
             if not search.value and not search.has_focus:
                 event.stop()
                 self.action_cancel()
+
+    def on_song_table_viewport_changed(self, _event: SongTable.ViewportChanged) -> None:
+        self._update_priority_paths()
+        self._refresh_visible_rows()
+        self._schedule_detail_render()
 
     def on_data_table_row_highlighted(self, _event: DataTable.RowHighlighted) -> None:
         # Per-scroll path. Keep it cheap: refresh metadata cells for the
@@ -791,51 +840,32 @@ class PickerScreen(Screen[SongPickerResult]):
     def _render_table(self, *, reset_cursor: bool = False) -> None:
         table = self.app.query_one("#songs", SongTable)
         previous_row = 0 if reset_cursor else table.cursor_row
-        normalized_query = remove_accents(self.search_query).casefold().strip()
-        match_style = f"bold {self._theme_tokens.match}"
-        muted = self._theme_tokens.muted
-        song_icon = self._theme_tokens.song_icon
         
         if getattr(self, "_render_timer", None) is not None:
             self._render_timer.stop()  # type: ignore[attr-defined]
+            self._render_timer = None
             
         table.clear()
         self._row_meta_sig.clear()
 
-        # Fix: Defer heavy materialization (Step 3.3). Render rows in chunks so the
-        # UI loop can breathe. This eliminates both the startup block and search lag.
-        def _render_chunk(start_idx: int) -> None:
-            chunk_size = 50
-            end_idx = min(start_idx + chunk_size, len(self.filtered))
-            for i in range(start_idx, end_idx):
-                choice = self.filtered[i]
-                metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
-                duration, notes, risk, suggested = _metadata_cells(metadata)
+        # Fix 4.6 & 4.7: Viewport materialization.
+        # Add all rows instantly with cheap string placeholders so the
+        # DataTable gets its full scrollable height immediately without
+        # constructing 5000 Rich objects or stat-ing 5000 files.
+        for choice in self.filtered:
+            row_cells = ["", choice.path.stem, ""]
+            if self.show_notes:
+                row_cells.append("")
+            if self.show_risk:
+                row_cells.append("")
+            if self.show_suggested:
+                row_cells.append("")
+            table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
 
-                row_cells = [
-                    song_icon,
-                    _title_cell(choice.path.stem, normalized_query, match_style),
-                    duration,
-                ]
-                if self.show_notes:
-                    row_cells.append(notes)
-                if self.show_risk:
-                    row_cells.append(_risk_cell(risk, muted, self._theme_tokens))
-                if self.show_suggested:
-                    row_cells.append(suggested)
-
-                table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
-
-            if end_idx < len(self.filtered):
-                self._render_timer = self.set_timer(0.001, lambda: _render_chunk(end_idx))
-            else:
-                self._render_timer = None
-                if self.filtered:
-                    table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
-                    self._update_priority_paths()
-
-        # Render the first chunk immediately for a snappy frame, then defer the rest
-        _render_chunk(0)
+        if self.filtered:
+            table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
+            
+        self.refresh_metadata_rows()
 
     def refresh_metadata_rows(self) -> None:
         """Refresh metadata cells for the visible rows only.
@@ -885,9 +915,15 @@ class PickerScreen(Screen[SongPickerResult]):
                 metadata.recommended_profile,
                 metadata.recommended_tempo_scale,
                 metadata.warnings,
+                metadata.duration_seconds,
+                metadata.average_notes_per_second,
+                metadata.peak_notes_per_second_1s,
+                metadata.chords_count,
+                metadata.min_note_gap_ms,
+                metadata.min_same_key_gap_ms,
             )
         else:
-            sig = (str(selected.path), False, "", 0, "", 0.0, ())
+            sig = (str(selected.path), False, "", 0, "", 0.0, (), 0.0, 0.0, 0.0, 0, 0.0, 0.0)
             
         if self._detail_sig == sig:
             return

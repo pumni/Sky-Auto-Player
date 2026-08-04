@@ -87,7 +87,7 @@ def _build_app(monkeypatch: Any, *, headless_songs: bool = True) -> SkyPickerApp
     """
     _ShortTerminalMetadataCoordinator.instances.clear()
     monkeypatch.setattr(
-        app_module, "get_song_choices", lambda force_refresh=False: []
+        "sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: []
     )
     monkeypatch.setattr(
         app_module, "MetadataCoordinator", _ShortTerminalMetadataCoordinator

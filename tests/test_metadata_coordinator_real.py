@@ -62,7 +62,7 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
         
     import sky_music.ui.textual_app.workers as workers_module
     monkeypatch.setattr(workers_module, "hydrate_persistent_metadata_for_paths", mock_warm)
-    monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
+    monkeypatch.setattr(workers_module, "populate_raw_song_ui_metadata_for_paths", mock_hydrate)
     
     coord.refresh([Path("some/song.json")])
     
@@ -99,7 +99,7 @@ def test_metadata_coordinator_debounce_request_id(monkeypatch) -> None:
         
     import sky_music.ui.textual_app.workers as workers_module
     monkeypatch.setattr(workers_module, "hydrate_persistent_metadata_for_paths", mock_warm)
-    monkeypatch.setattr(workers_module, "hydrate_and_fill_raw_metadata", mock_hydrate)
+    monkeypatch.setattr(workers_module, "populate_raw_song_ui_metadata_for_paths", mock_hydrate)
     
     coord.refresh([Path("first/path.json")])
     

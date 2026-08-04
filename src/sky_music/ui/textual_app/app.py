@@ -20,13 +20,12 @@ from sky_music.config import (
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
 )
-from sky_music.infrastructure.background import BackgroundCleanupError, BackgroundScope
+from sky_music.infrastructure.background import BackgroundCleanupError
 from sky_music.infrastructure.focus import Win32SkyFocusGuard
 from sky_music.ui.picker import (
     SongPickerResult,
 )
-from sky_music.ui.picker_helpers import get_song_choices, save_theme
-from sky_music.ui.picker_theme import remove_accents
+from sky_music.ui.picker_helpers import save_theme
 from sky_music.ui.textual_app.app_state import PlaybackMode
 from sky_music.ui.textual_app.display_widgets import GradientHeader
 from sky_music.ui.textual_app.keymap import COMMANDS
@@ -58,7 +57,6 @@ from sky_music.ui.textual_app.widgets import CustomFooter
 # spawning real background threads during Textual pilot tests). The App itself no
 # longer creates a coordinator — PickerScreen is the sole owner (Fix 4.2).
 from sky_music.ui.textual_app.workers import MetadataCoordinator as MetadataCoordinator
-from sky_music.ui.textual_app.workers import MetadataHandle
 
 if TYPE_CHECKING:
     from sky_music.infrastructure.hotkeys import PlaybackControls
@@ -145,11 +143,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._choices: list[SongChoice] = []
 
         self._picker: PickerScreen | None = None
-        self.picker_scope = BackgroundScope(phase="picker")
-        # Fix 4.2: App does NOT own a MetadataCoordinator. PickerScreen is
-        # the sole coordinator owner. Keeping a second one here caused a
-        # dual-coordinator race (both processed the full library concurrently).
-        self.metadata: MetadataHandle | None = None
 
         self._update_available_version: str | None = None
         self._version_indicator_applied = False
@@ -199,24 +192,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def _theme_class(self) -> str:
         return f"theme-{self.active_theme}"
 
-    def _pre_load_choices(self) -> None:
-        # Fix 4.1: Called exactly ONCE per session, from get_default_screen().
-        # No longer called from __init__ — eliminates the double-scan regression
-        # where the songs/ directory was stat()+iterated twice before first paint.
-        paths = get_song_choices(force_refresh=True)
-        self._choices = [
-            SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
-            for path in paths
-        ]
+
 
     def get_default_screen(self) -> Screen[SongPickerResult | None]:
-        # Fix 4.1: Scan songs/ exactly ONCE here (removed the second scan that
-        # was also in __init__). The App constructor no longer pre-loads;
-        # this is the single point of truth for the initial song list.
-        self._pre_load_choices()
         self._picker = PickerScreen(
             name="picker",
-            choices=self._choices,  # pass pre-scanned list; on_mount skips rescan
+            choices=None,
             theme_name=self.active_theme,
             background_mode=self.background_mode,
             profile_name=self.profile_name,
@@ -645,51 +626,56 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_unmount(self) -> None:
         try:
-            self.picker_scope.close_all(wait=True)
-            from sky_music.platform.win32 import window_target
-            if getattr(window_target, "PLAYBACK_DEBUG", False):
-                for snap in self.picker_scope.snapshots():
-                    window_target.debug_log(
-                        f"[background] picker resource {snap.name} closed={snap.closed} "
-                        f"pending={snap.pending_count} running={snap.running_count}"
-                    )
-            self.picker_scope.assert_closed()
-            from sky_music.orchestration.telemetry import TelemetryLogger
-            TelemetryLogger.last_picker_cleanup = {
-                "ok": True,
-                "resources": [
-                    {
-                        "name": snap.name,
-                        "phase": snap.phase,
-                        "state": snap.state,
-                        "closed": snap.closed,
-                        "pending_count": snap.pending_count,
-                        "running_count": snap.running_count,
-                    }
-                    for snap in self.picker_scope.snapshots()
-                ],
-            }
+            picker = self._find_picker_screen()
+            if picker is not None:
+                picker.quiesce()
+                
+                from sky_music.platform.win32 import window_target
+                if getattr(window_target, "PLAYBACK_DEBUG", False):
+                    for snap in picker.picker_scope.snapshots():
+                        window_target.debug_log(
+                            f"[background] picker resource {snap.name} closed={snap.closed} "
+                            f"pending={snap.pending_count} running={snap.running_count}"
+                        )
+                picker.picker_scope.assert_closed()
+                from sky_music.orchestration.telemetry import TelemetryLogger
+                TelemetryLogger.last_picker_cleanup = {
+                    "ok": True,
+                    "resources": [
+                        {
+                            "name": snap.name,
+                            "phase": snap.phase,
+                            "state": snap.state,
+                            "closed": snap.closed,
+                            "pending_count": snap.pending_count,
+                            "running_count": snap.running_count,
+                        }
+                        for snap in picker.picker_scope.snapshots()
+                    ],
+                }
         except Exception as exc:
             from sky_music.platform.win32 import window_target
             window_target.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
             from sky_music.orchestration.telemetry import TelemetryLogger
             resources_list: list[dict[str, Any]] = []
             with contextlib.suppress(Exception):
-                resources_list = [
-                    {
-                        "name": snap.name,
-                        "phase": snap.phase,
-                        "state": snap.state,
-                        "closed": snap.closed,
-                        "pending_count": snap.pending_count,
-                        "running_count": snap.running_count,
-                    }
-                    for snap in self.picker_scope.snapshots()
-                ]
+                picker = self._find_picker_screen()
+                if picker is not None:
+                    resources_list = [
+                        {
+                            "name": snap.name,
+                            "phase": snap.phase,
+                            "state": snap.state,
+                            "closed": snap.closed,
+                            "pending_count": snap.pending_count,
+                            "running_count": snap.running_count,
+                        }
+                        for snap in picker.picker_scope.snapshots()
+                    ]
             TelemetryLogger.last_picker_cleanup = {
                 "ok": False,
-                "resources": resources_list,
                 "error": str(exc),
+                "resources": resources_list,
             }
             raise exc
 
@@ -761,7 +747,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         # Record cleanup telemetry (mirrors on_unmount behavior)
         try:
-            snaps = close_result.snapshots if hasattr(close_result, 'snapshots') else []
+            snaps = getattr(close_result, "snapshots", [])
             snapshots_list = [
                 {
                     "name": snap.name, "phase": snap.phase, "state": snap.state,

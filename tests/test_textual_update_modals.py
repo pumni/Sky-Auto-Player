@@ -38,7 +38,7 @@ def test_update_modal_renders_release_notes_monkeypatch(monkeypatch: pytest.Monk
     """
     from sky_music.ui.textual_app.modals import UpdateModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     notes = (
         "## Changes\n"
@@ -77,7 +77,7 @@ def test_update_modal_handles_empty_notes_gracefully(monkeypatch: pytest.MonkeyP
     """
     from sky_music.ui.textual_app.modals import UpdateModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
         modal = UpdateModal(
@@ -108,7 +108,7 @@ def test_update_settings_modal_persists_toggles(monkeypatch: pytest.MonkeyPatch)
 
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     auto_check_calls: list[bool] = []
 
@@ -144,7 +144,7 @@ def test_update_settings_modal_clear_skip_version(
 
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     clear_calls: list[bool] = []
 
@@ -198,7 +198,7 @@ def test_open_update_settings_modal_pushes_screen_with_current_cfg(
     from sky_music.config import AppConfig, UpdateSettings
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     cfg = AppConfig(update=UpdateSettings(auto_check=False))
 
@@ -242,7 +242,7 @@ def test_update_settings_modal_renders_divider_between_info_and_rows(
 
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     async def actions(app: app_module.SkyPickerApp, pilot: Any) -> None:
         modal = UpdateSettingsModal(
@@ -268,7 +268,7 @@ def test_update_settings_modal_escape_works_immediately(
     """
     from sky_music.ui.textual_app.modals import UpdateSettingsModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     dismissed: list[Any] = []
 
@@ -298,7 +298,7 @@ def test_update_settings_modal_escape_works_immediately(
 def test_update_banner_modal_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     from sky_music.ui.textual_app.modals import UpdateBannerModal
 
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [])
 
     notes = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11"
 

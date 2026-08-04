@@ -11,9 +11,9 @@ from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import ResourceState, WorkerSnapshot
 from sky_music.ui.picker_metadata import (
     compute_song_ui_metadata_payloads,
-    hydrate_and_fill_raw_metadata,
     hydrate_persistent_metadata_for_paths,
     peek_cached_song_ui_metadata,
+    populate_raw_song_ui_metadata_for_paths,
     session_to_worker_payload,
     store_computed_song_ui_metadata_payloads,
 )
@@ -240,7 +240,7 @@ class MetadataCoordinator:
             for i in range(0, len(paths), raw_batch_size):
                 if self._should_stop(request_id):
                     return
-                changed = hydrate_and_fill_raw_metadata(
+                changed = populate_raw_song_ui_metadata_for_paths(
                     paths[i : i + raw_batch_size], self._session, self._cfg
                 )
                 if changed:

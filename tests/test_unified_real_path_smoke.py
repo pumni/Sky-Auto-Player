@@ -8,8 +8,8 @@ from sky_music.config import AppConfig
 from sky_music.infrastructure.background import WorkerSnapshot
 from sky_music.orchestration.telemetry import TelemetryLogger
 from sky_music.ui.picker import SongPickerResult
-from sky_music.ui.textual_app import app as app_module
 from sky_music.ui.textual_app.app import SkyPickerApp
+from sky_music.ui.textual_app.screens import picker as picker_module
 
 SONGS = [
     Path("songs/Alpha.json"),
@@ -57,7 +57,7 @@ class FakeMetadataCoordinator:
         )
 
 
-from sky_music.ui.textual_app.screens import picker as picker_module
+
 
 
 def run_picker(coro: Any) -> Any:
@@ -66,7 +66,7 @@ def run_picker(coro: Any) -> Any:
 
 def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     engine_instantiated = False
@@ -162,7 +162,7 @@ def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
 
 def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
-    monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
+    monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     engine_instantiated = False
@@ -241,10 +241,9 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
         # Unpatch close_all so on_unmount doesn't fail
         picker = app._find_picker_screen()
         if picker is not None:
-            try:
+            import contextlib
+            with contextlib.suppress(AttributeError):
                 del picker.picker_scope.close_all
-            except AttributeError:
-                pass
 
         await pilot.press("escape")
 

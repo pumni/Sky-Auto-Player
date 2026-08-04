@@ -429,7 +429,6 @@ def _run_textual_selftest() -> int:
     try:
         from rapidfuzz import fuzz
 
-        from sky_music.ui.textual_app import app as app_module
         from sky_music.ui.textual_app.app import SkyPickerApp
     except Exception as exc:
         print(f"Textual selftest import failed: {exc}", file=sys.stderr)
@@ -468,13 +467,15 @@ def _run_textual_selftest() -> int:
             )
 
     async def run_picker_probe() -> None:
-        original_get_song_choices = app_module.get_song_choices
-        original_metadata = app_module.MetadataCoordinator
-        app_module.get_song_choices = lambda force_refresh=False: [  # noqa: ARG005
+        from sky_music.ui import picker_helpers as helpers_module
+        original_get_song_choices = helpers_module.get_song_choices
+        from sky_music.ui.textual_app.screens import picker as picker_module
+        original_metadata = picker_module.MetadataCoordinator
+        helpers_module.get_song_choices = lambda force_refresh=False: [  # noqa: ARG005
             Path("songs/Diamonds.json"),
             Path("songs/Dandelions.json"),
         ]
-        app_module.MetadataCoordinator = SelftestMetadataCoordinator # type: ignore[assignment]
+        picker_module.MetadataCoordinator = SelftestMetadataCoordinator # type: ignore[assignment]
         try:
             app = SkyPickerApp(theme_name="aurora")
             async with app.run_test(size=(100, 30)) as pilot:
@@ -488,8 +489,8 @@ def _run_textual_selftest() -> int:
             if app.return_value is not None:
                 raise RuntimeError("Textual picker selftest did not exit cleanly")
         finally:
-            app_module.get_song_choices = original_get_song_choices
-            app_module.MetadataCoordinator = original_metadata
+            helpers_module.get_song_choices = original_get_song_choices
+            picker_module.MetadataCoordinator = original_metadata
 
     try:
         score = fuzz.WRatio("diamonds", "dimonds")
