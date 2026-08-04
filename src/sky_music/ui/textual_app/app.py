@@ -45,7 +45,6 @@ from sky_music.ui.textual_app.screens.picker import (
     PendingRiskDecision,
     PickerScreen,
     SongChoice,
-    SongTable,
 )
 from sky_music.ui.textual_app.theme_css import (
     APP_CSS,
@@ -328,19 +327,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
             return picker.show_suggested
         return True
 
-    @property
-    def _marked_row_key(self):
-        picker = self._find_picker_screen()
-        if picker is not None:
-            return picker._marked_row_key
-        return None
-
-    @_marked_row_key.setter
-    def _marked_row_key(self, value: object | None) -> None:
-        picker = self._find_picker_screen()
-        if picker is not None:
-            picker._marked_row_key = value
-
     def _run_command(self, value: object | None) -> None:
         picker = self._find_picker_screen()
         if picker is not None:
@@ -400,11 +386,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         picker = self._find_picker_screen()
         if picker is not None:
             picker._focus_table()
-
-    def _sync_marker(self) -> None:
-        picker = self._find_picker_screen()
-        if picker is not None:
-            picker._sync_marker()
 
     def _update_header_tagline(self) -> None:
         """Sync the header tagline to reflect the current total song count."""
@@ -705,27 +686,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
     def on_screen_resume(self, _event: events.ScreenResume) -> None:
         self.call_after_refresh(self._focus_table)
-
-    def _set_marker(self, row_key: object | None) -> None:
-        table = self.query_one("#songs", SongTable)
-        t = self._theme_tokens
-        if TYPE_CHECKING:
-            from textual.widgets._data_table import RowKey as _RowKey
-        else:
-            _RowKey = Any
-        if self._marked_row_key is not None:
-            try:
-                table.update_cell(cast(_RowKey, self._marked_row_key), "marker", t.song_icon)
-            except Exception:
-                from sky_music.platform.win32 import window_target
-                window_target.debug_log("[app] failed to clear marker")
-        if row_key is not None:
-            try:
-                table.update_cell(cast(_RowKey, row_key), "marker", t.pointer)
-            except Exception:
-                from sky_music.platform.win32 import window_target
-                window_target.debug_log("[app] failed to set marker")
-        self._marked_row_key = row_key
 
     # ── Playback Lifecycle ────────────────────────────────────────────
 

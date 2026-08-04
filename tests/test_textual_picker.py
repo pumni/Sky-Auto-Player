@@ -877,7 +877,7 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
 
     from textual.geometry import Size
     monkeypatch.setattr(SkyPickerApp, "size", Size(100, 20))
-    monkeypatch.setattr(app_module.SongTable, "size", Size(100, 20))
+    monkeypatch.setattr(picker_module.SongTable, "size", Size(100, 20))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")

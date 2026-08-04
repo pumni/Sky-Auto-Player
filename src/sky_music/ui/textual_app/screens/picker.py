@@ -6,7 +6,7 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 from rapidfuzz import fuzz, process
 from rich.text import Text
@@ -71,9 +71,6 @@ from sky_music.ui.textual_app.theme_css import (
     TextualThemeTokens,
 )
 from sky_music.ui.textual_app.workers import MetadataCoordinator, MetadataHandle
-
-if TYPE_CHECKING:
-    from textual.widgets._data_table import RowKey
 
 
 class PickerAppHost(Protocol):
@@ -338,13 +335,14 @@ class PickerScreen(Screen[SongPickerResult]):
         self._provided_choices = choices
         self.choices: list[SongChoice] = []
         self.filtered: list[SongChoice] = []
-        self._marked_row_key: object | None = None
         self.picker_scope = BackgroundScope(phase="picker")
         self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
         self._search_timer = None
+        self._detail_timer = None
         self._quiesced = False
         self._row_meta_sig: dict[str, tuple[str, str, str, str]] = {}
         self._detail_sig: tuple[object, ...] | None = None
+        self._priority_paths: list[Path] = []
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -545,6 +543,10 @@ class PickerScreen(Screen[SongPickerResult]):
             pass
 
     def on_unmount(self) -> None:
+        if self._detail_timer is not None:
+            with contextlib.suppress(Exception):
+                self._detail_timer.stop()
+            self._detail_timer = None
         try:
             self.picker_scope.close_all(wait=True)
             from sky_music.platform.win32 import window_target
@@ -609,19 +611,39 @@ class PickerScreen(Screen[SongPickerResult]):
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
     def get_metadata_priority_paths(self) -> list[Path]:
+        """Return the cached visible-window paths for the background worker.
+
+        ``_priority_paths`` is recomputed on the UI thread (in
+        ``_render_table`` and on cursor movement) so the worker thread never
+        touches Textual widget state. Reading the plain attribute here is
+        safe: it is a reference to an immutable-by-convention list; the worst
+        case is a slightly stale window, which the worker only uses for
+        prioritisation.
+        """
+        return self._priority_paths
+
+    def _visible_row_indices(self) -> range | None:
+        """Indices of ``self.filtered`` currently on screen (with header margin)."""
         try:
             table = self.app.query_one("#songs", SongTable)
-            if not self.filtered:
-                return []
-            y_min = table.scroll_y
-            y_max = y_min + table.size.height
-            return [
-                self.filtered[i].path
-                for i in range(int(y_min), min(int(y_max), len(self.filtered)))
-            ]
         except Exception:
-            # fallback
-            return [c.path for c in self.filtered[:40]]
+            return None
+        if not self.filtered:
+            return None
+        height = table.size.height
+        if height <= 0:
+            return None
+        y_min = max(0, int(table.scroll_y))
+        y_max = min(len(self.filtered), y_min + height + 1)
+        if y_min >= y_max:
+            return None
+        return range(y_min, y_max)
+
+    def _update_priority_paths(self) -> None:
+        indices = self._visible_row_indices()
+        if indices is None:
+            return
+        self._priority_paths = [self.filtered[i].path for i in indices]
 
     def _perform_search(self) -> None:
         self._search_timer = None
@@ -663,8 +685,12 @@ class PickerScreen(Screen[SongPickerResult]):
                 self.action_cancel()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        self._set_marker(event.row_key)
-        self._render_detail()
+        # Per-scroll path. Keep it cheap: refresh only the newly highlighted
+        # row's metadata cells and defer the detail-panel rebuild to a debounce
+        # timer so fast scrolling never rebuilds the panel per frame.
+        self._update_priority_paths()
+        self._refresh_row_metadata(event.row_key)
+        self._schedule_detail_render()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         event.stop()
@@ -672,32 +698,42 @@ class PickerScreen(Screen[SongPickerResult]):
         assert row_key_value is not None
         self.action_confirm(song_path=Path(row_key_value))
 
-    def _set_marker(self, row_key: object | None) -> None:
-        table = self.app.query_one("#songs", SongTable)
-        t = self._theme_tokens
-        if self._marked_row_key is not None:
-            try:
-                table.update_cell(cast(RowKey, self._marked_row_key), "marker", t.song_icon)
-            except Exception:
-                from sky_music.platform.win32 import window_target
-                window_target.debug_log("[picker] failed to clear marker")
-        if row_key is not None:
-            try:
-                table.update_cell(cast(RowKey, row_key), "marker", t.pointer)
-            except Exception:
-                from sky_music.platform.win32 import window_target
-                window_target.debug_log("[picker] failed to set marker")
-        self._marked_row_key = row_key
-
-    def _sync_marker(self) -> None:
-        table = self.app.query_one("#songs", SongTable)
-        if not self.filtered:
-            return
+    def _refresh_row_metadata(self, row_key: object) -> bool:
+        """Refresh metadata cells for a single row if its rendered content changed."""
         try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            key = str(getattr(row_key, "value", row_key))
         except Exception:
-            return
-        self._set_marker(row_key)
+            return False
+        try:
+            metadata = peek_cached_song_ui_metadata(Path(key), self.session, self.cfg)
+            if metadata is None:
+                return False
+            duration, notes, risk, suggested = _metadata_cells(metadata)
+            sig = (duration, notes, risk, suggested)
+            if self._row_meta_sig.get(key) == sig:
+                return False
+            self._row_meta_sig[key] = sig
+            table = self.app.query_one("#songs", SongTable)
+            table.update_cell(key, "time", duration)
+            if self.show_notes:
+                table.update_cell(key, "notes", notes)
+            if self.show_risk:
+                table.update_cell(key, "risk", str(_risk_cell(risk, self._theme_tokens.muted, self._theme_tokens)))
+            if self.show_suggested:
+                table.update_cell(key, "suggested", suggested)
+            return True
+        except Exception:
+            return False
+
+    def _schedule_detail_render(self) -> None:
+        if self._detail_timer is not None:
+            with contextlib.suppress(Exception):
+                self._detail_timer.stop()
+        self._detail_timer = self.set_timer(0.06, self._render_detail_debounced)
+
+    def _render_detail_debounced(self) -> None:
+        self._detail_timer = None
+        self._render_detail()
 
     def on_screen_resume(self, _event: events.ScreenResume) -> None:
         self.call_after_refresh(self._focus_table)
@@ -743,7 +779,6 @@ class PickerScreen(Screen[SongPickerResult]):
         muted = self._theme_tokens.muted
         song_icon = self._theme_tokens.song_icon
         table.clear()
-        self._marked_row_key = None
         self._row_meta_sig.clear()
         for choice in self.filtered:
             metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
@@ -765,31 +800,25 @@ class PickerScreen(Screen[SongPickerResult]):
 
         if self.filtered:
             table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
-            self._sync_marker()
+            self._update_priority_paths()
 
     def refresh_metadata_rows(self) -> None:
-        table = self.app.query_one("#songs", SongTable)
-        muted = self._theme_tokens.muted
-        for choice in self.filtered:
-            row_key = str(choice.path)
-            try:
-                metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
-                if metadata is not None:
-                    duration, notes, risk, suggested = _metadata_cells(metadata)
-                    sig = (duration, notes, risk, suggested)
-                    if self._row_meta_sig.get(row_key) == sig:
-                        continue
-                    self._row_meta_sig[row_key] = sig
-                    table.update_cell(row_key, "time", duration)
-                    if self.show_notes:
-                        table.update_cell(row_key, "notes", notes)
-                    if self.show_risk:
-                        table.update_cell(row_key, "risk", str(_risk_cell(risk, muted, self._theme_tokens)))
-                    if self.show_suggested:
-                        table.update_cell(row_key, "suggested", suggested)
-            except Exception:
-                pass
-        self._render_detail()
+        """Refresh metadata cells for the visible rows only.
+
+        Runs on the UI thread via the background coordinator, so it is limited
+        to the on-screen window (+1 header margin) instead of the whole
+        library; rows that scroll into view are refreshed by
+        ``on_data_table_row_highlighted``.
+        """
+        indices = self._visible_row_indices()
+        if indices is None:
+            return
+        changed = False
+        for index in indices:
+            if self._refresh_row_metadata(self.filtered[index].path):
+                changed = True
+        if changed:
+            self._render_detail()
 
     def _render_detail(self) -> None:
         detail = self.app.query_one("#detail", DetailPanel)
