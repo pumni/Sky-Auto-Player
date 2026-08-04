@@ -1,4 +1,6 @@
-use super::shared::SessionShared;
+use super::shared::{
+    SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
+};
 use super::worker::Worker;
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -55,26 +57,34 @@ impl NativeDispatchSession {
         let metrics = SharedMetrics::default();
         metrics.snapshot.lock().total_us = total_us;
         let shared = Arc::new(SessionShared {
-            interrupt,
-            desired_pause: AtomicBool::new(false),
-            quit_requested: AtomicBool::new(false),
-            skip_requested: AtomicBool::new(false),
-            panic_requested: AtomicBool::new(false),
-            // Foreground ownership is derived from target_hwnd inside the
-            // worker. Python no longer publishes a second focus boolean.
-            focus_active: AtomicBool::new(true),
-            target_hwnd: AtomicIsize::new(0),
-            target_generation: AtomicU64::new(0),
-            lifecycle: AtomicU8::new(LIFECYCLE_NEW),
-            terminal_outcome: AtomicU8::new(OUTCOME_NONE),
-            metrics,
-            completed: (StdMutex::new(false), Condvar::new()),
-            telemetry_output: Mutex::new(None),
-            priority_acquired: Mutex::new("pending".to_string()),
-            estimator_output: Mutex::new(None),
-            supervisor_heartbeat_ticks: AtomicU64::new(initial_heartbeat_ticks.as_u64()),
-            #[cfg(any(test, feature = "test-support"))]
-            command_timing: CommandTimingState::default(),
+            commands: SessionCommands {
+                interrupt,
+                desired_pause: AtomicBool::new(false),
+                quit_requested: AtomicBool::new(false),
+                skip_requested: AtomicBool::new(false),
+                panic_requested: AtomicBool::new(false),
+                // Foreground ownership is derived from target_hwnd inside the
+                // worker. Python no longer publishes a second focus boolean.
+                focus_active: AtomicBool::new(true),
+                #[cfg(any(test, feature = "test-support"))]
+                command_timing: CommandTimingState::default(),
+            },
+            target: SessionTarget {
+                target_hwnd: AtomicIsize::new(0),
+                target_generation: AtomicU64::new(0),
+            },
+            lifecycle: SessionLifecycle {
+                lifecycle: AtomicU8::new(LIFECYCLE_NEW),
+                terminal_outcome: AtomicU8::new(OUTCOME_NONE),
+                completed: (StdMutex::new(false), Condvar::new()),
+            },
+            publication: SessionPublication {
+                metrics,
+                telemetry_output: Mutex::new(None),
+                priority_acquired: Mutex::new("pending".to_string()),
+                estimator_output: Mutex::new(None),
+                supervisor_heartbeat_ticks: AtomicU64::new(initial_heartbeat_ticks.as_u64()),
+            },
         });
         Ok(Self {
             config: Mutex::new(Some(WorkerConfig {
@@ -112,6 +122,7 @@ impl NativeDispatchSession {
     pub fn start(&self) -> Result<(), String> {
         self.shared
             .lifecycle
+            .lifecycle
             .compare_exchange(
                 LIFECYCLE_NEW,
                 LIFECYCLE_RUNNING,
@@ -124,6 +135,7 @@ impl NativeDispatchSession {
             Err(error) => {
                 self.shared
                     .lifecycle
+                    .lifecycle
                     .store(LIFECYCLE_POISONED, Ordering::Release);
                 return Err(format!(
                     "QPC admission failed before worker start: {error:?}"
@@ -133,12 +145,14 @@ impl NativeDispatchSession {
         let Some(config) = self.config.lock().take() else {
             self.shared
                 .lifecycle
+                .lifecycle
                 .store(LIFECYCLE_POISONED, Ordering::Release);
             return Err("session configuration is no longer available".to_string());
         };
 
         let shared = Arc::clone(&self.shared);
         self.shared
+            .publication
             .supervisor_heartbeat_ticks
             .store(heartbeat_ticks.as_u64(), Ordering::Release);
 
@@ -161,25 +175,36 @@ impl NativeDispatchSession {
                 };
                 let panicked = panic_message.is_some();
                 if let Some(message) = panic_message {
-                    shared.metrics.terminal_error.lock().replace(message);
+                    shared
+                        .publication
+                        .metrics
+                        .terminal_error
+                        .lock()
+                        .replace(message);
                 }
                 shared
+                    .lifecycle
                     .terminal_outcome
                     .store(worker_outcome, Ordering::Release);
-                shared.metrics.panicked.store(panicked, Ordering::Release);
+                shared
+                    .publication
+                    .metrics
+                    .panicked
+                    .store(panicked, Ordering::Release);
                 if panicked {
                     shared
                         .lifecycle
+                        .lifecycle
                         .store(LIFECYCLE_POISONED, Ordering::Release);
                 } else {
-                    let _ = shared.lifecycle.compare_exchange(
+                    let _ = shared.lifecycle.lifecycle.compare_exchange(
                         LIFECYCLE_RUNNING,
                         LIFECYCLE_FINISHED,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
                 }
-                let (done_lock, done_cv) = &shared.completed;
+                let (done_lock, done_cv) = &shared.lifecycle.completed;
                 if let Ok(mut done) = done_lock.lock() {
                     *done = true;
                     done_cv.notify_all();
@@ -194,6 +219,7 @@ impl NativeDispatchSession {
             Err(error) => {
                 self.shared
                     .lifecycle
+                    .lifecycle
                     .store(LIFECYCLE_POISONED, Ordering::Release);
                 Err(format!("failed to spawn native dispatch worker: {error}"))
             }
@@ -202,12 +228,12 @@ impl NativeDispatchSession {
 
     fn signal_worker(&self) -> Result<(), String> {
         if !matches!(
-            self.shared.lifecycle.load(Ordering::Acquire),
+            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
             LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
-        let _ = self.shared.interrupt.signal();
+        let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
 
@@ -218,29 +244,36 @@ impl NativeDispatchSession {
         }
         #[cfg(not(any(test, feature = "test-support")))]
         {
-            if self.shared.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
+            if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
                 return Err("session commands require a running worker".to_string());
             }
-            self.shared.desired_pause.store(true, Ordering::Release);
-            let _ = self.shared.interrupt.signal();
+            self.shared
+                .commands
+                .desired_pause
+                .store(true, Ordering::Release);
+            let _ = self.shared.commands.interrupt.signal();
             Ok(())
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn pause_with_timing_token(&self) -> Result<u64, String> {
-        if self.shared.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
         }
         let request_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .map_err(|error| format!("QPC pause request failed: {error:?}"))?;
         let generation = self
             .shared
+            .commands
             .command_timing
             .request_pause(request_ticks)
             .map_err(|error| error.to_string())?;
-        self.shared.desired_pause.store(true, Ordering::Release);
-        let _ = self.shared.interrupt.signal();
+        self.shared
+            .commands
+            .desired_pause
+            .store(true, Ordering::Release);
+        let _ = self.shared.commands.interrupt.signal();
         Ok(generation)
     }
 
@@ -256,6 +289,7 @@ impl NativeDispatchSession {
             .map_err(|error| format!("QPC pause timing conversion failed: {error:?}"))?;
         match self
             .shared
+            .commands
             .command_timing
             .result(generation, qpc_clock)
             .map_err(|error| error.to_string())?
@@ -272,54 +306,67 @@ impl NativeDispatchSession {
     }
 
     pub fn resume(&self) -> Result<(), String> {
-        if self.shared.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
         }
         #[cfg(any(test, feature = "test-support"))]
-        self.shared.command_timing.cancel_pause_request();
-        self.shared.desired_pause.store(false, Ordering::Release);
-        let _ = self.shared.interrupt.signal();
+        self.shared.commands.command_timing.cancel_pause_request();
+        self.shared
+            .commands
+            .desired_pause
+            .store(false, Ordering::Release);
+        let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
 
     pub fn skip(&self) -> Result<(), String> {
         if !matches!(
-            self.shared.lifecycle.load(Ordering::Acquire),
+            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
             LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
-        self.shared.skip_requested.store(true, Ordering::Release);
+        self.shared
+            .commands
+            .skip_requested
+            .store(true, Ordering::Release);
         self.signal_worker()
     }
 
     pub fn quit(&self) -> Result<(), String> {
         if !matches!(
-            self.shared.lifecycle.load(Ordering::Acquire),
+            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
             LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
-        self.shared.quit_requested.store(true, Ordering::Release);
+        self.shared
+            .commands
+            .quit_requested
+            .store(true, Ordering::Release);
         self.signal_worker()
     }
 
     pub fn panic_release(&self) -> Result<(), String> {
         if !matches!(
-            self.shared.lifecycle.load(Ordering::Acquire),
+            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
             LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
-        self.shared.panic_requested.store(true, Ordering::Release);
+        self.shared
+            .commands
+            .panic_requested
+            .store(true, Ordering::Release);
         self.signal_worker()
     }
 
     pub fn heartbeat(&self) -> Result<(), String> {
-        if self.shared.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING {
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING {
             let now = sky_dispatch_win32::clock::qpc_now_ticks_checked()
                 .map_err(|error| format!("QPC heartbeat failed: {error:?}"))?;
             self.shared
+                .publication
                 .supervisor_heartbeat_ticks
                 .store(now.as_u64(), Ordering::Release);
         }
@@ -327,16 +374,28 @@ impl NativeDispatchSession {
     }
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
-        if self.shared.target_hwnd.swap(hwnd, Ordering::AcqRel) != hwnd {
-            self.shared.target_generation.fetch_add(1, Ordering::AcqRel);
-            let _ = self.shared.interrupt.signal();
+        if self.shared.target.target_hwnd.swap(hwnd, Ordering::AcqRel) != hwnd {
+            self.shared
+                .target
+                .target_generation
+                .fetch_add(1, Ordering::AcqRel);
+            let _ = self.shared.commands.interrupt.signal();
         }
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
-        let lifecycle = self.shared.lifecycle.load(Ordering::Acquire);
-        let paused = self.shared.metrics.is_paused.load(Ordering::Relaxed);
-        let outcome = self.shared.terminal_outcome.load(Ordering::Acquire);
+        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
+        let paused = self
+            .shared
+            .publication
+            .metrics
+            .is_paused
+            .load(Ordering::Relaxed);
+        let outcome = self
+            .shared
+            .lifecycle
+            .terminal_outcome
+            .load(Ordering::Acquire);
         let status = match lifecycle {
             LIFECYCLE_NEW => "ready",
             LIFECYCLE_RUNNING if paused => "paused",
@@ -347,13 +406,20 @@ impl NativeDispatchSession {
                 OUTCOME_SKIPPED => "skipped",
                 _ => "finished",
             },
-            LIFECYCLE_POISONED if self.shared.metrics.panicked.load(Ordering::Acquire) => {
+            LIFECYCLE_POISONED
+                if self
+                    .shared
+                    .publication
+                    .metrics
+                    .panicked
+                    .load(Ordering::Acquire) =>
+            {
                 "panicked"
             }
             LIFECYCLE_POISONED => "poisoned",
             _ => "invalid",
         };
-        let local = self.shared.metrics.snapshot.lock().clone();
+        let local = self.shared.publication.metrics.snapshot.lock().clone();
         EngineSnapshot {
             elapsed_us: local.elapsed_us,
             total_us: local.total_us,
@@ -372,7 +438,7 @@ impl NativeDispatchSession {
             active_count: local.active_count as usize,
             possibly_active_count: local.possibly_active_count as usize,
             failed_release_count: local.failed_release_count as usize,
-            last_error: self.shared.metrics.last_error.lock().clone(),
+            last_error: self.shared.publication.metrics.last_error.lock().clone(),
             keys_dropped: local.keys_dropped,
             chord_split_events: local.chord_split_events,
             sendinput_partial_events: local.sendinput_partial_events,
@@ -389,7 +455,7 @@ impl NativeDispatchSession {
             positive_residual_at_cap: local.positive_residual_at_cap,
             recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
             outcome: self.terminal_outcome().map(str::to_string),
-            rt_priority_acquired: self.shared.priority_acquired.lock().clone(),
+            rt_priority_acquired: self.shared.publication.priority_acquired.lock().clone(),
             effective_spin_threshold_us: local.effective_spin_threshold_us,
             wake_error_p50_us: local.wake_error_p50_us,
             wake_error_p95_us: local.wake_error_p95_us,
@@ -400,7 +466,13 @@ impl NativeDispatchSession {
             spin_duty_cycle_ppm: local.spin_duty_cycle_ppm,
             worker_cpu_time_us: local.worker_cpu_time_us,
             process_cpu_time_us: local.process_cpu_time_us,
-            wait_strategy_acquired: self.shared.metrics.wait_strategy_acquired.lock().clone(),
+            wait_strategy_acquired: self
+                .shared
+                .publication
+                .metrics
+                .wait_strategy_acquired
+                .lock()
+                .clone(),
             power_throttling_disabled: local.power_throttling_disabled,
             input_path_degraded: local.input_path_degraded,
             sendinput_path_degraded: local.sendinput_path_degraded,
@@ -408,20 +480,50 @@ impl NativeDispatchSession {
             wait_path_degraded: local.wait_path_degraded,
             wait_target_error_us: local.wait_target_error_us,
             idle_wake_count: local.idle_wake_count,
-            terminal_error: self.shared.metrics.terminal_error.lock().clone(),
-            secondary_errors: self.shared.metrics.secondary_errors.lock().clone(),
+            terminal_error: self
+                .shared
+                .publication
+                .metrics
+                .terminal_error
+                .lock()
+                .clone(),
+            secondary_errors: self
+                .shared
+                .publication
+                .metrics
+                .secondary_errors
+                .lock()
+                .clone(),
             generation_count: self.generation_count,
-            generation_status_counts: self.shared.metrics.generation_status_counts.lock().clone(),
-            abort_counts_by_reason: self.shared.metrics.abort_counts_by_reason.lock().clone(),
-            release_outcome: self.shared.metrics.terminal_release_outcome.lock().clone(),
+            generation_status_counts: self
+                .shared
+                .publication
+                .metrics
+                .generation_status_counts
+                .lock()
+                .clone(),
+            abort_counts_by_reason: self
+                .shared
+                .publication
+                .metrics
+                .abort_counts_by_reason
+                .lock()
+                .clone(),
+            release_outcome: self
+                .shared
+                .publication
+                .metrics
+                .terminal_release_outcome
+                .lock()
+                .clone(),
         }
     }
 
     pub fn join(&self, timeout: Duration) -> Result<bool, String> {
-        if self.shared.lifecycle.load(Ordering::Acquire) == LIFECYCLE_NEW {
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) == LIFECYCLE_NEW {
             return Err("session has not been started".to_string());
         }
-        let (done_lock, done_cv) = &self.shared.completed;
+        let (done_lock, done_cv) = &self.shared.lifecycle.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
@@ -441,7 +543,7 @@ impl NativeDispatchSession {
     }
 
     pub fn take_telemetry_json(&self) -> Result<String, String> {
-        let (done_lock, _) = &self.shared.completed;
+        let (done_lock, _) = &self.shared.lifecycle.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
@@ -451,6 +553,7 @@ impl NativeDispatchSession {
         drop(done);
         let output = self
             .shared
+            .publication
             .telemetry_output
             .lock()
             .take()
@@ -460,7 +563,12 @@ impl NativeDispatchSession {
     }
 
     pub fn terminal_outcome(&self) -> Option<&'static str> {
-        match self.shared.terminal_outcome.load(Ordering::Acquire) {
+        match self
+            .shared
+            .lifecycle
+            .terminal_outcome
+            .load(Ordering::Acquire)
+        {
             OUTCOME_NONE => None,
             OUTCOME_FINISHED => Some("finished"),
             OUTCOME_QUIT => Some("quit"),
@@ -471,7 +579,7 @@ impl NativeDispatchSession {
     }
 
     pub fn estimator_state_json(&self) -> Result<String, String> {
-        let (done_lock, _) = &self.shared.completed;
+        let (done_lock, _) = &self.shared.lifecycle.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
@@ -480,6 +588,7 @@ impl NativeDispatchSession {
         }
         drop(done);
         self.shared
+            .publication
             .estimator_output
             .lock()
             .clone()
