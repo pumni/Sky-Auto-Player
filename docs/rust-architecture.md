@@ -31,16 +31,42 @@ Current stable facades and ownership boundaries:
   re-exports; session lifecycle is in `engine/session.rs`.
 - `engine/shared.rs` owns the cross-thread command, target, lifecycle, metrics,
   telemetry, and completion resources shared by a session and its worker.
+- `SessionShared` groups those resources by capability (`commands`, `target`,
+  `lifecycle`, and `publication`); it does not add nested `Arc` ownership for
+  fields that already live for the session.
 - `engine/worker/{admission,cleanup,control,estimator,health,startup,timing,wait}.rs`
   own focused invariant and phase boundaries. Terminal cleanup, command
-  control, and wait-boundary orchestration now run through context objects;
-  `WorkerRuntime` owns mutable worker-thread state outside the panic boundary;
-  Down/Up transaction extraction remains gated on a complete worker-state
-  owner so operation order cannot change.
+  control, and wait-boundary orchestration currently use narrowly scoped
+  capability inputs; the remaining orchestration loop is still being reduced
+  to owner methods. `WorkerCore` owns mutable metrics, runtime, health, timing,
+  error, and dispatch resources outside the panic boundary. Down/Up
+  transaction extraction remains gated on a complete worker-state owner so
+  operation order cannot change.
 - `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
   session, and telemetry code live under `python/`.
 - `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
   submodules; raw SendInput and timer unsafe boundaries remain platform-owned.
+
+### State ownership table
+
+| State/capability | Owner | Readers | Mutation boundary |
+| --- | --- | --- | --- |
+| Session commands | `SessionShared::commands` | session, worker | atomics and command-timing guard |
+| Target stamp | `SessionShared::target` | session, admission | generation publication and acquire loads |
+| Lifecycle/completion | `SessionShared::lifecycle` | session, worker | lifecycle atomics and completion condvar |
+| Published metrics/telemetry | `SessionShared::publication` | session, worker | publication locks and atomics |
+| Playback clock | `WorkerCore::resources.playback` | worker phases | worker thread only |
+| Backend masks | `TrackedKeyState` | dispatch, cleanup | worker thread only |
+| Coordinator | `WorkerCore::resources.coordinator` | dispatch, cleanup | worker thread only |
+| Telemetry ring | `WorkerCore::resources.telemetry` | worker | worker thread; serialized after finish |
+| Estimator | `WorkerCore::resources.estimator` | dispatch, cleanup | worker thread only |
+| Local health/timing/error state | `WorkerCore::{health,timing,errors}` | worker phases | worker thread only |
+
+Adding worker state requires assigning it to one `WorkerCore` capability before
+it is read by a phase. Adding a phase requires documenting the invariant it
+owns, its allowed inputs, and its exact position relative to focus checks,
+preflight, SendInput, coordinator commit, telemetry, and cleanup. Timing-boundary
+changes require a dedicated regression test and a baseline/candidate benchmark.
 
 ## Public API Boundaries
 
@@ -75,8 +101,8 @@ Worker orchestration, estimators, coordinators, and Python boundaries must remai
 
 ## Architecture Checker
 
-Run `uv run python scripts/check_rust_architecture.py` from any directory in the
-repository. The checker reports file sizes, public-item counts, unsafe-boundary
-violations, PyO3-boundary violations, and forbidden lower-layer imports. It is
-report-only during the incremental refactor; CI enforcement is introduced only
-after the module boundaries have stabilized.
+Run `uv run python scripts/check_rust_architecture.py --enforce` from the
+repository root. The checker reports file sizes, public-item counts,
+unsafe-boundary violations, PyO3-boundary violations, forbidden lower-layer
+imports, and temporary architecture debt. Enforced violations fail CI; a
+temporary allowlist entry must name its reason and expiry phase.
