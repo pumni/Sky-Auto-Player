@@ -40,10 +40,6 @@
 
     {"path":"rust/crates/sky_player_rs/src/engine/config.rs","rule":"context_fields","reason":"replace WorkerConfig parameter bag with validated options in Phase 8","expires_phase":"Phase 8"},
     {"path":"rust/crates/sky_player_rs/src/engine/shared.rs","rule":"context_fields","reason":"consolidate direct shared ownership in Phase 3","expires_phase":"Phase 3"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/cleanup.rs","rule":"context_fields","reason":"make cleanup worker-owned in Phase 5","expires_phase":"Phase 5"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/control.rs","rule":"context_fields","reason":"make command control worker-owned in Phase 5","expires_phase":"Phase 5"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/wait.rs","rule":"context_fields","reason":"make wait boundary worker-owned in Phase 5","expires_phase":"Phase 5"},
-
     {"path":"rust/crates/sky_player_rs/src/engine.rs","rule":"pyo3_boundary","reason":"legacy Python root module; move FFI imports under explicit Python boundary","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/python.rs","rule":"pyo3_boundary","reason":"legacy Python root module; keep FFI migration explicit","expires_phase":"Phase 9"}
   ]
