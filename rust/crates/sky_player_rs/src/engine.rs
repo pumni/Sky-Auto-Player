@@ -49,13 +49,13 @@ use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_ti
 use sky_dispatch_win32::event::OwnedEvent;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
-use sky_dispatch_win32::input::{ReleaseAllOutcome, TrackedKeyState};
+use sky_dispatch_win32::input::TrackedKeyState;
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
 use sky_dispatch_win32::power::PowerThrottlingGuard;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WakeErrorStats};
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 

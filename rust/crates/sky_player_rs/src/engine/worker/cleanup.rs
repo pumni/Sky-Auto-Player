@@ -1,5 +1,18 @@
-use super::*;
+use super::{
+    OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
+    TrackedKeyState, WorkerMetricsLocal, current_process_cpu_time_us, current_thread_cpu_time_us,
+    publish_backend_metrics, try_publish_metrics,
+};
+use crate::engine::telemetry::{NativeTelemetryOutput, SharedMetrics, TelemetryCollector};
+use parking_lot::Mutex;
+use sky_dispatch_core::estimator::SendLatencyEstimator;
+use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_win32::clock::{QpcClock, QpcError};
+use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::any::Any;
+use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
