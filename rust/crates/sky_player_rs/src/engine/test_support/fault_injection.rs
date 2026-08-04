@@ -1,3 +1,5 @@
+#![cfg(any(test, feature = "test-support"))]
+
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
 ///

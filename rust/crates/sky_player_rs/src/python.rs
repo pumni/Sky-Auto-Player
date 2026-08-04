@@ -1,4 +1,6 @@
-use super::engine::{DispatchProfile, FaultInjectionScript, NativeDispatchSession};
+#[cfg(feature = "test-support")]
+use super::engine::FaultInjectionScript;
+use super::engine::{BackendConfig, DispatchProfile, NativeDispatchSession};
 
 mod conversion;
 mod session;
@@ -81,6 +83,7 @@ impl NativeSessionConfigPy {
         let target_hwnd = isize::try_from(target_hwnd.0)
             .map_err(|_| PyValueError::new_err("target_hwnd is outside the platform range"))?;
         let profile = DispatchProfile::parse(profile).map_err(PyValueError::new_err)?;
+        #[cfg(any(test, feature = "test-support"))]
         if profile == DispatchProfile::MockTest {
             return Err(PyValueError::new_err(
                 "mock_test is available only to Rust test support",
@@ -125,6 +128,7 @@ impl NativeSessionConfigPy {
         match self.profile {
             DispatchProfile::Production => "production",
             DispatchProfile::StrictTimingDiagnostic => "strict_timing_diagnostic",
+            #[cfg(any(test, feature = "test-support"))]
             DispatchProfile::MockTest => "mock_test",
         }
     }

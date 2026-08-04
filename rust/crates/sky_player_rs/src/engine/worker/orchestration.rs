@@ -1,27 +1,32 @@
 use super::*;
 
 pub(super) fn run(worker: Worker<'_>) -> u8 {
-    let Worker {
-        config,
-        interrupt,
-        desired_pause,
-        quit_requested,
-        skip_requested,
-        panic_requested,
-        focus_active,
-        target_hwnd,
-        target_generation,
-        metrics,
-        telemetry_output,
-        priority_acquired,
-        estimator_output,
-        supervisor_heartbeat_ticks,
-        #[cfg(any(test, feature = "test-support"))]
-        command_timing,
-    } = worker;
+    let config = worker.config;
+    let shared = worker.shared;
+    let mut core = worker.core;
+    let mut local_metrics = std::mem::take(&mut core.metrics);
+    let mut runtime = std::mem::take(&mut core.runtime);
+    let mut secondary_errors = std::mem::take(&mut core.errors.secondary);
+    let mut last_published_error = std::mem::take(&mut core.errors.last_published);
+    let mut abort_counts = std::mem::take(&mut core.errors.abort_counts);
+    let interrupt = &shared.interrupt;
+    let desired_pause = &shared.desired_pause;
+    let quit_requested = &shared.quit_requested;
+    let skip_requested = &shared.skip_requested;
+    let panic_requested = &shared.panic_requested;
+    let focus_active = &shared.focus_active;
+    let target_hwnd = &shared.target_hwnd;
+    let target_generation = &shared.target_generation;
+    let metrics = &shared.metrics;
+    let telemetry_output = &shared.telemetry_output;
+    let priority_acquired = &shared.priority_acquired;
+    let estimator_output = &shared.estimator_output;
+    let supervisor_heartbeat_ticks = &shared.supervisor_heartbeat_ticks;
 
     #[cfg(any(test, feature = "test-support"))]
-    let _command_timing_cleanup = CommandTimingCleanup(command_timing);
+    let command_timing = &shared.command_timing;
+    #[cfg(any(test, feature = "test-support"))]
+    let _command_timing_cleanup = CommandTimingCleanup(&shared.command_timing);
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
         Err(error) => {
@@ -29,129 +34,29 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             return 1;
         }
     };
-    let focus_loss_fault = config.fault_script.focus_loss_after_due_before_send;
-    let wait_fault = config.fault_script.wait_failure;
-    let mut backend = if config.mock_backend {
-        let script = Arc::new(config.fault_script);
-        let latency_base_us = config.mock_latency_base_us;
-        let latency_per_key_us = config.mock_latency_per_key_us;
-        // call_index counts every emitter invocation (Down + Up, in order).
-        let call_index = Arc::new(AtomicU64::new(0));
-        let script_emitter = Arc::clone(&script);
-        let call_index_emitter = Arc::clone(&call_index);
-        TrackedKeyState::with_emitter(move |codes, _key_up| {
-            let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
-
-            // Base per-call latency (mirrors old mock_latency_base_us / per_key).
-            let base_latency_us = latency_base_us
-                .saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
-            let sender_started_ticks = match qpc_clock.now() {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    return mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Err(error),
-                        codes.len() as u32,
-                        0,
-                        0,
-                        0,
-                    );
-                }
-            };
-            if base_latency_us > 0 {
-                // Keep the artificial sender work after the sender start
-                // boundary so test-support timing matches the real seam.
-                std::thread::sleep(Duration::from_micros(base_latency_us));
-            }
-
-            match script_emitter.resolve(idx) {
-                None | Some(InjectedSendOutcome::Full { latency_ticks: 0 }) => {
-                    // Fast path: full success, no extra latency.
-                    mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        codes.len() as u32,
-                        0,
-                        0,
-                    )
-                }
-                Some(InjectedSendOutcome::Full { latency_ticks }) => {
-                    mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        codes.len() as u32,
-                        0,
-                        *latency_ticks,
-                    )
-                }
-                Some(InjectedSendOutcome::Zero {
-                    latency_ticks,
-                    win32_error,
-                }) => mock_platform_send_result_from_started_ticks(
-                    qpc_clock,
-                    Ok(sender_started_ticks),
-                    codes.len() as u32,
-                    0,
-                    *win32_error,
-                    *latency_ticks,
-                ),
-                Some(InjectedSendOutcome::Partial {
-                    inserted,
-                    latency_ticks,
-                    win32_error,
-                }) => {
-                    let inserted = (*inserted as u32).min(codes.len() as u32);
-                    mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        inserted,
-                        *win32_error,
-                        *latency_ticks,
-                    )
-                }
-                Some(InjectedSendOutcome::Stall { duration_ticks }) => {
-                    // Spin-stall: hold the emitter without sending any key.
-                    // This simulates a scheduler stall or OS freeze without
-                    // actually blocking the thread (consistent with RT discipline).
-                    mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        0,
-                        0,
-                        *duration_ticks,
-                    )
-                }
-                Some(InjectedSendOutcome::PanicAfterSend) => {
-                    let _ = mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        codes.len() as u32,
-                        0,
-                        0,
-                    );
-                    panic!("fault injection: panic after send before commit");
-                }
-                Some(InjectedSendOutcome::QpcFailureAfterSend) => {
-                    let mut result = mock_platform_send_result_from_started_ticks(
-                        qpc_clock,
-                        Ok(sender_started_ticks),
-                        codes.len() as u32,
-                        codes.len() as u32,
-                        0,
-                        0,
-                    );
-                    result.timing_error = Some(QpcError::CounterUnavailable);
-                    result
-                }
-            }
-        })
-    } else {
-        TrackedKeyState::with_qpc_clock(qpc_clock)
+    #[cfg(any(test, feature = "test-support"))]
+    let (focus_loss_fault, wait_fault) = match &config.backend {
+        BackendConfig::Production => (false, false),
+        BackendConfig::Mock { fault_script, .. } => (
+            fault_script.focus_loss_after_due_before_send,
+            fault_script.wait_failure,
+        ),
+    };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let (focus_loss_fault, wait_fault) = (false, false);
+    let mut backend = match &config.backend {
+        #[cfg(any(test, feature = "test-support"))]
+        BackendConfig::Mock {
+            latency_base_us,
+            latency_per_key_us,
+            fault_script,
+        } => create_mock_backend(
+            qpc_clock,
+            *latency_base_us,
+            *latency_per_key_us,
+            fault_script.clone(),
+        ),
+        BackendConfig::Production => TrackedKeyState::with_qpc_clock(qpc_clock),
     };
     let admission_failure =
         |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
@@ -168,10 +73,6 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
             *metrics.last_error.lock() = Some(message);
             1
         };
-    let mut local_metrics = WorkerMetricsLocal::default();
-    let mut runtime = WorkerRuntime::default();
-    let mut secondary_errors: Vec<String> = Vec::new();
-    let mut last_published_error: Option<String> = None;
     let StartupResources {
         power_guard: _power_guard,
         priority_guard: _priority_guard,
@@ -365,7 +266,7 @@ pub(super) fn run(worker: Worker<'_>) -> u8 {
         }
     };
     let mut telemetry = TelemetryCollector::new(config.telemetry_mode, config.telemetry_capacity);
-    let mut abort_counts: HashMap<&'static str, u64> = HashMap::with_capacity(6);
+    abort_counts.reserve(6);
     let mut effective_spin_threshold_us = config.spin_threshold_us;
     let _ = interrupt.try_take();
     if config.enable_adaptive_spin

@@ -5,9 +5,11 @@ mod session;
 mod shared;
 mod snapshot;
 pub(crate) mod telemetry;
+#[cfg(any(test, feature = "test-support"))]
 mod test_support;
 mod worker;
 
+pub(crate) use config::BackendConfig;
 pub use config::DispatchProfile;
 use config::WorkerConfig;
 pub use session::NativeDispatchSession;
@@ -24,7 +26,10 @@ pub(crate) use telemetry::{
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::CommandTimingResult;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use test_support::mock_sender::create_mock_backend;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use test_support::{CommandTimingCleanup, CommandTimingState, PauseTimingLookup};
+#[cfg(any(test, feature = "test-support"))]
 pub use test_support::{FaultInjectionScript, InjectedSendOutcome};
 #[cfg(test)]
 pub(crate) use worker::*;
@@ -42,14 +47,15 @@ use sky_dispatch_win32::clock::qpc_us_to_ticks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
-use sky_dispatch_win32::input::{PlatformSendResult, ReleaseAllOutcome, TrackedKeyState};
+#[cfg(test)]
+pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
+use sky_dispatch_win32::input::{ReleaseAllOutcome, TrackedKeyState};
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
 use sky_dispatch_win32::power::PowerThrottlingGuard;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WakeErrorStats};
 use smallvec::SmallVec;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 

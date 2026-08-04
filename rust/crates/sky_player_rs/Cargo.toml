@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [features]
 default = []
-test-support = []
+test-support = ["sky_dispatch_win32/test-support"]
 calibration = []
 
 [dependencies]
@@ -22,3 +22,6 @@ smallvec = { version = "1", features = ["serde"] }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+sky_dispatch_win32 = { path = "../sky_dispatch_win32", features = ["test-support"] }

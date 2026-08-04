@@ -20,10 +20,6 @@ impl NativeDispatchSessionPy {
         let min_hold_us = config.min_hold_us;
         let max_lead_us = 2_000;
         let dispatch_lead_us = 0;
-        let mock_backend = false;
-        let mock_latency_base_us = 0;
-        let mock_latency_per_key_us = 0;
-        let fault_script = FaultInjectionScript::none();
         let require_focus = config.require_focus;
         let focus_restore_grace_us = 100_000;
         let spin_threshold_us = 150;
@@ -62,10 +58,7 @@ impl NativeDispatchSessionPy {
             max_lead_us,
             dispatch_lead_us,
             allowed_scan_codes,
-            mock_backend,
-            mock_latency_base_us,
-            mock_latency_per_key_us,
-            fault_script,
+            BackendConfig::Production,
             require_focus,
             focus_restore_grace_us,
             spin_threshold_us,
@@ -426,10 +419,11 @@ impl TestDispatchSessionPy {
             max_lead_us,
             dispatch_lead_us,
             allowed_scan_codes,
-            true,
-            mock_latency_base_us,
-            mock_latency_per_key_us,
-            FaultInjectionScript::none(),
+            BackendConfig::Mock {
+                latency_base_us: mock_latency_base_us,
+                latency_per_key_us: mock_latency_per_key_us,
+                fault_script: FaultInjectionScript::none(),
+            },
             false,
             100_000,
             150,

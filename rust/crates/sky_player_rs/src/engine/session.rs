@@ -1,5 +1,5 @@
 use super::shared::SessionShared;
-use super::worker::{Worker, WorkerInputs};
+use super::worker::Worker;
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -14,16 +14,13 @@ pub struct NativeDispatchSession {
 
 impl NativeDispatchSession {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         schedule: RuntimeSchedule,
         min_hold_us: u64,
         max_lead_us: u64,
         dispatch_lead_us: u64,
         allowed_scan_codes: Vec<u16>,
-        mock_backend: bool,
-        mock_latency_base_us: u64,
-        mock_latency_per_key_us: u64,
-        fault_script: FaultInjectionScript,
+        backend: BackendConfig,
         require_focus: bool,
         focus_restore_grace_us: u64,
         spin_threshold_us: u64,
@@ -43,7 +40,7 @@ impl NativeDispatchSession {
         strict_up_completion_late_us: u64,
         supervisor_lease_timeout_us: u64,
     ) -> Result<Self, String> {
-        if !cfg!(windows) && !mock_backend {
+        if !cfg!(windows) && matches!(&backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
         let initial_heartbeat_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
@@ -55,29 +52,29 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = schedule.generation_count;
-        let metrics = Arc::new(SharedMetrics::default());
+        let metrics = SharedMetrics::default();
         metrics.snapshot.lock().total_us = total_us;
         let shared = Arc::new(SessionShared {
-            interrupt: Arc::new(interrupt),
-            desired_pause: Arc::new(AtomicBool::new(false)),
-            quit_requested: Arc::new(AtomicBool::new(false)),
-            skip_requested: Arc::new(AtomicBool::new(false)),
-            panic_requested: Arc::new(AtomicBool::new(false)),
+            interrupt,
+            desired_pause: AtomicBool::new(false),
+            quit_requested: AtomicBool::new(false),
+            skip_requested: AtomicBool::new(false),
+            panic_requested: AtomicBool::new(false),
             // Foreground ownership is derived from target_hwnd inside the
             // worker. Python no longer publishes a second focus boolean.
-            focus_active: Arc::new(AtomicBool::new(true)),
-            target_hwnd: Arc::new(AtomicIsize::new(0)),
-            target_generation: Arc::new(AtomicU64::new(0)),
-            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_NEW)),
-            terminal_outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
+            focus_active: AtomicBool::new(true),
+            target_hwnd: AtomicIsize::new(0),
+            target_generation: AtomicU64::new(0),
+            lifecycle: AtomicU8::new(LIFECYCLE_NEW),
+            terminal_outcome: AtomicU8::new(OUTCOME_NONE),
             metrics,
-            completed: Arc::new((StdMutex::new(false), Condvar::new())),
-            telemetry_output: Arc::new(Mutex::new(None)),
-            priority_acquired: Arc::new(Mutex::new("pending".to_string())),
-            estimator_output: Arc::new(Mutex::new(None)),
-            supervisor_heartbeat_ticks: Arc::new(AtomicU64::new(initial_heartbeat_ticks.as_u64())),
+            completed: (StdMutex::new(false), Condvar::new()),
+            telemetry_output: Mutex::new(None),
+            priority_acquired: Mutex::new("pending".to_string()),
+            estimator_output: Mutex::new(None),
+            supervisor_heartbeat_ticks: AtomicU64::new(initial_heartbeat_ticks.as_u64()),
             #[cfg(any(test, feature = "test-support"))]
-            command_timing: Arc::new(CommandTimingState::default()),
+            command_timing: CommandTimingState::default(),
         });
         Ok(Self {
             config: Mutex::new(Some(WorkerConfig {
@@ -86,10 +83,7 @@ impl NativeDispatchSession {
                 max_lead_us,
                 dispatch_lead_us,
                 allowed_count: allowed_scan_codes.len(),
-                mock_backend,
-                mock_latency_base_us,
-                mock_latency_per_key_us,
-                fault_script,
+                backend,
                 require_focus,
                 focus_restore_grace_us,
                 spin_threshold_us,
@@ -144,10 +138,6 @@ impl NativeDispatchSession {
         };
 
         let shared = Arc::clone(&self.shared);
-        let lifecycle = Arc::clone(&self.shared.lifecycle);
-        let terminal_outcome = Arc::clone(&self.shared.terminal_outcome);
-        let metrics = Arc::clone(&self.shared.metrics);
-        let completed = Arc::clone(&self.shared.completed);
         self.shared
             .supervisor_heartbeat_ticks
             .store(heartbeat_ticks.as_u64(), Ordering::Release);
@@ -156,7 +146,7 @@ impl NativeDispatchSession {
             .name("sky-native-dispatch".to_string())
             .spawn(move || {
                 let worker_result = catch_unwind(AssertUnwindSafe(|| {
-                    Worker::new(config, WorkerInputs::from_shared(&shared)).run()
+                    Worker::new(config, shared.as_ref()).run()
                 }));
                 let (worker_outcome, panic_message) = match worker_result {
                     Ok(outcome) => (outcome, None),
@@ -171,21 +161,25 @@ impl NativeDispatchSession {
                 };
                 let panicked = panic_message.is_some();
                 if let Some(message) = panic_message {
-                    *metrics.terminal_error.lock() = Some(message);
+                    shared.metrics.terminal_error.lock().replace(message);
                 }
-                terminal_outcome.store(worker_outcome, Ordering::Release);
-                metrics.panicked.store(panicked, Ordering::Release);
+                shared
+                    .terminal_outcome
+                    .store(worker_outcome, Ordering::Release);
+                shared.metrics.panicked.store(panicked, Ordering::Release);
                 if panicked {
-                    lifecycle.store(LIFECYCLE_POISONED, Ordering::Release);
+                    shared
+                        .lifecycle
+                        .store(LIFECYCLE_POISONED, Ordering::Release);
                 } else {
-                    let _ = lifecycle.compare_exchange(
+                    let _ = shared.lifecycle.compare_exchange(
                         LIFECYCLE_RUNNING,
                         LIFECYCLE_FINISHED,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
                 }
-                let (done_lock, done_cv) = &*completed;
+                let (done_lock, done_cv) = &shared.completed;
                 if let Ok(mut done) = done_lock.lock() {
                     *done = true;
                     done_cv.notify_all();
@@ -427,7 +421,7 @@ impl NativeDispatchSession {
         if self.shared.lifecycle.load(Ordering::Acquire) == LIFECYCLE_NEW {
             return Err("session has not been started".to_string());
         }
-        let (done_lock, done_cv) = &*self.shared.completed;
+        let (done_lock, done_cv) = &self.shared.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
@@ -447,7 +441,7 @@ impl NativeDispatchSession {
     }
 
     pub fn take_telemetry_json(&self) -> Result<String, String> {
-        let (done_lock, _) = &*self.shared.completed;
+        let (done_lock, _) = &self.shared.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
@@ -477,7 +471,7 @@ impl NativeDispatchSession {
     }
 
     pub fn estimator_state_json(&self) -> Result<String, String> {
-        let (done_lock, _) = &*self.shared.completed;
+        let (done_lock, _) = &self.shared.completed;
         let done = done_lock
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;

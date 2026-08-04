@@ -112,6 +112,7 @@ pub fn emit_up(scan_codes: &[u16]) -> EmitResult {
     emit_up_with(scan_codes, send_input_raw)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
 #[derive(Default)]
@@ -130,6 +131,7 @@ pub struct TrackedKeyState {
     pub keys_rolled_back: u64,
     pub rollback_residue_keys: u64,
     pub timing_error: Option<crate::clock::QpcError>,
+    #[cfg(any(test, feature = "test-support"))]
     pub custom_emitter: Option<CustomEmitterFn>,
     qpc_clock: Option<QpcClock>,
 }
@@ -157,7 +159,6 @@ impl fmt::Debug for TrackedKeyState {
             .field("keys_rolled_back", &self.keys_rolled_back)
             .field("rollback_residue_keys", &self.rollback_residue_keys)
             .field("timing_error", &self.timing_error)
-            .field("custom_emitter", &self.custom_emitter.is_some())
             .field("qpc_clock_configured", &self.qpc_clock.is_some())
             .finish()
     }
@@ -168,6 +169,7 @@ impl TrackedKeyState {
         Self::default()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_emitter<F>(emitter: F) -> Self
     where
         F: Fn(&[u16], bool) -> PlatformSendResult + Send + Sync + 'static,
@@ -185,6 +187,16 @@ impl TrackedKeyState {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    fn uses_custom_emitter(&self) -> bool {
+        self.custom_emitter.is_some()
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn uses_custom_emitter(&self) -> bool {
+        false
+    }
+
     /// Admit a real playback start/resume only when the user is not holding an
     /// instrument key. Mock emitters do not represent physical keyboard state,
     /// so they are explicitly exempt from this host preflight.
@@ -192,7 +204,7 @@ impl TrackedKeyState {
         &self,
         target_hwnd: isize,
     ) -> Result<(), PhysicalKeyPreflightError> {
-        if self.custom_emitter.is_some() {
+        if self.uses_custom_emitter() {
             return Ok(());
         }
         if target_hwnd == 0 {
@@ -210,30 +222,30 @@ impl TrackedKeyState {
     }
 
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> EmitResult {
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
-            emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up))
+            return emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+        }
+        if let Some(clock) = self.qpc_clock {
+            emit_down_with(scan_codes, |sc, key_up| {
+                send_input_raw_with_clock(sc, key_up, clock)
+            })
         } else {
-            if let Some(clock) = self.qpc_clock {
-                emit_down_with(scan_codes, |sc, key_up| {
-                    send_input_raw_with_clock(sc, key_up, clock)
-                })
-            } else {
-                emit_down(scan_codes)
-            }
+            emit_down(scan_codes)
         }
     }
 
     fn do_emit_up(&mut self, scan_codes: &[u16]) -> EmitResult {
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
-            emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up))
+            return emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+        }
+        if let Some(clock) = self.qpc_clock {
+            emit_up_with(scan_codes, |sc, key_up| {
+                send_input_raw_with_clock(sc, key_up, clock)
+            })
         } else {
-            if let Some(clock) = self.qpc_clock {
-                emit_up_with(scan_codes, |sc, key_up| {
-                    send_input_raw_with_clock(sc, key_up, clock)
-                })
-            } else {
-                emit_up(scan_codes)
-            }
+            emit_up(scan_codes)
         }
     }
 
@@ -551,7 +563,7 @@ impl TrackedKeyState {
 
         let mut verification_inconclusive = false;
         let mut stuck = Vec::new();
-        if self.custom_emitter.is_none() {
+        if !self.uses_custom_emitter() {
             match instrument_physical_state_for_mask(target_hwnd, tracked_mask) {
                 InstrumentPhysicalState::AllUp => {}
                 InstrumentPhysicalState::Held(held) => {
@@ -640,7 +652,7 @@ impl TrackedKeyState {
             .filter(|scan_code| !sent.contains(scan_code))
             .collect();
 
-        if self.custom_emitter.is_none() {
+        if !self.uses_custom_emitter() {
             match instrument_physical_state_for_mask(target_hwnd, FULL_INSTRUMENT_MASK) {
                 InstrumentPhysicalState::AllUp => {}
                 InstrumentPhysicalState::Held(held) => {
@@ -658,7 +670,7 @@ impl TrackedKeyState {
             for delay_ms in [50, 100] {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 let retry_sent = self.do_emit_up(&stuck).sent;
-                if self.custom_emitter.is_some() {
+                if self.uses_custom_emitter() {
                     stuck.retain(|scan_code| !retry_sent.contains(scan_code));
                 } else {
                     let retry_mask = match mask_for_scan_codes(&stuck) {
