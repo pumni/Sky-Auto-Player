@@ -169,7 +169,22 @@ class MetadataCoordinator:
             self._state = ResourceState.CLOSED
             return
         try:
-            app.call_from_thread(app.refresh_metadata_rows)
+            # Fix 4.7: Smart yielding. In free-threaded Python, a tight loop in
+            # a background thread can starve the main UI thread. By blocking the
+            # worker until the UI thread actually processes the refresh, we naturally
+            # throttle the worker to the UI render pace and eliminate render jank.
+            import threading
+            done = threading.Event()
+            
+            def _refresh_and_notify() -> None:
+                try:
+                    app.refresh_metadata_rows()
+                finally:
+                    done.set()
+                    
+            app.call_from_thread(_refresh_and_notify)
+            # Timeout prevents deadlock if the UI loop is closing but hasn't updated state yet
+            done.wait(timeout=0.5)
         except RuntimeError:
             self._state = ResourceState.CLOSED
 
@@ -217,13 +232,21 @@ class MetadataCoordinator:
         if self._should_stop(request_id):
             return
 
-        # Step 2: Hydrate cache from SQLite for specific paths and populate raw note stats
+        # Fix 4.3: Step 2: Hydrate cache from SQLite for specific paths and populate raw note stats.
+        # Batched so the UI receives raw duration/note count immediately for the first pages
+        # without waiting for the whole library to be parsed.
+        raw_batch_size = 25
         try:
-            changed = hydrate_and_fill_raw_metadata(paths, self._session, self._cfg)
-            if changed:
-                self._refresh_ui_from_thread(request_id)
+            for i in range(0, len(paths), raw_batch_size):
+                if self._should_stop(request_id):
+                    return
+                changed = hydrate_and_fill_raw_metadata(
+                    paths[i : i + raw_batch_size], self._session, self._cfg
+                )
+                if changed:
+                    self._refresh_ui_from_thread(request_id)
         except Exception as exc:
-            self._last_error = f"Step 2 (hydrate) failed: {exc}"
+            self._last_error = f"Step 2 (hydrate/raw) failed: {exc}"
 
         if self._should_stop(request_id):
             return
@@ -245,10 +268,23 @@ class MetadataCoordinator:
         batch_size = 10
         session_payload = session_to_worker_payload(self._session)
         
-        for i in range(0, len(pending), batch_size):
+        while pending:
             if self._should_stop(request_id):
                 return
-            batch = pending[i : i + batch_size]
+            
+            # Fix 4.8: Dynamic Priority. Re-read priority paths so the worker pivots
+            # immediately if the user scrolls the UI during a long analysis pass.
+            try:
+                get_priority = getattr(self._app, "get_metadata_priority_paths", None)
+                if callable(get_priority):
+                    current_priority = set(cast(list[Path], get_priority()))
+                    pending.sort(key=lambda p: 0 if p in current_priority else 1)
+            except Exception:
+                pass
+                
+            batch = pending[:batch_size]
+            pending = pending[batch_size:]
+            
             try:
                 payloads = compute_song_ui_metadata_payloads(
                     [str(path) for path in batch],
@@ -261,5 +297,5 @@ class MetadataCoordinator:
                 if changed_risk:
                     self._refresh_ui_from_thread(request_id)
             except Exception as exc:
-                self._last_error = f"Step 4 (compute) failed for batch {i}: {exc}"
+                self._last_error = f"Step 4 (compute) failed for batch: {exc}"
                 continue

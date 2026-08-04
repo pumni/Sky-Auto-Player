@@ -57,6 +57,9 @@ class FakeMetadataCoordinator:
         )
 
 
+from sky_music.ui.textual_app.screens import picker as picker_module
+
+
 def run_picker(coro: Any) -> Any:
     return asyncio.run(coro)
 
@@ -64,7 +67,7 @@ def run_picker(coro: Any) -> Any:
 def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     engine_instantiated = False
     init_checked_cleanup = False
@@ -128,7 +131,12 @@ def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
 
         # Triggers quiesce and execute_playback_plan
         app.execute_playback_plan(plan, picker_result)
-        await pilot.pause()
+        
+        # Wait for the async thread callback to rearm the coordinator
+        for _ in range(20):
+            await pilot.pause()
+            if len(FakeMetadataCoordinator.instances) > 1:
+                break
 
         # Check engine was created and checked
         assert engine_instantiated is True
@@ -155,7 +163,7 @@ def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
 def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     engine_instantiated = False
 
@@ -174,7 +182,7 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
     monkeypatch.setattr("sky_music.orchestration.engine.PlaybackEngine", MockPlaybackEngine)
 
     # Force quiesce to fail by patching picker_scope.close_all to raise an error
-    original_init = SkyPickerApp.__init__
+    original_init = picker_module.PickerScreen.__init__
     def patched_init(self, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
         # Monkeypatch close_all on the instantiated picker_scope
@@ -187,7 +195,7 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
             raise BackgroundCleanupError("Simulation of worker closing failure!", result=res)
         self.picker_scope.close_all = failing_close_all
 
-    monkeypatch.setattr(SkyPickerApp, "__init__", patched_init)
+    monkeypatch.setattr(picker_module.PickerScreen, "__init__", patched_init)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         from sky_music.domain import Millis, Note, NoteKey, Song
@@ -231,8 +239,12 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
         assert "Simulation of worker closing failure!" in TelemetryLogger.last_picker_cleanup.get("error", "")
 
         # Unpatch close_all so on_unmount doesn't fail
-        if hasattr(app.picker_scope, "close_all"):
-            del app.picker_scope.close_all
+        picker = app._find_picker_screen()
+        if picker is not None:
+            try:
+                del picker.picker_scope.close_all
+            except AttributeError:
+                pass
 
         await pilot.press("escape")
 

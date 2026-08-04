@@ -25,7 +25,7 @@ def test_production_module_exposes_only_native_session_surface() -> None:
 
 
 def test_session_config_rejects_test_profile() -> None:
-    with pytest.raises(ValueError, match="mock_test"):
+    with pytest.raises(ValueError, match="profile must be"):
         sky_player_rs.SessionConfig(profile="mock_test")  # type: ignore[attr-defined]
 
 

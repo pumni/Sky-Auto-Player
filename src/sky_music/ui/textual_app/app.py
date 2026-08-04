@@ -52,7 +52,13 @@ from sky_music.ui.textual_app.theme_css import (
     TextualThemeTokens,
 )
 from sky_music.ui.textual_app.widgets import CustomFooter
-from sky_music.ui.textual_app.workers import MetadataCoordinator, MetadataHandle
+
+# MetadataCoordinator is imported for test-monkeypatch compatibility: tests that
+# need to stub the coordinator patch ``app_module.MetadataCoordinator`` (to avoid
+# spawning real background threads during Textual pilot tests). The App itself no
+# longer creates a coordinator — PickerScreen is the sole owner (Fix 4.2).
+from sky_music.ui.textual_app.workers import MetadataCoordinator as MetadataCoordinator
+from sky_music.ui.textual_app.workers import MetadataHandle
 
 if TYPE_CHECKING:
     from sky_music.infrastructure.hotkeys import PlaybackControls
@@ -134,17 +140,16 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._active_playback_commands: PlaybackCommandBridge | None = None
         self._shutting_down_playback = False
 
-        # Song choices (shared with PickerScreen) + initial preload
+        # Song choices cache — populated lazily by PickerScreen.on_mount()
+        # so the App constructor does NOT scan the songs/ directory.
         self._choices: list[SongChoice] = []
-        self._pre_load_choices()
 
         self._picker: PickerScreen | None = None
         self.picker_scope = BackgroundScope(phase="picker")
-        self.metadata: MetadataHandle | None
-        if not self.unified_mode:
-            self.metadata = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
-        else:
-            self.metadata = None
+        # Fix 4.2: App does NOT own a MetadataCoordinator. PickerScreen is
+        # the sole coordinator owner. Keeping a second one here caused a
+        # dual-coordinator race (both processed the full library concurrently).
+        self.metadata: MetadataHandle | None = None
 
         self._update_available_version: str | None = None
         self._version_indicator_applied = False
@@ -195,6 +200,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
         return f"theme-{self.active_theme}"
 
     def _pre_load_choices(self) -> None:
+        # Fix 4.1: Called exactly ONCE per session, from get_default_screen().
+        # No longer called from __init__ — eliminates the double-scan regression
+        # where the songs/ directory was stat()+iterated twice before first paint.
         paths = get_song_choices(force_refresh=True)
         self._choices = [
             SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
@@ -202,12 +210,13 @@ class SkyPickerApp(App[SongPickerResult | None]):
         ]
 
     def get_default_screen(self) -> Screen[SongPickerResult | None]:
+        # Fix 4.1: Scan songs/ exactly ONCE here (removed the second scan that
+        # was also in __init__). The App constructor no longer pre-loads;
+        # this is the single point of truth for the initial song list.
         self._pre_load_choices()
-        if hasattr(self, "metadata") and self.metadata is not None:
-            self.metadata.refresh([c.path for c in self._choices])
         self._picker = PickerScreen(
             name="picker",
-            choices=self._choices,
+            choices=self._choices,  # pass pre-scanned list; on_mount skips rescan
             theme_name=self.active_theme,
             background_mode=self.background_mode,
             profile_name=self.profile_name,
@@ -727,10 +736,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         from sky_music.orchestration.telemetry import TelemetryLogger
 
         picker = self._find_picker_screen()
+        close_result = None
         try:
             if picker is not None:
-                picker.quiesce()
-            close_result = self.picker_scope.close_all(wait=True)
+                close_result = picker.quiesce()
         except BackgroundCleanupError as e:
             try:
                 snaps = e.result.snapshots if e.result else []
@@ -815,10 +824,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 playback_error = result.removeprefix("error:").strip()
             if picker is not None:
                 picker.rearm()
-            if not self.unified_mode:
-                self.picker_scope = BackgroundScope(phase="picker")
-                self.metadata = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
-                self.metadata.refresh([choice.path for choice in self._choices])
+            # Fix 4.2: App no longer re-creates a coordinator after playback.
+            # picker.rearm() above already creates a fresh coordinator owned by
+            # PickerScreen. An App-level coordinator here was the post-playback
+            # dual-coordinator race (non-unified mode).
             self._focus_table()
             self._restore_picker_after_playback()
             if playback_error is not None:

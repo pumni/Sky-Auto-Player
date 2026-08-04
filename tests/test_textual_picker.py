@@ -90,7 +90,7 @@ async def _run_app(actions: Any) -> SkyPickerApp:
 def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
@@ -107,7 +107,7 @@ def test_textual_picker_opens_with_all_songs(monkeypatch) -> None:
 def test_textual_picker_filters_and_selects_current_row(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         await pilot.click("#search")
@@ -127,7 +127,7 @@ def test_textual_picker_filters_and_selects_current_row(monkeypatch) -> None:
 def test_search_typing_shortcut_letter_does_not_open_modal(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         await pilot.click("#search")
@@ -192,7 +192,7 @@ def test_textual_theme_tokens_cover_all_picker_presets() -> None:
 def test_textual_background_mode_applies_screen_class(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         assert app.screen.has_class("background-painted")
@@ -213,7 +213,7 @@ def test_textual_background_mode_applies_screen_class(monkeypatch) -> None:
 def test_table_arrow_moves_one_row_from_initial_focus(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
@@ -231,7 +231,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     saves: list[tuple[bool, bool]] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
         picker_module,
         "save_config",
@@ -264,7 +264,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
 def test_textual_picker_escape_returns_none(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(_app: SkyPickerApp, pilot: Any) -> None:
         await pilot.press("escape")
@@ -309,7 +309,7 @@ def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
         analyzed=True,
     )
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "peek_cached_song_ui_metadata", lambda *_args, **_kwargs: metadata)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
@@ -327,7 +327,7 @@ def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
 def test_detail_panel_shows_empty_and_no_match_states(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: [])
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def empty_actions(app: SkyPickerApp, pilot: Any) -> None:
         rendered = str(app.query_one("#detail").render())
@@ -363,7 +363,7 @@ def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     # fake is used everywhere a coordinator is instantiated — otherwise the
     # picker's ``_replace_metadata_coordinator`` would create a *real* one and
     # the test's fake-instance count assertion would silently fail.
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "persist_default_profile", lambda _cfg, profile: persisted.append(profile))
 
@@ -389,7 +389,7 @@ def test_tempo_fps_and_theme_modals_persist(monkeypatch) -> None:
     persisted_fps: list[int | None] = []
     persisted_theme: list[str] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "persist_default_tempo", lambda _cfg, tempo: persisted_tempo.append(tempo))
     monkeypatch.setattr(picker_module, "persist_default_fps", lambda _cfg, fps: persisted_fps.append(fps))
     monkeypatch.setattr(picker_module, "save_theme", lambda theme: persisted_theme.append(theme))
@@ -430,7 +430,7 @@ def test_fps_menu_has_no_auto() -> None:
 def test_command_palette_toggles_dry_run(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         assert app.dry_run is True
@@ -449,7 +449,7 @@ def test_command_palette_toggles_dry_run(monkeypatch) -> None:
 def test_command_palette_filters_and_runs_match(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_commands()
@@ -482,7 +482,7 @@ def test_command_palette_filters_and_runs_match(monkeypatch) -> None:
 def test_footer_commands_hint_opens_palette_on_click(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         from sky_music.ui.textual_app.components.footers import FooterAction
@@ -504,7 +504,7 @@ def test_footer_commands_hint_opens_palette_on_click(monkeypatch) -> None:
 def test_command_palette_hides_bottom_detail_panel(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_commands()
@@ -520,7 +520,7 @@ def test_command_palette_hides_bottom_detail_panel(monkeypatch) -> None:
 def test_preview_detail_toggle(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         detail = app.query_one("#detail")
@@ -537,7 +537,7 @@ def test_hud_and_telemetry_toggles_save_config(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     saves: list[tuple[bool, bool]] = []
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
         picker_module,
         "save_config",
@@ -557,7 +557,7 @@ def test_hud_and_telemetry_toggles_save_config(monkeypatch) -> None:
 def test_help_and_calibration_modals_open(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
         "sky_music.orchestration.calibration.load_latest_telemetry_summary",
         lambda: None,
@@ -600,15 +600,15 @@ def test_reload_clears_metadata_and_refreshes_song_list(monkeypatch) -> None:
     # the new list. Counting only ``force_refresh=True`` calls mirrors that.
     refresh_calls = 0
 
-    def fake_get_song_choices(force_refresh: bool = False) -> list[Path]:
+    def fake_get_song_choices(force_refresh=False):
         nonlocal refresh_calls
         if force_refresh:
             refresh_calls += 1
-        return lists[1] if refresh_calls > 2 else lists[0]
+        return lists[1] if refresh_calls > 1 else lists[0]
 
     monkeypatch.setattr(app_module, "get_song_choices", fake_get_song_choices)
     monkeypatch.setattr(picker_module, "get_song_choices", fake_get_song_choices)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "clear_metadata_cache", lambda: clear_calls.append(True))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
@@ -636,7 +636,7 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
         "schedule": {"impossible_same_key_repeats": 1, "risky_same_key_repeats": 6, "note_count": 100},
     }
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(
         "sky_music.orchestration.calibration.load_latest_telemetry_summary",
         lambda: summary,
@@ -664,17 +664,18 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
 def test_search_debouncing_behavior(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         import sys
         from unittest.mock import patch
-        assert app._search_timer is None
+        picker = app._find_picker_screen()
+        assert picker._search_timer is None
 
         with patch.dict(sys.modules):
             sys.modules.pop("pytest", None)
             sys.modules.pop("unittest", None)
-            
+
             await pilot.click("#search")
             await pilot.press("a")
             # ``pilot.press`` does not guarantee the downstream ``on_input_changed`` has
@@ -686,13 +687,13 @@ def test_search_debouncing_behavior(monkeypatch) -> None:
             # 2 s so the test still fails fast if the debounce wiring actually breaks.
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
-                if app._search_timer is not None:
+                if picker._search_timer is not None:
                     break
                 await pilot.pause(0.02)
-            assert app._search_timer is not None
-            
+            assert picker._search_timer is not None
+
         app.action_confirm()
-        assert app._search_timer is None
+        assert picker._search_timer is None
 
     app = run_picker(_run_app(actions))
     assert app.return_value is not None
@@ -702,7 +703,7 @@ def test_search_debouncing_behavior(monkeypatch) -> None:
 def test_search_interaction_navigation_and_escape(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
@@ -735,7 +736,7 @@ def test_search_interaction_navigation_and_escape(monkeypatch) -> None:
 def test_double_click_row_selects_song(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
@@ -775,7 +776,7 @@ def test_textual_cleanup_failure_is_recorded(monkeypatch) -> None:
 
     TelemetryLogger.last_picker_cleanup = None
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FailingCloseCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FailingCloseCoordinator)
 
     async def scenario() -> None:
         app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig())
@@ -873,7 +874,7 @@ def test_classic_risk_cell_uses_style_not_color_only() -> None:
 def test_responsive_columns_dynamic_width(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     from textual.geometry import Size
     monkeypatch.setattr(SkyPickerApp, "size", Size(100, 20))
@@ -897,7 +898,7 @@ def test_responsive_columns_dynamic_width(monkeypatch) -> None:
 def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
     monkeypatch.setattr(app_module, "get_song_choices", lambda force_refresh=False: SONGS)
-    monkeypatch.setattr(app_module, "MetadataCoordinator", FakeMetadataCoordinator)
+    monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
 
     from sky_music.platform.win32 import window_target
     monkeypatch.setattr(window_target, "get_sky_window", lambda: None)

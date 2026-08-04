@@ -684,12 +684,15 @@ class PickerScreen(Screen[SongPickerResult]):
                 event.stop()
                 self.action_cancel()
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        # Per-scroll path. Keep it cheap: refresh only the newly highlighted
-        # row's metadata cells and defer the detail-panel rebuild to a debounce
+    def on_data_table_row_highlighted(self, _event: DataTable.RowHighlighted) -> None:
+        # Per-scroll path. Keep it cheap: refresh metadata cells for the
+        # visible window and defer the detail-panel rebuild to a debounce
         # timer so fast scrolling never rebuilds the panel per frame.
         self._update_priority_paths()
-        self._refresh_row_metadata(event.row_key)
+        # Fix 4.4: refresh entire visible window — not just the highlighted
+        # row — so rows that scrolled into view after metadata completed are
+        # not stuck at placeholder values.
+        self._refresh_visible_rows()
         self._schedule_detail_render()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -718,12 +721,26 @@ class PickerScreen(Screen[SongPickerResult]):
             if self.show_notes:
                 table.update_cell(key, "notes", notes)
             if self.show_risk:
-                table.update_cell(key, "risk", str(_risk_cell(risk, self._theme_tokens.muted, self._theme_tokens)))
+                # Fix 4.5: pass Rich Text directly — str() strips bold colour styling
+                table.update_cell(key, "risk", _risk_cell(risk, self._theme_tokens.muted, self._theme_tokens))
             if self.show_suggested:
                 table.update_cell(key, "suggested", suggested)
             return True
         except Exception:
             return False
+
+    def _refresh_visible_rows(self) -> None:
+        """Refresh metadata cells for all currently visible rows.
+
+        Called on every scroll event so rows that move into the viewport
+        after background metadata completes pick up their values immediately.
+        """
+        indices = self._visible_row_indices()
+        if indices is None:
+            return
+        for i in indices:
+            if i < len(self.filtered):
+                self._refresh_row_metadata(self.filtered[i].path)
 
     def _schedule_detail_render(self) -> None:
         if self._detail_timer is not None:
@@ -778,29 +795,47 @@ class PickerScreen(Screen[SongPickerResult]):
         match_style = f"bold {self._theme_tokens.match}"
         muted = self._theme_tokens.muted
         song_icon = self._theme_tokens.song_icon
+        
+        if getattr(self, "_render_timer", None) is not None:
+            self._render_timer.stop()  # type: ignore[attr-defined]
+            
         table.clear()
         self._row_meta_sig.clear()
-        for choice in self.filtered:
-            metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
-            duration, notes, risk, suggested = _metadata_cells(metadata)
 
-            row_cells = [
-                song_icon,
-                _title_cell(choice.path.stem, normalized_query, match_style),
-                duration,
-            ]
-            if self.show_notes:
-                row_cells.append(notes)
-            if self.show_risk:
-                row_cells.append(_risk_cell(risk, muted, self._theme_tokens))
-            if self.show_suggested:
-                row_cells.append(suggested)
+        # Fix: Defer heavy materialization (Step 3.3). Render rows in chunks so the
+        # UI loop can breathe. This eliminates both the startup block and search lag.
+        def _render_chunk(start_idx: int) -> None:
+            chunk_size = 50
+            end_idx = min(start_idx + chunk_size, len(self.filtered))
+            for i in range(start_idx, end_idx):
+                choice = self.filtered[i]
+                metadata = peek_cached_song_ui_metadata(choice.path, self.session, self.cfg)
+                duration, notes, risk, suggested = _metadata_cells(metadata)
 
-            table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
+                row_cells = [
+                    song_icon,
+                    _title_cell(choice.path.stem, normalized_query, match_style),
+                    duration,
+                ]
+                if self.show_notes:
+                    row_cells.append(notes)
+                if self.show_risk:
+                    row_cells.append(_risk_cell(risk, muted, self._theme_tokens))
+                if self.show_suggested:
+                    row_cells.append(suggested)
 
-        if self.filtered:
-            table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
-            self._update_priority_paths()
+                table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
+
+            if end_idx < len(self.filtered):
+                self._render_timer = self.set_timer(0.001, lambda: _render_chunk(end_idx))
+            else:
+                self._render_timer = None
+                if self.filtered:
+                    table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
+                    self._update_priority_paths()
+
+        # Render the first chunk immediately for a snappy frame, then defer the rest
+        _render_chunk(0)
 
     def refresh_metadata_rows(self) -> None:
         """Refresh metadata cells for the visible rows only.
@@ -840,9 +875,19 @@ class PickerScreen(Screen[SongPickerResult]):
 
         metadata = peek_cached_song_ui_metadata(selected.path, self.session, self.cfg)
         if metadata is not None:
-            sig = (str(selected.path), metadata.analyzed, getattr(metadata, "risk", ""), metadata.note_count)
+            # Fix 4.8: include every rendered field in sig so changes to warnings
+            # or recommendations don't leave a stale detail panel.
+            sig = (
+                str(selected.path),
+                metadata.analyzed,
+                metadata.risk,
+                metadata.note_count,
+                metadata.recommended_profile,
+                metadata.recommended_tempo_scale,
+                metadata.warnings,
+            )
         else:
-            sig = (str(selected.path), False, "", 0)
+            sig = (str(selected.path), False, "", 0, "", 0.0, ())
             
         if self._detail_sig == sig:
             return
@@ -892,9 +937,9 @@ class PickerScreen(Screen[SongPickerResult]):
         self._render_detail()
         self._focus_table()
 
-    def quiesce(self) -> None:
+    def quiesce(self) -> Any:
         self._quiesced = True
-        self.picker_scope.close_all(wait=True)
+        return self.picker_scope.close_all(wait=True)
 
     def rearm(self) -> None:
         self._quiesced = False
