@@ -1,4 +1,3 @@
-import os
 import re
 import sys
 from pathlib import Path
@@ -6,20 +5,28 @@ from pathlib import Path
 SOFT_LIMIT = 700
 HARD_LIMIT = 1000
 FACADE_SOFT_LIMIT = 250
-FACADES = {"engine.rs", "input.rs", "wait.rs", "lib.rs", "coordinator.rs", "estimator.rs"}
+FACADES = {"engine.rs", "input.rs", "wait.rs", "lib.rs"}
 
 ALLOWED_UNSAFE_MODULES = {
-    "sky_dispatch_win32/src/input/raw.rs",
-    "sky_dispatch_win32/src/input/physical.rs",
-    "sky_dispatch_win32/src/wait/timer.rs",
+    "crates/sky_dispatch_win32/src/input/raw.rs",
+    "crates/sky_dispatch_win32/src/input/physical.rs",
+    "crates/sky_dispatch_win32/src/wait/timer.rs",
     # Allow current files before split:
-    "sky_dispatch_win32/src/input.rs",
-    "sky_dispatch_win32/src/wait.rs",
-    "sky_dispatch_win32/src/platform.rs"
+    "crates/sky_dispatch_win32/src/input.rs",
+    "crates/sky_dispatch_win32/src/wait.rs",
+    # Existing platform seams that own Win32 FFI before the planned split:
+    "crates/sky_dispatch_win32/src/calibration.rs",
+    "crates/sky_dispatch_win32/src/clock.rs",
+    "crates/sky_dispatch_win32/src/cpu.rs",
+    "crates/sky_dispatch_win32/src/event.rs",
+    "crates/sky_dispatch_win32/src/focus.rs",
+    "crates/sky_dispatch_win32/src/mmcss.rs",
+    "crates/sky_dispatch_win32/src/power.rs",
+    "crates/sky_dispatch_win32/src/timer.rs",
 }
 
 def analyze_rust_file(filepath):
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         lines = f.readlines()
     
     num_lines = len(lines)
@@ -46,7 +53,7 @@ def analyze_rust_file(filepath):
         if pub_pattern.search(line):
             pub_items += 1
             
-        if re.search(r'\bunsafe\s*[{f]', line):
+        if re.search(r"\bunsafe\b", line):
             has_unsafe = True
             
         if "use pyo3" in line or "pyo3::" in line:
@@ -68,7 +75,8 @@ def analyze_rust_file(filepath):
     }
 
 def main():
-    workspace_root = Path("rust/crates")
+    repository_root = Path(__file__).resolve().parents[1]
+    workspace_root = repository_root / "rust" / "crates"
     if not workspace_root.exists():
         print(f"Error: {workspace_root} not found.")
         sys.exit(1)

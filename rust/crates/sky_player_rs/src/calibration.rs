@@ -28,7 +28,7 @@ pub fn calibration_schema_version() -> u32 {
 ///
 /// Parameters
 /// ----------
-/// polyphonies : list[int]
+/// polyphonies : `list[int]`
 ///     Chord sizes to probe. Each value must be between 1 and 15.
 ///     Default: [1, 2, 3, 5, 8, 15].
 /// samples_per_hot_bucket : int

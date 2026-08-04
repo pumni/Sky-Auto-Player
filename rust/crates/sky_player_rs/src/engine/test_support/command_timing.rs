@@ -1,7 +1,3 @@
-use parking_lot::Mutex;
-use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
-use std::sync::atomic::{AtomicU64, Ordering};
-
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PauseTimingPhase {
@@ -28,7 +24,7 @@ pub(crate) enum PauseTimingPhase {
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PauseTimingLookup {
+pub(crate) enum CommandTimingLookup {
     Pending,
     Complete(CommandTimingResult),
     Cancelled,
@@ -179,7 +175,7 @@ impl CommandTimingState {
         &self,
         generation: u64,
         qpc_clock: QpcClock,
-    ) -> Result<PauseTimingLookup, CommandTimingError> {
+    ) -> Result<CommandTimingLookup, CommandTimingError> {
         if generation == 0 {
             return Err(CommandTimingError::InvalidGeneration);
         }
@@ -192,7 +188,7 @@ impl CommandTimingState {
             | PauseTimingPhase::Observed {
                 generation: current,
                 ..
-            } if current == generation => Ok(PauseTimingLookup::Pending),
+            } if current == generation => Ok(CommandTimingLookup::Pending),
             PauseTimingPhase::Acknowledged {
                 generation: current,
                 requested_ticks,
@@ -225,15 +221,15 @@ impl CommandTimingState {
                         .map_err(|error| CommandTimingError::Clock(format!("{error:?}")))?,
                 };
                 *phase = PauseTimingPhase::Idle;
-                Ok(PauseTimingLookup::Complete(result))
+                Ok(CommandTimingLookup::Complete(result))
             }
             PauseTimingPhase::Cancelled {
                 generation: current,
             } if current == generation => {
                 *phase = PauseTimingPhase::Idle;
-                Ok(PauseTimingLookup::Cancelled)
+                Ok(CommandTimingLookup::Cancelled)
             }
-            _ => Ok(PauseTimingLookup::UnknownGeneration),
+            _ => Ok(CommandTimingLookup::UnknownGeneration),
         }
     }
 }
@@ -257,3 +253,6 @@ impl Drop for CommandTimingCleanup<'_> {
         self.0.cancel_pause_request();
     }
 }
+use parking_lot::Mutex;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+use std::sync::atomic::{AtomicU64, Ordering};

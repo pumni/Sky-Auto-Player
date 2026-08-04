@@ -1,7 +1,8 @@
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::collections::HashMap;
 
-/// Public snapshot shape returned by [`NativeDispatchSession::snapshot`].
+/// Public snapshot shape returned by
+/// [`crate::engine::NativeDispatchSession::snapshot`].
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub elapsed_us: u64,

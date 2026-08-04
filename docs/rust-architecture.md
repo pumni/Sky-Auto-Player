@@ -25,6 +25,20 @@ Python application
 - Do not create utility catch-all files (`helpers.rs`, `utils.rs`, `common.rs`).
 - Use facade modules (e.g., `engine.rs` exposing `engine/worker.rs`) to keep public paths stable.
 
+Current stable facades and ownership boundaries:
+
+- `sky_player_rs::engine.rs` owns only module declarations and stable
+  re-exports; session lifecycle is in `engine/session.rs`.
+- `engine/shared.rs` owns the cross-thread command, target, lifecycle, metrics,
+  telemetry, and completion resources shared by a session and its worker.
+- `engine/worker/{admission,cleanup,estimator,health,timing}.rs` own focused
+  invariant helpers. The worker orchestration remains in `engine/worker.rs`
+  until its phase methods can be extracted without changing operation order.
+- `sky_player_rs::lib.rs` registers the Python module; Python-facing conversion,
+  session, and telemetry code live under `python/`.
+- `sky_dispatch_win32::input.rs` and `wait.rs` are facades for their platform
+  submodules; raw SendInput and timer unsafe boundaries remain platform-owned.
+
 ## Public API Boundaries
 
 - `pub`: Only for types strictly crossing the crate boundary.
@@ -55,3 +69,11 @@ Worker orchestration, estimators, coordinators, and Python boundaries must remai
 
 - Test-support APIs (mock senders, fault injection, command timing inspection) must be strictly feature-gated (`#[cfg(any(test, feature = "test-support"))]`).
 - Do not include test-support logic, telemetry serialization, or mock state in production structures when the feature is disabled.
+
+## Architecture Checker
+
+Run `uv run python scripts/check_rust_architecture.py` from any directory in the
+repository. The checker reports file sizes, public-item counts, unsafe-boundary
+violations, PyO3-boundary violations, and forbidden lower-layer imports. It is
+report-only during the incremental refactor; CI enforcement is introduced only
+after the module boundaries have stabilized.

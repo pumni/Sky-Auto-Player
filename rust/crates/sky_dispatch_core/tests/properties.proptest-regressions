@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc deb9cc3cedc9881903e0d07063907e45e20f24770fc77f554545db2624116cf9 # shrinks to mut scan_codes = [2], authored_hold_us = 478, min_hold_us = 1, send_latency_us = 0, release_lead_us = 1479

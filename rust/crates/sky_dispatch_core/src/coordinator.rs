@@ -2209,7 +2209,7 @@ impl RuntimeDispatchCoordinator {
     /// Returns a bitmask (`u16`) where each set bit corresponds to a key slot
     /// that is currently active.  A return value of `0` means no conflicts.
     ///
-    /// This is the hot-path alternative to [`split_down_intents`] —
+    /// This is the hot-path alternative to `split_down_intents` —
     /// it operates directly on the compact arena slice with one bitwise AND
     /// per intent and produces no allocation.
     pub fn check_down_conflicts_compact(&self, compact_intents: &[CompactIntent]) -> u16 {
@@ -2229,7 +2229,7 @@ impl RuntimeDispatchCoordinator {
     /// Terminalize the generations associated with every slot set in
     /// `conflict_mask` as `DroppedConflict`.
     ///
-    /// Called after [`check_down_conflicts_compact`] returns a non-zero mask.
+    /// Called after `check_down_conflicts_compact` returns a non-zero mask.
     /// Updating counters is the only side-effect; no mask bits are cleared
     /// (the slots were never activated for the conflicting batch).
     pub fn terminalize_conflicted_slots(
