@@ -85,7 +85,16 @@ impl NativeDispatchSession {
                 Ordering::Acquire,
             )
             .map_err(|state| format!("session cannot start from lifecycle state {state}"))?;
-        let heartbeat_ticks = match sky_dispatch_win32::clock::qpc_now_ticks_checked() {
+        let Some(config) = self.config.lock().take() else {
+            self.shared
+                .lifecycle
+                .lifecycle
+                .store(LIFECYCLE_POISONED, Ordering::Release);
+            return Err("session configuration is no longer available".to_string());
+        };
+
+        let shared = Arc::clone(&self.shared);
+        let startup_requested_ticks = match sky_dispatch_win32::clock::qpc_now_ticks_checked() {
             Ok(value) => value,
             Err(error) => {
                 self.shared
@@ -97,23 +106,14 @@ impl NativeDispatchSession {
                 ));
             }
         };
-        let Some(config) = self.config.lock().take() else {
-            self.shared
-                .lifecycle
-                .lifecycle
-                .store(LIFECYCLE_POISONED, Ordering::Release);
-            return Err("session configuration is no longer available".to_string());
-        };
-
-        let shared = Arc::clone(&self.shared);
         self.shared
             .publication
             .supervisor_heartbeat_ticks
-            .store(heartbeat_ticks.as_u64(), Ordering::Release);
+            .store(startup_requested_ticks.as_u64(), Ordering::Release);
         self.shared
             .publication
             .startup_requested_ticks
-            .store(heartbeat_ticks.as_u64(), Ordering::Release);
+            .store(startup_requested_ticks.as_u64(), Ordering::Release);
 
         let spawn_result = std::thread::Builder::new()
             .name("sky-native-dispatch".to_string())
@@ -490,7 +490,7 @@ impl NativeDispatchSession {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn startup_ticks(&self) -> (u64, u64) {
         (
             self.shared

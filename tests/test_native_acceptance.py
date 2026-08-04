@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
@@ -143,7 +144,7 @@ def test_signed_metrics_split_late_and_early_by_magnitude() -> None:
 
 
 def _trace_fixture(**overrides: object) -> SimpleNamespace:
-    values = {
+    values: dict[str, Any] = {
         "kind": "down",
         "wake_us": 100,
         "wake_error_us": -2,
@@ -255,6 +256,10 @@ def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
     assert "--dispatch-repeats 3" in workflow
     assert "--command-samples 100" in workflow
     assert "--rt-priority-mode off" in workflow
+    assert "scripts/bench_native_ab.py" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "baseline_comparison=unavailable_initial_push" in workflow
+    assert "adaptive-cold" in workflow
 
 
 @pytest.mark.windows
@@ -271,7 +276,7 @@ def test_test_support_pause_timing_smoke_uses_100_fresh_sessions() -> None:
         )
         assert result["requested_ticks"] <= result["observed_ticks"]
         assert result["observed_ticks"] <= result["acknowledged_ticks"]
-    assert result["generation"] > 0
+        assert result["generation"] > 0
 
 
 @pytest.mark.windows

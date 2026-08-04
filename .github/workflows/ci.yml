@@ -6,6 +6,19 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Exact baseline commit SHA
+        required: true
+        type: string
+      performance_scope:
+        description: Performance gate scope
+        required: true
+        default: full
+        type: choice
+        options:
+          - smoke
+          - full
 
 permissions:
   contents: read
@@ -99,6 +112,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python environment
@@ -129,6 +143,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python environment
@@ -145,7 +160,7 @@ jobs:
           cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
           cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
           cargo test --manifest-path rust/Cargo.toml --workspace --all-features
-          uv run --env-file .env python scripts/build_rust_wheel.py
+          uv run --env-file .env python scripts/build_rust_wheel.py --test-support
 
       - name: Pester — installer tests
         uses: ./.github/actions/run-pester
@@ -154,10 +169,61 @@ jobs:
         # Run windows-marked tests when present; skip only wall-clock `slow`.
         run: uv run pytest -m "not slow"
 
-      - name: Benchmark — native sender-side acceptance and regression gate
-        # Mock backend only: records host-side timing evidence without sending
-        # input to a game or another process.
-        run: uv run --env-file .env python scripts/bench_native_acceptance.py --actions 256 --dispatch-repeats 3 --command-samples 100 --polyphony 1,2,3,5,8,15 --rt-priority-mode off --label ci
+      - name: Benchmark — same-runner native A/B regression gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+          MANUAL_BASELINE_SHA: ${{ inputs.baseline_sha }}
+          PERFORMANCE_SCOPE: ${{ inputs.performance_scope }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactRoot = Join-Path $env:RUNNER_TEMP 'sky-native-ab-artifacts'
+          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+          if ($env:EVENT_NAME -eq 'pull_request') {
+            $baseline = $env:PR_BASE_SHA
+          } elseif ($env:EVENT_NAME -eq 'push') {
+            $baseline = $env:EVENT_BEFORE
+          } else {
+            $baseline = $env:MANUAL_BASELINE_SHA
+          }
+
+          $allZero = $baseline -match '^0+$'
+          if ($allZero) {
+            'baseline_comparison=unavailable_initial_push' | Set-Content (Join-Path $artifactRoot 'baseline-status.txt')
+            uv run --env-file .env python scripts/bench_native_acceptance.py --actions 256 --dispatch-repeats 3 --command-samples 100 --polyphony 1,2,3,5,8,15 --lead-mode fixed --fixed-lead-us 0 --gap-profile hot --warmup-cycles 8 --rt-priority-mode off --label ci-smoke --output (Join-Path $artifactRoot 'candidate.json')
+            exit $LASTEXITCODE
+          }
+          if ([string]::IsNullOrWhiteSpace($baseline)) {
+            throw 'baseline SHA is required for this event'
+          }
+
+          $matrices = @(
+            @{ Name = 'fixed-hot'; Actions = 256; Repeats = 3; Commands = 100; Lead = 'fixed'; Gap = 'hot' }
+          )
+          if ($env:EVENT_NAME -eq 'workflow_dispatch' -and $env:PERFORMANCE_SCOPE -eq 'full') {
+            $matrices = @(
+              @{ Name = 'fixed-hot'; Actions = 512; Repeats = 10; Commands = 500; Lead = 'fixed'; Gap = 'hot' },
+              @{ Name = 'adaptive-hot'; Actions = 512; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'hot' },
+              @{ Name = 'fixed-cold'; Actions = 64; Repeats = 10; Commands = 0; Lead = 'fixed'; Gap = 'cold' },
+              @{ Name = 'adaptive-cold'; Actions = 64; Repeats = 10; Commands = 0; Lead = 'adaptive'; Gap = 'cold' }
+            )
+          }
+          foreach ($matrix in $matrices) {
+            $matrixDir = Join-Path $artifactRoot $matrix.Name
+            New-Item -ItemType Directory -Force -Path $matrixDir | Out-Null
+            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --actions $matrix.Actions --dispatch-repeats $matrix.Repeats --command-samples $matrix.Commands --polyphony 1,2,3,5,8,15 --lead-mode $matrix.Lead --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode off --budget-seconds 120 --output-dir $matrixDir
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Upload native A/B artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ab-${{ github.run_id }}
+          path: ${{ runner.temp }}/sky-native-ab-artifacts
+          if-no-files-found: warn
 
   status:
     name: Sky Auto Player — full altitude gate
