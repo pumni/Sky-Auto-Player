@@ -28,7 +28,6 @@
     {"path":"rust/crates/sky_player_rs/src/engine/worker.rs","rule":"production_glob_import","reason":"make worker dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/admission.rs","rule":"production_glob_import","reason":"make admission dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/cleanup.rs","rule":"production_glob_import","reason":"make cleanup dependencies explicit in Phase 9","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/engine/worker/control.rs","rule":"production_glob_import","reason":"make control dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/estimator.rs","rule":"production_glob_import","reason":"make estimator dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/health.rs","rule":"production_glob_import","reason":"make health dependencies explicit in Phase 9","expires_phase":"Phase 9"},
     {"path":"rust/crates/sky_player_rs/src/engine/worker/orchestration.rs","rule":"production_glob_import","reason":"make orchestration dependencies explicit in Phase 9","expires_phase":"Phase 9"},
