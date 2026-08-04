@@ -374,8 +374,9 @@ impl TestDispatchSessionPy {
         min_hold_us = StrictU64(100),
         mock_latency_base_us = StrictU64(80),
         mock_latency_per_key_us = StrictU64(40),
-        telemetry_capacity = StrictU64(1024),
-        rt_priority_mode = "off",
+         telemetry_capacity = StrictU64(1024),
+         dispatch_lead_us = StrictU64(0),
+         rt_priority_mode = "off",
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = true,
@@ -389,6 +390,7 @@ impl TestDispatchSessionPy {
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
         telemetry_capacity: StrictU64,
+        dispatch_lead_us: StrictU64,
         rt_priority_mode: &str,
         enable_waitable_timer: bool,
         enable_event_wait: bool,
@@ -398,6 +400,7 @@ impl TestDispatchSessionPy {
         let min_hold_us = min_hold_us.0;
         let mock_latency_base_us = mock_latency_base_us.0;
         let mock_latency_per_key_us = mock_latency_per_key_us.0;
+        let dispatch_lead_us = dispatch_lead_us.0;
         let telemetry_capacity = usize::try_from(telemetry_capacity.0)
             .map_err(|_| PyValueError::new_err("telemetry_capacity is too large"))?;
         if min_hold_us > 60_000_000 {
@@ -408,6 +411,11 @@ impl TestDispatchSessionPy {
         if mock_latency_base_us > 1_000_000 || mock_latency_per_key_us > 1_000_000 {
             return Err(PyValueError::new_err(
                 "mock latency values must be at most 1000000 microseconds",
+            ));
+        }
+        if dispatch_lead_us > 10_000 {
+            return Err(PyValueError::new_err(
+                "dispatch_lead_us must be at most 10000",
             ));
         }
         if telemetry_capacity == 0 || telemetry_capacity > 4_096 {
@@ -428,7 +436,6 @@ impl TestDispatchSessionPy {
             }
         };
         let max_lead_us = 2_000;
-        let dispatch_lead_us = 0;
         let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
         let session = NativeDispatchSession::new(NativeSessionOptions {

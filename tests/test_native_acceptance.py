@@ -83,7 +83,7 @@ def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_two_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_three_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
         "rt_priority_mode": "off",
@@ -94,10 +94,15 @@ def test_schema_two_baseline_requires_matching_timing_domain_and_config() -> Non
         "mock_per_key_latency_us": 40,
         "actions": 128,
         "polyphony": [1, 2, 3, 5, 8, 15],
+        "lead_mode": "fixed",
+        "fixed_lead_us": 0,
+        "gap_profile": "hot",
+        "warmup_cycles": 8,
     }
     report = {
-        "benchmark_schema_version": 2,
+        "benchmark_schema_version": 3,
         "command_timing_domain": "native_qpc_v1",
+        "latency_segment_domain": "native_trace_v1",
         "benchmark_config": config,
         "statistics_eligible": True,
         "excluded_runs": 0,
@@ -119,6 +124,125 @@ def test_schema_two_baseline_requires_matching_timing_domain_and_config() -> Non
     mismatched["benchmark_config"] = {**config, "rt_priority_mode": "auto"}
     with pytest.raises(SystemExit, match="fingerprint mismatch"):
         ACCEPTANCE._assert_baseline_compatible(report, mismatched)
+
+
+def test_p999_uses_nearest_rank() -> None:
+    assert ACCEPTANCE._percentile([1, 2, 3, 4], 0.999) == 4
+
+
+def test_signed_metrics_split_late_and_early_by_magnitude() -> None:
+    report = ACCEPTANCE._completion_error_report_pairs(
+        [("down", -7), ("down", 3), ("up", -2), ("up", 5)]
+    )
+    assert report["signed"]["p50"] == -2
+    assert report["absolute"]["max"] == 7
+    assert report["late"]["n"] == 2
+    assert report["late"]["max"] == 5
+    assert report["early"]["n"] == 2
+    assert report["early"]["max"] == 7
+
+
+def _trace_fixture(**overrides: object) -> SimpleNamespace:
+    values = {
+        "kind": "down",
+        "wake_us": 100,
+        "wake_error_us": -2,
+        "sender_started_us": 110,
+        "sender_completed_us": 130,
+        "sendinput_call_duration_us": 20,
+        "bookkeeping_duration_us": 4,
+        "sender_completion_error_us": 3,
+        "native_polyphony": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_trace_metrics_calculate_pre_send_latency() -> None:
+    rows = ACCEPTANCE._trace_metric_rows([_trace_fixture()])
+    assert rows["pre_send_software_latency_us"] == [("down", 10)]
+
+
+def test_trace_metrics_reject_invalid_timestamp_ordering() -> None:
+    with pytest.raises(RuntimeError, match="timestamp ordering"):
+        ACCEPTANCE._trace_metric_rows([_trace_fixture(sender_started_us=90)])
+
+
+def test_trace_metrics_reject_missing_required_field() -> None:
+    with pytest.raises(RuntimeError, match="wake_error_us"):
+        ACCEPTANCE._trace_metric_rows([_trace_fixture(wake_error_us=None)])
+
+
+def test_hot_and_cold_action_spacing() -> None:
+    hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
+    cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
+    assert hot[2][2] - hot[0][2] == 10_000
+    assert hot[1][2] - hot[0][2] == 5_000
+    assert cold[2][2] - cold[0][2] == 60_000
+    assert cold[1][2] - cold[0][2] == 30_000
+    assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
+
+
+def test_warmup_records_are_integrity_input_but_measurement_slice_excludes_them() -> None:
+    actions = ACCEPTANCE._actions(3, 1)
+    assert len(actions) == 6
+    records = [SimpleNamespace(event_index=index, kind=kind) for index, kind, *_ in actions]
+    diagnostics = ACCEPTANCE._validate_telemetry_integrity(
+        actions=actions,
+        telemetry={"attempted": 6, "accepted": 6, "dropped": 0, "truncated": False},
+        records=records,
+        polyphony=1,
+    )
+    assert diagnostics["records_count"] == 6
+    assert [record.event_index for record in records[2:]] == [2, 3, 4, 5]
+
+
+def test_fixed_and_adaptive_lead_arguments_are_strict() -> None:
+    assert ACCEPTANCE._resolve_lead_config(
+        SimpleNamespace(lead_mode="fixed", fixed_lead_us=0)
+    ) == ("fixed", 0)
+    assert ACCEPTANCE._resolve_lead_config(
+        SimpleNamespace(lead_mode="adaptive", fixed_lead_us=0)
+    ) == ("adaptive", 0)
+    with pytest.raises(SystemExit, match="must be 0"):
+        ACCEPTANCE._resolve_lead_config(
+            SimpleNamespace(lead_mode="adaptive", fixed_lead_us=1)
+        )
+
+
+def test_cpu_ratio_is_computed_per_run() -> None:
+    assert ACCEPTANCE._ratio_ppm(50, 100) == 500_000
+
+
+def test_threshold_uses_relative_bound_and_absolute_floor() -> None:
+    assert ACCEPTANCE.allowed_value(
+        100,
+        relative_fraction=0.05,
+        absolute_floor=5,
+    ) == 105
+    assert ACCEPTANCE.allowed_value(
+        1,
+        relative_fraction=0.05,
+        absolute_floor=5,
+    ) == 6
+
+
+def test_rss_regression_uses_two_mib_floor() -> None:
+    baseline = {"peak_rss_bytes": {"max": 100}}
+    report = {"peak_rss_bytes": {"max": 2 * 1024 * 1024 + 100}}
+    ACCEPTANCE._assert_metric_threshold(
+        report,
+        baseline,
+        ("peak_rss_bytes", "max"),
+        relative_fraction=0.05,
+        absolute_floor=2 * 1024 * 1024,
+    )
+
+
+def test_no_outlier_exclusion_contract() -> None:
+    stats = ACCEPTANCE._stats([1, 2, 100])
+    assert stats["n"] == 3
+    assert stats["max"] == 100
 
 
 def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:

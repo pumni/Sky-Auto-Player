@@ -26,10 +26,12 @@ import math
 import os
 import platform
 import subprocess
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sky_music.layouts import SKY_15_SCAN_CODES
 from sky_music.orchestration.telemetry import (
@@ -40,26 +42,36 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 2
+BENCHMARK_SCHEMA_VERSION = 3
 COMMAND_TIMING_DOMAIN = "native_qpc_v1"
+LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
+SEND_COLD_THRESHOLD_US = 20_000
+HOT_CYCLE_US = 10_000
+COLD_CYCLE_US = 60_000
 
 
-def _actions(count: int, polyphony: int) -> list[tuple[int, str, int, list[int], str]]:
+def _actions(
+    count: int,
+    polyphony: int,
+    *,
+    gap_profile: str = "hot",
+) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
+    if gap_profile not in {"hot", "cold"}:
+        raise ValueError("gap_profile must be hot or cold")
+    cycle_us = HOT_CYCLE_US if gap_profile == "hot" else COLD_CYCLE_US
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
         scan_codes = [
             int(SKY_15_SCAN_CODES[(index * polyphony + offset) % len(SKY_15_SCAN_CODES)])
             for offset in range(polyphony)
         ]
-        # Leave a generous multi-millisecond off-gap between cycles. The benchmark is
-        # a clean chord-integrity gate; sub-millisecond same-key feasibility
-        # belongs to the dedicated conflict/recovery tests, not this sender
-        # timing baseline.
-        at_us = index * 10_000
+        at_us = index * cycle_us
         actions.append((index * 2, "down", at_us, scan_codes, "bench-down"))
-        actions.append((index * 2 + 1, "up", at_us + 5_000, scan_codes, "bench-up"))
+        actions.append(
+            (index * 2 + 1, "up", at_us + cycle_us // 2, scan_codes, "bench-up")
+        )
     return actions
 
 
@@ -77,6 +89,7 @@ def _stats(values: list[int]) -> dict[str, int]:
         "p50": _percentile(values, 0.50),
         "p95": _percentile(values, 0.95),
         "p99": _percentile(values, 0.99),
+        "p999": _percentile(values, 0.999),
         "max": max(values, default=0),
     }
 
@@ -110,6 +123,10 @@ def _benchmark_config(
         "mock_per_key_latency_us": mock_per_key_latency_us,
         "actions": args.actions,
         "polyphony": polyphonies,
+        "lead_mode": args.lead_mode,
+        "fixed_lead_us": args.fixed_lead_us,
+        "gap_profile": args.gap_profile,
+        "warmup_cycles": args.warmup_cycles,
     }
 
 
@@ -284,7 +301,7 @@ def _write_failed_run_artifact(
         "raw_telemetry": telemetry,
         "validation_diagnostics": diagnostics,
         "exception": f"{type(exception).__name__}: {exception}",
-        "command_line": list(os.sys.argv),
+        "command_line": list(sys.argv),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
@@ -321,7 +338,7 @@ def _git_provenance() -> dict[str, Any]:
 def _native_provenance(expected_commit: str) -> dict[str, Any]:
     import sky_player_rs
 
-    info = dict(sky_player_rs.build_info())
+    info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
     required = (
         "native_build_commit",
         "rustc_version",
@@ -373,13 +390,13 @@ def _completion_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any
     if not rows:
         raise RuntimeError("required sender telemetry has no records")
 
-    def report_for(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    def report_for(rows: list[tuple[str, int]], name: str) -> dict[str, Any]:
         signed = values_for(rows)
         return {
             "signed": _required_stats(signed, f"{name}.signed"),
             "absolute": _required_stats([abs(value) for value in signed], f"{name}.absolute"),
-            "late": _required_stats([max(value, 0) for value in signed], f"{name}.late"),
-            "early": _required_stats([max(-value, 0) for value in signed], f"{name}.early"),
+            "late": _stats([value for value in signed if value > 0]),
+            "early": _stats([-value for value in signed if value < 0]),
         }
 
     by_kind = {
@@ -389,6 +406,100 @@ def _completion_error_report_pairs(rows: list[tuple[str, int]]) -> dict[str, Any
     result = report_for(rows, "all")
     result["by_kind"] = by_kind
     return result
+
+
+def _nonnegative_metric_report(rows: list[tuple[str, int]], name: str) -> dict[str, Any]:
+    values: list[int] = []
+    for _kind, value in rows:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise RuntimeError(f"required nonnegative telemetry is invalid: {name}")
+        values.append(value)
+    if not values:
+        raise RuntimeError(f"required metric {name} has no measurements")
+    return {
+        **_required_stats(values, name),
+        "by_kind": {
+            kind: _required_stats(
+                [value for row_kind, value in rows if row_kind == kind],
+                f"{name}.{kind}",
+            )
+            for kind in ("down", "up")
+        },
+    }
+
+
+def _required_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"required telemetry field is missing or invalid: {name}")
+    return value
+
+
+def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[str, int]]]:
+    rows: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
+    for record in records:
+        kind = record.kind
+        wake_us = _required_int(record.wake_us, "wake_us")
+        sender_started_us = _required_int(record.sender_started_us, "sender_started_us")
+        sender_completed_us = _required_int(record.sender_completed_us, "sender_completed_us")
+        if sender_started_us < wake_us:
+            raise RuntimeError("invalid timestamp ordering: sender_started_us < wake_us")
+        if sender_completed_us < sender_started_us:
+            raise RuntimeError(
+                "invalid timestamp ordering: sender_completed_us < sender_started_us"
+            )
+        rows["wake_error_us"].append((kind, _required_int(record.wake_error_us, "wake_error_us")))
+        rows["pre_send_software_latency_us"].append(
+            (kind, sender_started_us - wake_us)
+        )
+        rows["sendinput_call_duration_us"].append(
+            (kind, _required_int(record.sendinput_call_duration_us, "sendinput_call_duration_us"))
+        )
+        rows["bookkeeping_duration_us"].append(
+            (kind, _required_int(record.bookkeeping_duration_us, "bookkeeping_duration_us"))
+        )
+        rows["sender_completion_error_us"].append(
+            (
+                kind,
+                _required_int(
+                    record.sender_completion_error_us,
+                    "sender_completion_error_us",
+                ),
+            )
+        )
+        _required_int(record.native_polyphony, "native_polyphony")
+    return dict(rows)
+
+
+def _aggregate_metric(runs: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    rows = [row for run in runs for row in run["_metric_rows"][name]]
+    if name in {"wake_error_us", "sender_completion_error_us"}:
+        if name == "sender_completion_error_us":
+            return _completion_error_report_pairs(rows)
+        signed = [value for _, value in rows]
+        return {
+            "signed": _required_stats(signed, name),
+            "absolute": _required_stats([abs(value) for value in signed], name),
+            "late": _stats([value for value in signed if value > 0]),
+            "early": _stats([-value for value in signed if value < 0]),
+            "by_kind": {
+                kind: {
+                    "signed": _required_stats(
+                        [value for row_kind, value in rows if row_kind == kind], name
+                    ),
+                    "absolute": _required_stats(
+                        [abs(value) for row_kind, value in rows if row_kind == kind], name
+                    ),
+                    "late": _stats(
+                        [value for row_kind, value in rows if row_kind == kind and value > 0]
+                    ),
+                    "early": _stats(
+                        [-value for row_kind, value in rows if row_kind == kind and value < 0]
+                    ),
+                }
+                for kind in ("down", "up")
+            },
+        }
+    return _nonnegative_metric_report(rows, name)
 
 
 def _completion_error_report(records: list[TelemetryRecord]) -> dict[str, Any]:
@@ -434,6 +545,8 @@ def _new_session(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    lead_mode: str = "fixed",
+    fixed_lead_us: int = 0,
 ) -> Any:
     import sky_player_rs
 
@@ -455,7 +568,8 @@ def _new_session(
             enable_waitable_timer=True,
             enable_event_wait=True,
             enable_adaptive_spin=adaptive_spin,
-            enable_adaptive_lead=True,
+            dispatch_lead_us=fixed_lead_us,
+            enable_adaptive_lead=lead_mode == "adaptive",
         )
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
@@ -478,6 +592,9 @@ def _run_dispatch(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    lead_mode: str = "fixed",
+    fixed_lead_us: int = 0,
+    warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
 ) -> dict[str, Any]:
     session = _new_session(
@@ -487,6 +604,8 @@ def _run_dispatch(
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
+        lead_mode=lead_mode,
+        fixed_lead_us=fixed_lead_us,
     )
     snapshot: dict[str, Any] | None = None
     telemetry: dict[str, Any] | None = None
@@ -494,6 +613,11 @@ def _run_dispatch(
     try:
         started_ns = time.perf_counter_ns()
         session.start()
+        startup_deadline = time.perf_counter() + min(timeout_ms / 1_000, 60.0)
+        while not bool(dict(session.snapshot()).get("startup_ready")):
+            if time.perf_counter() >= startup_deadline:
+                raise RuntimeError("native worker did not publish startup-ready boundary")
+            time.sleep(0.001)
         if not session.join(timeout_ms=timeout_ms):
             session.panic_release()
             session.quit()
@@ -502,6 +626,8 @@ def _run_dispatch(
         wall_us = (time.perf_counter_ns() - started_ns) // 1_000
         snapshot = dict(session.snapshot())
         telemetry = json.loads(session.take_telemetry_json())
+        if not isinstance(telemetry, dict):
+            raise RuntimeError("native telemetry envelope must be an object")
         records = materialize_native_trace(telemetry)
         diagnostics = _validate_telemetry_integrity(
             actions=actions,
@@ -509,21 +635,24 @@ def _run_dispatch(
             records=records,
             polyphony=polyphony,
         )
-        sender_errors = [
-            record.sender_completion_error_us
-            for record in records
-            if isinstance(record.sender_completion_error_us, int)
-            and not isinstance(record.sender_completion_error_us, bool)
-        ]
-        if len(sender_errors) != len(records):
-            raise RuntimeError("required sender telemetry has missing exact completion errors")
+        all_metric_rows = _trace_metric_rows(records)
+        warmup_record_count = warmup_cycles * 2
+        if warmup_record_count < 0 or warmup_record_count >= len(records):
+            raise RuntimeError("warmup cycles must leave measurement records")
+        measurement_records = records[warmup_record_count:]
+        metric_rows = _trace_metric_rows(measurement_records)
+        sender_errors = [value for _, value in metric_rows["sender_completion_error_us"]]
         lead_by_polyphony = {
             str(record.native_polyphony): int(record.applied_lead_us)
             for record in records
             if record.kind == "down" and record.native_polyphony is not None
         }
         completion_error_rows = [
-            (record.kind, int(record.sender_completion_error_us)) for record in records
+            (
+                record.kind,
+                _required_int(record.sender_completion_error_us, "sender_completion_error_us"),
+            )
+            for record in measurement_records
         ]
         peak_rss = _peak_working_set_bytes()
         result: dict[str, Any] = {
@@ -531,6 +660,10 @@ def _run_dispatch(
             "wall_us": wall_us,
             "_sender_error_values": sender_errors,
             "_completion_error_rows": completion_error_rows,
+            "_metric_rows": metric_rows,
+            "_all_metric_rows": all_metric_rows,
+            "warmup_records": warmup_record_count,
+            "measurement_records": len(measurement_records),
             "_snapshot": snapshot,
             "_telemetry": telemetry,
             "_telemetry_integrity": diagnostics,
@@ -557,6 +690,9 @@ def _run_dispatch(
             "lead_by_polyphony": lead_by_polyphony,
             "generation_status_counts": dict(snapshot.get("generation_status_counts", {})),
             "outcome": snapshot.get("outcome"),
+            "startup_latency_us": _required_int(
+                snapshot.get("startup_latency_us"), "startup_latency_us"
+            ),
         }
         result["worker_cpu_ratio_ppm"] = _ratio_ppm(
             result["worker_cpu_time_us"], result["playback_wall_time_us"]
@@ -596,6 +732,8 @@ def _measure_command_interrupt(
     mock_per_key_latency_us: int,
     adaptive_spin: bool,
     rt_priority_mode: str,
+    lead_mode: str = "fixed",
+    fixed_lead_us: int = 0,
 ) -> dict[str, int]:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
@@ -607,17 +745,11 @@ def _measure_command_interrupt(
         mock_per_key_latency_us=mock_per_key_latency_us,
         adaptive_spin=adaptive_spin,
         rt_priority_mode=rt_priority_mode,
+        lead_mode=lead_mode,
+        fixed_lead_us=fixed_lead_us,
     )
     session.start()
     deadline = time.perf_counter() + 2.0
-    while not bool(dict(session.snapshot()).get("is_running")):
-        if time.perf_counter() >= deadline:
-            raise RuntimeError("native worker did not enter running state")
-        time.sleep(0.001)
-
-    # The lifecycle flag is published before the worker finishes its bounded
-    # wake-probe/admission setup. Do not charge that startup work to the
-    # command interrupt measurement.
     while not bool(dict(session.snapshot()).get("startup_ready")):
         if time.perf_counter() >= deadline:
             raise RuntimeError("native worker did not publish startup-ready boundary")
@@ -631,11 +763,13 @@ def _measure_command_interrupt(
         raise RuntimeError(
             "native command timing requires a test-support wheel with QPC pause instrumentation"
         )
-    generation = int(pause_with_timing_token())
+    request_pause = cast(Callable[[], int], pause_with_timing_token)
+    get_pause_result = cast(Callable[[int], Any], pause_timing_result)
+    generation = int(request_pause())
     while True:
-        native_result = pause_timing_result(generation)
+        native_result = get_pause_result(generation)
         if native_result is not None:
-            result = dict(native_result)
+            result: dict[str, Any] = dict(native_result)
             break
         if time.perf_counter() >= deadline + 2.0:
             session.quit()
@@ -680,6 +814,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dispatch-repeats", type=int, default=None)
     parser.add_argument("--command-samples", type=int, default=100)
+    parser.add_argument(
+        "--skip-command-samples",
+        action="store_true",
+        help="skip the fresh-session command phase",
+    )
+    parser.add_argument("--warmup-cycles", type=int, default=8)
     parser.add_argument(
         "--continue-after-failure",
         action="store_true",
@@ -733,6 +873,15 @@ def _parse_args() -> argparse.Namespace:
         help="real-time priority policy (default: off)",
     )
     parser.add_argument(
+        "--lead-mode",
+        choices=("fixed", "adaptive"),
+        default="fixed",
+        help="fixed raw regression mode or production adaptive-lead mode",
+    )
+    parser.add_argument("--fixed-lead-us", type=int, default=0)
+    parser.add_argument("--gap-profile", choices=("hot", "cold"), default="hot")
+    parser.add_argument("--expected-native-build-commit")
+    parser.add_argument(
         "--baseline",
         type=Path,
         help="optional JSON report with sender-side regression thresholds",
@@ -776,6 +925,14 @@ def _resolve_mock_latency_values(
     return base_latency_us, per_key_latency_us
 
 
+def _resolve_lead_config(args: argparse.Namespace) -> tuple[str, int]:
+    if args.fixed_lead_us < 0 or args.fixed_lead_us > 10_000:
+        raise SystemExit("--fixed-lead-us must be between 0 and 10000")
+    if args.lead_mode == "adaptive" and args.fixed_lead_us != 0:
+        raise SystemExit("--fixed-lead-us must be 0 in adaptive lead mode")
+    return args.lead_mode, args.fixed_lead_us
+
+
 def _assert_correctness(run: dict[str, Any]) -> None:
     if run["outcome"] != "finished":
         raise RuntimeError(f"native acceptance outcome was {run['outcome']!r}")
@@ -810,8 +967,10 @@ def _resolve_repeat_counts(args: argparse.Namespace) -> tuple[int, int]:
     )
     if dispatch_repeats <= 0:
         raise SystemExit("--dispatch-repeats must be positive")
-    if args.command_samples <= 0:
-        raise SystemExit("--command-samples must be positive")
+    if args.command_samples < 0:
+        raise SystemExit("--command-samples must be non-negative")
+    if getattr(args, "skip_command_samples", False):
+        return dispatch_repeats, 0
     return dispatch_repeats, args.command_samples
 
 
@@ -821,16 +980,22 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 2"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 3"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
             "baseline command timing domain is incompatible; regenerate with native_qpc_v1"
         )
+    if baseline.get("latency_segment_domain") != LATENCY_SEGMENT_DOMAIN:
+        raise SystemExit(
+            "baseline latency segment domain is incompatible; regenerate with native_trace_v1"
+        )
     if report.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit("candidate benchmark schema version is invalid")
     if report.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit("candidate command timing domain is invalid")
+    if report.get("latency_segment_domain") != LATENCY_SEGMENT_DOMAIN:
+        raise SystemExit("candidate latency segment domain is invalid")
     required_config = (
         "backend",
         "rt_priority_mode",
@@ -841,6 +1006,10 @@ def _assert_baseline_compatible(
         "mock_per_key_latency_us",
         "actions",
         "polyphony",
+        "lead_mode",
+        "fixed_lead_us",
+        "gap_profile",
+        "warmup_cycles",
     )
     baseline_config = baseline.get("benchmark_config")
     report_config = report.get("benchmark_config")
@@ -861,23 +1030,50 @@ def _assert_baseline_compatible(
         raise SystemExit("baseline is incompatible; it is not statistics-eligible")
     if baseline.get("excluded_runs") != 0:
         raise SystemExit("baseline is incompatible; excluded runs are not allowed")
-    required_metrics = (
-        ("sender_completion_error_us", "p50"),
-        ("sender_completion_error_us", "p99"),
-        ("sender_completion_error_us", "max"),
-        ("command_observation_latency_us", "p99"),
-        ("command_completion_latency_us", "p99"),
-        ("worker_cpu_ratio_ppm", "p50"),
-        ("process_cpu_ratio_ppm", "p50"),
-        ("spin_cpu_ratio_ppm", "p50"),
-        ("peak_rss_bytes", "max"),
+    if baseline.get("statistics_eligible") is not True or report.get("statistics_eligible") is not True:
+        raise SystemExit("baseline and candidate must be statistics-eligible")
+
+
+def allowed_value(
+    baseline: float,
+    *,
+    relative_fraction: float,
+    absolute_floor: float,
+) -> float:
+    return baseline + max(math.ceil(baseline * relative_fraction), absolute_floor)
+
+
+def _metric_at(payload: dict[str, Any], path: tuple[str, ...]) -> float:
+    value: Any = payload
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            raise SystemExit(f"benchmark metric is missing: {'.'.join(path)}")
+        value = value[part]
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise SystemExit(f"benchmark metric is invalid: {'.'.join(path)}")
+    return float(value)
+
+
+def _assert_metric_threshold(
+    report: dict[str, Any],
+    baseline: dict[str, Any],
+    path: tuple[str, ...],
+    *,
+    relative_fraction: float,
+    absolute_floor: float,
+) -> None:
+    observed = _metric_at(report, path)
+    expected = _metric_at(baseline, path)
+    allowed = allowed_value(
+        expected,
+        relative_fraction=relative_fraction,
+        absolute_floor=absolute_floor,
     )
-    for section, field in required_metrics:
-        values = baseline.get(section)
-        if not isinstance(values, dict) or field not in values:
-            raise SystemExit(
-                f"baseline is incompatible; missing metric {section}.{field}"
-            )
+    if observed > allowed:
+        raise SystemExit(
+            "native benchmark regression in "
+            f"{'.'.join(path)}: observed={observed:g}, baseline={expected:g}, allowed={allowed:g}"
+        )
 
 
 def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
@@ -887,75 +1083,110 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         raise SystemExit(f"cannot read benchmark baseline {baseline_path}: {exc}") from exc
 
     _assert_baseline_compatible(report, baseline)
-    checks = [
-        ("sender_completion_error_us", "p50", 1.05),
-        ("sender_completion_error_us", "p99", 1.05),
-        ("sender_completion_error_us", "max", 1.10),
-        ("command_observation_latency_us", "p99", 1.05),
-        ("command_completion_latency_us", "p99", 1.05),
-        ("worker_cpu_ratio_ppm", "p50", 1.05),
-        ("process_cpu_ratio_ppm", "p50", 1.05),
-        ("spin_cpu_ratio_ppm", "p50", 1.05),
-    ]
-    for section, field, ratio in checks:
-        observed = float(report[section][field])
-        expected = float(baseline.get(section, {}).get(field, 0))
-        if expected <= 0:
-            continue
-        if observed > expected * ratio:
-            raise SystemExit(
-                f"native benchmark regression in {section}.{field}: "
-                f"observed={observed:g}, baseline={expected:g}, allowed={expected * ratio:g}"
+    signed_metrics = (
+        ("wake_error_us", "absolute", "p99", 0.05, 5),
+        ("wake_error_us", "absolute", "p999", 0.10, 10),
+        ("sender_completion_error_us", "absolute", "p99", 0.05, 5),
+        ("sender_completion_error_us", "absolute", "p999", 0.10, 10),
+        ("sender_completion_error_us", "absolute", "max", 0.10, 20),
+    )
+    nonnegative_metrics = (
+        ("pre_send_software_latency_us", "p99", 0.05, 5),
+        ("pre_send_software_latency_us", "p999", 0.10, 10),
+        ("sendinput_call_duration_us", "p99", 0.05, 5),
+        ("sendinput_call_duration_us", "p999", 0.10, 10),
+        ("bookkeeping_duration_us", "p99", 0.05, 5),
+        ("bookkeeping_duration_us", "p999", 0.10, 10),
+    )
+    for section, dimension, field, relative, floor in signed_metrics:
+        _assert_metric_threshold(
+            report,
+            baseline,
+            (section, dimension, field),
+            relative_fraction=relative,
+            absolute_floor=floor,
+        )
+    for section, field, relative, floor in nonnegative_metrics:
+        _assert_metric_threshold(
+            report,
+            baseline,
+            (section, field),
+            relative_fraction=relative,
+            absolute_floor=floor,
+        )
+
+    for section, relative, floor in (
+        ("command_observation_latency_us", 0.05, 10),
+        ("command_completion_latency_us", 0.05, 10),
+        ("command_cleanup_cost_us", 0.10, 20),
+    ):
+        _assert_metric_threshold(
+            report,
+            baseline,
+            (section, "p99"),
+            relative_fraction=relative,
+            absolute_floor=floor,
+        )
+    for section in ("worker_cpu_ratio_ppm", "process_cpu_ratio_ppm", "spin_cpu_ratio_ppm"):
+        for field, relative in (("p50", 0.05), ("p95", 0.05), ("max", 0.10)):
+            _assert_metric_threshold(
+                report,
+                baseline,
+                (section, field),
+                relative_fraction=relative,
+                absolute_floor=0,
             )
-
-    observed_rss = int(report.get("peak_rss_bytes", {}).get("max", 0))
-    expected_rss = int(baseline.get("peak_rss_bytes", {}).get("max", 0))
-    if observed_rss > 52 * 1024 * 1024:
-        raise SystemExit(
-            f"native benchmark memory ceiling exceeded: observed={observed_rss}"
+    _assert_metric_threshold(
+        report,
+        baseline,
+        ("peak_rss_bytes", "max"),
+        relative_fraction=0.05,
+        absolute_floor=2 * 1024 * 1024,
+    )
+    for field, relative, floor in (("p50", 0.05, 100), ("p99", 0.10, 250), ("max", 0.15, 500)):
+        _assert_metric_threshold(
+            report,
+            baseline,
+            ("startup_latency_us", field),
+            relative_fraction=relative,
+            absolute_floor=floor,
         )
-    if expected_rss > 0 and observed_rss > expected_rss + 2 * 1024 * 1024:
-        raise SystemExit(
-            "native benchmark memory regression: "
-            f"observed={observed_rss}, baseline={expected_rss}, "
-            f"allowed={expected_rss + 2 * 1024 * 1024}"
-        )
 
-    for polyphony, observed in report.get("by_polyphony", {}).items():
-        expected_poly = baseline.get("by_polyphony", {}).get(polyphony) or baseline.get(
-            "by_polyphony", {}
-        ).get("default", {})
-        expected_errors = expected_poly.get("completion_error_us", {})
-        observed_errors = observed.get("completion_error_us", {})
-        for dimension in ("absolute", "late", "early"):
-            for field in ("p95", "p99"):
-                expected = float(expected_errors.get(dimension, {}).get(field, 0))
-                observed_value = float(observed_errors.get(dimension, {}).get(field, 0))
-                if expected <= 0:
-                    continue
-                if observed_value > expected * 1.05:
-                    raise SystemExit(
-                        "native benchmark regression in "
-                        f"by_polyphony.{polyphony}.completion_error_us.{dimension}.{field}: "
-                        f"observed={observed_value:g}, baseline={expected:g}, "
-                        f"allowed={expected * 1.05:g}"
-                    )
-            for kind in ("down", "up"):
-                expected_kind = expected_errors.get("by_kind", {}).get(kind, {})
-                observed_kind = observed_errors.get("by_kind", {}).get(kind, {})
-                for dimension in ("absolute", "late", "early"):
-                    for field in ("p95", "p99"):
-                        expected = float(expected_kind.get(dimension, {}).get(field, 0))
-                        observed_value = float(observed_kind.get(dimension, {}).get(field, 0))
-                        if expected <= 0:
-                            continue
-                        if observed_value > expected * 1.05:
-                            raise SystemExit(
-                                "native benchmark regression in "
-                                f"by_polyphony.{polyphony}.completion_error_us.by_kind."
-                                f"{kind}.{dimension}.{field}: observed={observed_value:g}, "
-                                f"baseline={expected:g}, allowed={expected * 1.05:g}"
-                            )
+    for polyphony in report["benchmark_config"]["polyphony"]:
+        observed_poly = report["by_polyphony"][str(polyphony)]
+        baseline_poly = baseline["by_polyphony"][str(polyphony)]
+        for section, dimension, field, relative, floor in signed_metrics:
+            _assert_metric_threshold(
+                observed_poly,
+                baseline_poly,
+                (section, dimension, field),
+                relative_fraction=relative,
+                absolute_floor=floor,
+            )
+        for section, field, relative, floor in nonnegative_metrics:
+            _assert_metric_threshold(
+                observed_poly,
+                baseline_poly,
+                (section, field),
+                relative_fraction=relative,
+                absolute_floor=floor,
+            )
+        for section in ("worker_cpu_ratio_ppm", "process_cpu_ratio_ppm", "spin_cpu_ratio_ppm"):
+            for field, relative in (("p50", 0.05), ("p95", 0.05), ("max", 0.10)):
+                _assert_metric_threshold(
+                    observed_poly,
+                    baseline_poly,
+                    (section, field),
+                    relative_fraction=relative,
+                    absolute_floor=0,
+                )
+        _assert_metric_threshold(
+            observed_poly,
+            baseline_poly,
+            ("peak_rss_bytes", "max"),
+            relative_fraction=0.05,
+            absolute_floor=2 * 1024 * 1024,
+        )
 
 
 def main() -> int:
@@ -963,8 +1194,11 @@ def main() -> int:
     if os.name != "nt":
         raise SystemExit("this acceptance benchmark requires Windows")
     dispatch_repeats, command_samples = _resolve_repeat_counts(args)
+    lead_mode, fixed_lead_us = _resolve_lead_config(args)
     if args.actions <= 0:
         raise SystemExit("--actions must be positive")
+    if args.warmup_cycles < 0:
+        raise SystemExit("--warmup-cycles must be non-negative")
     if (
         isinstance(args.budget_seconds, bool)
         or not math.isfinite(args.budget_seconds)
@@ -982,11 +1216,12 @@ def main() -> int:
     )
 
     git_info = _git_provenance()
-    native_info = _native_provenance(git_info["git_sha"])
-    if native_info["native_build_commit"] != git_info["git_sha"]:
+    expected_native_commit = args.expected_native_build_commit or git_info["git_sha"]
+    native_info = _native_provenance(expected_native_commit)
+    if native_info["native_build_commit"] != expected_native_commit:
         raise RuntimeError(
-            "native build provenance does not match Git HEAD: "
-            f"native={native_info['native_build_commit']} git={git_info['git_sha']}"
+            "native build provenance does not match expected commit: "
+            f"native={native_info['native_build_commit']} expected={expected_native_commit}"
         )
     host_info = _host_fingerprint(native_info)
 
@@ -1005,11 +1240,19 @@ def main() -> int:
     for run_index in range(dispatch_repeats):
         suite_runs: dict[str, dict[str, Any]] = {}
         current_polyphony = polyphonies[0]
-        current_actions = _actions(args.actions, current_polyphony)
+        current_actions = _actions(
+            args.actions + args.warmup_cycles,
+            current_polyphony,
+            gap_profile=args.gap_profile,
+        )
         try:
             for polyphony in polyphonies:
                 current_polyphony = polyphony
-                current_actions = _actions(args.actions, polyphony)
+                current_actions = _actions(
+                    args.actions + args.warmup_cycles,
+                    polyphony,
+                    gap_profile=args.gap_profile,
+                )
                 run = _run_dispatch(
                     current_actions,
                     polyphony,
@@ -1018,6 +1261,9 @@ def main() -> int:
                     mock_per_key_latency_us=mock_per_key_latency_us,
                     adaptive_spin=not args.no_adaptive_spin,
                     rt_priority_mode=args.rt_priority_mode,
+                    lead_mode=lead_mode,
+                    fixed_lead_us=fixed_lead_us,
+                    warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                 )
                 _assert_correctness(run)
@@ -1085,7 +1331,7 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_actions = _actions(1, 1)
+    command_actions = _actions(1, 1, gap_profile=args.gap_profile)
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -1095,6 +1341,8 @@ def main() -> int:
                     mock_per_key_latency_us=mock_per_key_latency_us,
                     adaptive_spin=not args.no_adaptive_spin,
                     rt_priority_mode=args.rt_priority_mode,
+                    lead_mode=lead_mode,
+                    fixed_lead_us=fixed_lead_us,
                 )
             )
         except Exception as exc:
@@ -1127,12 +1375,14 @@ def main() -> int:
         invalid_report: dict[str, Any] = {
             "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
             "command_timing_domain": COMMAND_TIMING_DOMAIN,
+            "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
             "label": args.label,
             "backend": args.backend,
             "actions_per_polyphony": args.actions * 2,
             "polyphony": polyphonies,
             "dispatch_repeats": dispatch_repeats,
             "command_samples": command_samples,
+            "warmup_cycles": args.warmup_cycles,
             "budget_seconds": args.budget_seconds,
             "benchmark_config": _benchmark_config(
                 args=args,
@@ -1159,11 +1409,14 @@ def main() -> int:
             else None,
             "git_sha": git_info["git_sha"],
             "native_build_commit": native_info["native_build_commit"],
+            "expected_native_build_commit": expected_native_commit,
+            "harness_git_sha": git_info["git_sha"],
+            "candidate_or_baseline_role": args.label,
             "rustc_version": native_info["rustc_version"],
             "schema_version": native_info["schema_version"],
             "host_fingerprint": host_info,
             "dirty_worktree": git_info["dirty_worktree"],
-            "command_line": list(os.sys.argv),
+            "command_line": list(sys.argv),
         }
         encoded = json.dumps(invalid_report, indent=2)
         print(encoded)
@@ -1178,18 +1431,26 @@ def main() -> int:
     ]
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
-        actions = _actions(args.actions, polyphony)
+        actions = _actions(args.actions, polyphony, gap_profile=args.gap_profile)
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
-        values = [value for run in runs for value in run["_sender_error_values"]]
         poly_report = {
             "polyphony": polyphony,
             "actions": len(actions),
-            "sender_completion_error_us": {
-                key: _stats(values)[key] for key in ("p50", "p95", "p99", "max")
-            },
-            "completion_error_us": _completion_error_report_pairs(
-                [row for run in runs for row in run["_completion_error_rows"]]
+            "warmup_cycles": args.warmup_cycles,
+            "warmup_records": args.warmup_cycles * 2,
+            "measurement_records": sum(run["measurement_records"] for run in runs),
+            "wake_error_us": _aggregate_metric(runs, "wake_error_us"),
+            "pre_send_software_latency_us": _aggregate_metric(
+                runs, "pre_send_software_latency_us"
             ),
+            "sendinput_call_duration_us": _aggregate_metric(
+                runs, "sendinput_call_duration_us"
+            ),
+            "bookkeeping_duration_us": _aggregate_metric(runs, "bookkeeping_duration_us"),
+            "sender_completion_error_us": _aggregate_metric(
+                runs, "sender_completion_error_us"
+            ),
+            "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
             "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in runs]),
             "worker_cpu_time_us": _stats([run["worker_cpu_time_us"] for run in runs]),
             "process_cpu_time_us": _stats([run["process_cpu_time_us"] for run in runs]),
@@ -1221,11 +1482,6 @@ def main() -> int:
             "outcomes": sorted({run["outcome"] for run in runs}),
         }
         by_polyphony[str(polyphony)] = poly_report
-    sender_errors = [
-        value
-        for run in dispatch_runs
-        for value in run["_sender_error_values"]
-    ]
     report: dict[str, Any] = {
         "label": args.label,
         "backend": args.backend,
@@ -1236,6 +1492,7 @@ def main() -> int:
         "budget_seconds": args.budget_seconds,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "command_timing_domain": COMMAND_TIMING_DOMAIN,
+        "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
         "benchmark_config": _benchmark_config(
             args=args,
             polyphonies=polyphonies,
@@ -1252,12 +1509,24 @@ def main() -> int:
         "statistics_eligible": True,
         "excluded_runs": 0,
         "failures": [],
-        "sender_completion_error_us": {
-            key: _stats(sender_errors)[key]
-            for key in ("p50", "p95", "p99", "max")
-        },
-        "completion_error_us": _completion_error_report_pairs(
-            [row for run in dispatch_runs for row in run["_completion_error_rows"]]
+        "warmup_cycles": args.warmup_cycles,
+        "warmup_records": args.warmup_cycles * 2 * len(polyphonies) * dispatch_repeats,
+        "measurement_records": sum(run["measurement_records"] for run in dispatch_runs),
+        "wake_error_us": _aggregate_metric(dispatch_runs, "wake_error_us"),
+        "pre_send_software_latency_us": _aggregate_metric(
+            dispatch_runs, "pre_send_software_latency_us"
+        ),
+        "sendinput_call_duration_us": _aggregate_metric(
+            dispatch_runs, "sendinput_call_duration_us"
+        ),
+        "bookkeeping_duration_us": _aggregate_metric(
+            dispatch_runs, "bookkeeping_duration_us"
+        ),
+        "sender_completion_error_us": _aggregate_metric(
+            dispatch_runs, "sender_completion_error_us"
+        ),
+        "startup_latency_us": _stats(
+            [run["startup_latency_us"] for run in dispatch_runs]
         ),
         "spin_cpu_time_us": _stats([run["spin_cpu_time_us"] for run in dispatch_runs]),
         "peak_rss_bytes": _required_stats(
@@ -1305,6 +1574,9 @@ def main() -> int:
         "evidence_scope": "sender_completion",
         "git_sha": git_info["git_sha"],
         "native_build_commit": native_info["native_build_commit"],
+        "expected_native_build_commit": expected_native_commit,
+        "harness_git_sha": git_info["git_sha"],
+        "candidate_or_baseline_role": args.label,
         "rustc_version": native_info["rustc_version"],
         "schema_version": native_info["schema_version"],
         "backend_evidence": "real_sendinput_sender_completion"
@@ -1312,7 +1584,7 @@ def main() -> int:
         else "deterministic_coordinator_delivery_simulation",
         "host_fingerprint": host_info,
         "dirty_worktree": git_info["dirty_worktree"],
-        "command_line": list(os.sys.argv),
+        "command_line": list(sys.argv),
     }
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
