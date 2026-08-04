@@ -260,7 +260,9 @@ def check_repository(repository_root: Path) -> CheckReport:
                 _record(report, Violation("dependency_direction", relative, "core imports sky_dispatch_win32"), allowlist)
             if crate in {"sky_dispatch_core", "sky_dispatch_win32"} and ("sky_player_rs::" in joined or "use sky_player_rs" in joined):
                 _record(report, Violation("dependency_direction", relative, "lower crate imports sky_player_rs"), allowlist)
-            if _top_level_glob_import(lines):
+            if _top_level_glob_import(lines) and not (
+                relative.endswith("/tests.rs") or "/tests/" in relative
+            ):
                 _record(report, Violation("production_glob_import", relative, "top-level use super::* in production module"), allowlist)
             for line_index, line in enumerate(lines):
                 if "Box<dyn Fn" in line and not _line_is_test_support_gated(lines, line_index):
