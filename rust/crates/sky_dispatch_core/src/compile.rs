@@ -27,6 +27,12 @@ pub enum CompileError {
         "multiple same-timestamp down actions are not one atomic chord; merge them before dispatch: timestamp={scheduled_us}"
     )]
     SameTimestampDownBatch { scheduled_us: u64 },
+    #[error(
+        "duplicate same-timestamp up action for scan code {scan_code}: timestamp={scheduled_us}"
+    )]
+    DuplicateSameTimestampUp { scan_code: u16, scheduled_us: u64 },
+    #[error("too many authored batches at timestamp {scheduled_us} for packet metadata")]
+    TooManyBatchesAtTimestamp { scheduled_us: u64 },
     #[error("action {action_index} must contain between 1 and {MAX_KEYS} scan codes")]
     InvalidBatchSize { action_index: u32 },
     #[error("action {action_index} contains duplicate scan code {scan_code}")]
@@ -88,6 +94,7 @@ pub fn compile_runtime_intents(
         .sum::<usize>();
     let mut batches = Vec::with_capacity(actions.len());
     let mut intents = Vec::with_capacity(intent_capacity);
+    let mut packets = Vec::with_capacity(actions.len());
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {
@@ -103,135 +110,208 @@ pub fn compile_runtime_intents(
 
     let mut previous_source_index: Option<u32> = None;
     let mut previous_scheduled_us: Option<u64> = None;
-    let mut same_timestamp_down_seen = false;
-    let mut next_packet_id: PacketId = 0;
+    let mut group_start = 0usize;
 
-    for action in actions {
-        if let Some(previous) = previous_source_index
-            && action.source_action_index <= previous
-        {
-            return Err(CompileError::NonMonotonicSourceIndex {
-                previous,
-                current: action.source_action_index,
-            });
-        }
-        if let Some(previous) = previous_scheduled_us
-            && action.scheduled_us < previous
-        {
-            return Err(CompileError::NonMonotonicSchedule {
-                previous,
-                current: action.scheduled_us,
-            });
-        }
-        if previous_scheduled_us != Some(action.scheduled_us) {
-            same_timestamp_down_seen = false;
-            next_packet_id = next_packet_id.saturating_add(1);
-        }
-        if action.kind == ActionKind::Down && same_timestamp_down_seen {
-            return Err(CompileError::SameTimestampDownBatch {
-                scheduled_us: action.scheduled_us,
-            });
-        }
-        if action.scan_codes.is_empty() || action.scan_codes.len() > MAX_KEYS {
-            return Err(CompileError::InvalidBatchSize {
-                action_index: action.source_action_index,
-            });
-        }
-        if action.reason.len() > MAX_REASON_BYTES {
-            return Err(CompileError::ReasonTooLong {
-                action_index: action.source_action_index,
-            });
+    while group_start < actions.len() {
+        let scheduled_us = actions[group_start].scheduled_us;
+        let mut group_end = group_start + 1;
+        while group_end < actions.len() && actions[group_end].scheduled_us == scheduled_us {
+            group_end += 1;
         }
 
-        let mut batch_seen_mask: u16 = 0;
-        for &scan_code in &action.scan_codes {
-            let Some(key_slot) = key_registry.slot_for(scan_code) else {
-                return Err(CompileError::ScanCodeNotAllowed {
-                    action_index: action.source_action_index,
-                    scan_code,
-                });
-            };
-            let bit = 1u16 << key_slot;
-            if batch_seen_mask & bit != 0 {
-                return Err(CompileError::DuplicateBatchScanCode {
-                    action_index: action.source_action_index,
-                    scan_code,
+        let packet_id =
+            PacketId::try_from(packets.len()).map_err(|_| CompileError::TooManyActions)?;
+        let first_batch_index =
+            u32::try_from(batches.len()).map_err(|_| CompileError::TooManyActions)?;
+        let mut down_action: Option<usize> = None;
+        for (offset, action) in actions[group_start..group_end].iter().enumerate() {
+            if let Some(previous) = previous_source_index
+                && action.source_action_index <= previous
+            {
+                return Err(CompileError::NonMonotonicSourceIndex {
+                    previous,
+                    current: action.source_action_index,
                 });
             }
-            batch_seen_mask |= bit;
-        }
-
-        previous_source_index = Some(action.source_action_index);
-        previous_scheduled_us = Some(action.scheduled_us);
-        if action.kind == ActionKind::Down {
-            same_timestamp_down_seen = true;
-        }
-        let reason_id = get_or_insert_reason(&action.reason)?;
-        let intent_start =
-            u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
-        let mut sorted_scan_codes = action.scan_codes.clone();
-        sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
-
-        for &scan_code in &sorted_scan_codes {
-            let key_slot =
-                key_registry
-                    .slot_for(scan_code)
-                    .ok_or(CompileError::ScanCodeNotAllowed {
+            if let Some(previous) = previous_scheduled_us
+                && action.scheduled_us < previous
+            {
+                return Err(CompileError::NonMonotonicSchedule {
+                    previous,
+                    current: action.scheduled_us,
+                });
+            }
+            if action.scan_codes.is_empty() || action.scan_codes.len() > MAX_KEYS {
+                return Err(CompileError::InvalidBatchSize {
+                    action_index: action.source_action_index,
+                });
+            }
+            if action.reason.len() > MAX_REASON_BYTES {
+                return Err(CompileError::ReasonTooLong {
+                    action_index: action.source_action_index,
+                });
+            }
+            let mut batch_seen_mask: u16 = 0;
+            for &scan_code in &action.scan_codes {
+                let Some(key_slot) = key_registry.slot_for(scan_code) else {
+                    return Err(CompileError::ScanCodeNotAllowed {
                         action_index: action.source_action_index,
                         scan_code,
-                    })?;
-            let generation_id = match action.kind {
-                ActionKind::Down => {
-                    if next_generation_id > MAX_COMPACT_GENERATION_ID {
-                        return Err(CompileError::GenerationOverflow);
-                    }
-                    if let Some(open) = open_generation_by_slot[key_slot as usize] {
-                        return Err(CompileError::OverlappingSameKeyDown {
-                            scan_code,
-                            first_down_action_index: open.down_action_index,
-                            second_down_action_index: action.source_action_index,
-                            first_scheduled_us: open.down_scheduled_us,
-                            second_scheduled_us: action.scheduled_us,
-                        });
-                    }
-                    let gen_id = next_generation_id;
-                    next_generation_id = next_generation_id
-                        .checked_add(1)
-                        .ok_or(CompileError::GenerationOverflow)?;
-                    open_generation_by_slot[key_slot as usize] = Some(OpenGeneration {
-                        generation_id: gen_id,
-                        down_action_index: action.source_action_index,
-                        down_scheduled_us: action.scheduled_us,
                     });
-                    Some(gen_id)
+                };
+                let bit = 1u16 << key_slot;
+                if batch_seen_mask & bit != 0 {
+                    return Err(CompileError::DuplicateBatchScanCode {
+                        action_index: action.source_action_index,
+                        scan_code,
+                    });
                 }
-                ActionKind::Up => {
-                    let gen_id =
-                        open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
-                    open_generation_by_slot[key_slot as usize] = None;
-                    gen_id
+                batch_seen_mask |= bit;
+            }
+            get_or_insert_reason(&action.reason)?;
+            if action.kind == ActionKind::Down {
+                if down_action.is_some() {
+                    return Err(CompileError::SameTimestampDownBatch { scheduled_us });
                 }
-            };
-
-            intents.push(CompactIntent::new(
-                generation_id.unwrap_or(NO_GENERATION_ID),
-                key_slot,
-            ));
+                down_action = Some(group_start + offset);
+            }
+            previous_source_index = Some(action.source_action_index);
+            previous_scheduled_us = Some(action.scheduled_us);
         }
 
-        batches.push(CompiledBatch {
-            source_action_index: action.source_action_index,
-            kind: action.kind,
-            scheduled_us: action.scheduled_us,
-            reason_id,
-            intent_start,
-            intent_len: u8::try_from(action.scan_codes.len())
-                .expect("validated batch length is at most MAX_KEYS"),
-            packet_id: next_packet_id,
+        // Build all release intents first. This is the compiler's canonical
+        // physical order even when authored actions arrived Down-before-Up.
+        let up_intent_start =
+            u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
+        let mut up_mask = 0u16;
+        let mut seen_up_mask = 0u16;
+        let mut group_batches: Vec<CompiledBatch> = Vec::with_capacity(group_end - group_start);
+        for action in &actions[group_start..group_end] {
+            if action.kind != ActionKind::Up {
+                continue;
+            }
+            let reason_id = get_or_insert_reason(&action.reason)?;
+            let intent_start =
+                u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
+            let mut sorted_scan_codes = action.scan_codes.clone();
+            sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
+            for &scan_code in &sorted_scan_codes {
+                let key_slot = key_registry
+                    .slot_for(scan_code)
+                    .expect("allowlist validation must precede packet compilation");
+                let bit = 1u16 << key_slot;
+                if seen_up_mask & bit != 0 {
+                    return Err(CompileError::DuplicateSameTimestampUp {
+                        scan_code,
+                        scheduled_us,
+                    });
+                }
+                seen_up_mask |= bit;
+                let generation_id =
+                    open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
+                open_generation_by_slot[key_slot as usize] = None;
+                if generation_id.is_some() {
+                    up_mask |= bit;
+                }
+                intents.push(CompactIntent::new(
+                    generation_id.unwrap_or(NO_GENERATION_ID),
+                    key_slot,
+                ));
+            }
+            group_batches.push(CompiledBatch {
+                source_action_index: action.source_action_index,
+                kind: ActionKind::Up,
+                scheduled_us,
+                reason_id,
+                intent_start,
+                intent_len: u8::try_from(action.scan_codes.len())
+                    .expect("validated batch length is at most MAX_KEYS"),
+                packet_id,
+            });
+        }
+        let up_intent_len = u8::try_from(
+            intents.len() - usize::try_from(up_intent_start).expect("u32 range is usize-safe"),
+        )
+        .expect("one timestamp has at most fifteen release intents");
+
+        let down_intent_start =
+            u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
+        let mut down_mask = 0u16;
+        let mut down_source_action_index = None;
+        if let Some(down_index) = down_action {
+            let action = &actions[down_index];
+            let reason_id = get_or_insert_reason(&action.reason)?;
+            let intent_start =
+                u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
+            let mut sorted_scan_codes = action.scan_codes.clone();
+            sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
+            for &scan_code in &sorted_scan_codes {
+                let key_slot = key_registry
+                    .slot_for(scan_code)
+                    .expect("allowlist validation must precede packet compilation");
+                let bit = 1u16 << key_slot;
+                if let Some(open) = open_generation_by_slot[key_slot as usize] {
+                    return Err(CompileError::OverlappingSameKeyDown {
+                        scan_code,
+                        first_down_action_index: open.down_action_index,
+                        second_down_action_index: action.source_action_index,
+                        first_scheduled_us: open.down_scheduled_us,
+                        second_scheduled_us: scheduled_us,
+                    });
+                }
+                if next_generation_id > MAX_COMPACT_GENERATION_ID {
+                    return Err(CompileError::GenerationOverflow);
+                }
+                let generation_id = next_generation_id;
+                next_generation_id = next_generation_id
+                    .checked_add(1)
+                    .ok_or(CompileError::GenerationOverflow)?;
+                open_generation_by_slot[key_slot as usize] = Some(OpenGeneration {
+                    generation_id,
+                    down_action_index: action.source_action_index,
+                    down_scheduled_us: scheduled_us,
+                });
+                down_mask |= bit;
+                intents.push(CompactIntent::new(generation_id, key_slot));
+            }
+            group_batches.push(CompiledBatch {
+                source_action_index: action.source_action_index,
+                kind: ActionKind::Down,
+                scheduled_us,
+                reason_id,
+                intent_start,
+                intent_len: u8::try_from(action.scan_codes.len())
+                    .expect("validated batch length is at most MAX_KEYS"),
+                packet_id,
+            });
+            down_source_action_index = Some(action.source_action_index);
+        }
+        group_batches.sort_unstable_by_key(|batch| batch.source_action_index);
+        batches.extend(group_batches);
+        let batch_count = u16::try_from(group_end - group_start)
+            .map_err(|_| CompileError::TooManyBatchesAtTimestamp { scheduled_us })?;
+        packets.push(CompiledPacket {
+            packet_id,
+            scheduled_us,
+            first_batch_index,
+            batch_count,
+            up_mask,
+            down_mask,
+            up_intent_start,
+            up_intent_len,
+            down_intent_start,
+            down_intent_len: u8::try_from(
+                intents.len()
+                    - usize::try_from(down_intent_start).expect("u32 range is usize-safe"),
+            )
+            .expect("one timestamp has at most fifteen activation intents"),
+            down_source_action_index,
         });
+        group_start = group_end;
     }
 
     Ok(RuntimeSchedule {
+        packets,
         batches,
         intents,
         generation_count: next_generation_id,
@@ -243,6 +323,7 @@ pub fn compile_runtime_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::TimelineTicks;
 
     #[test]
     fn test_compile_basic_pairing() {
@@ -333,6 +414,100 @@ mod tests {
             compile_runtime_intents(&actions, &[1, 2]),
             Err(CompileError::SameTimestampDownBatch { scheduled_us: 100 })
         ));
+    }
+
+    #[test]
+    fn mixed_timestamp_packet_canonicalizes_up_before_down() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "first".into(),
+                },
+                // Authored order is deliberately Down-before-Up at this
+                // timestamp. The packet must still release generation 0
+                // before activating generation 1.
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1, 2],
+                    reason: "retrigger".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "release".into(),
+                },
+            ],
+            &[1, 2],
+        )
+        .unwrap();
+
+        assert_eq!(schedule.packets.len(), 2);
+        assert_eq!(schedule.packets[0].packet_id, 0);
+        assert_eq!(schedule.packets[1].packet_id, 1);
+        let packet = schedule.view_packet_ticks(1, TimelineTicks::ZERO).unwrap();
+        assert_eq!(packet.up_mask(), 0b01);
+        assert_eq!(packet.down_mask(), 0b11);
+        assert_eq!(packet.header.down_source_action_index, Some(1));
+        assert_eq!(packet.up_intents[0].generation_id(), 0);
+        assert_eq!(packet.down_intents[0].generation_id(), 1);
+        assert_eq!(packet.down_intents[1].generation_id(), 2);
+        assert_eq!(schedule.batches[1].kind, ActionKind::Down);
+        assert_eq!(schedule.batches[2].kind, ActionKind::Up);
+    }
+
+    #[test]
+    fn duplicate_same_timestamp_up_is_rejected() {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![1],
+                reason: "stale one".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![1],
+                reason: "stale two".into(),
+            },
+        ];
+        assert!(matches!(
+            compile_runtime_intents(&actions, &[1]),
+            Err(CompileError::DuplicateSameTimestampUp {
+                scan_code: 1,
+                scheduled_us: 100
+            })
+        ));
+    }
+
+    #[test]
+    fn stale_up_is_not_included_in_packet_physical_mask() {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: smallvec::smallvec![1],
+                reason: "stale".into(),
+            }],
+            &[1],
+        )
+        .unwrap();
+
+        let packet = schedule.view_packet_ticks(0, TimelineTicks::ZERO).unwrap();
+        assert_eq!(packet.up_mask(), 0);
+        assert_eq!(packet.up_intents.len(), 1);
+        assert_eq!(packet.up_intents[0].generation_id(), NO_GENERATION_ID);
     }
 
     #[test]

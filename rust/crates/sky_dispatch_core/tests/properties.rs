@@ -84,7 +84,7 @@ fn final_focus_loss_does_not_consume_the_prepared_authored_batch() {
         },
     ];
     let schedule = compile_runtime_intents(&actions, &[2]).expect("valid schedule");
-    let coordinator = test_coordinator(
+    let mut coordinator = test_coordinator(
         schedule,
         0,
         0,

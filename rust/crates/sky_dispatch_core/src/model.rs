@@ -12,8 +12,12 @@ pub const MAX_KEYS: usize = 15;
 pub enum RuntimeScheduleError {
     #[error("invalid runtime batch index {index}")]
     InvalidBatchIndex { index: usize },
+    #[error("invalid runtime packet index {index}")]
+    InvalidPacketIndex { index: usize },
     #[error("invalid intent range for runtime batch {index}")]
     InvalidIntentRange { index: usize },
+    #[error("invalid intent range for runtime packet {index}")]
+    InvalidPacketIntentRange { index: usize },
     #[error("compiled key slot {slot} is not present in the key registry")]
     InvalidKeySlot { slot: KeySlot },
 }
@@ -139,6 +143,26 @@ pub struct CompiledBatch {
     pub packet_id: PacketId,
 }
 
+/// One physical dispatch boundary for every authored timestamp.
+///
+/// The intent arena ranges are canonicalized: all release intents are stored
+/// before all activation intents. `up_mask` excludes stale releases while the
+/// corresponding batch metadata remains available for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledPacket {
+    pub packet_id: PacketId,
+    pub scheduled_us: u64,
+    pub first_batch_index: u32,
+    pub batch_count: u16,
+    pub up_mask: u16,
+    pub down_mask: u16,
+    pub up_intent_start: u32,
+    pub up_intent_len: u8,
+    pub down_intent_start: u32,
+    pub down_intent_len: u8,
+    pub down_source_action_index: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeBatch {
     pub source_action_index: u32,
@@ -151,6 +175,7 @@ pub struct RuntimeBatch {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSchedule {
+    pub packets: Vec<CompiledPacket>,
     pub batches: Vec<CompiledBatch>,
     pub intents: Vec<CompactIntent>,
     pub generation_count: u64,
@@ -159,6 +184,52 @@ pub struct RuntimeSchedule {
 }
 
 impl RuntimeSchedule {
+    pub fn view_packet_ticks(
+        &self,
+        index: usize,
+        effective_ticks: TimelineTicks,
+    ) -> Result<PacketView<'_>, RuntimeScheduleError> {
+        let header = self
+            .packets
+            .get(index)
+            .ok_or(RuntimeScheduleError::InvalidPacketIndex { index })?;
+        let up_start = header.up_intent_start as usize;
+        let up_end = up_start
+            .checked_add(header.up_intent_len as usize)
+            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
+        let down_start = header.down_intent_start as usize;
+        let down_end = down_start
+            .checked_add(header.down_intent_len as usize)
+            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
+        let up_intents = self
+            .intents
+            .get(up_start..up_end)
+            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
+        let down_intents = self
+            .intents
+            .get(down_start..down_end)
+            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
+        for compact in up_intents.iter().chain(down_intents) {
+            if self
+                .key_registry
+                .scan_code_for(compact.key_slot())
+                .is_none()
+            {
+                return Err(RuntimeScheduleError::InvalidKeySlot {
+                    slot: compact.key_slot(),
+                });
+            }
+        }
+        Ok(PacketView {
+            packet_index: index,
+            header,
+            up_intents,
+            down_intents,
+            registry: &self.key_registry,
+            effective_ticks,
+        })
+    }
+
     pub fn try_materialize_batch_authored(
         &self,
         index: usize,
@@ -272,6 +343,55 @@ impl RuntimeSchedule {
             ),
             scheduled_us: header.scheduled_us.saturating_add(scheduled_offset_us),
         }
+    }
+}
+
+/// Borrowed, allocation-free view of one canonical physical packet.
+#[derive(Debug, Clone, Copy)]
+pub struct PacketView<'a> {
+    pub packet_index: usize,
+    pub header: &'a CompiledPacket,
+    pub up_intents: &'a [CompactIntent],
+    pub down_intents: &'a [CompactIntent],
+    pub registry: &'a KeyRegistry,
+    pub effective_ticks: TimelineTicks,
+}
+
+impl PacketView<'_> {
+    #[inline]
+    pub fn packet_id(&self) -> PacketId {
+        self.header.packet_id
+    }
+
+    #[inline]
+    pub fn scheduled_us(&self) -> u64 {
+        self.header.scheduled_us
+    }
+
+    #[inline]
+    pub fn up_mask(&self) -> u16 {
+        self.header.up_mask
+    }
+
+    #[inline]
+    pub fn down_mask(&self) -> u16 {
+        self.header.down_mask
+    }
+
+    /// Build the activation portion of this packet into the fixed-size
+    /// worker buffer. Releases are emitted by the physical sender directly
+    /// from `up_mask` and must not be mixed into this legacy view.
+    pub fn down_scan_code_batch(&self) -> ScanCodeBatch {
+        let mut batch = ScanCodeBatch::new_empty();
+        let mut mask = self.header.down_mask;
+        while mask != 0 {
+            let slot = mask.trailing_zeros() as KeySlot;
+            mask &= mask - 1;
+            if let Some(scan_code) = self.registry.scan_code_for(slot) {
+                batch.push(scan_code);
+            }
+        }
+        batch
     }
 }
 
