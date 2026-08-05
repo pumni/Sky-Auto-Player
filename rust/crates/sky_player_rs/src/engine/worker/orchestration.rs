@@ -1461,15 +1461,24 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     );
                 }
                 runtime.pending_pre_send_spin_us = 0;
-                let expected_send_us = estimator
+                let send_estimate = estimator
                     .estimate_lead_with_class_and_policy(
                         ActionKind::Up,
                         scan_codes.len(),
                         latency_class,
                         config.timing.strict_timing,
                     )
+                    .components;
+                let cold_polyphony_floor_us = estimator
+                    .estimate_lead_with_class_and_policy(
+                        ActionKind::Up,
+                        scan_codes.len(),
+                        LatencyClass::Cold,
+                        config.timing.strict_timing,
+                    )
                     .components
-                    .syscall_us;
+                    .cold_reserve_us;
+                let expected_send_us = send_estimate.syscall_us.max(cold_polyphony_floor_us);
                 let send_warn_threshold_us =
                     health.options.send_warn_threshold_us(expected_send_us);
                 local_metrics.send_warn_threshold_us = send_warn_threshold_us;
@@ -2355,15 +2364,25 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         runtime.pending_pre_send_spin_us = 0;
                         let bookkeeping_after_send_us =
                             bookkeeping_completed_us.saturating_sub(result_completed_us);
-                        let expected_send_us = estimator
+                        let send_estimate = estimator
                             .estimate_lead_with_class_and_policy(
                                 ActionKind::Down,
                                 batch_intent_count,
                                 latency_class,
                                 config.timing.strict_timing,
                             )
+                            .components;
+                        let cold_polyphony_floor_us = estimator
+                            .estimate_lead_with_class_and_policy(
+                                ActionKind::Down,
+                                batch_intent_count,
+                                LatencyClass::Cold,
+                                config.timing.strict_timing,
+                            )
                             .components
-                            .syscall_us;
+                            .cold_reserve_us;
+                        let expected_send_us =
+                            send_estimate.syscall_us.max(cold_polyphony_floor_us);
                         let send_warn_threshold_us =
                             health.options.send_warn_threshold_us(expected_send_us);
                         local_metrics.send_warn_threshold_us = send_warn_threshold_us;
