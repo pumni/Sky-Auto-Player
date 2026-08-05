@@ -14,13 +14,12 @@ from sky_music.config import resolve_game_fps
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import PlaybackControls
 from sky_music.orchestration.native_models import (
-    STATUS_LABELS,
     BackendHealth,
     PlaybackOutcome,
-    PlaybackStatus,
 )
 from sky_music.ui.picker_theme import ThemePreset, get_theme_preset
 from sky_music.ui.playback_notices import PlaybackNoticeLedger
+from sky_music.ui.playback_view_model import build_playback_hud_view
 from sky_music.ui.text_render import (
     clamp_terminal_width,
     truncate_cells,
@@ -202,10 +201,19 @@ class ProgressRenderer:
             "done": styles["accent"],
         }
 
-        try:
-            header_label = STATUS_LABELS[PlaybackStatus(status)]
-        except (KeyError, ValueError):
-            header_label = status.replace("_", " ").title()
+        view = build_playback_hud_view(
+            current_seconds=current,
+            total_seconds=total,
+            song_name=song_name,
+            status=status,
+            input_path_degraded=self.input_path_degraded,
+            backend_health=backend_health,
+            late_2ms=self.late_2ms,
+            late_5ms=self.late_5ms,
+            late_10ms=self.late_10ms,
+            max_lateness_us=self.max_lateness_us,
+        )
+        header_label = view.status_label
         status_style = status_colors.get(status, styles["accent"])
 
         # Session info line
@@ -243,27 +251,35 @@ class ProgressRenderer:
         if self._task_id is not None:
             self._progress.update(self._task_id, total=total_safe, completed=min(current, total_safe))
 
-        current_time_str = format_duration(current)
-        total_time_str = format_duration(total)
-        remaining = max(0.0, total - current)
-        remaining_str = format_duration(remaining)
+        current_time_str = format_duration(view.current_seconds)
+        total_time_str = format_duration(view.total_seconds)
+        remaining_str = format_duration(view.eta_seconds)
         time_text = Text(f"{current_time_str} / {total_time_str}  ·  ETA {remaining_str}", style=styles["foreground"])
 
         # Backend status line
-        active_keys = 0
-        failed_releases = 0
-        keys_dropped = 0
-        chord_splits = 0
-        if backend_health is not None:
-            active_keys = backend_health.active_count
-            failed_releases = backend_health.failed_release_count
-            keys_dropped = int(getattr(backend_health, "keys_dropped", 0) or 0)
-            chord_splits = int(getattr(backend_health, "chord_split_events", 0) or 0)
+        active_keys = view.backend.active_keys
+        failed_releases = view.backend.stuck_keys
+        keys_dropped = view.backend.keys_dropped
+        chord_splits = view.backend.chord_split_events
 
         notice_state = self._notice_ledger.update(
             input_path_degraded=self.input_path_degraded,
             keys_dropped=keys_dropped,
             chord_split_events=chord_splits,
+        )
+
+        view = build_playback_hud_view(
+            current_seconds=view.current_seconds,
+            total_seconds=view.total_seconds,
+            song_name=view.song_name,
+            status=view.status,
+            input_path_degraded=self.input_path_degraded,
+            backend_health=backend_health,
+            late_2ms=self.late_2ms,
+            late_5ms=self.late_5ms,
+            late_10ms=self.late_10ms,
+            max_lateness_us=self.max_lateness_us,
+            notices=notice_state.notices,
         )
 
         if failed_releases > 0:

@@ -17,10 +17,10 @@ from textual.widgets import Static
 
 from sky_music.config import load_config, resolve_game_fps
 from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
-from sky_music.orchestration.native_models import STATUS_LABELS, PlaybackStatus
 from sky_music.ui.hud import format_duration
 from sky_music.ui.picker_theme import get_theme_preset
 from sky_music.ui.playback_notices import PlaybackNoticeLedger
+from sky_music.ui.playback_view_model import backend_view, build_playback_hud_view
 from sky_music.ui.text_render import (
     ansi_box,
     ansi_gradient_box,
@@ -179,19 +179,7 @@ class SnapshotRenderer:
             p95_us = 0
             stdev_ms = 0.0
 
-        snap = self.snapshot
-        active_keys = 0
-        stuck_keys = 0
-        keys_dropped = 0
-        chord_splits = 0
-        backend_status = "healthy"
-        if snap is not None and snap.backend_health is not None:
-            active_keys = snap.backend_health.active_count
-            stuck_keys = snap.backend_health.failed_release_count
-            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
-            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
-            if stuck_keys > 0:
-                backend_status = f"stuck:{stuck_keys}"
+        backend = backend_view(self.snapshot.backend_health if self.snapshot else None)
 
         return DebugStats(
             max_lateness_us=self.max_lateness_us,
@@ -201,28 +189,16 @@ class SnapshotRenderer:
             p50_ms=p50_us / 1000.0,
             p95_ms=p95_us / 1000.0,
             sigma_onset_ms=stdev_ms,
-            active_keys=active_keys,
-            stuck_keys=stuck_keys,
-            backend_status=backend_status,
-            keys_dropped=keys_dropped,
-            chord_split_events=chord_splits,
+            active_keys=backend.active_keys,
+            stuck_keys=backend.stuck_keys,
+            backend_status=backend.label,
+            keys_dropped=backend.keys_dropped,
+            chord_split_events=backend.chord_split_events,
         )
 
     def counters_snapshot(self) -> DebugStats:
         """Lightweight stats for non-debug display — avoids sorted() + variance."""
-        snap = self.snapshot
-        active_keys = 0
-        stuck_keys = 0
-        keys_dropped = 0
-        chord_splits = 0
-        backend_status = "healthy"
-        if snap is not None and snap.backend_health is not None:
-            active_keys = snap.backend_health.active_count
-            stuck_keys = snap.backend_health.failed_release_count
-            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
-            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
-            if stuck_keys > 0:
-                backend_status = f"stuck:{stuck_keys}"
+        backend = backend_view(self.snapshot.backend_health if self.snapshot else None)
         return DebugStats(
             max_lateness_us=self.max_lateness_us,
             late_2ms=self.late_2ms,
@@ -231,11 +207,11 @@ class SnapshotRenderer:
             p50_ms=0.0,
             p95_ms=0.0,
             sigma_onset_ms=0.0,
-            active_keys=active_keys,
-            stuck_keys=stuck_keys,
-            backend_status=backend_status,
-            keys_dropped=keys_dropped,
-            chord_split_events=chord_splits,
+            active_keys=backend.active_keys,
+            stuck_keys=backend.stuck_keys,
+            backend_status=backend.label,
+            keys_dropped=backend.keys_dropped,
+            chord_split_events=backend.chord_split_events,
         )
 
     def finish(self, message: str = "") -> None:
@@ -249,10 +225,6 @@ class SnapshotRenderer:
 
 _ANSI_RESET = "\033[0m"
 _ANSI_BOLD = "\033[1m"
-
-# Module-level constant — avoids re-creating this dict on every _playing_body() call (10 Hz).
-_STATUS_LABELS = STATUS_LABELS
-
 
 class PlaybackCard(Static):
     """In-place playback surface rendered as the legacy gradient HUD box.
@@ -675,40 +647,6 @@ class PlaybackCard(Static):
             chord_split_events=int(getattr(backend_health, "chord_split_events", 0) or 0),
         )
 
-        try:
-            header_label = _STATUS_LABELS[PlaybackStatus(status)]
-        except (KeyError, ValueError):
-            header_label = status.replace("_", " ").title()
-
-        session_line = (
-            f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  {accent}{self.hold_label}{_ANSI_RESET}"
-            f"  ·  tempo {accent}{self.tempo_scale:.2f}×{_ANSI_RESET}  ·  theme {accent}{self.theme_name}{_ANSI_RESET}"
-        )
-
-        total_str = format_duration(total)
-        current_str = format_duration(current)
-        remaining_str = format_duration(max(0.0, total - current))
-        time_text = f"{current_str} / {total_str}  ·  ETA {remaining_str}"
-
-        bar_width = max(10, width - 4 - visible_width(time_text) - 2)
-        fraction = current / max(total, 0.001)
-        filled = min(bar_width, round(fraction * bar_width))
-        bar = f"{accent}█{_ANSI_RESET}" * filled + f"{gray}░{_ANSI_RESET}" * (bar_width - filled)
-
-        song_title_line = f"♪ {_ANSI_BOLD}{truncate_cells(self.song_name, width - 8)}{_ANSI_RESET}"
-        song_progress_line = f"{bar}  {time_text}"
-
-        divider = f"{divider_c}{'─' * (width - 4)}{_ANSI_RESET}"
-        body = [session_line, divider, song_title_line, song_progress_line, divider]
-
-        if self.violations:
-            messages = ", ".join(v.message for v in self.violations)
-            body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
-        body.extend(
-            f"{yellow}{notice.message}{_ANSI_RESET}"
-            for notice in notice_state.persistent_notices + notice_state.runtime_notices
-        )
-
         if self.debug_mode:
             now = time.monotonic()
             if self._debug_stats_cache is None or (now - self._debug_stats_mono) >= 0.5:
@@ -717,18 +655,56 @@ class PlaybackCard(Static):
             stats = self._debug_stats_cache
         else:
             stats = self.renderer.counters_snapshot()
+        view = build_playback_hud_view(
+            current_seconds=current,
+            total_seconds=total,
+            song_name=self.song_name,
+            status=status,
+            input_path_degraded=degraded,
+            backend_health=backend_health,
+            late_2ms=stats.late_2ms,
+            late_5ms=stats.late_5ms,
+            late_10ms=stats.late_10ms,
+            max_lateness_us=stats.max_lateness_us,
+            p50_ms=stats.p50_ms,
+            p95_ms=stats.p95_ms,
+            sigma_onset_ms=stats.sigma_onset_ms,
+            notices=notice_state.notices,
+        )
+        session_line = (
+            f"{_ANSI_BOLD}{view.status_label}{_ANSI_RESET}  ·  {accent}{self.hold_label}{_ANSI_RESET}"
+            f"  ·  tempo {accent}{self.tempo_scale:.2f}×{_ANSI_RESET}  ·  theme {accent}{self.theme_name}{_ANSI_RESET}"
+        )
+        total_str = format_duration(view.total_seconds)
+        current_str = format_duration(view.current_seconds)
+        remaining_str = format_duration(view.eta_seconds)
+        time_text = f"{current_str} / {total_str}  ·  ETA {remaining_str}"
+        bar_width = max(10, width - 4 - visible_width(time_text) - 2)
+        filled = min(bar_width, round(view.progress_fraction * bar_width))
+        bar = f"{accent}█{_ANSI_RESET}" * filled + f"{gray}░{_ANSI_RESET}" * (bar_width - filled)
+        song_title_line = f"♪ {_ANSI_BOLD}{truncate_cells(view.song_name, width - 8)}{_ANSI_RESET}"
+        song_progress_line = f"{bar}  {time_text}"
+        divider = f"{divider_c}{'─' * (width - 4)}{_ANSI_RESET}"
+        body = [session_line, divider, song_title_line, song_progress_line, divider]
+        if self.violations:
+            messages = ", ".join(v.message for v in self.violations)
+            body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
+        body.extend(
+            f"{yellow}{notice.message}{_ANSI_RESET}"
+            for notice in notice_state.persistent_notices + notice_state.runtime_notices
+        )
         body.extend(f"{red}{notice.message}{_ANSI_RESET}" for notice in notice_state.backend_notices)
         backend = (
-            f"{red}stuck keys: {stats.stuck_keys}{_ANSI_RESET}"
-            if stats.stuck_keys > 0
+            f"{red}stuck keys: {view.backend.stuck_keys}{_ANSI_RESET}"
+            if not view.backend.healthy
             else f"{green}healthy{_ANSI_RESET}"
         )
         dropped_suffix = ""
-        if self.debug_mode or stats.keys_dropped > 0:
-            drop_color = red if stats.keys_dropped > 0 else gray
-            dropped_suffix = f"  ·  dropped: {drop_color}{stats.keys_dropped}{_ANSI_RESET}"
-            if self.debug_mode and stats.chord_split_events > 0:
-                dropped_suffix += f"  splits: {yellow}{stats.chord_split_events}{_ANSI_RESET}"
+        if self.debug_mode or view.backend.keys_dropped > 0:
+            drop_color = red if view.backend.keys_dropped > 0 else gray
+            dropped_suffix = f"  ·  dropped: {drop_color}{view.backend.keys_dropped}{_ANSI_RESET}"
+            if self.debug_mode and view.backend.chord_split_events > 0:
+                dropped_suffix += f"  splits: {yellow}{view.backend.chord_split_events}{_ANSI_RESET}"
 
         if status == "waiting_for_focus":
             status_line = f"{yellow}Playback has not started yet. Bring Sky window to foreground.{_ANSI_RESET}"
@@ -737,13 +713,13 @@ class PlaybackCard(Static):
             status_line = f"{tone}Playback is paused and tracked keys were released.{_ANSI_RESET}"
         elif self.debug_mode:
             status_line = (
-                f"backend {backend}  ·  late >2ms:{stats.late_2ms}  >5ms:{stats.late_5ms}  "
-                f">10ms:{stats.late_10ms}  ·  active keys: {stats.active_keys}{dropped_suffix}"
+                f"backend {backend}  ·  late >2ms:{view.timing.late_2ms}  >5ms:{view.timing.late_5ms}  "
+                f">10ms:{view.timing.late_10ms}  ·  active keys: {view.backend.active_keys}{dropped_suffix}"
             )
         else:
             status_line = (
-                f"backend {backend}  ·  late >5ms: {stats.late_5ms}  ·  "
-                f"active keys: {stats.active_keys}{dropped_suffix}"
+                f"backend {backend}  ·  late >5ms: {view.timing.late_5ms}  ·  "
+                f"active keys: {view.backend.active_keys}{dropped_suffix}"
             )
 
         if self.debug_mode:
