@@ -10,25 +10,26 @@ from __future__ import annotations
 import contextlib
 import json
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from sky_music.domain.scheduler_types import KeyAction
 from sky_music.layouts import SKY_15_SCAN_CODES
+from sky_music.orchestration.estimator_cache import load_estimator_state
 from sky_music.orchestration.native_models import (
+    LIVE_NATIVE_STATUSES,
     PLAYBACK_ERROR,
     PLAYBACK_FINISHED,
     PLAYBACK_QUIT,
     PLAYBACK_SHUTDOWN_TIMEOUT,
     PLAYBACK_SKIPPED,
+    TERMINAL_NATIVE_STATUSES,
     BackendHealth,
+    NativeDispatchError,
+    NativeSessionStatus,
     PlaybackOutcome,
-    PlaybackStatus,
     ProgressCounters,
+    parse_native_session_status,
 )
-
-
-class NativeDispatchError(RuntimeError):
-    """A controlled native worker failure after cleanup and telemetry capture."""
 
 
 class NativeBackendHealthProtocol(Protocol):
@@ -77,6 +78,9 @@ class NativeProgressSnapshotProtocol(Protocol):
     is_finished: bool
     is_paused: bool
     input_path_degraded: bool
+    sendinput_path_degraded: bool
+    bookkeeping_degraded: bool
+    wait_path_degraded: bool
     status: str
     @property
     def backend_health(self) -> NativeBackendHealthProtocol: ...
@@ -116,6 +120,13 @@ class RustDispatchRuntime:
     ) -> None:
         import sky_player_rs  # type: ignore[import-not-found]
 
+        native_info = dict(sky_player_rs.build_info())  # type: ignore[attr-defined]
+        estimator_state_json = load_estimator_state(
+            game_fps=int(game_fps),
+            native_build_commit=str(native_info.get("native_build_commit", "")),
+            native_abi=str(native_info.get("native_abi", "")),
+        )
+
         native_actions = (
             (
                 index,
@@ -126,15 +137,17 @@ class RustDispatchRuntime:
             )
             for index, action in enumerate(actions)
         )
+        session_config_type = cast(Any, sky_player_rs.SessionConfig)  # type: ignore[attr-defined]
         self._session = sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
             native_actions,
             list(SKY_15_SCAN_CODES),
-            config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            config=session_config_type(
                 game_fps=int(game_fps),
                 min_hold_us=min_hold_us,
                 require_focus=require_focus,
                 telemetry=telemetry_enabled,
                 profile="production",
+                estimator_state_json=estimator_state_json,
             ),
         )
         self._song_name = song_name
@@ -251,6 +264,12 @@ class RustDispatchRuntime:
         except ValueError as exc:
             raise NativeDispatchError(str(exc)) from exc
 
+    def _native_is_finished(self) -> bool:
+        try:
+            return bool(self._session.snapshot_lite().is_finished)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return False
+
     def run(self) -> tuple[str, dict[str, Any], dict[str, Any], str | None]:
         """Run supervisor polling until the native worker reaches a terminal state."""
         import time
@@ -261,28 +280,31 @@ class RustDispatchRuntime:
         live: NativeProgressSnapshotProtocol
         latest: dict[str, Any] = {}
         report: dict[str, Any] | None = None
+        next_render_at = 0.0
         try:
             self._set_initial_target()
             self._publish_focus()
             self._session.start()
             started = True
-            
-            live = self._session.snapshot_lite()
 
-            while not live.is_finished:
+            live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
+
+            while True:
+                if live.is_finished:
+                    break
+                native_status = parse_native_session_status(str(live.status))
+                if native_status not in LIVE_NATIVE_STATUSES:
+                    raise NativeDispatchError(
+                        f"unexpected live native session status: {native_status}"
+                    )
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
                 self._publish_focus()
                 self._session.heartbeat()
-                live = self._session.snapshot_lite()
-                try:
-                    PlaybackStatus(live.status)
-                except ValueError as exc:
-                    raise NativeDispatchError(
-                        f"unknown native playback status: {live.status}"
-                    ) from exc
+                live = cast(NativeProgressSnapshotProtocol, self._session.snapshot_lite())
 
-                if self._renderer is not None:
+                now = time.monotonic()
+                if self._renderer is not None and now >= next_render_at:
                     if hasattr(self._renderer, "update_counters_batch"):
                         self._renderer.update_counters_batch(
                             ProgressCounters(
@@ -314,8 +336,12 @@ class RustDispatchRuntime:
                         self._song_name,
                         status=status,
                         input_path_degraded=live.input_path_degraded,
+                        sendinput_path_degraded=live.sendinput_path_degraded,
+                        bookkeeping_degraded=live.bookkeeping_degraded,
+                        wait_path_degraded=live.wait_path_degraded,
                         backend_health=self._health(live.backend_health),
                     )
+                    next_render_at = now + (1.0 / 30.0)
                 time.sleep(self._sleep_s)
 
             joined = self._join_owned()
@@ -324,9 +350,11 @@ class RustDispatchRuntime:
             else:
                 report = dict(self._session.session_report())
                 latest = dict(report["snapshot"])
-                if latest.get("status") in {"panicked", "poisoned"}:
-                    detail = latest.get("terminal_error") or latest["status"]
-                    raise RuntimeError(f"native dispatch terminated: {detail}")
+                final_status = parse_native_session_status(str(latest.get("status")))
+                if final_status not in TERMINAL_NATIVE_STATUSES:
+                    raise NativeDispatchError(
+                        f"unexpected terminal native session status: {final_status}"
+                    )
                 raw_outcome = latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED
                 try:
                     outcome = PlaybackOutcome(str(raw_outcome))
@@ -355,16 +383,30 @@ class RustDispatchRuntime:
                 return outcome, latest, telemetry, None
             assert report is not None
             telemetry = json.loads(str(report["telemetry_json"]))
-            return outcome, latest, telemetry, str(report["estimator_state_json"])
+            estimator_state_json = str(report["estimator_state_json"])
+            final_status = parse_native_session_status(str(latest.get("status")))
+            if final_status in {
+                NativeSessionStatus.ERROR,
+                NativeSessionStatus.PANICKED,
+                NativeSessionStatus.POISONED,
+            }:
+                detail = latest.get("terminal_error") or final_status.value
+                raise NativeDispatchError(
+                    str(detail),
+                    snapshot=latest,
+                    telemetry=telemetry,
+                    estimator_state_json=estimator_state_json,
+                )
+            return outcome, latest, telemetry, estimator_state_json
         except BaseException:
-            if started:
+            if started and not self._native_is_finished():
                 with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._session.panic_release()
                 with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     self._session.quit()
-                if not joined:
-                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
-                        joined = self._join_owned()
+            if started and not joined:
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
+                    joined = self._join_owned()
             raise
         finally:
             if started and not joined:

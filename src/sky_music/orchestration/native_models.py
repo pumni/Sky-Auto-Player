@@ -7,6 +7,61 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+class NativeDispatchError(RuntimeError):
+    """A controlled native worker failure after cleanup and report capture."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot: Mapping[str, object] | None = None,
+        telemetry: Mapping[str, object] | None = None,
+        estimator_state_json: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.snapshot = snapshot
+        self.telemetry = telemetry
+        self.estimator_state_json = estimator_state_json
+
+
+class NativeSessionStatus(StrEnum):
+    """Lifecycle values produced by the Rust session boundary."""
+
+    READY = "ready"
+    PLAYING = "playing"
+    PAUSED = "paused"
+    FINISHED = "finished"
+    QUIT = "quit"
+    SKIPPED = "skipped"
+    ERROR = "error"
+    PANICKED = "panicked"
+    POISONED = "poisoned"
+
+
+LIVE_NATIVE_STATUSES = frozenset(
+    {NativeSessionStatus.PLAYING, NativeSessionStatus.PAUSED}
+)
+TERMINAL_NATIVE_STATUSES = frozenset(
+    {
+        NativeSessionStatus.FINISHED,
+        NativeSessionStatus.QUIT,
+        NativeSessionStatus.SKIPPED,
+        NativeSessionStatus.ERROR,
+        NativeSessionStatus.PANICKED,
+        NativeSessionStatus.POISONED,
+    }
+)
+
+
+def parse_native_session_status(raw: str) -> NativeSessionStatus:
+    """Parse the Rust lifecycle domain, never the UI presentation domain."""
+
+    try:
+        return NativeSessionStatus(raw)
+    except ValueError as exc:
+        raise NativeDispatchError(f"unknown native session status: {raw}") from exc
+
+
 class PlaybackOutcome(StrEnum):
     FINISHED = "finished"
     QUIT = "quit"

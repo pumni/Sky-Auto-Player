@@ -12,6 +12,7 @@ from sky_music.infrastructure.focus import (
     NoopFocusGuard,
     Win32SkyFocusGuard,
 )
+from sky_music.orchestration.estimator_cache import save_estimator_state
 from sky_music.orchestration.native_dispatch import (
     NativeDispatchError,
     RustDispatchRuntime,
@@ -117,10 +118,35 @@ class PlaybackEngine:
             poll_s=0.01,
             telemetry_enabled=self.telemetry.enabled,
         )
-        outcome, snapshot, native_telemetry, _estimator_state_json = runtime.run()
+        try:
+            outcome, snapshot, native_telemetry, estimator_state_json = runtime.run()
+        except NativeDispatchError as exc:
+            # The native supervisor has already joined and materialized the
+            # final report before raising a terminal worker error. Ingest it
+            # here so diagnostics are not lost on the error path.
+            if exc.snapshot is not None and exc.telemetry is not None:
+                snapshot = dict(exc.snapshot)
+                native_telemetry = dict(exc.telemetry)
+                self._last_snapshot = snapshot
+                self._input_path_degraded = bool(
+                    snapshot.get("input_path_degraded", False)
+                )
+                self._ingest_native_report(snapshot, native_telemetry)
+            raise
         self._last_snapshot = snapshot
         self._input_path_degraded = bool(snapshot.get("input_path_degraded", False))
         self._ingest_native_report(snapshot, native_telemetry)
+        if (
+            outcome == PLAYBACK_FINISHED
+            and estimator_state_json is not None
+            and snapshot.get("terminal_error") is None
+        ):
+            save_estimator_state(
+                estimator_state_json,
+                game_fps=self.game_fps,
+                native_build_commit=str(snapshot.get("native_build_commit", "")),
+                native_abi=str(snapshot.get("native_abi", "")),
+            )
         if outcome == PLAYBACK_ERROR:
             raise NativeDispatchError(
                 str(snapshot.get("terminal_error") or "native dispatch failed")
