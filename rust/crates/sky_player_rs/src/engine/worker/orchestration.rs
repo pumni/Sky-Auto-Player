@@ -374,10 +374,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     core.health = Some(WorkerHealthState {
         down_saturation_positive_streak: 0,
         up_saturation_positive_streak: 0,
-        send_duration_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
-        send_over_warn_count: 0,
-        input_path_warn_started_us: None,
-        input_path_healthy_started_us: None,
         send_pure_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
         send_pure_over_warn_count: 0,
         send_pure_warn_started_us: None,
@@ -1457,16 +1453,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 }
                 runtime.pending_pre_send_spin_us = 0;
                 record_input_path_health(
-                    bookkeeping_completed_us.saturating_sub(started_us),
-                    completed_effective,
-                    config.timing.input_path_warn_us,
-                    &mut health.send_duration_window,
-                    &mut health.send_over_warn_count,
-                    &mut health.input_path_warn_started_us,
-                    &mut health.input_path_healthy_started_us,
-                    &mut local_metrics.input_path_degraded,
-                );
-                record_input_path_health(
                     result.send_completed_us.saturating_sub(started_us),
                     completed_effective,
                     config.timing.input_path_warn_us,
@@ -1486,6 +1472,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     &mut health.bookkeeping_healthy_started_us,
                     &mut local_metrics.bookkeeping_degraded,
                 );
+                local_metrics.input_path_degraded =
+                    local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
                 let deferred_release = deferred_by_us > 0;
                 record_lateness(
                     signed_delta(completed_effective, scheduled_us),
@@ -2327,16 +2315,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         let bookkeeping_after_send_us =
                             bookkeeping_completed_us.saturating_sub(result_completed_us);
                         record_input_path_health(
-                            sender_duration_us.saturating_add(bookkeeping_after_send_us),
-                            completed_effective,
-                            config.timing.input_path_warn_us,
-                            &mut health.send_duration_window,
-                            &mut health.send_over_warn_count,
-                            &mut health.input_path_warn_started_us,
-                            &mut health.input_path_healthy_started_us,
-                            &mut local_metrics.input_path_degraded,
-                        );
-                        record_input_path_health(
                             sender_duration_us,
                             completed_effective,
                             config.timing.input_path_warn_us,
@@ -2356,6 +2334,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             &mut health.bookkeeping_healthy_started_us,
                             &mut local_metrics.bookkeeping_degraded,
                         );
+                        local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
+                            || local_metrics.bookkeeping_degraded;
                         record_lateness(
                             signed_delta(completed_effective, batch_scheduled_us),
                             false,

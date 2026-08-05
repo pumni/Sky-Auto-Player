@@ -67,3 +67,42 @@ pub struct EngineSnapshot {
     pub startup_ready: bool,
     pub startup_latency_us: Option<u64>,
 }
+
+/// Allocation-light frequent polling shape. It deliberately excludes final
+/// report maps, release provenance, estimator output, and build metadata.
+#[derive(Debug, Clone)]
+pub struct EngineProgressSnapshot {
+    pub elapsed_us: u64,
+    pub total_us: u64,
+    pub max_lateness_us: u64,
+    pub late_2ms: u64,
+    pub late_5ms: u64,
+    pub late_10ms: u64,
+    pub release_max_us: u64,
+    pub release_late_2ms: u64,
+    pub recent_latencies_us: Vec<i64>,
+    pub is_running: bool,
+    pub is_finished: bool,
+    pub is_paused: bool,
+    pub status: String,
+    pub has_terminal_error: bool,
+    pub active_count: usize,
+    pub possibly_active_count: usize,
+    pub failed_release_count: usize,
+    pub last_error: Option<String>,
+    pub keys_dropped: u64,
+    pub chord_split_events: u64,
+    pub sendinput_partial_events: u64,
+    pub sendinput_zero_progress_failures: u64,
+    pub chords_rejected: u64,
+    pub authored_conflict_events: u64,
+    pub authored_chords_rejected: u64,
+    pub authored_keys_rejected: u64,
+    pub keys_inserted_before_failure: u64,
+    pub keys_rolled_back: u64,
+    pub rollback_residue_keys: u64,
+    pub input_path_degraded: bool,
+    pub sendinput_path_degraded: bool,
+    pub bookkeeping_degraded: bool,
+    pub wait_path_degraded: bool,
+}

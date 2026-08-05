@@ -41,7 +41,7 @@ impl NativeDispatchSessionPy {
         let enable_event_wait = true;
         let enable_adaptive_spin = true;
         let spin_floor_us = 700;
-        let estimator_state_json = None;
+        let estimator_state_json = config.estimator_state_json.clone();
         let enable_adaptive_lead = true;
         let input_path_warn_us = 300;
         let strict_timing = parsed_profile.strict_timing();
@@ -93,7 +93,7 @@ impl NativeDispatchSessionPy {
                 mode: priority_mode,
             },
             estimator: EstimatorOptions {
-                state_json: estimator_state_json.map(str::to_string),
+                state_json: estimator_state_json,
                 enable_adaptive_lead,
             },
         })
@@ -292,7 +292,7 @@ impl NativeDispatchSessionPy {
     }
 
     fn snapshot_lite(&self) -> ProgressSnapshotPy {
-        ProgressSnapshotPy::from_snapshot(&self.session.snapshot())
+        ProgressSnapshotPy::from_snapshot(&self.session.snapshot_lite())
     }
 
     fn session_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {

@@ -11,8 +11,9 @@ class SessionConfig:
     target_hwnd: int
     telemetry: bool
     profile: PlaybackProfile
+    estimator_state_json: str | None
 
-    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., profile: PlaybackProfile = ...) -> None: ...
+    def __init__(self, *, game_fps: int, min_hold_us: int = ..., require_focus: bool = ..., target_hwnd: int = ..., telemetry: bool = ..., profile: PlaybackProfile = ..., estimator_state_json: str | None = ...) -> None: ...
 
 
 class BackendHealthSnapshot:
@@ -47,6 +48,9 @@ class ProgressSnapshot:
     is_finished: bool
     is_paused: bool
     input_path_degraded: bool
+    sendinput_path_degraded: bool
+    bookkeeping_degraded: bool
+    wait_path_degraded: bool
     status: str
     health: Literal["ok", "degraded", "error"]
     backend_health: BackendHealthSnapshot

@@ -344,6 +344,86 @@ impl NativeDispatchSession {
         }
     }
 
+    pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
+        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
+        let paused = self
+            .shared
+            .publication
+            .metrics
+            .is_paused
+            .load(Ordering::Relaxed);
+        let outcome = self
+            .shared
+            .lifecycle
+            .terminal_outcome
+            .load(Ordering::Acquire);
+        let status = match lifecycle {
+            LIFECYCLE_NEW => "ready",
+            LIFECYCLE_RUNNING if paused => "paused",
+            LIFECYCLE_RUNNING => "playing",
+            LIFECYCLE_FINISHED => match outcome {
+                OUTCOME_ERROR => "error",
+                OUTCOME_QUIT => "quit",
+                OUTCOME_SKIPPED => "skipped",
+                _ => "finished",
+            },
+            LIFECYCLE_POISONED
+                if self
+                    .shared
+                    .publication
+                    .metrics
+                    .panicked
+                    .load(Ordering::Acquire) =>
+            {
+                "panicked"
+            }
+            LIFECYCLE_POISONED => "poisoned",
+            _ => "invalid",
+        };
+        let local = self.shared.publication.metrics.snapshot.load();
+        EngineProgressSnapshot {
+            elapsed_us: local.elapsed_us,
+            total_us: local.total_us,
+            max_lateness_us: local.max_lateness_us,
+            late_2ms: local.late_2ms,
+            late_5ms: local.late_5ms,
+            late_10ms: local.late_10ms,
+            release_max_us: local.release_max_us,
+            release_late_2ms: local.release_late_2ms,
+            recent_latencies_us: local.recent_latencies.to_vec(),
+            is_running: lifecycle == LIFECYCLE_RUNNING,
+            is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
+            is_paused: paused,
+            status: status.to_string(),
+            has_terminal_error: self
+                .shared
+                .publication
+                .metrics
+                .terminal_error
+                .lock()
+                .is_some(),
+            active_count: local.active_count as usize,
+            possibly_active_count: local.possibly_active_count as usize,
+            failed_release_count: local.failed_release_count as usize,
+            last_error: self.shared.publication.metrics.last_error.lock().clone(),
+            keys_dropped: local.keys_dropped,
+            chord_split_events: local.chord_split_events,
+            sendinput_partial_events: local.sendinput_partial_events,
+            sendinput_zero_progress_failures: local.sendinput_zero_progress_failures,
+            chords_rejected: local.chords_rejected,
+            authored_conflict_events: local.authored_conflict_events,
+            authored_chords_rejected: local.authored_chords_rejected,
+            authored_keys_rejected: local.authored_keys_rejected,
+            keys_inserted_before_failure: local.keys_inserted_before_failure,
+            keys_rolled_back: local.keys_rolled_back,
+            rollback_residue_keys: local.rollback_residue_keys,
+            input_path_degraded: local.input_path_degraded,
+            sendinput_path_degraded: local.sendinput_path_degraded,
+            bookkeeping_degraded: local.bookkeeping_degraded,
+            wait_path_degraded: local.wait_path_degraded,
+        }
+    }
+
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
         let paused = self

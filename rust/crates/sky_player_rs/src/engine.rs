@@ -16,7 +16,7 @@ pub(crate) use config::{
     TelemetryOptions, TimingOptions, WaitOptions,
 };
 pub use session::NativeDispatchSession;
-pub use snapshot::EngineSnapshot;
+pub use snapshot::{EngineProgressSnapshot, EngineSnapshot};
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,
     TelemetryMode, TimingSemantics, WorkerMetricsLocal,

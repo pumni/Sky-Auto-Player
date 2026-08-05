@@ -1,4 +1,4 @@
-use crate::engine::EngineSnapshot;
+use crate::engine::EngineProgressSnapshot;
 use pyo3::prelude::*;
 
 #[pyclass(name = "BackendHealthSnapshot", frozen, skip_from_py_object)]
@@ -65,6 +65,12 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) input_path_degraded: bool,
     #[pyo3(get)]
+    pub(super) sendinput_path_degraded: bool,
+    #[pyo3(get)]
+    pub(super) bookkeeping_degraded: bool,
+    #[pyo3(get)]
+    pub(super) wait_path_degraded: bool,
+    #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
     pub(super) health: String,
@@ -73,8 +79,8 @@ pub(super) struct ProgressSnapshotPy {
 }
 
 impl ProgressSnapshotPy {
-    pub(super) fn from_snapshot(snapshot: &EngineSnapshot) -> Self {
-        let health = if snapshot.terminal_error.is_some() || snapshot.failed_release_count > 0 {
+    pub(super) fn from_snapshot(snapshot: &EngineProgressSnapshot) -> Self {
+        let health = if snapshot.has_terminal_error || snapshot.failed_release_count > 0 {
             "error"
         } else if snapshot.input_path_degraded {
             "degraded"
@@ -95,6 +101,9 @@ impl ProgressSnapshotPy {
             is_finished: snapshot.is_finished,
             is_paused: snapshot.is_paused,
             input_path_degraded: snapshot.input_path_degraded,
+            sendinput_path_degraded: snapshot.sendinput_path_degraded,
+            bookkeeping_degraded: snapshot.bookkeeping_degraded,
+            wait_path_degraded: snapshot.wait_path_degraded,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {
