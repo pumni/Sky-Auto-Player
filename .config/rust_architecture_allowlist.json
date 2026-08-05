@@ -15,6 +15,7 @@
     {"path":"rust/crates/sky_dispatch_win32/src/event.rs","rule":"unsafe_boundary","reason":"existing event Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/focus.rs","rule":"unsafe_boundary","reason":"existing focus Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"unsafe_boundary","reason":"existing physical keyboard Win32 seam","expires_phase":"Phase 12"},
+    {"path":"rust/crates/sky_dispatch_win32/src/input/packet.rs","rule":"unsafe_boundary","reason":"SendInput packet construction and syscall boundary remains isolated in the Win32 input module","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/mmcss.rs","rule":"unsafe_boundary","reason":"existing MMCSS Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/power.rs","rule":"unsafe_boundary","reason":"existing power Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/timer.rs","rule":"unsafe_boundary","reason":"existing timer Win32 seam","expires_phase":"Phase 12"},
@@ -32,6 +33,7 @@
     {"path":"rust/crates/sky_player_rs/src/engine/config.rs","rule":"context_fields","reason":"replace WorkerConfig parameter bag with validated options in Phase 8","expires_phase":"Phase 8"},
     {"path":"rust/crates/sky_player_rs/src/engine/shared.rs","rule":"context_fields","reason":"consolidate direct shared ownership in Phase 3","expires_phase":"Phase 3"},
     {"path":"rust/crates/sky_player_rs/src/engine.rs","rule":"pyo3_boundary","reason":"legacy Python root module; move FFI imports under explicit Python boundary","expires_phase":"Phase 9"},
-    {"path":"rust/crates/sky_player_rs/src/python.rs","rule":"pyo3_boundary","reason":"legacy Python root module; keep FFI migration explicit","expires_phase":"Phase 9"}
+    {"path":"rust/crates/sky_player_rs/src/python.rs","rule":"pyo3_boundary","reason":"legacy Python root module; keep FFI migration explicit","expires_phase":"Phase 9"},
+    {"path":"rust/crates/sky_player_rs/src/engine/telemetry/metrics.rs","rule":"unsafe_boundary","reason":"bounded dual-slot telemetry snapshot synchronization uses a reviewed UnsafeCell boundary","expires_phase":"Phase 12"}
   ]
 }

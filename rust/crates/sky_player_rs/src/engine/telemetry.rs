@@ -40,6 +40,7 @@ pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 7;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
+pub(crate) const TRACE_KIND_MIXED: u8 = 2;
 pub(crate) const TRACE_FLAG_SENT_FULL: u8 = 1 << 0;
 pub(crate) const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
 pub(crate) const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
@@ -291,5 +292,73 @@ impl TelemetryCollector {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        NativeTelemetrySummary, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_MIXED,
+        TRACE_KIND_UP, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+    };
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    fn record(kind: u8, requested: usize, sent: usize) -> RtTraceRecord {
+        RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 0,
+                kind,
+                outcome: trace_outcome_code("sent"),
+                polyphony: requested,
+                flags: TRACE_FLAG_SENT_FULL,
+                win32_error: 0,
+            },
+            TraceTiming {
+                authored_ticks: TimelineTicks::ZERO,
+                effective_deadline_ticks: TimelineTicks::ZERO,
+                wake_ticks: TimelineTicks::ZERO,
+                send_started_ticks: Some(TimelineTicks::from_raw(1)),
+                send_completed_ticks: Some(TimelineTicks::from_raw(2)),
+                bookkeeping_duration_us: 0,
+                completion_error_ticks: 0,
+                authored_completion_error_ticks: 0,
+                applied_lead_ticks: DurationTicks::ZERO,
+            },
+            TraceDelivery {
+                requested,
+                sent,
+                skipped: 0,
+                send_attempts: 1,
+            },
+        )
+        .expect("valid telemetry record")
+    }
+
+    #[test]
+    fn up_only_summary_is_not_counted_as_down() {
+        let record = record(TRACE_KIND_UP, 2, 2);
+        let mut summary = NativeTelemetrySummary::default();
+
+        summary.observe(&record);
+
+        assert_eq!(summary.down_count, 0);
+        assert_eq!(summary.up_count, 1);
+        assert_eq!(summary.requested_key_count, 2);
+        assert_eq!(summary.sent_key_count, 2);
+    }
+
+    #[test]
+    fn mixed_record_keeps_mixed_kind_and_physical_count() {
+        let record = record(TRACE_KIND_MIXED, 2, 2);
+        let mut summary = NativeTelemetrySummary::default();
+
+        summary.observe(&record);
+
+        assert_eq!(record.kind, TRACE_KIND_MIXED);
+        assert_eq!(record.requested_count, 2);
+        assert_eq!(record.sent_count, 2);
+        assert_eq!(summary.dispatch_count, 1);
+        assert_eq!(summary.requested_key_count, 2);
+        assert_eq!(summary.sent_key_count, 2);
     }
 }

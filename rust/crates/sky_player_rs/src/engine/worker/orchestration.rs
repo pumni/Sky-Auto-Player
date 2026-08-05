@@ -28,6 +28,7 @@ use super::{
     signed_timeline_delta_ticks, suspend_live_input, target_stamp_still_current,
     update_estimator_after_send_class, wait_failure_message, wait_for_next_boundary,
 };
+use crate::engine::telemetry::TRACE_KIND_MIXED;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -1947,6 +1948,19 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             break;
                         }
 
+                        let trace_kind = match prepared_batch.packet_kind {
+                            Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => {
+                                TRACE_KIND_UP
+                            }
+                            Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => {
+                                TRACE_KIND_DOWN
+                            }
+                            Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed) => {
+                                TRACE_KIND_MIXED
+                            }
+                            None => TRACE_KIND_DOWN,
+                        };
+
                         let (
                             result_started_ticks,
                             result_completed_us,
@@ -2239,7 +2253,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             "strict_completion_slo_exceeded"
                         } else if result_chord_integrity_lost {
                             "chord_integrity_lost"
-                        } else if result_sent.len() == scan_batch.len() {
+                        } else if packet_masks.is_some_and(|_| result_success)
+                            || (packet_masks.is_none() && result_sent.len() == scan_batch.len())
+                        {
                             "sent"
                         } else {
                             "partial_note_on"
@@ -2248,7 +2264,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             || result_retried_after_zero_progress
                             || result_chord_integrity_lost;
                         let mut trace_flags = 0;
-                        if result_sent.len() == scan_batch.len() {
+                        let send_completed_fully = packet_masks.is_some_and(|_| result_success)
+                            || (packet_masks.is_none() && result_sent.len() == scan_batch.len());
+                        if send_completed_fully {
                             trace_flags |= TRACE_FLAG_SENT_FULL;
                         }
                         if recovered_retry_late || result_chord_integrity_lost {
@@ -2261,7 +2279,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             RtTraceRecord::dispatched(
                                 TraceContext {
                                     event_index: batch_source_action_index,
-                                    kind: TRACE_KIND_DOWN,
+                                    kind: trace_kind,
                                     outcome: trace_outcome_code(down_outcome),
                                     polyphony: batch_intent_count,
                                     flags: trace_flags,
@@ -2282,7 +2300,11 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 },
                                 TraceDelivery {
                                     requested: batch_intent_count,
-                                    sent: result_sent.len(),
+                                    sent: if packet_masks.is_some() && result_success {
+                                        batch_intent_count
+                                    } else {
+                                        result_sent.len()
+                                    },
                                     skipped: result_skipped_duplicates.len(),
                                     send_attempts: usize::from(result_send_attempts),
                                 },

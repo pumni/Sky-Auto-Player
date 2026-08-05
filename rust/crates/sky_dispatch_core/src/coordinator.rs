@@ -267,14 +267,14 @@ mod tests {
             RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
 
         let (first, _) = coordinator
-            .pop_next_due_authored(0, 2_000)
+            .pop_next_due_authored(0, 500)
             .expect("first action is due");
         assert_eq!(first.scheduled_us, 0);
-        assert_eq!(coordinator.next_authored_us(2_000), Some(1_000));
-        assert!(coordinator.pop_next_due_authored(0, 2_000).is_none());
+        assert_eq!(coordinator.next_authored_us(500), Some(500));
+        assert!(coordinator.pop_next_due_authored(0, 500).is_none());
 
         let (second, _) = coordinator
-            .pop_next_due_authored(1_000, 2_000)
+            .pop_next_due_authored(500, 500)
             .expect("second action keeps its authored ordering");
         assert_eq!(second.scheduled_us, 1_000);
     }
@@ -620,6 +620,120 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(following.effective_scheduled_ticks.as_u64(), 220);
+    }
+
+    #[test]
+    fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16].into(),
+                    reason: "first chord".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "release one".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16].into(),
+                    reason: "release two".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid up-only packet schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 100, 0, TimelineTicks::from_raw);
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(20))
+            .unwrap();
+
+        let lead = DurationTicks::from_raw(50);
+        assert_eq!(
+            coordinator.next_authored_ticks(lead).unwrap(),
+            Some(TimelineTicks::from_raw(120))
+        );
+        assert!(
+            coordinator
+                .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
+                .unwrap()
+                .is_none()
+        );
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.packet_kind, Some(PhysicalPacketKind::UpOnly));
+    }
+
+    #[test]
+    fn mixed_release_floor_is_not_reduced_by_dispatch_lead() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "first".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16].into(),
+                    reason: "retrigger".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "release".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid mixed packet schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 100, 0, TimelineTicks::from_raw);
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(20))
+            .unwrap();
+
+        let lead = DurationTicks::from_raw(50);
+        assert_eq!(
+            coordinator.next_authored_ticks(lead).unwrap(),
+            Some(TimelineTicks::from_raw(120))
+        );
+        assert!(
+            coordinator
+                .prepare_next_due_authored(TimelineTicks::from_raw(119), lead)
+                .unwrap()
+                .is_none()
+        );
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(120), lead)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.packet_kind, Some(PhysicalPacketKind::Mixed));
     }
 
     #[test]
@@ -1855,19 +1969,18 @@ impl RuntimeDispatchCoordinator {
                 "packet id does not fit in usize".to_string(),
             ))
         })?;
-        let effective = self.packet_effective_deadline_ticks(packet_index)?;
-        if dispatch_lead == DurationTicks::ZERO || self.early_pop_blocked(batch) {
-            return Ok(Some(effective));
-        }
-        let effective_lead = if effective >= TimelineTicks::from_raw(dispatch_lead.as_u64()) {
-            dispatch_lead
-        } else {
-            DurationTicks::ZERO
-        };
-        Ok(Some(effective.checked_sub_duration(effective_lead)?))
+        let effective = self.packet_effective_deadline_ticks(
+            packet_index,
+            if self.early_pop_blocked(batch) {
+                DurationTicks::ZERO
+            } else {
+                dispatch_lead
+            },
+        )?;
+        Ok(Some(effective))
     }
 
-    /// Return the effective authored target for one physical packet.
+    /// Return the next dispatch deadline for one physical packet.
     ///
     /// A packet containing releases cannot be dispatched before the latest
     /// sender-side minimum-hold floor owned by its physical Up mask.  Waiting
@@ -1875,6 +1988,7 @@ impl RuntimeDispatchCoordinator {
     pub fn packet_effective_deadline_ticks(
         &self,
         packet_index: usize,
+        dispatch_lead: DurationTicks,
     ) -> Result<TimelineTicks, CoordinatorError> {
         let packet = self
             .schedule
@@ -1914,33 +2028,34 @@ impl RuntimeDispatchCoordinator {
         // hold floor.  Physical packets (mixed or multi-batch) must gate the
         // transaction before it reaches SendInput.
         let needs_release_gate = packet.down_mask != 0 || packet.batch_count > 1;
-        let mut release_gate = TimelineTicks::ZERO;
-        if !needs_release_gate {
-            return Ok(authored);
-        }
-        for compact in up_intents {
-            let generation_id = compact.generation_id();
-            if generation_id == NO_GENERATION_ID {
-                continue;
+        let mut release_not_before = TimelineTicks::ZERO;
+        if needs_release_gate {
+            for compact in up_intents {
+                let generation_id = compact.generation_id();
+                if generation_id == NO_GENERATION_ID {
+                    continue;
+                }
+                let slot = compact.key_slot();
+                let Some(active) = self.active_for_slot(slot) else {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "packet release has no active generation".to_string(),
+                        ),
+                    ));
+                };
+                if active.generation_id != generation_id {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "packet release generation does not own its key slot".to_string(),
+                        ),
+                    ));
+                }
+                release_not_before = release_not_before.max(active.release_not_before_ticks);
             }
-            let slot = compact.key_slot();
-            let Some(active) = self.active_for_slot(slot) else {
-                return Err(CoordinatorError::Invariant(
-                    CoordinatorInvariantError::Accounting(
-                        "packet release has no active generation".to_string(),
-                    ),
-                ));
-            };
-            if active.generation_id != generation_id {
-                return Err(CoordinatorError::Invariant(
-                    CoordinatorInvariantError::Accounting(
-                        "packet release generation does not own its key slot".to_string(),
-                    ),
-                ));
-            }
-            release_gate = release_gate.max(active.release_not_before_ticks);
         }
-        Ok(authored.max(release_gate))
+        let lead_deadline =
+            TimelineTicks::from_raw(authored.as_u64().saturating_sub(dispatch_lead.as_u64()));
+        Ok(lead_deadline.max(release_not_before))
     }
 
     /// Polyphony of the next authored down batch, used to select its lead
@@ -2464,7 +2579,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let mut authored = self.effective_batch_scheduled_ticks(index)?;
+        let authored = self.effective_batch_scheduled_ticks(index)?;
         if self.frame_period_ticks != DurationTicks::ZERO
             && now > authored
             && now
@@ -2473,16 +2588,16 @@ impl RuntimeDispatchCoordinator {
         {
             let late = now.checked_duration_since(authored)?;
             self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(late)?;
-            authored = now;
         }
-        authored = authored.max(self.packet_effective_deadline_ticks(packet_index)?);
-        let effective_lead = if authored >= TimelineTicks::from_raw(dispatch_lead.as_u64()) {
-            dispatch_lead
-        } else {
-            DurationTicks::ZERO
-        };
-        let deadline = authored.checked_sub_duration(effective_lead)?;
-        if deadline > now || (authored > now && self.early_pop_blocked(batch)) {
+        let effective_scheduled_ticks =
+            self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
+        let deadline = self.packet_effective_deadline_ticks(packet_index, dispatch_lead)?;
+        let effective_lead = DurationTicks::from_raw(
+            effective_scheduled_ticks
+                .as_u64()
+                .saturating_sub(deadline.as_u64()),
+        );
+        if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(batch)) {
             return Ok(None);
         }
         let packet_kind = match physical_packet_kind(packet.up_mask, packet.down_mask) {
@@ -2511,7 +2626,7 @@ impl RuntimeDispatchCoordinator {
         };
         Ok(Some(PreparedBatch {
             index,
-            effective_scheduled_ticks: authored,
+            effective_scheduled_ticks,
             effective_lead_ticks: effective_lead,
             packet_index,
             packet_batch_count: usize::from(packet.batch_count),
