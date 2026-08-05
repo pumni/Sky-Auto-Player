@@ -906,43 +906,21 @@ class PickerScreen(Screen[SongPickerResult]):
         table.clear()
         self._row_meta_sig.clear()
 
-        # Chunked viewport materialization
-        self._render_chunk_idx = 0
-        self._render_chunk_size = 50
-        self._render_previous_row = previous_row
+        with self.app.batch_update():
+            for choice in self.filtered:
+                row_cells = ["", self._title_cell(choice), ""]
+                if self.show_notes:
+                    row_cells.append("")
+                if self.show_risk:
+                    row_cells.append("")
+                if self.show_suggested:
+                    row_cells.append("")
+                table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
 
-        # Render first chunk immediately for fast first paint and test compatibility
-        self._render_next_chunk()
-        
-        if getattr(self, "_render_chunk_idx", 0) < len(self.filtered):
-            self._render_timer = self.set_interval(0.01, self._render_next_chunk)  # type: ignore[attr-defined]
-
-    def _render_next_chunk(self) -> None:
-        table = self.app.query_one("#songs", SongTable)
-        start = getattr(self, "_render_chunk_idx", 0)
-        chunk_size = getattr(self, "_render_chunk_size", 50)
-        end = min(start + chunk_size, len(self.filtered))
-        
-        for i in range(start, end):
-            choice = self.filtered[i]
-            row_cells = ["", self._title_cell(choice), ""]
-            if self.show_notes:
-                row_cells.append("")
-            if self.show_risk:
-                row_cells.append("")
-            if self.show_suggested:
-                row_cells.append("")
-            table.add_row(*row_cells, key=str(choice.path))  # type: ignore[arg-type]
-
-        self._render_chunk_idx = end  # type: ignore[attr-defined]
-        
-        if self._render_chunk_idx >= len(self.filtered):  # type: ignore[attr-defined]
-            if getattr(self, "_render_timer", None) is not None:
-                self._render_timer.stop()  # type: ignore[attr-defined]
-                self._render_timer = None
-            if self.filtered:
-                table.move_cursor(row=min(getattr(self, "_render_previous_row", 0), len(self.filtered) - 1), column=0)
-            self.refresh_metadata_rows()
+        if self.filtered:
+            table.move_cursor(row=min(previous_row, len(self.filtered) - 1), column=0)
+            
+        self.refresh_metadata_rows()
 
     def refresh_metadata_rows(self) -> None:
         """Refresh metadata cells for the visible rows only.
