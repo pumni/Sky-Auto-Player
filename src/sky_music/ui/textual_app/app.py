@@ -130,7 +130,9 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         # Playback state machine
         self.playback_mode = PlaybackMode.PICKER
+        self.calibration_active = False
         self._risk_decisions: tuple[PendingRiskDecision, ...] = ()
+
         self._risk_index = 0
         self._risk_plan: PlaybackPlan | None = None
         self._risk_picker_result: SongPickerResult | None = None
@@ -620,9 +622,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
     # ── Event Handlers ──────────────────────────────────────────────
 
     def on_key(self, event: events.Key) -> None:
+        if self.calibration_active:
+            event.stop()
+            event.prevent_default()
+            return
         if self.handle_playback_card_key(event.key):
             event.stop()
             return
+
 
 
 

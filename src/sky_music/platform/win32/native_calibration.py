@@ -17,10 +17,29 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sky_music.infrastructure.calibration_loader import MIN_CALIBRATION_SAMPLE_COUNT
+from sky_music.infrastructure.calibration_loader import (
+    MIN_CALIBRATION_SAMPLE_COUNT,
+    CalibrationQuantiles,
+    parse_calibration_cache_summary,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedCalibrationResult:
+    margin_us: int
+    source: str
+    sample_count: int
+    down_us: CalibrationQuantiles
+    up_us: CalibrationQuantiles
+    cache_path: Path
+    evidence_kind: str
+    source_git_sha: str
+    native_build_id: str
+
 
 SUPPORTED_NATIVE_CALIBRATION_VERSION = 8
 SUPPORTED_MEASUREMENT_PROTOCOL_VERSION = 3
@@ -2378,11 +2397,44 @@ def run_native_calibration(
     return result
 
 
+def run_published_native_calibration(
+    *,
+    output_path: Path | str | None = None,
+    cache_path: Path | str = ".cache/input_latency.json",
+    timeout_seconds: float | None = None,
+) -> PublishedCalibrationResult:
+    """Run native quick calibration, write artifacts, and return typed publication result."""
+    raw_result = run_native_calibration(
+        mode="quick",
+        output_path=output_path,
+        cache_path=cache_path,
+        timeout_seconds=timeout_seconds,
+    )
+    compatible_cache = _legacy_cache(raw_result)
+    summary = parse_calibration_cache_summary(compatible_cache)
+    target_cache_path = Path(cache_path)
+    return PublishedCalibrationResult(
+        margin_us=summary.margin_us,
+        source=summary.source,
+        sample_count=summary.sample_count,
+        down_us=summary.down_us,
+        up_us=summary.up_us,
+        cache_path=target_cache_path,
+        evidence_kind=str(raw_result.get("evidence_kind", "injected_raw_input_delivery_proxy")),
+        source_git_sha=str(raw_result.get("source_git_sha", "")),
+        native_build_id=str(raw_result.get("native_build_id", "")),
+    )
+
+
 __all__ = [
+    "CalibrationQuantiles",
     "NativeCalibrationError",
+    "PublishedCalibrationResult",
     "calibration_bucket_keys",
     "finalize_native_calibration",
     "run_diagnostic_calibration",
     "run_full_calibration",
     "run_native_calibration",
+    "run_published_native_calibration",
 ]
+

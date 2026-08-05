@@ -136,14 +136,21 @@ class OptionModal(PickerModal[object | None]):
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
             event.stop()
+            event.prevent_default()
             self.dismiss(None)
-        elif event.key == "enter":
+            return
+
+        if event.key == "enter":
             event.stop()
+            event.prevent_default()
             options = self.query_one("#modal-options", OptionList)
             index = options.highlighted
             if index is None:
                 return
             self.dismiss(self.options[index].value)
+            return
+
+        super().on_key(event)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         event.stop()
@@ -154,6 +161,33 @@ class OptionModal(PickerModal[object | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class CalibrationProgressModal(PickerModal[None]):
+    """Modal displayed while input latency calibration is actively running."""
+
+    BINDINGS: list[tuple[str, str, str]] = []
+
+    def __init__(self, *, theme_name: str = "aurora") -> None:
+        PickerModal.__init__(
+            self,
+            "Input Latency Calibration",
+            [],
+            theme_name=theme_name,
+        )
+
+    def compose_modal_content(self) -> ComposeResult:
+        text = (
+            "Input latency calibration is running.\n\n"
+            "Keep the separate calibration window focused.\n"
+            "Keyboard commands are temporarily disabled."
+        )
+        yield Static(text, id="modal-info", markup=False)
+
+    def on_key(self, event: events.Key) -> None:
+        event.stop()
+        event.prevent_default()
+
 
 
 class CommandModal(PickerModal[str | None]):

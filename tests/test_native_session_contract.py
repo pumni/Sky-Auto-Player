@@ -27,9 +27,10 @@ def test_production_module_exposes_only_native_session_surface() -> None:
 def test_session_config_rejects_test_profile() -> None:
     with pytest.raises(
         ValueError,
-        match="available only to Rust test support",
+        match=r"profile must be '(production|strict_timing_diagnostic)'",
     ):
         sky_player_rs.SessionConfig(game_fps=60, profile="mock_test")  # type: ignore[attr-defined]
+
 
 
 def test_session_config_validates_target_and_exposes_user_fields() -> None:

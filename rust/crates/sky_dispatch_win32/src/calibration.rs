@@ -113,6 +113,15 @@ pub enum CalibrationError {
         win32_error: Option<u32>,
     },
 
+    #[error("failed to acquire foreground for calibration window within timeout")]
+    ForegroundAcquireFailed,
+
+    #[error("calibration window lost foreground focus during measurement")]
+    ForegroundLost,
+
+    #[error("calibration window was closed by user or system")]
+    CalibrationWindowClosed,
+
     #[error("keyboard cleanup could not be verified; stuck keys: {stuck_keys:?}")]
     CleanupFailed { stuck_keys: Vec<u16> },
 
@@ -121,6 +130,7 @@ pub enum CalibrationError {
         report: Box<CalibrationFailureReport>,
     },
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationFailureReport {
@@ -692,12 +702,52 @@ struct SharedCalibState {
     window_ready: bool,
     /// Set to signal the pump thread to exit gracefully (checked on resume).
     should_exit: bool,
+    window_closed: bool,
+    foreground_lost: bool,
     /// HWND of the calibration window (as `isize`).
     hwnd: isize,
     clock_failed: bool,
     raw_input_restore_failed: bool,
     pump_thread_failed: bool,
 }
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FOREGROUND_OVERRIDE: std::cell::RefCell<Option<Box<dyn Fn(isize) -> bool + Send + Sync>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_foreground_override<F: Fn(isize) -> bool + Send + Sync + 'static>(f: Option<F>) {
+    TEST_FOREGROUND_OVERRIDE.with(|cell| {
+        *cell.borrow_mut() = f.map(|func| Box::new(func) as Box<dyn Fn(isize) -> bool + Send + Sync>);
+    });
+}
+
+pub fn check_foreground_owned(hwnd: isize) -> bool {
+    #[cfg(test)]
+    {
+        let overridden = TEST_FOREGROUND_OVERRIDE.with(|cell| {
+            cell.borrow().as_ref().map(|f| f(hwnd))
+        });
+        if let Some(res) = overridden {
+            return res;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if hwnd == 0 {
+            return false;
+        }
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == (hwnd as windows_sys::Win32::Foundation::HWND)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 
 // ─── Platform-specific implementation ────────────────────────────────────────
 
@@ -713,12 +763,16 @@ mod platform {
         GetRawInputData, GetRegisteredRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
         RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RegisterRawInputDevices,
     };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        HWND_MESSAGE, MSG, PostMessageW, RegisterClassExW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_INPUT, WM_USER, WNDCLASSEXW,
-        WS_OVERLAPPEDWINDOW,
+        MSG, PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage,
+        WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
     };
+
+
+
+
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
     const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
@@ -883,6 +937,16 @@ mod platform {
                 }
                 0
             }
+            WM_CLOSE | WM_DESTROY => {
+                let (lock, cvar) = ctx.shared.as_ref();
+                if let Ok(mut guard) = lock.lock() {
+                    guard.window_closed = true;
+                    guard.should_exit = true;
+                    cvar.notify_all();
+                }
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+                0
+            }
             WM_CALIB_EXIT => {
                 // SAFETY: PostQuitMessage is safe to call from within a window
                 // procedure.
@@ -890,21 +954,15 @@ mod platform {
                 0
             }
             WM_CALIB_ACTIVATE => {
-                // Trigger a SetWindowPos to flush any pending messages.
-                // SAFETY: hwnd is a valid live window handle.
                 unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        HWND_MESSAGE,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
                 };
                 0
             }
+
+
             _ => {
                 // SAFETY: forwarding to the default handler is always safe.
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -948,29 +1006,33 @@ mod platform {
         let atom = unsafe { RegisterClassExW(&wc) };
         if atom == 0 {
             let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-            let (lock, _cvar) = shared.as_ref();
-            if let Ok(mut g) = lock.lock() {
-                g.window_ready = true; // signal failure with hwnd = 0
-                drop(g);
+            if err != windows_sys::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS {
+                let (lock, _cvar) = shared.as_ref();
+                if let Ok(mut g) = lock.lock() {
+                    g.window_ready = true; // signal failure with hwnd = 0
+                    drop(g);
+                }
+                eprintln!("[calibration] RegisterClassExW failed: {err}");
+                return;
             }
-            eprintln!("[calibration] RegisterClassExW failed: {err}");
-            return;
         }
 
-        let window_name: Vec<u16> = "SkyCalib\0".encode_utf16().collect();
-        // SAFETY: the class name and window name are NUL-terminated UTF-16 slices
-        // valid for the duration of the call.
+
+        let window_name: Vec<u16> = "Sky Auto Player — Input Latency Calibration\0"
+            .encode_utf16()
+            .collect();
+        // SAFETY: top-level window for calibration foreground ownership.
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
                 class_name.as_ptr(),
                 window_name.as_ptr(),
                 WS_OVERLAPPEDWINDOW,
-                0,
-                0,
-                1,
-                1,
-                HWND_MESSAGE,
+                100,
+                100,
+                520,
+                180,
+                std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null(),
@@ -986,6 +1048,12 @@ mod platform {
             eprintln!("[calibration] CreateWindowExW failed: {err}");
             return;
         }
+
+        unsafe {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+
+
 
         // Register Raw Input for keyboard on this window.
         let rid = RAWINPUTDEVICE {
@@ -1078,12 +1146,12 @@ mod platform {
     // ── CalibrationSession ────────────────────────────────────────────────────
 
     pub struct CalibrationSession {
-        shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
+        pub(crate) shared: Arc<(Mutex<SharedCalibState>, Condvar)>,
         hwnd: isize,
         pump_thread: Option<std::thread::JoinHandle<()>>,
         qpc_clock: QpcClock,
         next_sequence: u32,
-        possibly_active_mask: u16,
+        pub(crate) possibly_active_mask: u16,
         last_send_completed_ticks: Option<QpcTicks>,
         measurement_deadline: Option<QpcTicks>,
     }
@@ -1113,6 +1181,8 @@ mod platform {
                 active_sequence: None,
                 window_ready: false,
                 should_exit: false,
+                window_closed: false,
+                foreground_lost: false,
                 hwnd: 0,
                 clock_failed: false,
                 raw_input_restore_failed: false,
@@ -1154,7 +1224,7 @@ mod platform {
                 hwnd
             };
 
-            Ok(Self {
+            let mut session = Self {
                 shared,
                 hwnd,
                 pump_thread: Some(handle),
@@ -1163,8 +1233,75 @@ mod platform {
                 possibly_active_mask: 0,
                 last_send_completed_ticks: None,
                 measurement_deadline: None,
-            })
+            };
+
+            if let Err(err) = session.acquire_foreground(Duration::from_secs(5)) {
+                let shared = Arc::clone(&session.shared);
+                let hwnd = session.hwnd;
+                if let Some(handle) = session.pump_thread.take() {
+                    stop_pump_on_startup_failure(&shared, hwnd, handle);
+                }
+                return Err(err);
+            }
+
+            Ok(session)
         }
+
+        pub fn acquire_foreground(&mut self, timeout: Duration) -> Result<(), CalibrationError> {
+            let hwnd = self.hwnd as HWND;
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
+                SetFocus(hwnd);
+            }
+
+            let start = std::time::Instant::now();
+            let effective_timeout = if cfg!(test) {
+                Duration::from_millis(50)
+            } else {
+                timeout
+            };
+            while start.elapsed() < effective_timeout {
+                if check_foreground_owned(self.hwnd) {
+                    return Ok(());
+                }
+                unsafe {
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if check_foreground_owned(self.hwnd) {
+                Ok(())
+            } else {
+                Err(CalibrationError::ForegroundAcquireFailed)
+            }
+        }
+
+
+        pub fn ensure_foreground_owned(&mut self) -> Result<(), CalibrationError> {
+            self.ensure_budget()?;
+            let (lock, _cvar) = self.shared.as_ref();
+            let guard = lock.lock().map_err(|_| CalibrationError::StateLockFailed)?;
+            if guard.window_closed || guard.should_exit {
+                return Err(CalibrationError::CalibrationWindowClosed);
+            }
+            if guard.foreground_lost {
+                return Err(CalibrationError::ForegroundLost);
+            }
+            drop(guard);
+
+            if !check_foreground_owned(self.hwnd) {
+                let (lock, _cvar) = self.shared.as_ref();
+                if let Ok(mut g) = lock.lock() {
+                    g.foreground_lost = true;
+                }
+                return Err(CalibrationError::ForegroundLost);
+            }
+            Ok(())
+        }
+
 
         pub fn set_measurement_deadline(&mut self, deadline: QpcTicks) {
             self.measurement_deadline = Some(deadline);
@@ -1233,7 +1370,8 @@ mod platform {
             self.ensure_budget()
         }
 
-        fn cleanup_keyboard(&mut self) -> CleanupOutcome {
+        pub(crate) fn cleanup_keyboard(&mut self) -> CleanupOutcome {
+
             let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
             let expected = attempted.len() as u32;
             let mut cleanup_success = false;
@@ -1276,7 +1414,8 @@ mod platform {
             key_up: bool,
             receipt_timeout: Duration,
         ) -> Result<CalibrationSample, CalibrationError> {
-            self.ensure_budget()?;
+            self.ensure_foreground_owned()?;
+
             let n = scan_codes.len();
             if n == 0 || n > 15 {
                 return Err(CalibrationError::PolyphonyTooLarge(n));
@@ -3022,4 +3161,76 @@ mod tests {
             Err(CalibrationError::ClockFailure)
         ));
     }
+
+    #[cfg(windows)]
+    use platform::CalibrationSession;
+
+    #[test]
+    #[cfg(windows)]
+    fn no_send_before_foreground_acquired() {
+        set_test_foreground_override(Some(|_| false));
+        let res = CalibrationSession::open();
+        assert!(matches!(res, Err(CalibrationError::ForegroundAcquireFailed)));
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn foreground_loss_aborts_before_next_send() {
+        set_test_foreground_override(Some(|_| true));
+        let mut session = CalibrationSession::open().expect("session open");
+        set_test_foreground_override(Some(|_| false));
+        let res = session.ensure_foreground_owned();
+        assert!(matches!(res, Err(CalibrationError::ForegroundLost)));
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn foreground_loss_still_runs_emergency_cleanup() {
+        set_test_foreground_override(Some(|_| true));
+        let mut session = CalibrationSession::open().expect("session open");
+        session.possibly_active_mask = 0b11;
+        set_test_foreground_override(Some(|_| false));
+        assert!(session.ensure_foreground_owned().is_err());
+        let outcome = session.cleanup_keyboard();
+        assert!(outcome.cleanup_attempted);
+        assert_eq!(session.possibly_active_mask, 0);
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn closed_window_cancels_calibration() {
+        set_test_foreground_override(Some(|_| true));
+        let mut session = CalibrationSession::open().expect("session open");
+        {
+            let mut guard = session.shared.0.lock().unwrap();
+            guard.window_closed = true;
+        }
+        let res = session.ensure_foreground_owned();
+        assert!(matches!(res, Err(CalibrationError::CalibrationWindowClosed)));
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn foreground_check_is_outside_qpc_measurement_boundary() {
+        set_test_foreground_override(Some(|_| true));
+        let mut session = CalibrationSession::open().expect("session open");
+        let check_res = session.ensure_foreground_owned();
+        assert!(check_res.is_ok());
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn successful_run_requires_foreground_ownership() {
+        set_test_foreground_override(Some(|_| true));
+        let mut session = CalibrationSession::open().expect("session open");
+        assert!(session.ensure_foreground_owned().is_ok());
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+    }
+
 }
+

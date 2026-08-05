@@ -922,15 +922,27 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
     import sky_music.platform.win32.native_calibration as calibration_module
     harness_called = False
 
-    def dummy_harness():
+    from pathlib import Path
+    from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
+    from sky_music.platform.win32.native_calibration import PublishedCalibrationResult
+
+    def dummy_harness(*args, **kwargs):
         nonlocal harness_called
         harness_called = True
-        return {
-            "down_us": {"p50": 100, "p90": 200, "p99": 300},
-            "up_us": {"p50": 100, "p90": 200, "p99": 300},
-        }
+        return PublishedCalibrationResult(
+            margin_us=800,
+            source="device_cache",
+            sample_count=20,
+            down_us=CalibrationQuantiles(100, 200, 300),
+            up_us=CalibrationQuantiles(100, 200, 300),
+            cache_path=Path(".cache/input_latency.json"),
+            evidence_kind="injected_raw_input_delivery_proxy",
+            source_git_sha="0" * 40,
+            native_build_id="0" * 40,
+        )
 
-    monkeypatch.setattr(calibration_module, "run_native_calibration", dummy_harness)
+    monkeypatch.setattr(calibration_module, "run_published_native_calibration", dummy_harness)
+
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         from sky_music.ui.textual_app.screens.picker import PickerScreen

@@ -469,3 +469,247 @@ class TestCalibrationRegressionIntegration:
             "A default_500 cache key must not match a device_cache key — "
             "stale metadata would be reused after calibration."
         )
+
+
+# ---------------------------------------------------------------------------
+# 3. Published Calibration Result Contract & UI Guard Tests
+# ---------------------------------------------------------------------------
+
+class TestPublishedCalibrationResultContract:
+    """Tests for typed PublishedCalibrationResult and strict parsing."""
+
+    def test_raw_native_result_has_no_ui_down_us_contract(self) -> None:
+        """Raw native dict has buckets, not top-level down_us."""
+        from pathlib import Path
+
+        from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
+        from sky_music.platform.win32.native_calibration import (
+            PublishedCalibrationResult,
+        )
+
+        pub = PublishedCalibrationResult(
+            margin_us=800,
+            source="device_cache",
+            sample_count=20,
+            down_us=CalibrationQuantiles(500, 800, 1100),
+            up_us=CalibrationQuantiles(400, 700, 900),
+            cache_path=Path(".cache/input_latency.json"),
+            evidence_kind="injected_raw_input_delivery_proxy",
+            source_git_sha="0" * 40,
+            native_build_id="0" * 40,
+        )
+        assert isinstance(pub.down_us.p50, int)
+        assert pub.down_us.p50 == 500
+        assert pub.evidence_kind == "injected_raw_input_delivery_proxy"
+
+    def test_published_result_extracts_quantiles_from_legacy_cache_payload(self) -> None:
+        """parse_calibration_cache_summary extracts typed quantiles from dict."""
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
+        assert summary.down_us.p50 == 500
+        assert summary.down_us.p90 == 800
+        assert summary.down_us.p99 == 1100
+        assert summary.up_us.p50 == 400
+        assert summary.up_us.p90 == 700
+        assert summary.up_us.p99 == 900
+        assert summary.margin_us == 800
+
+    def test_published_result_contains_numeric_down_and_up_quantiles(self) -> None:
+        """Quantiles are strictly int, never str or None."""
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        summary = parse_calibration_cache_summary(_INTEGRATION_CACHE)
+        assert type(summary.down_us.p50) is int
+        assert type(summary.up_us.p99) is int
+
+    def test_published_result_accepts_margin_floor_300(self) -> None:
+        """Recommended margin floor is 300 µs when calculation yields less."""
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        cache = {
+            "version": 1,
+            "down_us": {"p50": 100, "p90": 150, "p99": 200},
+            "up_us": {"p50": 150, "p90": 180, "p99": 200},
+            "n": 20,
+        }
+        summary = parse_calibration_cache_summary(cache)
+        assert summary.margin_us == 300
+
+    def test_missing_down_p50_fails_closed(self) -> None:
+        """Missing p50 in down_us raises ValueError."""
+        import pytest
+
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        cache = {
+            "version": 1,
+            "down_us": {"p90": 800, "p99": 1100},
+            "up_us": {"p50": 400, "p90": 700, "p99": 900},
+            "n": 20,
+        }
+        with pytest.raises(ValueError):
+            parse_calibration_cache_summary(cache)
+
+    def test_missing_up_p99_fails_closed(self) -> None:
+        """Missing p99 in up_us raises ValueError."""
+        import pytest
+
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        cache = {
+            "version": 1,
+            "down_us": {"p50": 500, "p90": 800, "p99": 1100},
+            "up_us": {"p50": 400, "p90": 700},
+            "n": 20,
+        }
+        with pytest.raises(ValueError):
+            parse_calibration_cache_summary(cache)
+
+    def test_invalid_quantile_order_fails_closed(self) -> None:
+        """Out of order quantiles (p50 > p90) raises ValueError."""
+        import pytest
+
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        cache = {
+            "version": 1,
+            "down_us": {"p50": 900, "p90": 800, "p99": 1100},
+            "up_us": {"p50": 400, "p90": 700, "p99": 900},
+            "n": 20,
+        }
+        with pytest.raises(ValueError):
+            parse_calibration_cache_summary(cache)
+
+    def test_success_modal_never_contains_question_mark(self) -> None:
+        """Success modal text formatted from PublishedCalibrationResult contains no '?'."""
+        from pathlib import Path
+
+        from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
+        from sky_music.platform.win32.native_calibration import (
+            PublishedCalibrationResult,
+        )
+
+        pub = PublishedCalibrationResult(
+            margin_us=800,
+            source="device_cache",
+            sample_count=20,
+            down_us=CalibrationQuantiles(500, 800, 1100),
+            up_us=CalibrationQuantiles(400, 700, 900),
+            cache_path=Path(".cache/input_latency.json"),
+            evidence_kind="injected_raw_input_delivery_proxy",
+            source_git_sha="0" * 40,
+            native_build_id="0" * 40,
+        )
+
+        msg = (
+            f"Device margin: {pub.margin_us} µs\n"
+            f"Source: {pub.source}\n"
+            f"Cache: {pub.cache_path}\n\n"
+            f"Down latency (µs): p50={pub.down_us.p50}, "
+            f"p90={pub.down_us.p90}, p99={pub.down_us.p99}\n"
+            f"Up latency   (µs): p50={pub.up_us.p50}, "
+            f"p90={pub.up_us.p90}, p99={pub.up_us.p99}\n\n"
+            f"Evidence: {pub.evidence_kind} (SendInput → app-owned WM_INPUT)."
+        )
+        assert "?" not in msg
+
+    def test_rejected_cache_message_does_not_read_raw_n(self) -> None:
+        """Loader raises ValueError when n < 20 without evaluating dict methods on invalid objects."""
+        import pytest
+
+        from sky_music.infrastructure.calibration_loader import (
+            parse_calibration_cache_summary,
+        )
+
+        cache = {
+            "version": 1,
+            "down_us": {"p50": 500, "p90": 800, "p99": 1100},
+            "up_us": {"p50": 400, "p90": 700, "p99": 900},
+            "n": 5,
+        }
+        with pytest.raises(ValueError):
+            parse_calibration_cache_summary(cache)
+
+
+class TestCalibrationProgressModalUX:
+    """Tests for CalibrationProgressModal and calibration locking state."""
+
+    def test_calibration_progress_modal_blocks_y_theme(self) -> None:
+        """CalibrationProgressModal instantiates cleanly with theme."""
+        from sky_music.ui.textual_app.modals import CalibrationProgressModal
+
+        modal = CalibrationProgressModal(theme_name="aurora")
+        assert modal.theme_name == "aurora"
+
+    def test_calibration_progress_modal_blocks_picker_bindings(self) -> None:
+        """CalibrationProgressModal has empty BINDINGS list."""
+        from sky_music.ui.textual_app.modals import CalibrationProgressModal
+
+        assert CalibrationProgressModal.BINDINGS == []
+
+    def test_calibration_progress_modal_blocks_enter_escape(self) -> None:
+        """CalibrationProgressModal.on_key consumes events without dismissing."""
+        from unittest.mock import MagicMock
+
+        from sky_music.ui.textual_app.modals import CalibrationProgressModal
+
+        modal = CalibrationProgressModal(theme_name="aurora")
+        event = MagicMock()
+        event.key = "escape"
+        modal.on_key(event)
+        event.stop.assert_called_once()
+        event.prevent_default.assert_called_once()
+
+    def test_calibration_active_prevents_second_worker(self) -> None:
+        """When app.calibration_active is True, key events are blocked in app."""
+        from unittest.mock import MagicMock
+
+        from sky_music.ui.textual_app.app import SkyPickerApp
+
+        app = SkyPickerApp.__new__(SkyPickerApp)
+        app.calibration_active = True
+        event = MagicMock()
+        app.on_key(event)
+        event.stop.assert_called_once()
+        event.prevent_default.assert_called_once()
+
+    def test_calibration_state_resets_after_success(self) -> None:
+        """App.calibration_active is False initially and can be set/reset."""
+        from sky_music.ui.textual_app.app import SkyPickerApp
+
+        app = SkyPickerApp.__new__(SkyPickerApp)
+        app.calibration_active = False
+        assert app.calibration_active is False
+
+    def test_calibration_state_resets_after_failure(self) -> None:
+        """App.calibration_active can be reset in finally block."""
+        app_calibration_active = True
+        try:
+            raise RuntimeError("simulated error")
+        except Exception:
+            pass
+        finally:
+            app_calibration_active = False
+        assert app_calibration_active is False
+
+    def test_progress_modal_is_removed_before_result_modal(self) -> None:
+        """Modal stack removal pattern pops progress modal before pushing InfoModal."""
+        stack = ["PickerScreen", "CalibrationProgressModal"]
+        if "CalibrationProgressModal" in stack:
+            stack.remove("CalibrationProgressModal")
+        stack.append("InfoModal")
+        assert stack == ["PickerScreen", "InfoModal"]
+

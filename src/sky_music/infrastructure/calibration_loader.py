@@ -33,6 +33,7 @@ loader instead of the removed domain function.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 #: Default location of the calibration artefact. Exposed so callers and
@@ -61,6 +62,22 @@ MARGIN_FLOOR_US: int = 300
 MARGIN_CEILING_US: int = 2000
 
 
+@dataclass(frozen=True, slots=True)
+class CalibrationQuantiles:
+    p50: int
+    p90: int
+    p99: int
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationCacheSummary:
+    margin_us: int
+    source: str
+    sample_count: int
+    down_us: CalibrationQuantiles
+    up_us: CalibrationQuantiles
+
+
 def _compute_recommended_margin_us(p99_down: float, p50_up: float) -> int:
     """Apply the calibration formula and clamp to ``[MARGIN_FLOOR_US,
     MARGIN_CEILING_US]``. Pulled out so the loader is the single owner of
@@ -69,6 +86,79 @@ def _compute_recommended_margin_us(p99_down: float, p50_up: float) -> int:
     raw = p99_down - p50_up + 100
     clamped = max(float(MARGIN_FLOOR_US), min(float(MARGIN_CEILING_US), raw))
     return round(clamped)
+
+
+def parse_calibration_cache_summary(data: object) -> CalibrationCacheSummary:
+    """Parse and strictly validate compatible calibration cache payload.
+
+    Validation rules:
+    - version == 1 (SUPPORTED_CACHE_VERSION)
+    - n >= MIN_CALIBRATION_SAMPLE_COUNT
+    - down_us and up_us are dicts
+    - p50/p90/p99 are ints (not bools)
+    - 0 <= p50 <= p90 <= p99 <= MAX_DELIVERY_US
+    - source == SOURCE_DEVICE_CACHE ("device_cache")
+    - margin calculated via _compute_recommended_margin_us helper
+
+    Missing or invalid fields raise ValueError or TypeError.
+    """
+    if not isinstance(data, dict):
+        raise TypeError("calibration cache payload must be a dict")
+
+    if data.get("version") != SUPPORTED_CACHE_VERSION:
+        raise ValueError(f"unsupported calibration cache version: {data.get('version')}")
+
+    source = data.get("source", SOURCE_DEVICE_CACHE)
+    if source != SOURCE_DEVICE_CACHE:
+        raise ValueError(f"invalid calibration source: {source!r}")
+
+    n = data.get("n")
+    if n is None:
+        n = data.get("sample_count")
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise TypeError("calibration sample count 'n' must be an integer")
+    if n < MIN_CALIBRATION_SAMPLE_COUNT:
+        raise ValueError(
+            f"calibration sample count {n} is less than minimum {MIN_CALIBRATION_SAMPLE_COUNT}"
+        )
+
+    down_dict = data.get("down_us")
+    up_dict = data.get("up_us")
+    if not isinstance(down_dict, dict) or not isinstance(up_dict, dict):
+        raise TypeError("down_us and up_us must be dictionaries")
+
+    def _extract_quantiles(qdict: dict, name: str) -> CalibrationQuantiles:
+        vals: dict[str, int] = {}
+        for key in ("p50", "p90", "p99"):
+            if key not in qdict:
+                raise ValueError(f"missing quantile {key!r} in {name}")
+            val = qdict[key]
+            if not isinstance(val, int) or isinstance(val, bool):
+                raise TypeError(
+                    f"quantile {key!r} in {name} must be an integer, got {type(val).__name__}"
+                )
+            vals[key] = val
+        p50, p90, p99 = vals["p50"], vals["p90"], vals["p99"]
+        if not (0 <= p50 <= p90 <= p99 <= MAX_DELIVERY_US):
+            raise ValueError(
+                f"invalid quantile ordering or bounds in {name}: p50={p50}, p90={p90}, p99={p99}"
+            )
+        return CalibrationQuantiles(p50=p50, p90=p90, p99=p99)
+
+    down_quantiles = _extract_quantiles(down_dict, "down_us")
+    up_quantiles = _extract_quantiles(up_dict, "up_us")
+
+    margin_us = _compute_recommended_margin_us(
+        float(down_quantiles.p99), float(up_quantiles.p50)
+    )
+
+    return CalibrationCacheSummary(
+        margin_us=margin_us,
+        source=SOURCE_DEVICE_CACHE,
+        sample_count=n,
+        down_us=down_quantiles,
+        up_us=up_quantiles,
+    )
 
 
 def load_calibrated_margin_recommendation(
@@ -99,30 +189,11 @@ def load_calibrated_margin_recommendation(
     else:
         loaded = data
 
-    if not isinstance(loaded, dict):
+    try:
+        summary = parse_calibration_cache_summary(loaded)
+        return summary.margin_us, summary.source
+    except Exception:
         return None, SOURCE_DEFAULT_500
-    if loaded.get("version") != SUPPORTED_CACHE_VERSION:
-        return None, SOURCE_DEFAULT_500
-
-    down_us = loaded.get("down_us")
-    up_us = loaded.get("up_us")
-    if not isinstance(down_us, dict) or not isinstance(up_us, dict):
-        return None, SOURCE_DEFAULT_500
-
-    p99_down = down_us.get("p99")
-    p50_up = up_us.get("p50")
-    if not isinstance(p99_down, (int, float)) or not isinstance(p50_up, (int, float)):
-        return None, SOURCE_DEFAULT_500
-    if isinstance(p99_down, bool) or isinstance(p50_up, bool):
-        return None, SOURCE_DEFAULT_500
-    if p99_down < 0 or p50_up < 0 or p99_down > MAX_DELIVERY_US or p50_up > MAX_DELIVERY_US:
-        return None, SOURCE_DEFAULT_500
-
-    n = loaded.get("n")
-    if not isinstance(n, int) or isinstance(n, bool) or n < MIN_CALIBRATION_SAMPLE_COUNT:
-        return None, SOURCE_DEFAULT_500
-
-    return _compute_recommended_margin_us(float(p99_down), float(p50_up)), SOURCE_DEVICE_CACHE
 
 
 __all__ = [
@@ -134,5 +205,9 @@ __all__ = [
     "SOURCE_DEFAULT_500",
     "SOURCE_DEVICE_CACHE",
     "SUPPORTED_CACHE_VERSION",
+    "CalibrationCacheSummary",
+    "CalibrationQuantiles",
     "load_calibrated_margin_recommendation",
+    "parse_calibration_cache_summary",
 ]
+
