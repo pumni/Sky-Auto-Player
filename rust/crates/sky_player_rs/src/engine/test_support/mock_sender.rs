@@ -4,8 +4,8 @@ use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::{
-    PacketClockFailurePhase, PhysicalPacket, PhysicalSendOutcome, PlatformSendResult,
-    TrackedKeyState,
+    PacketClockFailurePhase, PacketRetryReason, PhysicalPacket, PhysicalSendOutcome,
+    PlatformSendResult, TrackedKeyState,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -229,6 +229,7 @@ fn physical_packet_outcome(
             requested,
             inserted,
             attempts: 1,
+            retry_reason: PacketRetryReason::None,
             started_ticks,
             completed_ticks,
         }
@@ -236,6 +237,7 @@ fn physical_packet_outcome(
         PhysicalSendOutcome::ZeroProgress {
             requested,
             attempts: 1,
+            retry_reason: PacketRetryReason::None,
             first_error: win32_error,
             last_error: win32_error,
             started_ticks,
@@ -246,6 +248,7 @@ fn physical_packet_outcome(
             requested,
             inserted_count: inserted,
             attempts: 1,
+            retry_reason: PacketRetryReason::None,
             first_error: win32_error,
             last_error: win32_error,
             started_ticks,

@@ -69,6 +69,7 @@ mod tests {
                 requested: packet.event_count(),
                 inserted_count: 1,
                 attempts: 1,
+                retry_reason: input::PacketRetryReason::None,
                 first_error: 5,
                 last_error: 5,
                 started_ticks: clock::QpcTicks::from_raw(10),
@@ -96,6 +97,7 @@ mod tests {
                 requested: 2,
                 inserted: 2,
                 attempts: 1,
+                retry_reason: input::PacketRetryReason::None,
                 started_ticks: clock::QpcTicks::from_raw(10),
                 completed_ticks: clock::QpcTicks::from_raw(20),
             }
@@ -115,6 +117,7 @@ mod tests {
                 requested: 2,
                 inserted: 2,
                 attempts: 1,
+                retry_reason: input::PacketRetryReason::None,
                 started_ticks: clock::QpcTicks::from_raw(10),
                 completed_ticks: clock::QpcTicks::from_raw(20),
             }
@@ -129,6 +132,7 @@ mod tests {
             PhysicalSendOutcome::ZeroProgress {
                 requested: packet.event_count(),
                 attempts: 2,
+                retry_reason: input::PacketRetryReason::ZeroProgress,
                 first_error: 1460,
                 last_error: 1460,
                 started_ticks: clock::QpcTicks::from_raw(10),

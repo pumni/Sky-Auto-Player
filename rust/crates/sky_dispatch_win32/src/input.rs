@@ -11,7 +11,7 @@ mod up_transaction;
 
 pub use down_transaction::{emit_down, emit_down_with};
 pub use outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PacketClockFailurePhase,
+    DownSendOutcome, EmitResult, InputSendResult, PacketClockFailurePhase, PacketRetryReason,
     PhysicalKeyPreflightError, PhysicalPacket, PhysicalSendOutcome, PlatformSendResult,
     ReleaseAllOutcome,
 };

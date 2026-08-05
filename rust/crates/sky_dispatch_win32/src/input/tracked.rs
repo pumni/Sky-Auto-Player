@@ -2,8 +2,8 @@ use super::down_transaction::{emit_down, emit_down_with};
 #[cfg(any(test, feature = "test-support"))]
 use super::outcome::PlatformSendResult;
 use super::outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, PhysicalPacket,
-    PhysicalSendOutcome, ReleaseAllOutcome,
+    DownSendOutcome, EmitResult, InputSendResult, PacketRetryReason, PhysicalKeyPreflightError,
+    PhysicalPacket, PhysicalSendOutcome, ReleaseAllOutcome,
 };
 use super::packet::send_physical_packet_with_clock;
 use super::physical::{
@@ -198,6 +198,7 @@ impl TrackedKeyState {
                 send_attempts: 0,
                 zero_progress_retries: 0,
                 retried_after_zero_progress: false,
+                retry_reason: PacketRetryReason::None,
                 timing_error,
             };
         }
@@ -225,6 +226,7 @@ impl TrackedKeyState {
                 send_attempts: 0,
                 zero_progress_retries: 0,
                 retried_after_zero_progress: false,
+                retry_reason: PacketRetryReason::None,
                 timing_error,
             };
         }
@@ -308,6 +310,7 @@ impl TrackedKeyState {
                 skipped_duplicates: duplicates,
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
+                retry_reason: PacketRetryReason::None,
                 timing_error: emitted.timing_error,
             }
         } else if !emitted.success {
@@ -319,6 +322,7 @@ impl TrackedKeyState {
                 skipped_duplicates: duplicates,
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
+                retry_reason: PacketRetryReason::None,
                 first_error: emitted.first_win32_error,
                 last_error: emitted.last_win32_error,
                 timing_error: emitted.timing_error,
@@ -333,6 +337,7 @@ impl TrackedKeyState {
                 send_attempts: emitted.send_attempts,
                 zero_progress_retries: emitted.zero_progress_retries,
                 retried_after_zero_progress: emitted.retried_after_zero_progress,
+                retry_reason: PacketRetryReason::None,
                 timing_error: emitted.timing_error,
             }
         }
@@ -361,6 +366,7 @@ impl TrackedKeyState {
                         skipped_duplicates: SmallVec::new(),
                         send_attempts: 0,
                         zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
                         first_error: None,
                         last_error: None,
                         started_ticks: None,
@@ -398,6 +404,7 @@ impl TrackedKeyState {
                 started_ticks,
                 completed_ticks,
                 attempts,
+                retry_reason,
                 ..
             } => {
                 let union = packet.up_mask | packet.down_mask;
@@ -414,7 +421,11 @@ impl TrackedKeyState {
                     skipped_duplicates: SmallVec::new(),
                     send_attempts: attempts,
                     zero_progress_retries: attempts.saturating_sub(1),
-                    retried_after_zero_progress: attempts > 1,
+                    retried_after_zero_progress: matches!(
+                        retry_reason,
+                        PacketRetryReason::ZeroProgress
+                    ),
+                    retry_reason,
                     timing_error: None,
                 }
             }
@@ -422,6 +433,7 @@ impl TrackedKeyState {
                 started_ticks,
                 completed_ticks,
                 attempts,
+                retry_reason,
                 first_error,
                 last_error,
                 ..
@@ -445,6 +457,7 @@ impl TrackedKeyState {
                     skipped_duplicates: SmallVec::new(),
                     send_attempts: attempts,
                     zero_progress_retries: attempts.saturating_sub(1),
+                    retry_reason,
                     first_error: (first_error != 0).then_some(first_error),
                     last_error: (last_error != 0).then_some(last_error),
                     started_ticks: Some(started_ticks),
@@ -456,6 +469,7 @@ impl TrackedKeyState {
                 started_ticks,
                 completed_ticks,
                 attempts,
+                retry_reason,
                 inserted_count,
                 first_error,
                 last_error,
@@ -489,6 +503,7 @@ impl TrackedKeyState {
                     skipped_duplicates: SmallVec::new(),
                     send_attempts: attempts,
                     zero_progress_retries: 0,
+                    retry_reason,
                     timing_error: None,
                 }
             }
@@ -527,6 +542,7 @@ impl TrackedKeyState {
                         skipped_duplicates: SmallVec::new(),
                         send_attempts: 1,
                         zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
                         timing_error: Some(error),
                     }
                 } else {
@@ -536,6 +552,7 @@ impl TrackedKeyState {
                         skipped_duplicates: SmallVec::new(),
                         send_attempts: 0,
                         zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
                         first_error: None,
                         last_error: None,
                         started_ticks,

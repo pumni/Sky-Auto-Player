@@ -36,17 +36,26 @@ impl PhysicalPacket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketRetryReason {
+    None,
+    ZeroProgress,
+    PartialProgress { inserted_count: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalSendOutcome {
     Complete {
         requested: u8,
         inserted: u8,
         attempts: u8,
+        retry_reason: PacketRetryReason,
         started_ticks: QpcTicks,
         completed_ticks: QpcTicks,
     },
     ZeroProgress {
         requested: u8,
         attempts: u8,
+        retry_reason: PacketRetryReason,
         first_error: u32,
         last_error: u32,
         started_ticks: QpcTicks,
@@ -56,6 +65,7 @@ pub enum PhysicalSendOutcome {
         requested: u8,
         inserted_count: u8,
         attempts: u8,
+        retry_reason: PacketRetryReason,
         first_error: u32,
         last_error: u32,
         started_ticks: QpcTicks,
@@ -110,6 +120,7 @@ pub enum DownSendOutcome {
         send_attempts: u8,
         zero_progress_retries: u8,
         retried_after_zero_progress: bool,
+        retry_reason: PacketRetryReason,
         timing_error: Option<crate::clock::QpcError>,
     },
     ZeroProgress {
@@ -118,6 +129,7 @@ pub enum DownSendOutcome {
         skipped_duplicates: SmallVec<[u16; 15]>,
         send_attempts: u8,
         zero_progress_retries: u8,
+        retry_reason: PacketRetryReason,
         first_error: Option<u32>,
         last_error: Option<u32>,
         started_ticks: Option<QpcTicks>,
@@ -137,6 +149,7 @@ pub enum DownSendOutcome {
         skipped_duplicates: SmallVec<[u16; 15]>,
         send_attempts: u8,
         zero_progress_retries: u8,
+        retry_reason: PacketRetryReason,
         timing_error: Option<crate::clock::QpcError>,
     },
 }

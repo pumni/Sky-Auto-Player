@@ -1,4 +1,4 @@
-use super::outcome::{PhysicalPacket, PhysicalSendOutcome};
+use super::outcome::{PacketRetryReason, PhysicalPacket, PhysicalSendOutcome};
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
@@ -172,6 +172,7 @@ fn send_once(packet: PhysicalPacket, clock: QpcClock) -> PhysicalSendOutcome {
         requested,
         inserted: requested,
         attempts: 1,
+        retry_reason: PacketRetryReason::None,
         started_ticks,
         completed_ticks,
     }
@@ -190,6 +191,7 @@ fn outcome_from_counts(
             requested,
             inserted,
             attempts,
+            retry_reason: PacketRetryReason::None,
             started_ticks,
             completed_ticks,
         }
@@ -197,6 +199,7 @@ fn outcome_from_counts(
         PhysicalSendOutcome::ZeroProgress {
             requested,
             attempts,
+            retry_reason: PacketRetryReason::None,
             first_error: error,
             last_error: error,
             started_ticks,
@@ -207,10 +210,23 @@ fn outcome_from_counts(
             requested,
             inserted_count: inserted,
             attempts,
+            retry_reason: PacketRetryReason::None,
             first_error: error,
             last_error: error,
             started_ticks,
             completed_ticks,
+        }
+    }
+}
+
+fn retry_reason_for_first(first: &PhysicalSendOutcome) -> PacketRetryReason {
+    match first {
+        PhysicalSendOutcome::ZeroProgress { .. } => PacketRetryReason::ZeroProgress,
+        PhysicalSendOutcome::Partial { inserted_count, .. } => PacketRetryReason::PartialProgress {
+            inserted_count: *inserted_count,
+        },
+        PhysicalSendOutcome::Complete { .. } | PhysicalSendOutcome::ClockFailure { .. } => {
+            PacketRetryReason::None
         }
     }
 }
@@ -223,6 +239,7 @@ pub fn send_physical_packet_with_clock(
         return PhysicalSendOutcome::ZeroProgress {
             requested: packet.event_count(),
             attempts: 0,
+            retry_reason: PacketRetryReason::None,
             first_error: 87,
             last_error: 87,
             started_ticks: QpcTicks::ZERO,
@@ -252,6 +269,7 @@ pub fn send_physical_packet_with_clock(
             requested,
             inserted,
             attempts: 2,
+            retry_reason: retry_reason_for_first(&first),
             started_ticks: match first {
                 PhysicalSendOutcome::Complete { started_ticks, .. }
                 | PhysicalSendOutcome::ZeroProgress { started_ticks, .. }
@@ -272,6 +290,11 @@ pub fn send_physical_packet_with_clock(
         } => PhysicalSendOutcome::ZeroProgress {
             requested,
             attempts: 2,
+            retry_reason: match first {
+                PhysicalSendOutcome::ZeroProgress { .. } => PacketRetryReason::ZeroProgress,
+                PhysicalSendOutcome::Partial { .. } => PacketRetryReason::ZeroProgress,
+                _ => PacketRetryReason::None,
+            },
             first_error: match first {
                 PhysicalSendOutcome::ZeroProgress { first_error, .. }
                 | PhysicalSendOutcome::Partial { first_error, .. } => first_error,
@@ -302,6 +325,7 @@ pub fn send_physical_packet_with_clock(
             requested,
             inserted_count,
             attempts: 2,
+            retry_reason: retry_reason_for_first(&first),
             first_error: match first {
                 PhysicalSendOutcome::Complete { .. } => second_first_error,
                 PhysicalSendOutcome::ZeroProgress { first_error, .. }
@@ -353,6 +377,37 @@ mod tests {
                 (count, other) => panic!("unexpected outcome for inserted={count}: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn retry_reason_preserves_first_attempt_provenance() {
+        let zero = PhysicalSendOutcome::ZeroProgress {
+            requested: 4,
+            attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            first_error: 5,
+            last_error: 5,
+            started_ticks: QpcTicks::from_raw(1),
+            completed_ticks: QpcTicks::from_raw(2),
+        };
+        let partial = PhysicalSendOutcome::Partial {
+            requested: 4,
+            inserted_count: 2,
+            attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            first_error: 5,
+            last_error: 5,
+            started_ticks: QpcTicks::from_raw(1),
+            completed_ticks: QpcTicks::from_raw(2),
+        };
+        assert_eq!(
+            retry_reason_for_first(&zero),
+            PacketRetryReason::ZeroProgress
+        );
+        assert_eq!(
+            retry_reason_for_first(&partial),
+            PacketRetryReason::PartialProgress { inserted_count: 2 }
+        );
     }
 
     #[test]
