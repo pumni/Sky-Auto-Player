@@ -36,10 +36,9 @@ impl MmcssGuard {
 
             if matches!(mode, PriorityMode::Auto | PriorityMode::Mmcss) {
                 for (task, acquired) in [
-                    ("Pro Audio", "mmcss:Pro Audio"),
+                    ("Games", "mmcss:Games"),
                     ("Low Latency", "mmcss:Low Latency"),
                     ("Audio", "mmcss:Audio"),
-                    ("Games", "mmcss:Games"),
                 ] {
                     let task_name: Vec<u16> = format!("{task}\0").encode_utf16().collect();
                     let mut task_index: u32 = 0;
