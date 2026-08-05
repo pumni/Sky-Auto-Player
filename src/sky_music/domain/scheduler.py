@@ -15,10 +15,10 @@ from sky_music.layouts import DefaultNoteResolver, NoteResolver
 
 class ScheduleBuildError(ValueError):
     """Raised when the schedule cannot be built due to strict conflict policies."""
-    def __init__(self, message: str, recommended_tempo_scale: float | None = None, recommended_profile: str | None = None):
+    def __init__(self, message: str, recommended_tempo_scale: float | None = None, recommended_hold_frames: float | None = None):
         super().__init__(message)
         self.recommended_tempo_scale = recommended_tempo_scale
-        self.recommended_profile = recommended_profile
+        self.recommended_hold_frames = recommended_hold_frames
 
 
 def _recommended_tempo_scale_for_repeats(
@@ -151,7 +151,7 @@ def build_key_actions(
         raise ValueError("tempo_scale must be > 0")
 
     if policy is None:
-        policy = FrameTimingPolicy.balanced()
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
     elif not isinstance(policy, FrameTimingPolicy):
         raise TypeError(
             "build_key_actions requires FrameTimingPolicy; "
@@ -301,7 +301,7 @@ def build_key_actions(
                     recommended_tempo_scale=_recommended_tempo_scale_for_repeats(
                         effective_delta_us, policy, tempo_scale
                     ),
-                    recommended_profile="local-precise",
+                    recommended_hold_frames=1.0,
                 )
         elif planned_hold.risk == "moderate":
             risky_same_key_repeats += 1
@@ -408,9 +408,9 @@ def build_key_actions(
         warnings.append(f"Compressed {compressed_holds} note hold(s) due to same-key scheduling pressure.")
     if sub_60fps_frame_notes > 0 and policy.fps > 60:
         warnings.append(
-            f"This profile assumes {policy.fps} fps. {sub_60fps_frame_notes} short note(s) are shorter "
+            f"This hold selection assumes {policy.fps} FPS. {sub_60fps_frame_notes} short note(s) are shorter "
             f"than one 60 fps frame; if your game runs below {policy.fps} fps they may not register. "
-            "Lower fps in the profile or use `local_precise`."
+            "Lower the configured FPS to match Sky or use a longer hold for visibility."
         )
     if gap_below_frame_repeats > 0:
         warnings.append(
@@ -429,12 +429,12 @@ def build_key_actions(
     source_duration_us = Microseconds(max((d.at_us - stagger_offset_by_source_index[d.source_index] for d in drafts), default=0) + policy.hold_us)
 
     rec_tempo_scale = None
-    rec_profile = None
+    rec_hold_frames = None
     if impossible_same_key_repeats > 0 and shortest_same_key_interval_us is not None:
         rec_tempo_scale = _recommended_tempo_scale_for_repeats(
             shortest_same_key_interval_us, policy, tempo_scale
         )
-        rec_profile = "local-precise"
+        rec_hold_frames = 1.0
 
     return ScheduleMetadata(
         actions=tuple(key_actions_list),
@@ -452,7 +452,7 @@ def build_key_actions(
         source_duration_us=source_duration_us,
         playback_duration_us=playback_duration_us,
         diagnostics=tuple(diagnostics),
-        recommended_profile=rec_profile,
+        recommended_hold_frames=rec_hold_frames,
         recommended_tempo_scale=rec_tempo_scale,
         sub_60fps_frame_notes=sub_60fps_frame_notes,
         gap_below_frame_repeats=gap_below_frame_repeats,

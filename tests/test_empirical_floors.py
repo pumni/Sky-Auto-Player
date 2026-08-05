@@ -1,83 +1,33 @@
-"""Regression tests that pin the frame-relative timing model.
-
-These lock the in-game-measured standard so a future change to the frame ratios
-fails loudly instead of silently regressing reliability:
-
-  - visibility (hold/min_hold) target     = profile frames (pure frame-relative)
-  - frame-aware sizing is disabled at fps=0/None (expert/experiment escape hatch)
-"""
-
 import pytest
 
-from sky_music.config import (
-    AppConfig,
-    FrameTimingDefaults,
-    clear_config_cache,
-    load_config,
-)
+from sky_music.domain.hold_timing import HOLD_FRAME_OPTIONS, materialize_hold_us
 from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
-from sky_music.domain.session_context import PlaybackSessionContext
 
 
-def test_frame_timing_defaults_encode_empirical_standard():
-    """If these change, Appendix A and the in-game measurements must be revisited."""
-    d = FrameTimingDefaults()
-    assert d.min_visible_hold_frames == 1.25          # hold target: 1 frame + 25% margin
-    assert d.min_hold_min_frame_ratio == 1.25         # compression floor: also >= ~1 frame
+@pytest.mark.parametrize("fps", (30, 60, 90, 120, 144, 165, 240))
+@pytest.mark.parametrize("hold_frames", HOLD_FRAME_OPTIONS)
+def test_production_hold_is_frame_relative(fps: int, hold_frames: float) -> None:
+    policy = FrameTimingPolicy.from_hold_frames(hold_frames, fps)
+
+    assert policy.hold_us == policy.min_hold_us
+    assert policy.hold_us == materialize_hold_us(hold_frames, fps, 500)
+    assert policy.hold_us >= policy.frame_us
 
 
-@pytest.mark.parametrize(
-    ("fps", "expected"),
-    # round(1.25 x ceil(1e6/fps)) + 500us device-delivery margin
-    [(30, 42_168), (60, 21_334), (144, 9_181)],
-)
-def test_min_hold_visibility_floor_is_one_and_a_quarter_frames(fps, expected):
-    base = TimingPolicy.from_dict(
-        {"min_hold_us": 1000, "hold_us": 100000}
+def test_zero_margin_one_frame_equals_one_frame() -> None:
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=0)
+
+    assert policy.hold_us == policy.min_hold_us == policy.frame_us == 16_667
+
+
+def test_negative_margin_is_clamped() -> None:
+    policy = FrameTimingPolicy.from_timing_policy(
+        TimingPolicy(hold_frames=1.0, min_hold_margin_us=-500), fps=60  # type: ignore[arg-type]
     )
-    p = FrameTimingPolicy.from_timing_policy(base, fps=fps)
-    assert p.min_hold_us == expected
+
+    assert policy.hold_us == policy.min_hold_us == 16_667
 
 
-def test_fps_none_keeps_raw_base_for_experiments():
-    # Frame-aware disabled -> no floors applied, so timing experiments (e.g. probing the
-    # in-game floor with tiny holds) remain possible.
-    base = TimingPolicy.from_dict(
-        {"min_hold_us": 1000, "hold_us": 2000}
-    )
-    p = FrameTimingPolicy.from_timing_policy(base, fps=None)
-    assert p.min_hold_us == 1000
-    assert p.hold_us == 2000
-
-
-def test_builtin_unframed_fallbacks_remain_60fps_safe():
-    # Local holds can be sharper with FPS set, but the no-FPS escape hatch keeps
-    # conservative raw values for existing CLI/config behavior.
-    from sky_music.config import DEFAULT_TIMING_PROFILES
-
-    for name in ("balanced", "local_precise", "audience_safe"):
-        prof = DEFAULT_TIMING_PROFILES[name]
-        assert prof["min_hold_unframed_us"] >= 16667, name
-
-
-def test_removed_repeat_release_gap_config_is_ignored(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.json"
-    cfg_path.write_text(
-        '{"frame_timing": {"repeat_release_gap_floor_us": 20000}}', encoding="utf-8"
-    )
-    monkeypatch.setattr("sky_music.config.CONFIG_PATH", cfg_path)
-    clear_config_cache()
-    try:
-        cfg = load_config(force_reload=True)
-        p = PlaybackSessionContext(profile_name="balanced", fps=144).resolve_effective_policy(cfg)
-        assert not hasattr(cfg.frame_timing, "repeat_release_gap_floor_us")
-        assert not hasattr(p, "repeat_release_gap_us")
-    finally:
-        clear_config_cache()
-
-def test_local_profile_unframed_fallback_keeps_conservative_raw_values():
-    # fps=None resolves to the session default (60), so this is the frame model:
-    # balanced = round(1.02 x 16667) + 500us margin = 17000 + 500.
-    policy = PlaybackSessionContext(profile_name="balanced", fps=None).resolve_effective_policy(AppConfig())  # type: ignore[arg-type]
-    assert policy.frame_us == 16667
-    assert policy.hold_us == policy.min_hold_us == 17500
+def test_frame_policy_requires_positive_fps() -> None:
+    with pytest.raises(ValueError):
+        FrameTimingPolicy.from_timing_policy(TimingPolicy(), fps=0)

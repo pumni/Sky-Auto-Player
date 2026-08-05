@@ -3,7 +3,7 @@ from pathlib import Path
 
 from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 
 
 def get_golden_songs():
@@ -73,7 +73,7 @@ def generate_snapshots():
 
     print(f"Generating golden schedule snapshots to: {snapshots_dir.resolve()}")
 
-    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({}))
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
 
     for key, song in songs.items():
         res = build_key_actions(song, policy=policy)
