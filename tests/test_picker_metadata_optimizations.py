@@ -287,3 +287,108 @@ def test_zero_fs_io_on_render_peek_cached_song_ui_metadata(tmp_path: Path) -> No
         res2 = peek_cached_song_ui_metadata(song_path, session, cfg)
         assert res2 is not None
         mock_stat.assert_not_called()
+
+def test_persistent_relative_path_hit(monkeypatch, tmp_path: Path) -> None:
+    from sky_music.ui.picker_metadata import (
+        SongUiMetadata,
+        _metadata_to_payload,
+        _path_session_ram_cache,
+        _persistent_cache,
+        _raw_cache,
+        hydrate_persistent_metadata_for_paths,
+        store_computed_song_ui_metadata_payloads,
+    )
+    
+    monkeypatch.chdir(tmp_path)
+    
+    songs_dir = Path("songs")
+    songs_dir.mkdir()
+    song_path = songs_dir / "relative_test.json"
+    song_path.write_text('{"name": "Relative", "songNotes": []}', encoding="utf-8")
+    
+    session = PlaybackSessionContext.balanced()
+    cfg = AppConfig()
+    
+    meta = SongUiMetadata(
+        path=song_path,
+        name="Relative test",
+        duration_seconds=10.0,
+        note_count=5,
+        max_polyphony=1,
+        min_note_gap_ms=100.0,
+        min_same_key_gap_ms=100.0,
+        risk="low",
+        recommended_profile="balanced",
+        recommended_tempo_scale=1.0,
+        warnings=(),
+        analyzed=True
+    )
+    
+    store_computed_song_ui_metadata_payloads([_metadata_to_payload(meta)], session, cfg)
+    
+    _persistent_cache.clear()
+    _path_session_ram_cache.clear()
+    _raw_cache.clear()
+    
+    abs_path = song_path.resolve()
+    n_loaded = hydrate_persistent_metadata_for_paths([abs_path], session, cfg)
+    
+    assert n_loaded >= 1
+    loaded_keys = [str(k[0]) for k in _path_session_ram_cache]
+    assert str(abs_path) in loaded_keys or str(song_path) in loaded_keys
+
+def test_persistent_cross_session_raw_hit_reanalyzes(tmp_path: Path) -> None:
+    from sky_music.ui.picker_metadata import (
+        SongUiMetadata,
+        _metadata_cache,
+        _metadata_to_payload,
+        _path_session_ram_cache,
+        _persistent_cache,
+        _raw_cache,
+        hydrate_persistent_metadata_for_paths,
+        store_computed_song_ui_metadata_payloads,
+    )
+
+    song_path = tmp_path / "cross_session_test.json"
+    song_path.write_text('{"name": "Cross", "songNotes": []}', encoding="utf-8")
+    
+    session_bal = PlaybackSessionContext.balanced()
+    cfg = AppConfig()
+    
+    meta_bal = SongUiMetadata(
+        path=song_path,
+        name="Cross",
+        duration_seconds=10.0,
+        note_count=5,
+        max_polyphony=1,
+        min_note_gap_ms=100.0,
+        min_same_key_gap_ms=100.0,
+        risk="low",
+        recommended_profile="balanced",
+        recommended_tempo_scale=1.0,
+        warnings=(),
+        analyzed=True
+    )
+    
+    store_computed_song_ui_metadata_payloads([_metadata_to_payload(meta_bal)], session_bal, cfg)
+    
+    _persistent_cache.clear()
+    _path_session_ram_cache.clear()
+    _raw_cache.clear()
+    _metadata_cache.clear()
+    
+    session_safe = PlaybackSessionContext(profile_name="safe", tempo_scale=1.0, fps=30, scan_code_mode="physical")
+    n_loaded = hydrate_persistent_metadata_for_paths([song_path], session_safe, cfg)
+    
+    assert n_loaded >= 1
+    
+    from sky_music.domain.song_repository import get_shared_song_repository
+    repo = get_shared_song_repository()
+    sf_key = repo.cache_key(song_path)
+    ram_key_safe = session_safe.metadata_cache_key(sf_key, cfg)
+    
+    assert ram_key_safe not in _metadata_cache
+    
+    raw_meta = _raw_cache.get(sf_key)
+    assert raw_meta is not None
+    assert raw_meta.analyzed is False

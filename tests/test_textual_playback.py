@@ -284,7 +284,6 @@ def test_unified_workflow_integration(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 
@@ -454,7 +453,6 @@ def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
             return "quit"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -574,7 +572,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -689,7 +686,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -822,7 +818,6 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -955,7 +950,6 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
 
     hotkey_down = {"value": False}
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -1127,7 +1121,6 @@ def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> Non
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -1260,7 +1253,6 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
             return "finished"
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(app_module, "prepare_playback", mock_prepare_playback)
@@ -1336,7 +1328,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 
@@ -1466,7 +1457,6 @@ def test_unified_workflow_prepare_playback_error(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 
@@ -1539,7 +1529,6 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 
@@ -1738,7 +1727,6 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 
@@ -1924,7 +1912,6 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             )
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: TEST_SONGS)
-    monkeypatch.setattr(picker_module, "get_song_choices", lambda force_refresh=False: TEST_SONGS)
     monkeypatch.setattr(app_module, "MetadataCoordinator", MockMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", MockMetadataCoordinator)
 

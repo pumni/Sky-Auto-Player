@@ -624,58 +624,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             event.stop()
             return
 
-    def on_unmount(self) -> None:
-        try:
-            picker = self._find_picker_screen()
-            if picker is not None:
-                from sky_music.platform.win32 import window_target
-                if getattr(window_target, "PLAYBACK_DEBUG", False):
-                    for snap in picker.picker_scope.snapshots():
-                        window_target.debug_log(
-                            f"[background] picker resource {snap.name} closed={snap.closed} "
-                            f"pending={snap.pending_count} running={snap.running_count}"
-                        )
-                picker.picker_scope.assert_closed()
-                from sky_music.orchestration.telemetry import TelemetryLogger
-                TelemetryLogger.last_picker_cleanup = {
-                    "ok": True,
-                    "resources": [
-                        {
-                            "name": snap.name,
-                            "phase": snap.phase,
-                            "state": snap.state,
-                            "closed": snap.closed,
-                            "pending_count": snap.pending_count,
-                            "running_count": snap.running_count,
-                        }
-                        for snap in picker.picker_scope.snapshots()
-                    ],
-                }
-        except Exception as exc:
-            from sky_music.platform.win32 import window_target
-            window_target.debug_log(f"[background] Cleanup error in Textual picker unmount: {exc}")
-            from sky_music.orchestration.telemetry import TelemetryLogger
-            resources_list: list[dict[str, Any]] = []
-            with contextlib.suppress(Exception):
-                picker = self._find_picker_screen()
-                if picker is not None:
-                    resources_list = [
-                        {
-                            "name": snap.name,
-                            "phase": snap.phase,
-                            "state": snap.state,
-                            "closed": snap.closed,
-                            "pending_count": snap.pending_count,
-                            "running_count": snap.running_count,
-                        }
-                        for snap in picker.picker_scope.snapshots()
-                    ]
-            TelemetryLogger.last_picker_cleanup = {
-                "ok": False,
-                "error": str(exc),
-                "resources": resources_list,
-            }
-            raise exc
+
 
     def on_screen_resume(self, _event: events.ScreenResume) -> None:
         self.call_after_refresh(self._focus_table)

@@ -81,6 +81,9 @@ async def _run_app(actions: Any) -> SkyPickerApp:
     app = SkyPickerApp(initial_dry_run=True, cfg=AppConfig())
     async with app.run_test() as pilot:
         await pilot.pause()
+        while not FakeMetadataCoordinator.instances or not FakeMetadataCoordinator.instances[0].refreshed:
+            await asyncio.sleep(0.01)
+        await pilot.pause()
         await actions(app, pilot)
     return app
 
@@ -610,16 +613,22 @@ def test_reload_clears_metadata_and_refreshes_song_list(monkeypatch) -> None:
         nonlocal refresh_calls
         if force_refresh:
             refresh_calls += 1
-        return lists[1] if refresh_calls > 1 else lists[0]
+        return lists[1] if refresh_calls > 0 else lists[0]
 
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", fake_get_song_choices)
-    monkeypatch.setattr(picker_module, "get_song_choices", fake_get_song_choices)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "clear_metadata_cache", lambda: clear_calls.append(True))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         assert len(app.choices) == 3
         app.action_reload_songs()
+        # Wait for CatalogScanned message to process
+        while True:
+            picker = app._find_picker_screen()
+            if picker is not None and len(picker.choices) == 1:
+                break
+            await asyncio.sleep(0.01)
+        
         assert [choice.path for choice in app.choices] == [Path("songs/Delta.json")]
         await pilot.press("escape")
 

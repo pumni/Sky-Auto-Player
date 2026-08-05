@@ -39,7 +39,7 @@ from sky_music.ui.picker import (
     TEMPO_OPTIONS,
     SongPickerResult,
 )
-from sky_music.ui.picker_helpers import get_song_choices, save_theme
+from sky_music.ui.picker_helpers import save_theme
 from sky_music.ui.picker_metadata import (
     clear_metadata_cache,
     peek_cached_song_ui_metadata,
@@ -368,15 +368,8 @@ class PickerScreen(Screen[SongPickerResult]):
         self._provided_choices = choices
         self.choices: list[SongChoice] = []
         self.filtered: list[SongChoice] = []
-        self.picker_scope = BackgroundScope(phase="picker")
         self._catalog_generation = 0
-        self._catalog_executor = ExecutorResource(
-            name="textual-picker-catalog", 
-            phase="picker-catalog", 
-            executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="CatalogScanner")
-        )
-        self.picker_scope.register(self._catalog_executor)
-        self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
+        self._create_picker_resources()
         self._search_timer = None
         self._detail_timer = None
         self._quiesced = False
@@ -384,6 +377,16 @@ class PickerScreen(Screen[SongPickerResult]):
         self._detail_sig: tuple[object, ...] | None = None
         self._search_query: str = ""
         self._priority_paths: MetadataPrioritySnapshot = MetadataPrioritySnapshot([], [], [], [])
+
+    def _create_picker_resources(self) -> None:
+        self.picker_scope = BackgroundScope(phase="picker")
+        self._catalog_executor = ExecutorResource(
+            name="textual-picker-catalog", 
+            phase="picker-catalog", 
+            executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="CatalogScanner")
+        )
+        self.picker_scope.register(self._catalog_executor)
+        self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -492,7 +495,7 @@ class PickerScreen(Screen[SongPickerResult]):
         self._catalog_generation += 1
         self._catalog_executor.submit(self._scan_catalog_worker, self._catalog_generation)
 
-    def _scan_catalog_worker(self, generation: int) -> None:
+    def _scan_catalog_worker(self, generation: int, force_refresh: bool = False) -> None:
         from sky_music.ui.picker_helpers import get_song_choices
         from sky_music.ui.picker_theme import remove_accents
         
@@ -500,7 +503,7 @@ class PickerScreen(Screen[SongPickerResult]):
             return
             
         if self._provided_choices is None:
-            paths = get_song_choices(force_refresh=True)
+            paths = get_song_choices(force_refresh=force_refresh)
             new_choices = [
                 SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
                 for path in paths
@@ -1053,8 +1056,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def rearm(self) -> None:
         self._quiesced = False
-        self.picker_scope = BackgroundScope(phase="picker")
-        self.metadata = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
+        self._create_picker_resources()
         self.metadata.refresh([choice.path for choice in self.choices])
         self._focus_table()
 
@@ -1471,18 +1473,14 @@ class PickerScreen(Screen[SongPickerResult]):
             self._search_timer = None
 
         clear_metadata_cache()
-        paths = get_song_choices(force_refresh=True)
-        self.choices = [
-            SongChoice(path=path, search_key=remove_accents(path.stem).casefold())
-            for path in paths
-        ]
-        self.filtered = rank_song_choices(self.choices, self.search_query)
-        self._render_status()
-        self._update_header_tagline()
+        self.choices = []
+        self.filtered = []
         self._render_table(reset_cursor=True)
         self._render_detail()
-        self.metadata.refresh(paths)
-
+        self._update_header_tagline()
+        self._render_status()
+        self._catalog_generation += 1
+        self._catalog_executor.submit(self._scan_catalog_worker, self._catalog_generation, force_refresh=True)
     def action_check_for_update(self) -> None:
         cast(PickerAppHost, self.app).on_picker_check_for_update()
 

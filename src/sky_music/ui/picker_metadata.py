@@ -143,17 +143,22 @@ def _update_path_session_ram_cache(
     session: PlaybackSessionContext,
     ram_key: tuple[Any, ...],
     song_file_key: tuple[Any, ...],
-) -> None:
+) -> bool:
     path_str = str(song_path)
     sig = _session_signature(session)
     ps_key = (path_str, sig)
     with _path_session_ram_lock:
+        if ps_key in _path_session_ram_cache and _path_session_ram_cache[ps_key] == (ram_key, song_file_key):
+            # Put it at the front of the LRU
+            _lru_get(_path_session_ram_cache, ps_key)
+            return False
         _lru_set(
             _path_session_ram_cache,
             ps_key,
             (ram_key, song_file_key),
             maxsize=_PATH_SESSION_RAM_CACHE_MAX,
         )
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +170,40 @@ def _metadata_to_payload(meta: SongUiMetadata) -> dict[str, Any]:
     payload["path"] = str(meta.path)
     payload["warnings"] = list(meta.warnings)
     return payload
+
+
+def _raw_metadata_payload(meta: SongUiMetadata) -> dict[str, Any]:
+    """Serialise only policy-independent fields for the persistent raw table.
+
+    A fully analyzed ``SongUiMetadata`` (risk / recommended profile / tempo /
+    warnings derived from a specific session) must NEVER be written verbatim to
+    the ``picker_raw_metadata`` table, otherwise a later session could rehydrate
+    it, treat the song as analyzed, and reuse stale session-specific results.
+
+    The raw payload keeps only fields that do not depend on the timing policy
+    and forces ``analyzed=False`` so the coordinator always runs a fresh full
+    analysis for the current session.
+    """
+    return {
+        "path": str(meta.path),
+        "name": meta.name,
+        "duration_seconds": meta.duration_seconds,
+        "note_count": meta.note_count,
+        "max_polyphony": meta.max_polyphony,
+        "min_note_gap_ms": meta.min_note_gap_ms,
+        "min_same_key_gap_ms": meta.min_same_key_gap_ms,
+        "average_notes_per_second": meta.average_notes_per_second,
+        "peak_notes_per_second_1s": meta.peak_notes_per_second_1s,
+        "max_chord_size": meta.max_chord_size,
+        "chords_count": meta.chords_count,
+        "analyzed": False,
+        "risk": "low",
+        "recommended_profile": "",
+        "recommended_tempo_scale": 1.0,
+        "warnings": (),
+        "impossible_repeats": 0,
+        "timing_stress_rate": 0.0,
+    }
 
 
 def _metadata_from_payload(payload: dict[str, Any]) -> SongUiMetadata | None:
@@ -224,6 +263,19 @@ def _effective_policy_signature(session: PlaybackSessionContext, cfg: AppConfig 
     }
 
 
+def _canonical_path_str(path: Path) -> str:
+    """Single canonical string for a song path used for persistent cache keys.
+
+    Both the write path (given a ``song_file_key``) and the read path (given a
+    bare ``song_path``) must hash the *same* string or the SHA-256 cache key
+    diverges silently (e.g. ``songs/x.json`` vs ``C:\\...\\songs\\x.json``).
+    """
+    try:
+        return str(path.resolve(strict=False))
+    except Exception:
+        return str(path)
+
+
 def _persistent_cache_key(
     song_path: Path,
     session: PlaybackSessionContext,
@@ -242,15 +294,12 @@ def _persistent_cache_key(
     """
     try:
         if song_file_key is not None:
-            path_str = str(song_file_key[0])
+            path_str = _canonical_path_str(song_file_key[0])
             mtime_ns = int(song_file_key[1])
             size = int(song_file_key[2])
         else:
             stat = song_path.stat()
-            try:
-                path_str = str(song_path.resolve())
-            except Exception:
-                path_str = str(song_path)
+            path_str = _canonical_path_str(song_path)
             mtime_ns = stat.st_mtime_ns
             size = stat.st_size
 
@@ -310,15 +359,12 @@ def _persistent_raw_cache_key(
 ) -> str | None:
     try:
         if song_file_key is not None:
-            path_str = str(song_file_key[0])
+            path_str = _canonical_path_str(song_file_key[0])
             mtime_ns = int(song_file_key[1])
             size = int(song_file_key[2])
         else:
             stat = song_path.stat()
-            try:
-                path_str = str(song_path.resolve())
-            except Exception:
-                path_str = str(song_path)
+            path_str = _canonical_path_str(song_path)
             mtime_ns = stat.st_mtime_ns
             size = stat.st_size
 
@@ -497,6 +543,10 @@ def hydrate_persistent_metadata_for_paths(
     This is meant for a tiny visible-window batch. It avoids waiting for the
     full persistent cache warmup, and it should be called only from a background
     cache worker, not from prompt_toolkit render paths.
+
+    Returns the number of rows that became (re)paintable: the sum of full
+    session metadata rows AND policy-independent raw rows loaded, so callers can
+    trigger a UI repaint even when only raw stats were available on disk.
     """
     if not paths:
         return 0
@@ -517,44 +567,14 @@ def hydrate_persistent_metadata_for_paths(
         return 0
 
     placeholders = ",".join("?" for _ in missing_keys)
+    conn = _connect_persistent_cache()
     try:
-        conn = _connect_persistent_cache()
         rows = conn.execute(
             f"SELECT cache_key, payload FROM picker_metadata WHERE cache_key IN ({placeholders})",
             tuple(missing_keys),
         ).fetchall()
-        
-        # Also attempt to hydrate raw metadata for paths that we missed or need raw for
-        raw_keys_to_path = {}
-        for path in paths:
-            raw_key = _persistent_raw_cache_key(path)
-            if raw_key is not None:
-                raw_keys_to_path[raw_key] = path
-                
-        if raw_keys_to_path:
-            raw_missing = [rk for rk in raw_keys_to_path if _lru_get(_raw_cache, _song_repository.cache_key(raw_keys_to_path[rk])) is None]
-            if raw_missing:
-                raw_placeholders = ",".join("?" for _ in raw_missing)
-                raw_rows = conn.execute(
-                    f"SELECT cache_key, payload FROM picker_raw_metadata WHERE cache_key IN ({raw_placeholders})",
-                    tuple(raw_missing),
-                ).fetchall()
-                
-                with _cache_lock:
-                    for rk, payload_text in raw_rows:
-                        try:
-                            payload = json.loads(str(payload_text))
-                            meta = _metadata_from_payload(payload)
-                            if meta is not None:
-                                song_path = raw_keys_to_path[rk]
-                                sf_key = _song_repository.cache_key(song_path)
-                                _lru_set(_raw_cache, sf_key, meta, maxsize=_RAW_CACHE_MAX)
-                                ram_key = session.metadata_cache_key(sf_key, cfg)
-                                _update_path_session_ram_cache(song_path, session, ram_key, sf_key)
-                        except Exception:
-                            continue
     except Exception:
-        return 0
+        rows = []
 
     loaded: dict[str, SongUiMetadata] = {}
     for key, payload_text in rows:
@@ -566,24 +586,80 @@ def hydrate_persistent_metadata_for_paths(
         except Exception:
             continue
 
-    if not loaded:
-        return 0
+    # Seed full rows into RAM caches (stat/parse happens outside the lock).
+    prepared_full: list[tuple[str, Path, SongUiMetadata]] = []
+    for key, meta in loaded.items():
+        song_path = key_to_path[key]
+        prepared_full.append((key, song_path, meta))
+    if prepared_full:
+        with _cache_lock:
+            for key, song_path, meta in prepared_full:
+                try:
+                    song_file_key = _song_repository.cache_key(song_path)
+                    ram_key = session.metadata_cache_key(song_file_key, cfg)
+                    _lru_set(_persistent_cache, key, meta, maxsize=_PERSISTENT_CACHE_MAX)
+                    _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
+                    _update_path_session_ram_cache(song_path, session, ram_key, song_file_key)
+                except Exception:
+                    continue
 
-    # Also seed the normal RAM cache, so future peeks do not need to compute the
-    # persistent key again once the file identity is available.
-    with _cache_lock:
-        for key, meta in loaded.items():
-            _lru_set(_persistent_cache, key, meta, maxsize=_PERSISTENT_CACHE_MAX)
+    # Raw (policy-independent) hydration — count and seed separately so a raw-only
+    # hit still reports a positive change and triggers a UI repaint.
+    raw_loaded = 0
+    raw_keys_to_path: dict[str, Path] = {}
+    for path in paths:
+        raw_key = _persistent_raw_cache_key(path)
+        if raw_key is not None:
+            raw_keys_to_path[raw_key] = path
+
+    if raw_keys_to_path:
+        with _cache_lock:
+            existing_raw_keys = set(_raw_cache)
+        missing_raw: list[str] = []
+        raw_sf_keys: dict[str, tuple[Any, ...]] = {}
+        for rk in raw_keys_to_path:
             try:
-                song_path = key_to_path[key]
-                song_file_key = _song_repository.cache_key(song_path)
-                ram_key = session.metadata_cache_key(song_file_key, cfg)
-                _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
-                _update_path_session_ram_cache(song_path, session, ram_key, song_file_key)
+                sf_key = _song_repository.cache_key(raw_keys_to_path[rk])
             except Exception:
                 continue
+            raw_sf_keys[rk] = sf_key
+            if sf_key not in existing_raw_keys:
+                missing_raw.append(rk)
+            else:
+                ram_key = session.metadata_cache_key(sf_key, cfg)
+                if _update_path_session_ram_cache(raw_keys_to_path[rk], session, ram_key, sf_key):
+                    raw_loaded += 1
+        if missing_raw:
+            raw_placeholders = ",".join("?" for _ in missing_raw)
+            try:
+                raw_rows = conn.execute(
+                    f"SELECT cache_key, payload FROM picker_raw_metadata WHERE cache_key IN ({raw_placeholders})",
+                    tuple(missing_raw),
+                ).fetchall()
+            except Exception:
+                raw_rows = []
 
-    return len(loaded)
+            prepared_raw: list[tuple[Path, tuple[Any, ...], tuple[Any, ...], SongUiMetadata]] = []
+            for rk, payload_text in raw_rows:
+                try:
+                    payload = json.loads(str(payload_text))
+                    meta = _metadata_from_payload(payload)
+                    if meta is None:
+                        continue
+                    song_path = raw_keys_to_path[rk]
+                    sf_key = raw_sf_keys[rk]
+                    ram_key = session.metadata_cache_key(sf_key, cfg)
+                    prepared_raw.append((song_path, sf_key, ram_key, meta))
+                except Exception:
+                    continue
+            if prepared_raw:
+                with _cache_lock:
+                    for song_path, sf_key, ram_key, meta in prepared_raw:
+                        _lru_set(_raw_cache, sf_key, meta, maxsize=_RAW_CACHE_MAX)
+                        _update_path_session_ram_cache(song_path, session, ram_key, sf_key)
+                        raw_loaded += 1
+
+    return len(loaded) + raw_loaded
 
 
 def persistent_metadata_cache_stats() -> dict[str, Any]:
@@ -715,7 +791,10 @@ def store_computed_song_ui_metadata_payloads(
 
                 raw_key = _persistent_raw_cache_key(meta.path, song_file_key=song_file_key)
                 if raw_key is not None:
-                    raw_payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
+                    # NEVER persist full session metadata into the raw table:
+                    # store only policy-independent fields with analyzed=False so
+                    # a different session/later run re-runs full analysis.
+                    raw_payload_str = json.dumps(_raw_metadata_payload(meta), ensure_ascii=False, separators=(",", ":"))
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO picker_raw_metadata(cache_key, payload, updated_at)
@@ -1038,10 +1117,12 @@ def populate_raw_song_ui_metadata_for_paths(
         ram_key = session.metadata_cache_key(song_file_key, cfg)
         with _cache_lock:
             if _lru_get(_metadata_cache, ram_key) is not None:
-                _update_path_session_ram_cache(path, session, ram_key, song_file_key)
+                if _update_path_session_ram_cache(path, session, ram_key, song_file_key):
+                    filled += 1
                 continue
             if _lru_get(_raw_cache, song_file_key) is not None:
-                _update_path_session_ram_cache(path, session, ram_key, song_file_key)
+                if _update_path_session_ram_cache(path, session, ram_key, song_file_key):
+                    filled += 1
                 continue
         meta = compute_raw_song_ui_metadata(path)
         with _cache_lock:
@@ -1053,7 +1134,7 @@ def populate_raw_song_ui_metadata_for_paths(
         try:
             raw_key = _persistent_raw_cache_key(path, song_file_key=song_file_key)
             if raw_key is not None:
-                raw_payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
+                raw_payload_str = json.dumps(_raw_metadata_payload(meta), ensure_ascii=False, separators=(",", ":"))
                 conn = _connect_persistent_cache()
                 conn.execute(
                     """
