@@ -176,6 +176,9 @@ class ProgressRenderer:
         sendinput_path_degraded: bool = False,
         bookkeeping_degraded: bool = False,
         wait_path_degraded: bool = False,
+        wait_backend_failures: int = 0,
+        wait_clock_failures: int = 0,
+        recovered_zero_progress_but_late: int = 0,
         backend_health: BackendHealth | None = None,
     ) -> None:
         now = time.perf_counter()
@@ -285,6 +288,9 @@ class ProgressRenderer:
             sendinput_zero_progress_failures=int(
                 getattr(backend_health, "sendinput_zero_progress_failures", 0) or 0
             ),
+            recovered_zero_progress_but_late=recovered_zero_progress_but_late,
+            wait_backend_failures=wait_backend_failures,
+            wait_clock_failures=wait_clock_failures,
         )
 
         view = build_playback_hud_view(

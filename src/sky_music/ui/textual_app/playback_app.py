@@ -670,6 +670,11 @@ class PlaybackCard(Static):
             sendinput_zero_progress_failures=int(
                 getattr(backend_health, "sendinput_zero_progress_failures", 0) or 0
             ),
+            recovered_zero_progress_but_late=int(
+                getattr(snap, "recovered_zero_progress_but_late", 0) or 0
+            ),
+            wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
+            wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),
         )
 
         if self.debug_mode:
@@ -974,6 +979,11 @@ class PlaybackApp(App[str]):
             chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
         notice_state = self._notice_ledger.update(
             input_path_degraded=snap.input_path_degraded,
+            recovered_zero_progress_but_late=int(
+                getattr(snap, "recovered_zero_progress_but_late", 0) or 0
+            ),
+            wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
+            wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),
             keys_dropped=keys_dropped,
             chord_split_events=chord_splits,
         )
@@ -1158,6 +1168,11 @@ class PlaybackScreen(Screen[str]):
             chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
         notice_state = self._notice_ledger.update(
             input_path_degraded=snap.input_path_degraded,
+            recovered_zero_progress_but_late=int(
+                getattr(snap, "recovered_zero_progress_but_late", 0) or 0
+            ),
+            wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
+            wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),
             keys_dropped=keys_dropped,
             chord_split_events=chord_splits,
         )

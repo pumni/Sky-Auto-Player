@@ -12,7 +12,7 @@ def test_schedule_notice_is_persistent_and_dynamic_notices_are_independent() -> 
 
     assert [notice.message for notice in first.persistent_notices] == ["repeat warning"]
     assert [notice.message for notice in second.persistent_notices] == ["repeat warning"]
-    assert len(first.runtime_notices) == 1
+    assert not first.runtime_notices
     assert not second.runtime_notices
     assert len(second.backend_notices) == 1
 
@@ -40,8 +40,8 @@ def test_playback_card_keeps_schedule_warning_across_polls() -> None:
 
     assert "same-key repeat warning" in first
     assert "same-key repeat warning" in second
-    assert "Windows input injection is responding slowly" in first
-    assert "Windows input injection is responding slowly" not in second
+    assert "Windows input injection latency is elevated" not in first
+    assert "Windows input injection latency is elevated" not in second
 
 
 def test_latency_signals_are_distinct_from_backend_rejection() -> None:

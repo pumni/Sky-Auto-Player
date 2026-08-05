@@ -1,29 +1,29 @@
 use super::super::{
     ActionKind, BackendConfig, CORE_WARMUP_SPIN_MAX_US, CPU_METRICS_SAMPLE_INTERVAL_US,
-    CoordinatorError, Duration, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US,
-    INPUT_PATH_WINDOW_CAPACITY, LatencyClass, PAUSED_POLL_US, PlaybackClockState, QpcClock,
-    QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, RuntimeDispatchCoordinator,
-    SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US, STRICT_RETRY_LATE_THRESHOLD_US,
-    STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator, SharedMetrics, TRACE_FLAG_ANOMALY,
-    TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
-    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
-    VecDeque, WaitFailure, WaitOutcome, current_process_cpu_time_us, current_thread_cpu_time_us,
-    qpc_frequency_checked, trace_outcome_code, try_publish_metrics,
+    CoordinatorError, Duration, DurationTicks, HARD_LATE_ABORT_THRESHOLD_US, LatencyClass,
+    PAUSED_POLL_US, PlaybackClockState, QpcClock, QpcError, QpcTicks, RELEASE_RETRY_BACKOFF_US,
+    RtTraceRecord, RuntimeDispatchCoordinator, SEND_COLD_THRESHOLD_US, STARTUP_WAKE_GUARD_US,
+    STRICT_RETRY_LATE_THRESHOLD_US, STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator,
+    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
+    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
+    TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitFailure, WaitOutcome,
+    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
+    trace_outcome_code, try_publish_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::{CommandTimingCleanup, create_mock_backend};
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, DispatchHealthOptions, DownAdmission,
-    FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
-    FinalizeTiming, StartupResources, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable,
-    WaitSignals, WaitTiming, Worker, WorkerHealthState, WorkerResources, WorkerTimingState,
-    anchored_dispatch_target_ticks_typed, cancel_coordinator_or_terminal, classify_latency_class,
-    cpu_metrics_sample_due, derive_spin_threshold_us, describe_release_outcome,
-    ensure_preflight_for_target, final_down_admission, finalize_worker, focus_matches,
-    focus_matches_hwnd, initialize_startup, lease_bounded_ticks, load_target_stamp,
-    process_command_control, publish_backend_metrics, publish_wake_error_stats,
-    record_degraded_sample, record_input_path_health_with_options, record_lateness,
+    CommandControlRuntime, CommandControlSignals, DispatchHealthOptions, DispatchPath,
+    DownAdmission, FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals,
+    FinalizeState, FinalizeTiming, HealthWindow, StartupResources, WaitBoundary, WaitBoundaryInput,
+    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, WorkerHealthState, WorkerResources,
+    WorkerTimingState, anchored_dispatch_target_ticks_typed, build_dispatch_budget,
+    cancel_coordinator_or_terminal, classify_latency_class, cpu_metrics_sample_due,
+    derive_spin_threshold_us, describe_release_outcome, ensure_preflight_for_target,
+    final_down_admission, finalize_worker, focus_matches, focus_matches_hwnd, initialize_startup,
+    lease_bounded_ticks, load_target_stamp, process_command_control, publish_backend_metrics,
+    publish_wake_error_stats, record_degraded_sample, record_input_path_health, record_lateness,
     record_lead_saturation, record_termination_error, release_runtime_outcome,
     release_state_verified, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     suspend_live_input, target_stamp_still_current, update_estimator_after_send_class,
@@ -380,14 +380,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         down_saturation_positive_streak: 0,
         up_saturation_positive_streak: 0,
         options: health_options,
-        send_pure_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
-        send_pure_over_warn_count: 0,
-        send_pure_warn_started_us: None,
-        send_pure_healthy_started_us: None,
-        bookkeeping_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
-        bookkeeping_over_warn_count: 0,
-        bookkeeping_warn_started_us: None,
-        bookkeeping_healthy_started_us: None,
+        send_pure_window: HealthWindow::default(),
+        bookkeeping_window: HealthWindow::default(),
+        wait_window: HealthWindow::default(),
     });
     let health = core.health.as_mut().expect("worker health initialized");
     local_metrics.send_warn_threshold_us = health.options.send_warn_floor_us;
@@ -912,7 +907,13 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     )
                     .outcome
                 {
-                    local_metrics.wait_path_degraded = true;
+                    if matches!(failure, WaitFailure::Clock) {
+                        local_metrics.wait_clock_failures =
+                            local_metrics.wait_clock_failures.saturating_add(1);
+                    } else {
+                        local_metrics.wait_backend_failures =
+                            local_metrics.wait_backend_failures.saturating_add(1);
+                    }
                     if config.timing.strict_timing || matches!(failure, WaitFailure::Clock) {
                         runtime.force_full_cleanup = true;
                         runtime.terminal_error = Some(wait_failure_message(failure));
@@ -975,7 +976,13 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         WaitOutcome::Interrupted => continue,
                         WaitOutcome::Deadline => continue,
                         WaitOutcome::Failed(failure) => {
-                            local_metrics.wait_path_degraded = true;
+                            if matches!(failure, WaitFailure::Clock) {
+                                local_metrics.wait_clock_failures =
+                                    local_metrics.wait_clock_failures.saturating_add(1);
+                            } else {
+                                local_metrics.wait_backend_failures =
+                                    local_metrics.wait_backend_failures.saturating_add(1);
+                            }
                             if config.timing.strict_timing || matches!(failure, WaitFailure::Clock)
                             {
                                 runtime.force_full_cleanup = true;
@@ -1083,6 +1090,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
             if !due_pending.is_empty() {
                 let scan_codes: SmallVec<[u16; 15]> =
                     due_pending.iter().map(|p| p.scan_code).collect();
+                let frozen_budget = build_dispatch_budget(
+                    estimator,
+                    DispatchPath::UpOnly {
+                        up_count: scan_codes.len(),
+                    },
+                    latency_class,
+                    health.options,
+                    config.timing.strict_timing,
+                );
                 let started_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
@@ -1373,23 +1389,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 };
                 let saturation_abort = config.timing.strict_timing
                     && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-                if config.estimator.enable_adaptive_lead
-                    && let Err(error) = update_estimator_after_send_class(
-                        estimator,
-                        ActionKind::Up,
-                        result.send_completed_us.saturating_sub(started_us),
-                        result.sent.len(),
-                        scan_codes.len(),
-                        lead_up,
-                        up_completion_error_us,
-                        clean_up_sample,
-                        latency_class,
-                    )
-                {
-                    runtime.force_full_cleanup = true;
-                    runtime.terminal_error = Some(format!("estimator update failure: {error}"));
-                    break;
-                }
                 let release_outcome = if strict_up_completion_late {
                     "strict_completion_slo_exceeded"
                 } else {
@@ -1461,66 +1460,79 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     );
                 }
                 runtime.pending_pre_send_spin_us = 0;
-                let send_estimate = estimator
-                    .estimate_lead_with_class_and_policy(
-                        ActionKind::Up,
-                        scan_codes.len(),
-                        latency_class,
-                        config.timing.strict_timing,
-                    )
-                    .components;
-                let cold_polyphony_floor_us = estimator
-                    .estimate_lead_with_class_and_policy(
-                        ActionKind::Up,
-                        scan_codes.len(),
-                        LatencyClass::Cold,
-                        config.timing.strict_timing,
-                    )
-                    .components
-                    .cold_reserve_us;
-                let expected_send_us = send_estimate.syscall_us.max(cold_polyphony_floor_us);
-                let send_warn_threshold_us =
-                    health.options.send_warn_threshold_us(expected_send_us);
-                local_metrics.send_warn_threshold_us = send_warn_threshold_us;
-                local_metrics.bookkeeping_warn_threshold_us = health.options.bookkeeping_warn_us;
+                let send_warn_threshold_us = frozen_budget.send_warn_us;
+                local_metrics.send_warn_threshold_us = frozen_budget.send_warn_us;
+                local_metrics.bookkeeping_warn_threshold_us = frozen_budget.bookkeeping_warn_us;
+                local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
                 local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-                record_input_path_health_with_options(
-                    result.send_completed_us.saturating_sub(started_us),
-                    completed_effective,
+                let send_duration_us = result.send_completed_us.saturating_sub(started_us);
+                let _ = record_input_path_health(
+                    send_duration_us,
                     send_warn_threshold_us,
-                    health.options.window_capacity,
-                    health.options.bad_sample_count,
-                    health.options.degrade_hold_us,
-                    health.options.recovery_hold_us,
+                    completed_effective,
+                    health.options.window_policy(),
                     &mut health.send_pure_window,
-                    &mut health.send_pure_over_warn_count,
-                    &mut health.send_pure_warn_started_us,
-                    &mut health.send_pure_healthy_started_us,
-                    &mut local_metrics.sendinput_path_degraded,
                 );
+                local_metrics.sendinput_path_degraded = health.send_pure_window.is_degraded();
                 record_degraded_sample(
-                    result.send_completed_us.saturating_sub(started_us),
+                    send_duration_us,
                     send_warn_threshold_us,
                     &mut local_metrics.sendinput_degraded_samples,
                 );
-                record_input_path_health_with_options(
-                    bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                if send_duration_us > send_warn_threshold_us {
+                    local_metrics.send_up_degraded_samples =
+                        local_metrics.send_up_degraded_samples.saturating_add(1);
+                }
+                if config.estimator.enable_adaptive_lead
+                    && let Err(error) = update_estimator_after_send_class(
+                        estimator,
+                        ActionKind::Up,
+                        result.send_completed_us.saturating_sub(started_us),
+                        result.sent.len(),
+                        scan_codes.len(),
+                        lead_up,
+                        up_completion_error_us,
+                        clean_up_sample,
+                        latency_class,
+                    )
+                {
+                    runtime.force_full_cleanup = true;
+                    runtime.terminal_error = Some(format!("estimator update failure: {error}"));
+                    break;
+                }
+                let iteration_ready_us = qpc_us_or_terminal!();
+                let bookkeeping_after_send_us =
+                    iteration_ready_us.saturating_sub(result.send_completed_us);
+                local_metrics.post_send_max_us = local_metrics
+                    .post_send_max_us
+                    .max(bookkeeping_after_send_us);
+                local_metrics.dispatch_occupancy_max_us = local_metrics
+                    .dispatch_occupancy_max_us
+                    .max(send_duration_us.saturating_add(bookkeeping_after_send_us));
+                let _ = record_input_path_health(
+                    bookkeeping_after_send_us,
+                    frozen_budget.bookkeeping_warn_us,
                     completed_effective,
-                    health.options.bookkeeping_warn_us,
-                    health.options.window_capacity,
-                    health.options.bad_sample_count,
-                    health.options.degrade_hold_us,
-                    health.options.recovery_hold_us,
+                    health.options.window_policy(),
                     &mut health.bookkeeping_window,
-                    &mut health.bookkeeping_over_warn_count,
-                    &mut health.bookkeeping_warn_started_us,
-                    &mut health.bookkeeping_healthy_started_us,
-                    &mut local_metrics.bookkeeping_degraded,
+                );
+                local_metrics.bookkeeping_degraded = health.bookkeeping_window.is_degraded();
+                local_metrics.send_window_bad_count = health.send_pure_window.bad_count() as u64;
+                local_metrics.bookkeeping_window_bad_count =
+                    health.bookkeeping_window.bad_count() as u64;
+                local_metrics.send_window_sample_count =
+                    health.send_pure_window.sample_count() as u64;
+                local_metrics.bookkeeping_window_sample_count =
+                    health.bookkeeping_window.sample_count() as u64;
+                record_degraded_sample(
+                    bookkeeping_after_send_us,
+                    frozen_budget.bookkeeping_warn_us,
+                    &mut local_metrics.bookkeeping_degraded_samples,
                 );
                 record_degraded_sample(
-                    bookkeeping_completed_us.saturating_sub(result.send_completed_us),
-                    health.options.bookkeeping_warn_us,
-                    &mut local_metrics.bookkeeping_degraded_samples,
+                    bookkeeping_after_send_us,
+                    frozen_budget.bookkeeping_warn_us,
+                    &mut local_metrics.post_send_degraded_samples,
                 );
                 local_metrics.input_path_degraded =
                     local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
@@ -1672,6 +1684,37 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
                 };
+            local_metrics.timeline_rebase_count = coordinator.timeline_rebase_count();
+            local_metrics.timeline_rebase_total_us =
+                match qpc_clock.duration_to_us(coordinator.timeline_rebase_total_ticks()) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
+                            "timeline rebase telemetry conversion failure: {error:?}"
+                        ));
+                        break;
+                    }
+                };
+            local_metrics.timeline_rebase_max_us =
+                match qpc_clock.duration_to_us(coordinator.timeline_rebase_max_ticks()) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error = Some(format!(
+                            "timeline rebase telemetry conversion failure: {error:?}"
+                        ));
+                        break;
+                    }
+                };
+            local_metrics.timeline_rebase_last_reason = match coordinator
+                .last_timeline_rebase_reason()
+            {
+                None => 0,
+                Some(sky_dispatch_core::coordinator::TimelineRebaseReason::WorkerLate) => 1,
+                Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseFloor) => 2,
+                Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseRecovery) => 3,
+            };
             if let Some(prepared_batch) = prepared_batch {
                 let batch_index = prepared_batch.index;
                 // --- Borrow scope: extract all scalar and stack data before any &mut call ---
@@ -1690,6 +1733,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 };
                 let (
                     batch_kind,
+                    dispatch_path,
                     batch_source_action_index,
                     batch_intent_count,
                     conflict_mask,
@@ -1712,8 +1756,30 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         packet_view.up_mask(),
                         packet_view.down_intents,
                     );
+                    let up_count = packet_view.up_mask().count_ones() as usize;
+                    let down_count = packet_view.down_mask().count_ones() as usize;
+                    let dispatch_path = match prepared_batch.packet_kind {
+                        Some(sky_dispatch_core::model::PhysicalPacketKind::UpOnly) => {
+                            DispatchPath::UpOnly { up_count }
+                        }
+                        Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly) => {
+                            DispatchPath::DownOnly { down_count }
+                        }
+                        Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed) => {
+                            DispatchPath::Mixed {
+                                up_count,
+                                down_count,
+                            }
+                        }
+                        None => DispatchPath::DownOnly { down_count: 0 },
+                    };
                     (
-                        ActionKind::Down,
+                        if matches!(dispatch_path, DispatchPath::UpOnly { .. }) {
+                            ActionKind::Up
+                        } else {
+                            ActionKind::Down
+                        },
+                        dispatch_path,
                         packet_view
                             .header
                             .down_source_action_index
@@ -1725,8 +1791,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     .map(|batch| batch.source_action_index)
                             })
                             .unwrap_or(0),
-                        packet_view.header.up_mask.count_ones() as usize
-                            + packet_view.header.down_mask.count_ones() as usize,
+                        up_count + down_count,
                         conflict_mask,
                         packet_view.down_scan_code_batch(),
                         Some(sky_dispatch_win32::input::PhysicalPacket::new(
@@ -1751,6 +1816,14 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         coordinator.check_down_conflicts_compact(batch_view.intents);
                     (
                         batch_view.kind(),
+                        match batch_view.kind() {
+                            ActionKind::Up => DispatchPath::UpOnly {
+                                up_count: batch_view.intents.len(),
+                            },
+                            ActionKind::Down => DispatchPath::DownOnly {
+                                down_count: batch_view.intents.len(),
+                            },
+                        },
                         batch_view.source_action_index(),
                         batch_view.intents.len(),
                         conflict_mask,
@@ -1768,11 +1841,22 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     }
                 };
                 let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
+                let authored_batch_scheduled_us =
+                    match qpc_clock.timeline_to_us(authored_batch_scheduled_ticks) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error = Some(format!(
+                                "authored schedule telemetry conversion failure: {error:?}"
+                            ));
+                            break;
+                        }
+                    };
                 let has_conflicts = conflict_mask != 0;
                 // --- End of borrow scope: all data is now in stack-local copies ---
 
                 let mut force_dispatch_publish = false;
-                if batch_kind == ActionKind::Down {
+                if packet_masks.is_some() || batch_kind == ActionKind::Down {
                     // Repeat the foreground comparison at the final boundary
                     // immediately before SendInput. If focus changed after
                     // the outer-loop sample, terminalize this authored batch;
@@ -1874,7 +1958,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     }
                     if config.timing.strict_timing
                         && effective_now_ticks
-                            .checked_duration_since(batch_scheduled_ticks)
+                            .checked_duration_since(authored_batch_scheduled_ticks)
                             .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
                     {
                         runtime.force_full_cleanup = true;
@@ -1974,6 +2058,13 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         // platform boundary exactly once. Legacy single
                         // batches retain their existing sender seam until
                         // the compatibility path is removed.
+                        let frozen_budget = build_dispatch_budget(
+                            estimator,
+                            dispatch_path,
+                            latency_class,
+                            health.options,
+                            config.timing.strict_timing,
+                        );
                         let result = if let Some(packet) = packet_masks {
                             backend.key_down_physical_packet(packet)
                         } else {
@@ -2261,29 +2352,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         let saturation_abort = config.timing.strict_timing
                             && health.down_saturation_positive_streak
                                 >= STRICT_SATURATION_ABORT_STREAK;
-                        // Mixed packets have no single-direction timing
-                        // sample.  Their conservative lead is intentionally
-                        // not trained into either legacy histogram.
-                        if config.estimator.enable_adaptive_lead
-                            && prepared_batch.packet_kind
-                                != Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed)
-                            && let Err(error) = update_estimator_after_send_class(
-                                estimator,
-                                ActionKind::Down,
-                                sender_duration_us,
-                                result_sent.len(),
-                                batch_intent_count,
-                                lead_down,
-                                completion_error_us,
-                                clean_down_sample,
-                                latency_class,
-                            )
-                        {
-                            runtime.force_full_cleanup = true;
-                            runtime.terminal_error =
-                                Some(format!("estimator update failure: {error}"));
-                            break;
-                        }
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
                         let down_outcome = if recovered_retry_late {
                             "recovered_zero_progress_but_late"
@@ -2362,75 +2430,118 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             );
                         }
                         runtime.pending_pre_send_spin_us = 0;
-                        let bookkeeping_after_send_us =
-                            bookkeeping_completed_us.saturating_sub(result_completed_us);
-                        let send_estimate = estimator
-                            .estimate_lead_with_class_and_policy(
-                                ActionKind::Down,
-                                batch_intent_count,
-                                latency_class,
-                                config.timing.strict_timing,
-                            )
-                            .components;
-                        let cold_polyphony_floor_us = estimator
-                            .estimate_lead_with_class_and_policy(
-                                ActionKind::Down,
-                                batch_intent_count,
-                                LatencyClass::Cold,
-                                config.timing.strict_timing,
-                            )
-                            .components
-                            .cold_reserve_us;
-                        let expected_send_us =
-                            send_estimate.syscall_us.max(cold_polyphony_floor_us);
-                        let send_warn_threshold_us =
-                            health.options.send_warn_threshold_us(expected_send_us);
-                        local_metrics.send_warn_threshold_us = send_warn_threshold_us;
+                        let send_warn_threshold_us = frozen_budget.send_warn_us;
+                        local_metrics.send_warn_threshold_us = frozen_budget.send_warn_us;
                         local_metrics.bookkeeping_warn_threshold_us =
-                            health.options.bookkeeping_warn_us;
+                            frozen_budget.bookkeeping_warn_us;
+                        match dispatch_path {
+                            DispatchPath::DownOnly { .. } => {
+                                local_metrics.send_down_warn_threshold_us =
+                                    frozen_budget.send_warn_us;
+                            }
+                            DispatchPath::UpOnly { .. } => {
+                                local_metrics.send_up_warn_threshold_us =
+                                    frozen_budget.send_warn_us;
+                            }
+                            DispatchPath::Mixed { .. } => {
+                                local_metrics.send_mixed_warn_threshold_us =
+                                    frozen_budget.send_warn_us;
+                            }
+                        }
                         local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-                        record_input_path_health_with_options(
+                        let _ = record_input_path_health(
                             sender_duration_us,
-                            completed_effective,
                             send_warn_threshold_us,
-                            health.options.window_capacity,
-                            health.options.bad_sample_count,
-                            health.options.degrade_hold_us,
-                            health.options.recovery_hold_us,
+                            completed_effective,
+                            health.options.window_policy(),
                             &mut health.send_pure_window,
-                            &mut health.send_pure_over_warn_count,
-                            &mut health.send_pure_warn_started_us,
-                            &mut health.send_pure_healthy_started_us,
-                            &mut local_metrics.sendinput_path_degraded,
                         );
+                        local_metrics.sendinput_path_degraded =
+                            health.send_pure_window.is_degraded();
                         record_degraded_sample(
                             sender_duration_us,
                             send_warn_threshold_us,
                             &mut local_metrics.sendinput_degraded_samples,
                         );
-                        record_input_path_health_with_options(
+                        if sender_duration_us > send_warn_threshold_us {
+                            match dispatch_path {
+                                DispatchPath::DownOnly { .. } => {
+                                    local_metrics.send_down_degraded_samples =
+                                        local_metrics.send_down_degraded_samples.saturating_add(1);
+                                }
+                                DispatchPath::UpOnly { .. } => {
+                                    local_metrics.send_up_degraded_samples =
+                                        local_metrics.send_up_degraded_samples.saturating_add(1);
+                                }
+                                DispatchPath::Mixed { .. } => {
+                                    local_metrics.send_mixed_degraded_samples =
+                                        local_metrics.send_mixed_degraded_samples.saturating_add(1);
+                                }
+                            }
+                        }
+                        if config.estimator.enable_adaptive_lead
+                            && let Some(kind) = match dispatch_path {
+                                DispatchPath::DownOnly { .. } => Some(ActionKind::Down),
+                                DispatchPath::UpOnly { .. } => Some(ActionKind::Up),
+                                DispatchPath::Mixed { .. } => None,
+                            }
+                            && let Err(error) = update_estimator_after_send_class(
+                                estimator,
+                                kind,
+                                sender_duration_us,
+                                result_sent.len(),
+                                batch_intent_count,
+                                lead_down,
+                                completion_error_us,
+                                clean_down_sample,
+                                latency_class,
+                            )
+                        {
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("estimator update failure: {error}"));
+                            break;
+                        }
+                        let iteration_ready_us = qpc_us_or_terminal!();
+                        let bookkeeping_after_send_us =
+                            iteration_ready_us.saturating_sub(result_completed_us);
+                        local_metrics.post_send_max_us = local_metrics
+                            .post_send_max_us
+                            .max(bookkeeping_after_send_us);
+                        local_metrics.dispatch_occupancy_max_us = local_metrics
+                            .dispatch_occupancy_max_us
+                            .max(sender_duration_us.saturating_add(bookkeeping_after_send_us));
+                        let _ = record_input_path_health(
                             bookkeeping_after_send_us,
+                            frozen_budget.bookkeeping_warn_us,
                             completed_effective,
-                            health.options.bookkeeping_warn_us,
-                            health.options.window_capacity,
-                            health.options.bad_sample_count,
-                            health.options.degrade_hold_us,
-                            health.options.recovery_hold_us,
+                            health.options.window_policy(),
                             &mut health.bookkeeping_window,
-                            &mut health.bookkeeping_over_warn_count,
-                            &mut health.bookkeeping_warn_started_us,
-                            &mut health.bookkeeping_healthy_started_us,
-                            &mut local_metrics.bookkeeping_degraded,
+                        );
+                        local_metrics.bookkeeping_degraded =
+                            health.bookkeeping_window.is_degraded();
+                        local_metrics.send_window_bad_count =
+                            health.send_pure_window.bad_count() as u64;
+                        local_metrics.bookkeeping_window_bad_count =
+                            health.bookkeeping_window.bad_count() as u64;
+                        local_metrics.send_window_sample_count =
+                            health.send_pure_window.sample_count() as u64;
+                        local_metrics.bookkeeping_window_sample_count =
+                            health.bookkeeping_window.sample_count() as u64;
+                        record_degraded_sample(
+                            bookkeeping_after_send_us,
+                            frozen_budget.bookkeeping_warn_us,
+                            &mut local_metrics.bookkeeping_degraded_samples,
                         );
                         record_degraded_sample(
                             bookkeeping_after_send_us,
-                            health.options.bookkeeping_warn_us,
-                            &mut local_metrics.bookkeeping_degraded_samples,
+                            frozen_budget.bookkeeping_warn_us,
+                            &mut local_metrics.post_send_degraded_samples,
                         );
                         local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
                             || local_metrics.bookkeeping_degraded;
                         record_lateness(
-                            signed_delta(completed_effective, batch_scheduled_us),
+                            signed_delta(completed_effective, authored_batch_scheduled_us),
                             false,
                             false,
                             local_metrics,
@@ -2655,12 +2766,14 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     interrupt,
                     strict_timing: config.timing.strict_timing,
                     wait_warn_us: health.options.wait_warn_us,
+                    wait_policy: health.options.window_policy(),
                 },
                 mutable: WaitMutable {
                     local_metrics,
                     pending_pre_send_spin_us: &mut runtime.pending_pre_send_spin_us,
                     force_full_cleanup: &mut runtime.force_full_cleanup,
                     terminal_error: &mut runtime.terminal_error,
+                    wait_window: &mut health.wait_window,
                 },
             }) {
                 WaitBoundary::Ready => {}

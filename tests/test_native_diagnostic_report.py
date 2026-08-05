@@ -29,7 +29,7 @@ def test_reporter_preserves_sender_game_boundary(tmp_path: Path) -> None:
 
     assert report["evidence_scope"] == "sender_completion"
     assert report["game_input_observed"] is False
-    assert report["runs"][0]["diagnosis"] == "clean"
+    assert report["runs"][0]["diagnosis"] == "clean_native_delivery"
 
 
 def test_reporter_rejects_duplicate_hold_profiles(tmp_path: Path) -> None:

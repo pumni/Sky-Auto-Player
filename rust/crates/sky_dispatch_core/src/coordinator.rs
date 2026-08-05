@@ -197,7 +197,7 @@ pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
-    use super::{GenerationStatus, RuntimeDispatchCoordinator};
+    use super::{GenerationStatus, RuntimeDispatchCoordinator, TimelineRebaseReason};
     use crate::compile::compile_runtime_intents;
     use crate::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
     use crate::time::{DurationTicks, TimelineTicks};
@@ -611,6 +611,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 20);
+        assert_eq!(coordinator.timeline_rebase_count(), 1);
+        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
+        assert_eq!(
+            coordinator.last_timeline_rebase_reason(),
+            Some(TimelineRebaseReason::ReleaseFloor)
+        );
         let following = coordinator
             .prepare_next_due_authored(TimelineTicks::from_raw(219), DurationTicks::ZERO)
             .unwrap();
@@ -1709,6 +1715,23 @@ pub struct PreparedBatch {
     pub packet_kind: Option<PhysicalPacketKind>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineRebaseReason {
+    WorkerLate,
+    ReleaseFloor,
+    ReleaseRecovery,
+}
+
+impl TimelineRebaseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkerLate => "worker_late",
+            Self::ReleaseFloor => "release_floor",
+            Self::ReleaseRecovery => "release_recovery",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
@@ -1735,6 +1758,10 @@ pub struct RuntimeDispatchCoordinator {
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     recovery_offset_ticks: DurationTicks,
+    timeline_rebase_count: u64,
+    timeline_rebase_total_ticks: u64,
+    timeline_rebase_max_ticks: u64,
+    last_timeline_rebase_reason: Option<TimelineRebaseReason>,
     frame_period_ticks: DurationTicks,
     release_recovery_started_ticks: Option<TimelineTicks>,
 }
@@ -1806,6 +1833,10 @@ impl RuntimeDispatchCoordinator {
             generation_states,
             generation_count,
             recovery_offset_ticks: DurationTicks::ZERO,
+            timeline_rebase_count: 0,
+            timeline_rebase_total_ticks: 0,
+            timeline_rebase_max_ticks: 0,
+            last_timeline_rebase_reason: None,
             frame_period_ticks: DurationTicks::ZERO,
             release_recovery_started_ticks: None,
         })
@@ -1828,6 +1859,47 @@ impl RuntimeDispatchCoordinator {
 
     pub fn recovery_offset_ticks(&self) -> DurationTicks {
         self.recovery_offset_ticks
+    }
+
+    pub fn timeline_rebase_count(&self) -> u64 {
+        self.timeline_rebase_count
+    }
+
+    pub fn timeline_rebase_total_ticks(&self) -> DurationTicks {
+        DurationTicks::from_raw(self.timeline_rebase_total_ticks)
+    }
+
+    pub fn timeline_rebase_max_ticks(&self) -> DurationTicks {
+        DurationTicks::from_raw(self.timeline_rebase_max_ticks)
+    }
+
+    pub fn last_timeline_rebase_reason(&self) -> Option<TimelineRebaseReason> {
+        self.last_timeline_rebase_reason
+    }
+
+    fn apply_timeline_rebase(
+        &mut self,
+        delta: DurationTicks,
+        reason: TimelineRebaseReason,
+    ) -> Result<(), CoordinatorError> {
+        if delta == DurationTicks::ZERO {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "timeline rebase delta must be non-zero".to_string(),
+                ),
+            ));
+        }
+        self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(delta)?;
+        self.timeline_rebase_count = self.timeline_rebase_count.saturating_add(1);
+        self.timeline_rebase_total_ticks = self
+            .timeline_rebase_total_ticks
+            .checked_add(delta.as_u64())
+            .ok_or(CoordinatorError::Time(
+                crate::time::TimeArithmeticError::Overflow,
+            ))?;
+        self.timeline_rebase_max_ticks = self.timeline_rebase_max_ticks.max(delta.as_u64());
+        self.last_timeline_rebase_reason = Some(reason);
+        Ok(())
     }
 
     pub fn set_frame_period_ticks(&mut self, frame_period_ticks: DurationTicks) {
@@ -1990,7 +2062,7 @@ impl RuntimeDispatchCoordinator {
         packet_index: usize,
         dispatch_lead: DurationTicks,
     ) -> Result<TimelineTicks, CoordinatorError> {
-        let packet = self
+        let packet = *self
             .schedule
             .packets
             .get(packet_index)
@@ -2553,7 +2625,7 @@ impl RuntimeDispatchCoordinator {
             return Ok(None);
         }
         let index = self.cursor;
-        let batch = self
+        let batch = *self
             .schedule
             .batches
             .get(index)
@@ -2563,7 +2635,7 @@ impl RuntimeDispatchCoordinator {
                 "packet id does not fit in usize".to_string(),
             ))
         })?;
-        let packet = self
+        let packet = *self
             .schedule
             .packets
             .get(packet_index)
@@ -2587,7 +2659,7 @@ impl RuntimeDispatchCoordinator {
                 .is_ok_and(|late| late >= self.frame_period_ticks)
         {
             let late = now.checked_duration_since(authored)?;
-            self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(late)?;
+            self.apply_timeline_rebase(late, TimelineRebaseReason::WorkerLate)?;
         }
         let effective_scheduled_ticks =
             self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
@@ -2597,7 +2669,7 @@ impl RuntimeDispatchCoordinator {
                 .as_u64()
                 .saturating_sub(deadline.as_u64()),
         );
-        if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(batch)) {
+        if deadline > now || (effective_scheduled_ticks > now && self.early_pop_blocked(&batch)) {
             return Ok(None);
         }
         let packet_kind = match physical_packet_kind(packet.up_mask, packet.down_mask) {
@@ -2691,7 +2763,7 @@ impl RuntimeDispatchCoordinator {
             // A release-floor deferral is a timeline event, not permission to
             // burst overdue authored actions.  Rebase all future actions only
             // after this packet has completed successfully.
-            self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(deferral)?;
+            self.apply_timeline_rebase(deferral, TimelineRebaseReason::ReleaseFloor)?;
         }
         let release_not_before_ticks = completed
             .checked_add_duration(self.min_hold_ticks)
@@ -3321,7 +3393,9 @@ impl RuntimeDispatchCoordinator {
             return Ok(None);
         };
         let pause = completed.checked_duration_since(started)?;
-        self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(pause)?;
+        if pause != DurationTicks::ZERO {
+            self.apply_timeline_rebase(pause, TimelineRebaseReason::ReleaseRecovery)?;
+        }
         Ok(Some(pause))
     }
 

@@ -27,11 +27,11 @@ use control::{
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
-#[cfg(test)]
-pub(crate) use health::record_input_path_health;
+pub(crate) use health::HealthWindowPolicy;
 pub(crate) use health::{
-    DispatchHealthOptions, focus_gate_matches, publish_backend_metrics, record_degraded_sample,
-    record_input_path_health_with_options, record_lateness,
+    DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY, HealthWindow,
+    build_dispatch_budget, focus_gate_matches, publish_backend_metrics, record_degraded_sample,
+    record_input_path_health, record_lateness,
 };
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
@@ -101,14 +101,9 @@ pub(super) struct WorkerHealthState {
     pub(super) down_saturation_positive_streak: u8,
     pub(super) up_saturation_positive_streak: u8,
     pub(super) options: DispatchHealthOptions,
-    pub(super) send_pure_window: VecDeque<u64>,
-    pub(super) send_pure_over_warn_count: usize,
-    pub(super) send_pure_warn_started_us: Option<u64>,
-    pub(super) send_pure_healthy_started_us: Option<u64>,
-    pub(super) bookkeeping_window: VecDeque<u64>,
-    pub(super) bookkeeping_over_warn_count: usize,
-    pub(super) bookkeeping_warn_started_us: Option<u64>,
-    pub(super) bookkeeping_healthy_started_us: Option<u64>,
+    pub(super) send_pure_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    pub(super) bookkeeping_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    pub(super) wait_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
 }
 
 pub(super) struct WorkerResources {

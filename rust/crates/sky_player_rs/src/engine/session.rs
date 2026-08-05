@@ -8,6 +8,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
 
+fn timeline_rebase_reason(code: u8) -> Option<String> {
+    match code {
+        1 => Some("worker_late".to_string()),
+        2 => Some("release_floor".to_string()),
+        3 => Some("release_recovery".to_string()),
+        _ => None,
+    }
+}
+
 pub struct NativeDispatchSession {
     config: Mutex<Option<NativeSessionOptions>>,
     generation_count: u64,
@@ -427,6 +436,22 @@ impl NativeDispatchSession {
             sendinput_degraded_samples: local.sendinput_degraded_samples,
             bookkeeping_degraded_samples: local.bookkeeping_degraded_samples,
             wait_degraded_samples: local.wait_degraded_samples,
+            wait_backend_failures: local.wait_backend_failures,
+            wait_clock_failures: local.wait_clock_failures,
+            wait_interrupted_count: local.wait_interrupted_count,
+            send_window_bad_count: local.send_window_bad_count,
+            bookkeeping_window_bad_count: local.bookkeeping_window_bad_count,
+            wait_window_bad_count: local.wait_window_bad_count,
+            send_window_sample_count: local.send_window_sample_count,
+            bookkeeping_window_sample_count: local.bookkeeping_window_sample_count,
+            wait_window_sample_count: local.wait_window_sample_count,
+            timeline_rebase_count: local.timeline_rebase_count,
+            timeline_rebase_total_us: local.timeline_rebase_total_us,
+            timeline_rebase_max_us: local.timeline_rebase_max_us,
+            post_send_max_us: local.post_send_max_us,
+            dispatch_occupancy_max_us: local.dispatch_occupancy_max_us,
+            post_send_degraded_samples: local.post_send_degraded_samples,
+            recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
         }
     }
 
@@ -536,6 +561,28 @@ impl NativeDispatchSession {
             sendinput_degraded_samples: local.sendinput_degraded_samples,
             bookkeeping_degraded_samples: local.bookkeeping_degraded_samples,
             wait_degraded_samples: local.wait_degraded_samples,
+            wait_backend_failures: local.wait_backend_failures,
+            wait_clock_failures: local.wait_clock_failures,
+            wait_interrupted_count: local.wait_interrupted_count,
+            send_window_bad_count: local.send_window_bad_count,
+            bookkeeping_window_bad_count: local.bookkeeping_window_bad_count,
+            wait_window_bad_count: local.wait_window_bad_count,
+            send_window_sample_count: local.send_window_sample_count,
+            bookkeeping_window_sample_count: local.bookkeeping_window_sample_count,
+            wait_window_sample_count: local.wait_window_sample_count,
+            timeline_rebase_count: local.timeline_rebase_count,
+            timeline_rebase_total_us: local.timeline_rebase_total_us,
+            timeline_rebase_max_us: local.timeline_rebase_max_us,
+            timeline_rebase_last_reason: timeline_rebase_reason(local.timeline_rebase_last_reason),
+            post_send_max_us: local.post_send_max_us,
+            dispatch_occupancy_max_us: local.dispatch_occupancy_max_us,
+            post_send_degraded_samples: local.post_send_degraded_samples,
+            send_down_degraded_samples: local.send_down_degraded_samples,
+            send_up_degraded_samples: local.send_up_degraded_samples,
+            send_mixed_degraded_samples: local.send_mixed_degraded_samples,
+            send_down_warn_threshold_us: local.send_down_warn_threshold_us,
+            send_up_warn_threshold_us: local.send_up_warn_threshold_us,
+            send_mixed_warn_threshold_us: local.send_mixed_warn_threshold_us,
             wait_target_error_us: local.wait_target_error_us,
             idle_wake_count: local.idle_wake_count,
             terminal_error: self

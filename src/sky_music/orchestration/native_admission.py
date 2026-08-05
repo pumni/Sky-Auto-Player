@@ -10,6 +10,8 @@ from typing import cast
 
 from sky_music.orchestration.native_models import RUST_DISPATCH_SCHEMA_VERSION
 
+SUPPORTED_DISPATCH_SCHEMA_VERSIONS = frozenset((2, RUST_DISPATCH_SCHEMA_VERSION))
+
 EXPECTED_NATIVE_ABI = "cp314t-win_amd64"
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -85,11 +87,11 @@ def validate_native_runtime_info(
     free_threaded = _require_bool(native_info.get("free_threaded"), "free_threaded")
     win32_backend = _require_bool(native_info.get("win32_backend"), "win32_backend")
 
-    if schema_version != RUST_DISPATCH_SCHEMA_VERSION:
+    if schema_version not in SUPPORTED_DISPATCH_SCHEMA_VERSIONS:
         raise NativeAdmissionError(
             f"schema mismatch: expected {RUST_DISPATCH_SCHEMA_VERSION}, actual {schema_version}"
         )
-    if native_schema_version != RUST_DISPATCH_SCHEMA_VERSION:
+    if native_schema_version not in SUPPORTED_DISPATCH_SCHEMA_VERSIONS:
         raise NativeAdmissionError(
             "native schema mismatch: "
             f"expected {RUST_DISPATCH_SCHEMA_VERSION}, actual {native_schema_version}"

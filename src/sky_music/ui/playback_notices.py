@@ -51,6 +51,10 @@ class PlaybackNoticeLedger:
         self._rejected_chords = 0
         self._rejected_keys = 0
         self._partial_packet_seen = False
+        self._zero_progress_failure_seen = False
+        self._recovered_retry_late_seen = False
+        self._wait_backend_failure_seen = False
+        self._wait_clock_failure_seen = False
 
     def update(
         self,
@@ -65,7 +69,13 @@ class PlaybackNoticeLedger:
         authored_keys_rejected: int = 0,
         sendinput_partial_events: int = 0,
         sendinput_zero_progress_failures: int = 0,
+        recovered_zero_progress_but_late: int = 0,
+        wait_backend_failures: int = 0,
+        wait_clock_failures: int = 0,
     ) -> PlaybackHudState:
+        # Compatibility input only; the aggregate flag must not infer a
+        # specific warning class.
+        _ = input_path_degraded
         if any(
             value > 0
             for value in (
@@ -86,11 +96,50 @@ class PlaybackNoticeLedger:
             self._partial_packet_seen = self._partial_packet_seen or (
                 sendinput_partial_events > 0
             )
+            self._zero_progress_failure_seen = self._zero_progress_failure_seen or (
+                sendinput_zero_progress_failures > 0
+            )
+        self._recovered_retry_late_seen = self._recovered_retry_late_seen or (
+            recovered_zero_progress_but_late > 0
+        )
+        self._wait_backend_failure_seen = self._wait_backend_failure_seen or (
+            wait_backend_failures > 0
+        )
+        self._wait_clock_failure_seen = self._wait_clock_failure_seen or (
+            wait_clock_failures > 0
+        )
 
         rejected_chords = self._rejected_chords
         rejected_keys = self._rejected_keys
 
         runtime: list[PlaybackNotice] = []
+        if self._recovered_retry_late_seen:
+            runtime.append(
+                PlaybackNotice(
+                    code="recovered-zero-progress-late",
+                    message="Windows initially accepted no input events; retry succeeded after the deadline.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+        if self._wait_backend_failure_seen:
+            runtime.append(
+                PlaybackNotice(
+                    code="native-wait-failure",
+                    message="Native wait mechanism reported a failure and used fallback handling.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+        if self._wait_clock_failure_seen:
+            runtime.append(
+                PlaybackNotice(
+                    code="native-wait-clock-failure",
+                    message="Native wait clock failure stopped deadline scheduling.",
+                    severity="danger",
+                    source="runtime",
+                )
+            )
         if wait_path_degraded:
             runtime.append(
                 PlaybackNotice(
@@ -100,11 +149,11 @@ class PlaybackNoticeLedger:
                     source="runtime",
                 )
             )
-        if sendinput_path_degraded or (input_path_degraded and not bookkeeping_degraded):
+        if sendinput_path_degraded:
             runtime.append(
                 PlaybackNotice(
                     code="sendinput-slow",
-                    message="Windows input injection is responding slowly; note timing may be delayed.",
+                    message="Windows input injection latency is elevated; note timing may be delayed.",
                     severity="warning",
                     source="runtime",
                 )
@@ -113,14 +162,14 @@ class PlaybackNoticeLedger:
             runtime.append(
                 PlaybackNotice(
                     code="native-bookkeeping-slow",
-                    message="Native post-send processing is elevated; timing diagnostics are active.",
+                    message="Native post-send processing is elevated; the next dispatch may start late.",
                     severity="warning",
                     source="runtime",
                 )
             )
 
         backend_list: list[PlaybackNotice] = []
-        if self._note_on_drop_seen:
+        if self._note_on_drop_seen or self._zero_progress_failure_seen:
             backend_list.append(
                 PlaybackNotice(
                     code="native-input-rejection",
@@ -136,7 +185,7 @@ class PlaybackNoticeLedger:
                 backend_list.append(
                     PlaybackNotice(
                         code="partial-input-packet",
-                        message="A Windows input packet was partially accepted; chord integrity was lost.",
+                        message="A Windows input packet was partially accepted; packet integrity was lost.",
                         severity="danger",
                         source="backend",
                     )

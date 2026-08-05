@@ -55,6 +55,21 @@ thresholds remain independent. Each path also publishes its degraded-sample
 count and active threshold. UI text must not infer an OS hook, Filter Keys, or
 game-side cause from any of these sender-side signals.
 
+Each performance sample is classified once against the budget frozen before
+dispatch; the rolling windows retain only that boolean classification, not raw
+durations. SendInput, post-send occupancy, and scheduler wake latency have
+independent fixed-capacity hysteresis windows. A single spike therefore cannot
+latch degradation for a session, and a later threshold/polyphony change cannot
+reclassify history. Backend rejection, partial packets, clock failures, and
+uncertain key state remain immediate session-latched correctness failures.
+
+The native final snapshot also reports `post_send_max_us`,
+`dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
+wait failure counters, and timeline-rebase count/duration/reason. Authored
+lateness is measured before any recovery rebase. These fields are diagnostic
+evidence owned by the sender; none establishes that the game observed or
+played a note.
+
 `session_report` is called once after worker termination. It contains the full
 terminal snapshot, native telemetry, estimator output, cleanup result, and
 build metadata. Python enriches it only with song/application metadata; it does

@@ -283,6 +283,52 @@ impl NativeDispatchSessionPy {
             snap.bookkeeping_degraded_samples,
         )?;
         dict.set_item("wait_degraded_samples", snap.wait_degraded_samples)?;
+        dict.set_item("wait_backend_failures", snap.wait_backend_failures)?;
+        dict.set_item("wait_clock_failures", snap.wait_clock_failures)?;
+        dict.set_item("wait_interrupted_count", snap.wait_interrupted_count)?;
+        dict.set_item("send_window_bad_count", snap.send_window_bad_count)?;
+        dict.set_item(
+            "bookkeeping_window_bad_count",
+            snap.bookkeeping_window_bad_count,
+        )?;
+        dict.set_item("wait_window_bad_count", snap.wait_window_bad_count)?;
+        dict.set_item("send_window_sample_count", snap.send_window_sample_count)?;
+        dict.set_item(
+            "bookkeeping_window_sample_count",
+            snap.bookkeeping_window_sample_count,
+        )?;
+        dict.set_item("wait_window_sample_count", snap.wait_window_sample_count)?;
+        dict.set_item("timeline_rebase_count", snap.timeline_rebase_count)?;
+        dict.set_item("timeline_rebase_total_us", snap.timeline_rebase_total_us)?;
+        dict.set_item("timeline_rebase_max_us", snap.timeline_rebase_max_us)?;
+        dict.set_item(
+            "timeline_rebase_last_reason",
+            snap.timeline_rebase_last_reason,
+        )?;
+        dict.set_item("post_send_max_us", snap.post_send_max_us)?;
+        dict.set_item("dispatch_occupancy_max_us", snap.dispatch_occupancy_max_us)?;
+        dict.set_item(
+            "post_send_degraded_samples",
+            snap.post_send_degraded_samples,
+        )?;
+        dict.set_item(
+            "send_down_degraded_samples",
+            snap.send_down_degraded_samples,
+        )?;
+        dict.set_item("send_up_degraded_samples", snap.send_up_degraded_samples)?;
+        dict.set_item(
+            "send_mixed_degraded_samples",
+            snap.send_mixed_degraded_samples,
+        )?;
+        dict.set_item(
+            "send_down_warn_threshold_us",
+            snap.send_down_warn_threshold_us,
+        )?;
+        dict.set_item("send_up_warn_threshold_us", snap.send_up_warn_threshold_us)?;
+        dict.set_item(
+            "send_mixed_warn_threshold_us",
+            snap.send_mixed_warn_threshold_us,
+        )?;
         dict.set_item("wait_target_error_us", snap.wait_target_error_us)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;

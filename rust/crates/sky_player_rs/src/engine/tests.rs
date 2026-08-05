@@ -4,7 +4,7 @@ use super::test_support::command_timing::{
 };
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, EstimatorOptions,
-    FaultInjectionScript, FocusOptions, INPUT_PATH_WINDOW_CAPACITY, InjectedSendOutcome,
+    FaultInjectionScript, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
     RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
     TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
@@ -23,7 +23,6 @@ use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
     DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
 };
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::Duration;
@@ -196,7 +195,12 @@ fn native_telemetry_records_are_complete_beyond_303_events() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
     assert_eq!(snapshot.terminal_error, None);
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
@@ -1131,142 +1135,82 @@ fn focus_gate_requires_both_validation_and_foreground_match() {
 
 #[test]
 fn input_path_degraded_is_not_key_drop_state() {
-    let mut window = VecDeque::with_capacity(64);
-    let mut over_warn = 0;
-    let mut started = None;
-    let mut healthy_started = None;
-    let mut degraded = false;
+    let mut window = HealthWindow::<64>::default();
+    let policy = HealthWindowPolicy {
+        minimum_samples: 64,
+        bad_sample_count: 4,
+        degrade_hold_us: 1_000_000,
+        recovery_hold_us: 2_000_000,
+    };
 
     for elapsed_us in (0..=1_070_000).step_by(1_000) {
-        record_input_path_health(
-            400,
-            elapsed_us,
-            300,
-            &mut window,
-            &mut over_warn,
-            &mut started,
-            &mut healthy_started,
-            &mut degraded,
-        );
+        record_input_path_health(400, 300, elapsed_us, policy, &mut window);
     }
 
-    assert!(degraded);
+    assert!(window.is_degraded());
 }
 
 #[test]
 fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
-    let mut window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
-    let initial_capacity = window.capacity();
-    let mut over_warn = 0;
-    let mut started = None;
-    let mut healthy_started = None;
-    let mut degraded = false;
+    let mut window = HealthWindow::<64>::default();
+    let policy = HealthWindowPolicy {
+        minimum_samples: 64,
+        bad_sample_count: 4,
+        degrade_hold_us: 1_000_000,
+        recovery_hold_us: 2_000_000,
+    };
 
     for _ in 0..10_000 {
-        record_input_path_health(
-            400,
-            0,
-            300,
-            &mut window,
-            &mut over_warn,
-            &mut started,
-            &mut healthy_started,
-            &mut degraded,
-        );
+        record_input_path_health(400, 300, 0, policy, &mut window);
     }
 
-    assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
-    assert_eq!(window.capacity(), initial_capacity);
-    assert_eq!(over_warn, INPUT_PATH_WINDOW_CAPACITY);
+    assert_eq!(window.sample_count(), 64);
+    assert_eq!(window.bad_count(), 64);
 
-    for _ in 0..INPUT_PATH_WINDOW_CAPACITY {
-        record_input_path_health(
-            100,
-            0,
-            300,
-            &mut window,
-            &mut over_warn,
-            &mut started,
-            &mut healthy_started,
-            &mut degraded,
-        );
+    for _ in 0..64 {
+        record_input_path_health(100, 300, 0, policy, &mut window);
     }
 
-    assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
-    assert_eq!(over_warn, 0);
+    assert_eq!(window.sample_count(), 64);
+    assert_eq!(window.bad_count(), 0);
 }
 
 #[test]
 fn input_path_health_uses_full_window_and_recovers_without_latching() {
-    let mut window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
-    let mut over_warn = 0;
-    let mut warn_started = None;
-    let mut healthy_started = None;
-    let mut degraded = false;
+    let mut window = HealthWindow::<64>::default();
+    let policy = HealthWindowPolicy {
+        minimum_samples: 64,
+        bad_sample_count: 4,
+        degrade_hold_us: 1_000_000,
+        recovery_hold_us: 2_000_000,
+    };
 
-    for sample in 0..INPUT_PATH_WINDOW_CAPACITY {
-        record_input_path_health(
-            400,
-            sample as u64 * 1_000,
-            300,
-            &mut window,
-            &mut over_warn,
-            &mut warn_started,
-            &mut healthy_started,
-            &mut degraded,
-        );
+    for sample in 0..64 {
+        record_input_path_health(400, 300, sample as u64 * 1_000, policy, &mut window);
     }
-    assert!(!degraded, "a partial duration must not degrade the warning");
-    record_input_path_health(
-        400,
-        1_063_000,
-        300,
-        &mut window,
-        &mut over_warn,
-        &mut warn_started,
-        &mut healthy_started,
-        &mut degraded,
+    assert!(
+        !window.is_degraded(),
+        "a partial duration must not degrade the warning"
     );
-    assert!(degraded);
+    record_input_path_health(400, 300, 1_063_000, policy, &mut window);
+    assert!(window.is_degraded());
 
     for elapsed_us in (1_064_000..=1_127_000).step_by(1_000) {
-        record_input_path_health(
-            100,
-            elapsed_us,
-            300,
-            &mut window,
-            &mut over_warn,
-            &mut warn_started,
-            &mut healthy_started,
-            &mut degraded,
-        );
+        record_input_path_health(100, 300, elapsed_us, policy, &mut window);
     }
-    assert!(degraded, "healthy samples need the full recovery duration");
-    record_input_path_health(
-        100,
-        3_127_000,
-        300,
-        &mut window,
-        &mut over_warn,
-        &mut warn_started,
-        &mut healthy_started,
-        &mut degraded,
+    assert!(
+        window.is_degraded(),
+        "healthy samples need the full recovery duration"
     );
-    assert!(!degraded);
+    record_input_path_health(100, 300, 3_127_000, policy, &mut window);
+    assert!(!window.is_degraded());
 
-    record_input_path_health(
-        400,
-        3_128_000,
-        0,
-        &mut window,
-        &mut over_warn,
-        &mut warn_started,
-        &mut healthy_started,
-        &mut degraded,
-    );
-    assert!(!degraded);
-    assert!(warn_started.is_none());
-    assert!(healthy_started.is_none());
+    let disabled = HealthWindowPolicy {
+        minimum_samples: 0,
+        ..policy
+    };
+    record_input_path_health(400, 0, 3_128_000, disabled, &mut window);
+    assert_eq!(window.sample_count(), 0);
 }
 
 #[test]
@@ -1550,7 +1494,11 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "finished");
+    assert_eq!(
+        snapshot.status, "finished",
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
     assert_eq!(snapshot.generation_status_counts["released"], 3);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);

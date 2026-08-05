@@ -57,6 +57,21 @@ class ProgressSnapshot:
     sendinput_degraded_samples: int
     bookkeeping_degraded_samples: int
     wait_degraded_samples: int
+    wait_backend_failures: int
+    wait_clock_failures: int
+    wait_interrupted_count: int
+    send_window_bad_count: int
+    bookkeeping_window_bad_count: int
+    wait_window_bad_count: int
+    send_window_sample_count: int
+    bookkeeping_window_sample_count: int
+    wait_window_sample_count: int
+    timeline_rebase_count: int
+    timeline_rebase_total_us: int
+    timeline_rebase_max_us: int
+    post_send_max_us: int
+    dispatch_occupancy_max_us: int
+    post_send_degraded_samples: int
     status: str
     health: Literal["ok", "degraded", "error"]
     backend_health: BackendHealthSnapshot

@@ -83,6 +83,38 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) wait_degraded_samples: u64,
     #[pyo3(get)]
+    pub(super) wait_backend_failures: u64,
+    #[pyo3(get)]
+    pub(super) wait_clock_failures: u64,
+    #[pyo3(get)]
+    pub(super) wait_interrupted_count: u64,
+    #[pyo3(get)]
+    pub(super) send_window_bad_count: u64,
+    #[pyo3(get)]
+    pub(super) bookkeeping_window_bad_count: u64,
+    #[pyo3(get)]
+    pub(super) wait_window_bad_count: u64,
+    #[pyo3(get)]
+    pub(super) send_window_sample_count: u64,
+    #[pyo3(get)]
+    pub(super) bookkeeping_window_sample_count: u64,
+    #[pyo3(get)]
+    pub(super) wait_window_sample_count: u64,
+    #[pyo3(get)]
+    pub(super) timeline_rebase_count: u64,
+    #[pyo3(get)]
+    pub(super) timeline_rebase_total_us: u64,
+    #[pyo3(get)]
+    pub(super) timeline_rebase_max_us: u64,
+    #[pyo3(get)]
+    pub(super) post_send_max_us: u64,
+    #[pyo3(get)]
+    pub(super) dispatch_occupancy_max_us: u64,
+    #[pyo3(get)]
+    pub(super) post_send_degraded_samples: u64,
+    #[pyo3(get)]
+    pub(super) recovered_zero_progress_but_late: u64,
+    #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
     pub(super) health: String,
@@ -122,6 +154,22 @@ impl ProgressSnapshotPy {
             sendinput_degraded_samples: snapshot.sendinput_degraded_samples,
             bookkeeping_degraded_samples: snapshot.bookkeeping_degraded_samples,
             wait_degraded_samples: snapshot.wait_degraded_samples,
+            wait_backend_failures: snapshot.wait_backend_failures,
+            wait_clock_failures: snapshot.wait_clock_failures,
+            wait_interrupted_count: snapshot.wait_interrupted_count,
+            send_window_bad_count: snapshot.send_window_bad_count,
+            bookkeeping_window_bad_count: snapshot.bookkeeping_window_bad_count,
+            wait_window_bad_count: snapshot.wait_window_bad_count,
+            send_window_sample_count: snapshot.send_window_sample_count,
+            bookkeeping_window_sample_count: snapshot.bookkeeping_window_sample_count,
+            wait_window_sample_count: snapshot.wait_window_sample_count,
+            timeline_rebase_count: snapshot.timeline_rebase_count,
+            timeline_rebase_total_us: snapshot.timeline_rebase_total_us,
+            timeline_rebase_max_us: snapshot.timeline_rebase_max_us,
+            post_send_max_us: snapshot.post_send_max_us,
+            dispatch_occupancy_max_us: snapshot.dispatch_occupancy_max_us,
+            post_send_degraded_samples: snapshot.post_send_degraded_samples,
+            recovered_zero_progress_but_late: snapshot.recovered_zero_progress_but_late,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {

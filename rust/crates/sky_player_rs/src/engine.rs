@@ -52,7 +52,7 @@ use sky_dispatch_win32::input::TrackedKeyState;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -68,7 +68,6 @@ const OUTCOME_ERROR: u8 = 4;
 const PAUSED_POLL_US: u64 = 2_000;
 const CORE_WARMUP_SPIN_MAX_US: u64 = 500;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
-const INPUT_PATH_WINDOW_CAPACITY: usize = 64;
 const STRICT_RETRY_LATE_THRESHOLD_US: u64 = 2_000;
 const HARD_LATE_ABORT_THRESHOLD_US: u64 = 20_000;
 const STRICT_SATURATION_ABORT_STREAK: u8 = 3;

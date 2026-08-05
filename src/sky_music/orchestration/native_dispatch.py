@@ -81,6 +81,9 @@ class NativeProgressSnapshotProtocol(Protocol):
     sendinput_path_degraded: bool
     bookkeeping_degraded: bool
     wait_path_degraded: bool
+    recovered_zero_progress_but_late: int
+    wait_backend_failures: int
+    wait_clock_failures: int
     status: str
     @property
     def backend_health(self) -> NativeBackendHealthProtocol: ...
@@ -339,6 +342,9 @@ class RustDispatchRuntime:
                         sendinput_path_degraded=live.sendinput_path_degraded,
                         bookkeeping_degraded=live.bookkeeping_degraded,
                         wait_path_degraded=live.wait_path_degraded,
+                        wait_backend_failures=live.wait_backend_failures,
+                        wait_clock_failures=live.wait_clock_failures,
+                        recovered_zero_progress_but_late=live.recovered_zero_progress_but_late,
                         backend_health=self._health(live.backend_health),
                     )
                     next_render_at = now + (1.0 / 30.0)

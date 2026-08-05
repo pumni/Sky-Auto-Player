@@ -31,7 +31,7 @@ def load_estimator_state(
             raise ValueError("native build mismatch")
         if envelope.get("native_abi") != native_abi:
             raise ValueError("native ABI mismatch")
-        if envelope.get("dispatch_schema_version") != 2:
+        if envelope.get("dispatch_schema_version") not in (2, 3):
             raise ValueError("dispatch schema mismatch")
         if envelope.get("game_fps") != game_fps:
             raise ValueError("game FPS mismatch")
@@ -60,7 +60,7 @@ def save_estimator_state(
             "schema_version": ESTIMATOR_CACHE_SCHEMA_VERSION,
             "native_build_commit": native_build_commit,
             "native_abi": native_abi,
-            "dispatch_schema_version": 2,
+            "dispatch_schema_version": 3,
             "game_fps": game_fps,
             "estimator_state_json": state_json,
         }

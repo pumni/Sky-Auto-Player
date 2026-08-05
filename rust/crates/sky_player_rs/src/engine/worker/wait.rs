@@ -1,4 +1,7 @@
-use super::{lease_bounded_ticks, wait_failure_message, wake_lateness_ticks};
+use super::{
+    HEALTH_WINDOW_CAPACITY, HealthWindow, HealthWindowPolicy, lease_bounded_ticks,
+    wait_failure_message, wake_lateness_ticks,
+};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
@@ -35,6 +38,7 @@ pub(super) struct WaitSignals<'a> {
     pub(super) interrupt: &'a OwnedEvent,
     pub(super) strict_timing: bool,
     pub(super) wait_warn_us: u64,
+    pub(super) wait_policy: HealthWindowPolicy,
 }
 
 pub(super) struct WaitMutable<'a> {
@@ -42,6 +46,7 @@ pub(super) struct WaitMutable<'a> {
     pub(super) pending_pre_send_spin_us: &'a mut u64,
     pub(super) force_full_cleanup: &'a mut bool,
     pub(super) terminal_error: &'a mut Option<String>,
+    pub(super) wait_window: &'a mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
 }
 
 pub(super) struct WaitBoundaryInput<'a> {
@@ -77,12 +82,14 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         interrupt,
         strict_timing,
         wait_warn_us,
+        wait_policy,
     } = signals;
     let WaitMutable {
         local_metrics,
         pending_pre_send_spin_us,
         force_full_cleanup,
         terminal_error,
+        wait_window,
     } = mutable;
 
     let Some(deadline_ticks) = deadline_ticks else {
@@ -213,7 +220,13 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 local_metrics.wait_target_error_us.max(wake_error_us);
         }
         WaitOutcome::Failed(failure) => {
-            local_metrics.wait_path_degraded = true;
+            if matches!(failure, WaitFailure::Clock) {
+                local_metrics.wait_clock_failures =
+                    local_metrics.wait_clock_failures.saturating_add(1);
+            } else {
+                local_metrics.wait_backend_failures =
+                    local_metrics.wait_backend_failures.saturating_add(1);
+            }
             if strict_timing || matches!(failure, WaitFailure::Clock) {
                 *force_full_cleanup = true;
                 *terminal_error = Some(wait_failure_message(failure));
@@ -223,12 +236,22 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             *pending_pre_send_spin_us = 0;
             return WaitBoundary::Continue;
         }
-        WaitOutcome::Interrupted => {}
+        WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+        }
     }
-    if wait_warn_us > 0 && wake_error_us > wait_warn_us {
-        local_metrics.wait_path_degraded = true;
+    if wait_warn_us == 0 {
+        wait_window.reset();
+    } else if wake_error_us > wait_warn_us {
+        let _ = wait_window.observe(true, wake_elapsed_ticks.as_u64(), wait_policy);
         local_metrics.wait_degraded_samples = local_metrics.wait_degraded_samples.saturating_add(1);
+    } else {
+        let _ = wait_window.observe(false, wake_elapsed_ticks.as_u64(), wait_policy);
     }
+    local_metrics.wait_path_degraded = wait_window.is_degraded();
+    local_metrics.wait_window_bad_count = wait_window.bad_count() as u64;
+    local_metrics.wait_window_sample_count = wait_window.sample_count() as u64;
     if wait_result.outcome == WaitOutcome::Interrupted {
         *pending_pre_send_spin_us = 0;
         return WaitBoundary::Continue;
