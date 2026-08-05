@@ -1,4 +1,4 @@
-"""Sky Music Player — persistent user configuration (config.json schema v2).
+"""Sky Music Player — persistent user configuration (config.json schema v3).
 
 The config file is read once at startup and provides *defaults* that can be
 overridden by CLI flags.  Saving happens when the user explicitly changes a
@@ -14,7 +14,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-SCHEMA_VERSION: int = 2
+from sky_music.domain.hold_timing import (
+    DEFAULT_HOLD_FRAMES,
+    nearest_hold_frames,
+    normalize_hold_frames,
+)
+
+SCHEMA_VERSION: int = 3
 DEFAULT_GAME_FPS: int = 60
 VALID_FPS: tuple[int, ...] = (30, 60, 90, 120, 144, 165, 240)
 CONFIG_PATH: Path = Path(__file__).resolve().parents[2] / "config.json"
@@ -60,65 +66,6 @@ class HotkeyDefaults:
 class SafetyDefaults:
     prompt_on_medium_risk: bool = True
     prompt_on_high_risk:   bool = True
-
-
-@dataclass(frozen=True)
-class FrameTimingDefaults:
-    """Frame-aware scaling ratios (defaults match built-in FrameTimingPolicy formulas)."""
-
-    min_visible_hold_frames: float = 1.25
-    # Compression floor for the key-down (visibility): empirically every key-down, even a
-    # compressed one, needs >= 1 frame to register (Exp1). 1.25 = one frame + ~25% margin,
-    # matching the hold target, and applied at all FPS (not just <60).
-    min_hold_min_frame_ratio: float = 1.25
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> FrameTimingDefaults:
-        return cls(
-            min_visible_hold_frames=_parse_float(raw.get("min_visible_hold_frames"), 1.25),
-            min_hold_min_frame_ratio=_parse_float(raw.get("min_hold_min_frame_ratio"), 1.25),
-        )
-
-    def as_policy_kwargs(self) -> dict[str, float | int]:
-        return {
-            "min_visible_hold_frames": self.min_visible_hold_frames,
-            "min_hold_min_frame_ratio": self.min_hold_min_frame_ratio,
-        }
-
-
-# ==============================================================================
-# ⚠️ ATTENTION DEVELOPERS & AI ASSISTANTS:
-# Before modifying or creating new timing profiles, you MUST read and adhere
-# to the constraints defined in `docs/timing-principles.md`.
-#
-# Critical mathematical constraint for game engine input polling:
-#   min_hold_us is the visibility floor for every scheduled key-down.
-#   Same-key repeats whose interval is below min_hold_us are infeasible.
-# ==============================================================================
-DEFAULT_TIMING_PROFILES: dict[str, dict[str, Any]] = {
-    "local_precise": {
-        # hold is intentionally omitted from built-ins and derives from min_hold. Declare hold_*
-        # explicitly only as an experiment/escape hatch; see hold-min-hold-unification-plan.md.
-        "min_hold_frames": 1,
-        "min_hold_unframed_us": 22000,
-        "spin_threshold_us": 800,
-        "focus_restore_grace_us": 50000,
-    },
-    "balanced": {
-        "min_hold_frames": 1.02,
-        "min_hold_unframed_us": 17000,
-        "spin_threshold_us": 800,
-        "focus_restore_grace_us": 100000,
-    },
-    "audience_safe": {
-        # Deliberately sharp frame-relative audience profile. At high local FPS this no longer
-        # guarantees a fixed remote-client visibility wall; see floor-removal-three-profile-plan.
-        "min_hold_frames": 1.5,
-        "min_hold_unframed_us": 18000,
-        "spin_threshold_us": 800,
-        "focus_restore_grace_us": 150000,
-    },
-}
 
 
 DEFAULT_SKY_PROCESS_NAMES: list[str] = ["Sky.exe", "Sky Children of the Light.exe"]
@@ -206,15 +153,13 @@ class AppConfig:
 
     theme:                       str           = "aurora"
     ui_background_mode:          str           = "transparent"
-    default_timing_profile:      str           = "balanced"
+    default_hold_frames:         float         = DEFAULT_HOLD_FRAMES
     default_tempo_scale:         float         = 1.0
     game_fps:                    int           = DEFAULT_GAME_FPS
     telemetry_enabled_by_default: bool         = False
     verbose_hud:                 bool          = False
     hotkeys:                     HotkeyDefaults = field(default_factory=HotkeyDefaults)
     safety:                      SafetyDefaults  = field(default_factory=SafetyDefaults)
-    frame_timing:                FrameTimingDefaults = field(default_factory=FrameTimingDefaults)
-    timing_profiles:             dict[str, dict[str, Any]] = field(default_factory=dict)
     songs_dir:                   str           = "songs"
     sky_process_names:           list[str]     = field(default_factory=lambda: list(DEFAULT_SKY_PROCESS_NAMES))
     allow_title_fallback:        bool          = False
@@ -230,69 +175,6 @@ def clear_config_cache() -> None:
     global _runtime_cfg
     with _runtime_cfg_lock:
         _runtime_cfg = None
-
-
-def normalize_profile_name(name: str) -> str:
-    n = name.lower().replace("-", "_")
-    if n in ("remote_safe", "audience_safe", "online_audible_safe", "online_audible"):
-        return "audience_safe"
-    return n
-
-
-CLI_PROFILE_NAMES: tuple[str, ...] = (
-    "balanced",
-    "local-precise",
-    "audience-safe",
-)
-
-_PROFILE_KEY_TO_CLI: dict[str, str] = {
-    "balanced": "balanced",
-    "local_precise": "local-precise",
-    "audience_safe": "audience-safe",
-}
-
-def canonical_profile_name(name: str) -> str:
-    """Normalize a profile name to picker/CLI form (hyphens, no @fps suffix)."""
-    base = name.split("@", 1)[0].strip()
-    key = normalize_profile_name(base)
-    if key in _PROFILE_KEY_TO_CLI:
-        return _PROFILE_KEY_TO_CLI[key]
-    return "balanced"
-
-
-def display_profile_name(base: str, fps: int | None = None) -> str:
-    """HUD-friendly profile label; FPS suffix is display-only, never persisted."""
-    canonical = canonical_profile_name(base)
-    if fps is not None and fps > 0:
-        return f"{canonical}@{fps}fps"
-    return canonical
-
-
-def merged_timing_profiles(cfg: AppConfig) -> dict[str, dict[str, Any]]:
-    """Built-in profiles with user overrides from config.json."""
-    merged = {name: dict(profile) for name, profile in DEFAULT_TIMING_PROFILES.items()}
-    for raw_name, override in cfg.timing_profiles.items():
-        name = normalize_profile_name(raw_name)
-        if name not in merged:
-            continue
-        base = dict(merged[name])
-        base.update(override)
-        merged[name] = base
-    return merged
-
-
-def profile_dict_for(cfg: AppConfig, profile_name: str) -> dict[str, Any]:
-    """Resolve a timing profile dict by name, falling back to balanced."""
-    key = normalize_profile_name(canonical_profile_name(profile_name))
-    merged = merged_timing_profiles(cfg)
-    return merged.get(key, merged["balanced"])
-
-
-def spin_threshold_for_profile(cfg: AppConfig, profile_name: str) -> int:
-    p_dict = profile_dict_for(cfg, profile_name)
-    _default_spin: int = 800  # matches DEFAULT_TIMING_PROFILES["balanced"]["spin_threshold_us"]
-    raw = p_dict.get("spin_threshold_us", _default_spin)
-    return int(raw) if raw is not None else _default_spin
 
 
 def sky_process_names_csv(cfg: AppConfig | None = None) -> str:
@@ -314,8 +196,8 @@ def normalize_fps_value(fps: int | None) -> int:
     return resolve_game_fps(fps)
 
 
-def persist_default_profile(cfg: AppConfig, profile_name: str) -> None:
-    cfg.default_timing_profile = canonical_profile_name(profile_name)
+def persist_default_hold_frames(cfg: AppConfig, hold_frames: float) -> None:
+    cfg.default_hold_frames = normalize_hold_frames(hold_frames)
     save_config(cfg)
 
 
@@ -334,13 +216,13 @@ def persist_default_fps(cfg: AppConfig, fps: int | None) -> None:
 def persist_playback_defaults(
     cfg: AppConfig,
     *,
-    profile_name: str,
+    hold_frames: float,
     tempo_scale: float,
     fps: int | None,
 ) -> None:
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
-    cfg.default_timing_profile = canonical_profile_name(profile_name)
+    cfg.default_hold_frames = normalize_hold_frames(hold_frames)
     cfg.default_tempo_scale = tempo_scale
     cfg.game_fps = normalize_fps_value(fps)
     save_config(cfg)
@@ -349,21 +231,16 @@ def persist_playback_defaults(
 def persist_calibration_defaults(
     cfg: AppConfig,
     *,
-    profile_name: str,
+    hold_frames: float,
     tempo_scale: float,
     fps: int,
 ) -> None:
     """Persist calibration without storing already frame-scaled hold values."""
     if tempo_scale <= 0:
         raise ValueError("tempo_scale must be > 0")
-    canonical = canonical_profile_name(profile_name)
-    profile_key = normalize_profile_name(canonical)
-    base_profile = dict(profile_dict_for(cfg, profile_key))
-
-    cfg.default_timing_profile = canonical
+    cfg.default_hold_frames = normalize_hold_frames(hold_frames)
     cfg.default_tempo_scale = tempo_scale
     cfg.game_fps = normalize_fps_value(fps)
-    cfg.timing_profiles[profile_key] = base_profile
     save_config(cfg)
 
 
@@ -371,7 +248,7 @@ def argparse_base_defaults() -> dict[str, Any]:
     """Generic CLI defaults before ``apply_config_defaults`` applies config.json."""
     hk = HotkeyDefaults()
     return {
-        "timing_profile": "balanced",
+        "hold_frames": DEFAULT_HOLD_FRAMES,
         "tempo_scale": 1.0,
         "debug_csv": False,
         "verbose_hud": False,
@@ -403,11 +280,84 @@ def _load_raw() -> dict[str, Any]:
         return {}
 
 
+_LEGACY_HOLD_PROFILE_MAP = {
+    "local_precise": 1.0,
+    "balanced": 1.0,
+    "audience_safe": 1.5,
+    "remote_safe": 1.5,
+    "online_audible_safe": 1.5,
+    "online_audible": 1.5,
+}
+
+
+def _migrate_raw_config(raw: dict[str, Any]) -> dict[str, Any]:
+    """Convert v2 timing selection to v3 and atomically sanitize the source."""
+    migrated = dict(raw)
+    fps = resolve_game_fps(_parse_int(raw.get("game_fps"), DEFAULT_GAME_FPS))
+    legacy_name = str(raw.get("default_timing_profile", "balanced")).lower().replace("-", "_")
+    candidate: float | None = None
+    profiles = raw.get("timing_profiles")
+    selected = profiles.get(legacy_name, {}) if isinstance(profiles, dict) else {}
+    if not selected and isinstance(profiles, dict):
+        for profile_key, profile_value in profiles.items():
+            if str(profile_key).lower().replace("-", "_") == legacy_name:
+                selected = profile_value
+                break
+    if not isinstance(selected, dict):
+        selected = {}
+    for key in ("min_hold_frames", "hold_frames"):
+        if key in selected:
+            try:
+                candidate = nearest_hold_frames(float(selected[key]))
+            except (TypeError, ValueError, OverflowError):
+                candidate = None
+            if candidate is not None:
+                break
+    if candidate is None:
+        from sky_music.domain.hold_timing import frame_duration_us
+        frame_us = frame_duration_us(fps)
+        for key in ("min_hold_us", "hold_us"):
+            if key in selected:
+                try:
+                    candidate = nearest_hold_frames(float(selected[key]) / frame_us)
+                except (TypeError, ValueError, OverflowError):
+                    candidate = None
+                if candidate is not None:
+                    break
+    if candidate is None:
+        candidate = _LEGACY_HOLD_PROFILE_MAP.get(legacy_name, DEFAULT_HOLD_FRAMES)
+
+    migrated["schema_version"] = SCHEMA_VERSION
+    migrated["default_hold_frames"] = normalize_hold_frames(
+        raw.get("default_hold_frames", candidate), DEFAULT_HOLD_FRAMES
+    )
+    for key in (
+        "default_timing_profile", "timing_profiles", "frame_timing", "hold_us",
+        "min_hold_us", "hold_frames", "min_hold_frames", "hold_unframed_us",
+        "min_hold_unframed_us",
+    ):
+        migrated.pop(key, None)
+    if migrated != raw:
+        _write_raw_atomic(migrated)
+    return migrated
+
+
+def _write_raw_atomic(raw: dict[str, Any]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(raw, f, indent=4)
+        os.replace(tmp, CONFIG_PATH)
+    finally:
+        with contextlib.suppress(Exception):
+            tmp.unlink(missing_ok=True)
+
+
 def _build_config_from_disk() -> AppConfig:
-    raw = _load_raw()
+    raw = _migrate_raw_config(_load_raw())
     hk_raw = raw.get("hotkeys", {}) if isinstance(raw.get("hotkeys"), dict) else {}
     sf_raw = raw.get("safety", {})   if isinstance(raw.get("safety"),  dict) else {}
-    ft_raw = raw.get("frame_timing", {}) if isinstance(raw.get("frame_timing"), dict) else {}
     up_raw = raw.get("update", {})
 
     hotkeys = HotkeyDefaults(
@@ -423,16 +373,7 @@ def _build_config_from_disk() -> AppConfig:
         prompt_on_high_risk   = _parse_bool(sf_raw.get("prompt_on_high_risk"),   SafetyDefaults.prompt_on_high_risk),
     )
 
-    frame_timing = FrameTimingDefaults.from_dict(ft_raw)
     update_settings = UpdateSettings.from_dict(up_raw)
-
-    # Validate timing_profiles structure
-    timing_profiles_raw = raw.get("timing_profiles", {})
-    timing_profiles = (
-        {name: profile_dict for name, profile_dict in timing_profiles_raw.items() if isinstance(profile_dict, dict)}
-        if isinstance(timing_profiles_raw, dict)
-        else {}
-    )
 
     spn_raw = raw.get("sky_process_names")
     if isinstance(spn_raw, list):
@@ -440,21 +381,16 @@ def _build_config_from_disk() -> AppConfig:
     else:
         sky_process_names = list(DEFAULT_SKY_PROCESS_NAMES)
 
-    default_timing_profile = canonical_profile_name(
-        str(raw.get("default_timing_profile", AppConfig.default_timing_profile))
-    )
     return AppConfig(
         theme                        = str(raw.get("theme", AppConfig.theme)),
         ui_background_mode           = str(raw.get("ui_background_mode", AppConfig.ui_background_mode)),
-        default_timing_profile       = default_timing_profile,
+        default_hold_frames          = normalize_hold_frames(raw.get("default_hold_frames")),
         default_tempo_scale          = _parse_float(raw.get("default_tempo_scale"), AppConfig.default_tempo_scale),
         game_fps                     = resolve_game_fps(_parse_int(raw.get("game_fps"), AppConfig.game_fps)),
         telemetry_enabled_by_default = _parse_bool(raw.get("telemetry_enabled_by_default"), AppConfig.telemetry_enabled_by_default),
         verbose_hud                  = _parse_bool(raw.get("verbose_hud"), AppConfig.verbose_hud),
         hotkeys                      = hotkeys,
         safety                       = safety,
-        frame_timing                 = frame_timing,
-        timing_profiles              = timing_profiles,
         songs_dir                    = str(raw.get("songs_dir", AppConfig.songs_dir)),
         sky_process_names            = sky_process_names,
         allow_title_fallback         = _parse_bool(raw.get("allow_title_fallback"), AppConfig.allow_title_fallback),
@@ -498,7 +434,7 @@ def save_config(cfg: AppConfig) -> None:
         # Update known keys
         raw["theme"]                        = cfg.theme
         raw["ui_background_mode"]           = cfg.ui_background_mode
-        raw["default_timing_profile"]       = canonical_profile_name(cfg.default_timing_profile)
+        raw["default_hold_frames"]          = normalize_hold_frames(cfg.default_hold_frames)
         raw["default_tempo_scale"]          = cfg.default_tempo_scale
         raw["game_fps"]                     = cfg.game_fps
         raw["telemetry_enabled_by_default"] = cfg.telemetry_enabled_by_default
@@ -515,11 +451,12 @@ def save_config(cfg: AppConfig) -> None:
             "prompt_on_medium_risk": cfg.safety.prompt_on_medium_risk,
             "prompt_on_high_risk":   cfg.safety.prompt_on_high_risk,
         }
-        raw["frame_timing"] = {
-            "min_visible_hold_frames": cfg.frame_timing.min_visible_hold_frames,
-            "min_hold_min_frame_ratio": cfg.frame_timing.min_hold_min_frame_ratio,
-        }
-        raw["timing_profiles"]              = cfg.timing_profiles
+        for legacy_key in (
+            "default_timing_profile", "timing_profiles", "frame_timing", "hold_us",
+            "min_hold_us", "hold_frames", "min_hold_frames", "hold_unframed_us",
+            "min_hold_unframed_us",
+        ):
+            raw.pop(legacy_key, None)
         raw["songs_dir"]                    = cfg.songs_dir
         raw["sky_process_names"]            = cfg.sky_process_names
         raw["allow_title_fallback"]         = cfg.allow_title_fallback
@@ -571,8 +508,11 @@ def apply_config_defaults(args: Any, cfg: AppConfig) -> None:
     # argparse doesn't expose which flags were explicit; compare to generic CLI defaults.
     parser_defaults = argparse_base_defaults()
 
-    if getattr(args, "timing_profile", None) == parser_defaults["timing_profile"]:
-        args.timing_profile = canonical_profile_name(cfg.default_timing_profile)
+    if (
+        not getattr(args, "_hold_frames_explicit", False)
+        and getattr(args, "hold_frames", None) == parser_defaults["hold_frames"]
+    ):
+        args.hold_frames = normalize_hold_frames(cfg.default_hold_frames)
 
     if getattr(args, "tempo_scale", None) == parser_defaults["tempo_scale"]:
         args.tempo_scale = cfg.default_tempo_scale
