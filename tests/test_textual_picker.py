@@ -666,13 +666,13 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
         app.action_open_calibration()
         await pilot.pause()
         await pilot.press("enter")
-        assert app.hold_frames == 1.5
+        assert app.hold_frames == 1.0
         assert app.fps == 30
         await pilot.press("escape")
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert persisted == [(1.5, 0.9, 30)]
+    assert persisted == [(1.0, 0.9, 30)]
     assert FakeMetadataCoordinator.instances[0].closed is True
 
 

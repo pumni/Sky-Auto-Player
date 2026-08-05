@@ -156,6 +156,27 @@ def test_hold_comparison_lists_the_three_supported_values(capsys):
     assert "1.50" in output
 
 
+def test_hold_comparison_uses_calibrated_margin(monkeypatch, capsys):
+    import sky_music.cli.console_playback as console_playback
+    from sky_music.domain.scheduler_types import FrameTimingPolicy
+
+    monkeypatch.setattr(
+        console_playback,
+        "resolve_calibrated_policy",
+        lambda session, cfg: FrameTimingPolicy.from_hold_frames(
+            session.hold_frames,
+            session.fps,
+            margin_us=800,
+            margin_source="device_cache",
+        ),
+    )
+
+    console_playback._print_hold_comparison_table(AppConfig(game_fps=120), fps=120)
+    output = capsys.readouterr().out
+
+    assert "800 µs (device_cache)" in output
+
+
 @pytest.mark.parametrize("value", ["2.0", "0.5"])
 def test_unsupported_hold_values_are_rejected(value: str) -> None:
     parser = main.build_arg_parser()
@@ -180,6 +201,39 @@ def test_explicit_default_hold_wins_over_configured_hold() -> None:
     parser = main.build_arg_parser()
     args = parser.parse_args(["--hold-frames", "1.0"])
     main.apply_config_defaults(args, AppConfig(default_hold_frames=1.25))
+
+    assert args.hold_frames == 1.0
+
+
+def test_interactive_main_preserves_explicit_hold_over_config(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    cfg = AppConfig(default_hold_frames=1.5, game_fps=60)
+
+    monkeypatch.setattr(main.sys, "argv", ["main.py", "--hold-frames", "1.0"])
+    monkeypatch.setattr(main, "load_config", lambda: cfg)
+    monkeypatch.setattr(main, "build_playback_controls", lambda _args: object())
+    monkeypatch.setattr(main, "get_song_choices", lambda force_refresh=False: [Path("songs/Alpha.json")])
+    monkeypatch.setattr(main, "_check_textual_support", lambda: None)
+    monkeypatch.setattr(main, "require_rust_core", lambda: object())
+    monkeypatch.setattr(
+        "sky_music.infrastructure.realtime.assert_free_threaded_runtime",
+        lambda: None,
+    )
+
+    def fake_run_sky_app_unified(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("sky_music.ui.textual_app.run_sky_app_unified", fake_run_sky_app_unified)
+
+    assert main.main() == 0
+    assert captured["initial_hold_frames"] == 1.0
+
+
+def test_fallback_picker_receives_explicit_hold() -> None:
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--hold-frames", "1.0"])
+    main.apply_config_defaults(args, AppConfig(default_hold_frames=1.5))
 
     assert args.hold_frames == 1.0
 

@@ -306,7 +306,7 @@ def print_choices_local(song_choices: list[Path]) -> None:
     _console.print(table)
 
 
-def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
+def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any, *, fps: int) -> None:
     max_chord = max((len(a.scan_codes) for a in actions if a.kind == "down"), default=0)
     down_timestamps = sorted({a.at_us for a in actions if a.kind == "down"})
     min_timestamp_gap_us = min((b - a for a, b in itertools.pairwise(down_timestamps)), default=0)
@@ -328,7 +328,7 @@ def print_schedule_summary(actions: tuple[Any, ...], sched_meta: Any) -> None:
     text.append(f"Infeasible same-key repeats : {sched_meta.impossible_same_key_repeats}\n", style=muted)
     if sched_meta.impossible_same_key_repeats > 0:
         text.append(
-            f"  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @60fps - the game may merge them)\n",
+            f"  ({sched_meta.impossible_same_key_repeats} same-key repeats faster than one frame @{fps}fps - the game may merge them)\n",
             style=warning,
         )
     text.append(f"Risky same-key repeats      : {sched_meta.risky_same_key_repeats}\n", style=muted)
@@ -534,7 +534,7 @@ def play_selected_song(
                     return PLAYBACK_QUIT
 
     # Print Schedule Summary
-    print_schedule_summary(actions, sched_meta)
+    print_schedule_summary(actions, sched_meta, fps=int(active_policy.fps))
 
     # Phase C: FPS assumption advisory — non-blocking notice when short notes exist under
     # high configured FPS. Printed once at play-start so the user has the information
@@ -633,7 +633,13 @@ def _print_hold_comparison_table(
     """Print the explicit hold-frame choices for the selected FPS."""
     cfg = cfg or load_config()
     fps = resolve_game_fps(fps if fps is not None else cfg.game_fps)
-    margin = 500
+    active_session = PlaybackSessionContext.default(
+        hold_frames=cfg.default_hold_frames,
+        fps=fps,
+    )
+    active_policy = resolve_calibrated_policy(active_session, cfg)
+    margin = int(active_policy.min_hold_margin_us)
+    margin_label = f"{margin} µs ({active_policy.min_hold_margin_source})"
     intents = {1.0: "Sharpest; default; maximum same-key scheduling room", 1.25: "Moderate visibility cushion", 1.5: "Longest visibility; useful when registration reliability matters more than short repeat room"}
 
     accent = _resolve_cli_theme_style()
@@ -651,11 +657,12 @@ def _print_hold_comparison_table(
     for ratio in HOLD_FRAME_OPTIONS:
         base = round(ratio * frame_us)
         effective = materialize_hold_us(ratio, fps, margin)
-        table.add_row(format_hold_frames(ratio), f"{ratio:.2f}", str(fps), f"{frame_us} µs", f"{base} µs", f"{margin} µs", f"{effective} µs", intents[ratio])
+        table.add_row(format_hold_frames(ratio), f"{ratio:.2f}", str(fps), f"{frame_us} µs", f"{base} µs", margin_label, f"{effective} µs", intents[ratio])
 
     _console.print()
     _console.print(table)
     _console.print()
+    _console.print(Text(f"Device margin: {margin_label}", style=Style(dim=True)))
     _console.print(
         Text("Select hold frames directly; FPS must match the value configured inside Sky.", style=Style(dim=True))
     )

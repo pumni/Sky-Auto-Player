@@ -950,7 +950,7 @@ def main() -> int:
                     fps=resolved_fps,
                     scan_code_mode=RUNTIME_STATE.scan_code_mode,
                 ),
-                hold_frames=user_cfg.default_hold_frames,
+                hold_frames=args.hold_frames,
                 tempo=RUNTIME_STATE.tempo_scale,
                 fps=resolved_fps,
             )
@@ -978,7 +978,7 @@ def main() -> int:
 
             try:
                 picker_result = prompt_song_selection(
-                    hold_frames=user_cfg.default_hold_frames,
+                    hold_frames=args.hold_frames,
                     tempo=RUNTIME_STATE.tempo_scale,
                     dry_run=RUNTIME_STATE.dry_run,
                     fps=resolved_fps,

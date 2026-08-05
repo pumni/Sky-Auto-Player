@@ -57,3 +57,39 @@ def test_calibration_recommendation_uses_hold_frames() -> None:
 
     assert rec.hold_frames == 1.25
     assert rec.recommended_hold_us == 21_334
+
+
+def test_calibration_repeat_stress_wins_over_polyphony() -> None:
+    rec = calibrate_timing(
+        CalibrationInput(
+            hold_frames=1.5,
+            tempo_scale=1.0,
+            fps=60,
+            p95_lateness_us=0,
+            p99_lateness_us=0,
+            p95_send_duration_us=0,
+            late_over_10ms=0,
+            impossible_same_key_repeats=0,
+            risky_same_key_repeats=1,
+            failed_release_count=0,
+            max_polyphony=5,
+        )
+    )
+
+    assert rec.hold_frames == 1.0
+
+
+def test_calibration_uses_summary_device_margin() -> None:
+    from sky_music.orchestration.calibration import calibration_input_from_summary
+
+    inp = calibration_input_from_summary(
+        {
+            "hold_frames": 1.0,
+            "fps": 60,
+            "min_hold_margin_us": 800,
+            "min_hold_margin_source": "device_cache",
+        }
+    )
+    rec = calibrate_timing(inp)
+
+    assert rec.recommended_hold_us == 17_467

@@ -184,7 +184,7 @@ def main() -> int:
             env_file = ROOT / ".env"
             if env_file.exists():
                 shutil.copy2(env_file, worktree / ".env")
-            baseline_wheel = _build_wheel(worktree, env_file=(worktree / ".env") if env_file.exists() else None)
+            baseline_wheel = _build_wheel(worktree, env_file=Path(".env") if env_file.exists() else None)
             provenance["roles"]["baseline"] = {
                 "native_build_commit": baseline_sha,
                 "wheel": baseline_wheel.name,
@@ -202,7 +202,7 @@ def main() -> int:
             if result.returncode != 0:
                 raise RuntimeError("baseline benchmark failed")
 
-            candidate_wheel = _build_wheel(ROOT, env_file=(ROOT / ".env") if env_file.exists() else None)
+            candidate_wheel = _build_wheel(ROOT, env_file=Path(".env") if env_file.exists() else None)
             provenance["roles"]["candidate"] = {
                 "native_build_commit": candidate_sha,
                 "wheel": candidate_wheel.name,

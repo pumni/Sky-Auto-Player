@@ -710,15 +710,15 @@ struct SharedCalibState {
     pump_thread_failed: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 type ForegroundProbe = Box<dyn Fn(isize) -> bool + Send + Sync>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static TEST_FOREGROUND_OVERRIDE: std::cell::RefCell<Option<ForegroundProbe>> = const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn set_test_foreground_override<F: Fn(isize) -> bool + Send + Sync + 'static>(f: Option<F>) {
     TEST_FOREGROUND_OVERRIDE.with(|cell| {
         *cell.borrow_mut() = f.map(|func| Box::new(func) as ForegroundProbe);
@@ -726,7 +726,7 @@ pub fn set_test_foreground_override<F: Fn(isize) -> bool + Send + Sync + 'static
 }
 
 pub fn check_foreground_owned(hwnd: isize) -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let overridden =
             TEST_FOREGROUND_OVERRIDE.with(|cell| cell.borrow().as_ref().map(|f| f(hwnd)));

@@ -204,13 +204,15 @@ def analyze_schedule(
     reason = f"{' and '.join(reasons_list)} detected" if reasons_list else "No timing conflicts detected."
     
     # 7. Unified Recommendation Engine decisions (P1.3)
+    has_repeat_stress = res.risky_same_key_repeats > 0 or res.compressed_holds > 0
+    severe_repeat_stress = res.risky_same_key_repeats > 5 or res.compressed_holds > 10
     if res.impossible_same_key_repeats > 0:
         suggested_hold_frames = 1.0
         suggested_tempo_scale = min(0.92, 1.0)
         recommendations.append(
             "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
         )
-    elif res.risky_same_key_repeats > 5 or res.compressed_holds > 10:
+    elif severe_repeat_stress or has_repeat_stress:
         suggested_hold_frames = 1.0
         suggested_tempo_scale = min(0.95, 1.0)
     elif res.max_polyphony >= 5 or (

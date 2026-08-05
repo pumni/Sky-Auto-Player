@@ -47,11 +47,17 @@ class PlaybackSessionContext:
     @classmethod
     def default(
         cls,
+        hold_frames: float = DEFAULT_HOLD_FRAMES,
         tempo_scale: float = 1.0,
         fps: int | None = None,
         scan_code_mode: str = "physical",
     ) -> PlaybackSessionContext:
-        return cls(tempo_scale=tempo_scale, fps=resolve_game_fps(fps), scan_code_mode=scan_code_mode)
+        return cls(
+            hold_frames=hold_frames,
+            tempo_scale=tempo_scale,
+            fps=resolve_game_fps(fps),
+            scan_code_mode=scan_code_mode,
+        )
 
     @classmethod
     def from_cli_args(cls, args: Any, cfg: AppConfig | None = None) -> PlaybackSessionContext:

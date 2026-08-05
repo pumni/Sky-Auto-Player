@@ -24,6 +24,8 @@ class CalibrationInput:
     compressed_holds: int = 0
     max_polyphony: int = 0
     note_count: int = 0
+    min_hold_margin_us: int = 500
+    min_hold_margin_source: str = "default_500"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hold_frames", normalize_hold_frames(self.hold_frames))
@@ -67,23 +69,29 @@ def load_telemetry_summary(target: Path | str | None = None) -> dict | None:
 
 
 def calibrate_timing(inp: CalibrationInput) -> CalibrationRecommendation:
-    stress_repeats = inp.risky_same_key_repeats > 5 or inp.compressed_holds > 10
+    has_repeat_stress = inp.risky_same_key_repeats > 0 or inp.compressed_holds > 0
+    severe_repeat_stress = inp.risky_same_key_repeats > 5 or inp.compressed_holds > 10
     timing_failure = inp.failed_release_count > 0 or inp.p99_lateness_us > 15_000 or inp.late_over_10ms > 5
-    if inp.infeasible_same_key_repeats > 0 and not timing_failure:
+    if inp.infeasible_same_key_repeats > 0:
         hold = 1.0
         tempo = round(min(inp.tempo_scale, 0.90), 2)
         severity = "moderate"
         reason = "Infeasible repeat stress detected; use the shortest hold and reduce tempo."
+    elif severe_repeat_stress:
+        hold = 1.0
+        tempo = round(min(inp.tempo_scale, 0.95), 2)
+        severity = "moderate"
+        reason = "Repeat/compression stress detected; use the shortest hold and reduce tempo."
+    elif has_repeat_stress:
+        hold = 1.0
+        tempo = round(min(inp.tempo_scale, 0.95), 2)
+        severity = "moderate"
+        reason = "Repeat/compression stress detected; use the shortest hold."
     elif timing_failure:
         hold = 1.5
         tempo = round(min(inp.tempo_scale, 0.90), 2)
         severity = "severe"
         reason = "Delivery degradation or completion lateness detected; use a longer hold and reduce tempo."
-    elif stress_repeats:
-        hold = 1.0
-        tempo = round(min(inp.tempo_scale, 0.95), 2)
-        severity = "moderate"
-        reason = "Repeat/compression stress detected; use a shorter hold."
     elif inp.p99_lateness_us > 8_000 or inp.late_over_10ms > 0:
         hold = 1.25
         tempo = round(min(inp.tempo_scale, 0.95), 2)
@@ -100,7 +108,12 @@ def calibrate_timing(inp: CalibrationInput) -> CalibrationRecommendation:
         severity = "ok"
         reason = "Timing is good; retain the selected hold."
 
-    effective = FrameTimingPolicy.from_hold_frames(hold, resolve_game_fps(inp.fps))
+    effective = FrameTimingPolicy.from_hold_frames(
+        hold,
+        resolve_game_fps(inp.fps),
+        margin_us=inp.min_hold_margin_us,
+        margin_source=inp.min_hold_margin_source,
+    )
     return CalibrationRecommendation(hold, tempo, int(effective.hold_us), reason, severity)
 
 
@@ -126,4 +139,6 @@ def calibration_input_from_summary(summary: dict) -> CalibrationInput:
         compressed_holds=int(sched.get("compressed_holds", 0)),
         max_polyphony=int(sched.get("max_polyphony", 0)),
         note_count=int(sched.get("note_count", summary.get("total_events", 0))),
+        min_hold_margin_us=max(0, int(summary.get("min_hold_margin_us", 500))),
+        min_hold_margin_source=str(summary.get("min_hold_margin_source", "default_500")),
     )
