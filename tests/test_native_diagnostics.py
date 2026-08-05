@@ -16,3 +16,15 @@ def test_diagnostics_keep_latency_without_rejection() -> None:
     assert diagnose_native_playback({"bookkeeping_degraded": True}).category == (
         "bookkeeping_latency"
     )
+
+
+def test_diagnostics_label_hold_visibility_as_inference() -> None:
+    result = diagnose_native_playback(
+        {
+            "game_fps": 60,
+            "configured_hold_us": 16_667,
+            "sendinput_path_degraded": True,
+        }
+    )
+    assert result.category == "hold_visibility_risk"
+    assert any("inference" in evidence for evidence in result.evidence)

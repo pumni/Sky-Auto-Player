@@ -51,6 +51,21 @@ def diagnose_native_playback(snapshot: Mapping[str, object]) -> NativePlaybackDi
     )
     lead = positive("positive_residual_at_cap") or positive("lead_saturation_count_down")
     focus_or_expiry = positive("dropped_expired") or positive("focus_loss_diagnostics")
+    hold_visibility = False
+    configured_hold_us = snapshot.get("configured_hold_us")
+    game_fps = snapshot.get("game_fps")
+    if (
+        not backend
+        and not scheduler
+        and isinstance(configured_hold_us, (int, float))
+        and not isinstance(configured_hold_us, bool)
+        and isinstance(game_fps, (int, float))
+        and not isinstance(game_fps, bool)
+        and game_fps > 0
+        and configured_hold_us <= 1_250_000 / game_fps
+        and (sendinput or bookkeeping)
+    ):
+        hold_visibility = True
 
     evidence: list[str] = []
     if backend:
@@ -65,9 +80,20 @@ def diagnose_native_playback(snapshot: Mapping[str, object]) -> NativePlaybackDi
         evidence.append("adaptive lead reached its cap with positive residual")
     if focus_or_expiry:
         evidence.append("focus or expiry drop evidence is present")
+    if hold_visibility:
+        evidence.append(
+            "hold is near one frame while sender-side latency is elevated; game visibility is an inference"
+        )
 
     causes = sum((backend, sendinput, bookkeeping, scheduler, lead, focus_or_expiry))
+    if hold_visibility and not backend and not scheduler and not lead and not focus_or_expiry:
+        return NativePlaybackDiagnosis("hold_visibility_risk", tuple(evidence))
     if causes == 0:
+        if sendinput or bookkeeping:
+            category = "mixed" if sendinput and bookkeeping else (
+                "sendinput_latency" if sendinput else "bookkeeping_latency"
+            )
+            return NativePlaybackDiagnosis(category, tuple(evidence))
         return NativePlaybackDiagnosis("clean", ())
     if causes > 1:
         return NativePlaybackDiagnosis("mixed", tuple(evidence))
@@ -81,6 +107,8 @@ def diagnose_native_playback(snapshot: Mapping[str, object]) -> NativePlaybackDi
         category = "scheduler_wake_latency"
     elif lead:
         category = "lead_saturation"
+    elif hold_visibility:
+        category = "hold_visibility_risk"
     else:
         category = "focus_or_expiry_drop"
     return NativePlaybackDiagnosis(category, tuple(evidence))
