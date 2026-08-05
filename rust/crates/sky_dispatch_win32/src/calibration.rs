@@ -768,7 +768,8 @@ mod platform {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
         PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage,
-        WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+        WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW,
+        WS_VISIBLE,
     };
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
@@ -1044,7 +1045,26 @@ mod platform {
             return;
         }
 
+        let static_class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let label_text: Vec<u16> =
+            "Input latency calibration is running...\n\nKeep this window focused until calibration completes.\nDo not press any keys."
+                .encode_utf16()
+                .collect();
         unsafe {
+            CreateWindowExW(
+                0,
+                static_class.as_ptr(),
+                label_text.as_ptr(),
+                WS_CHILD | WS_VISIBLE,
+                20,
+                20,
+                460,
+                100,
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
             ShowWindow(hwnd, SW_SHOW);
         }
 
