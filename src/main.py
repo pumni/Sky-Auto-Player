@@ -11,23 +11,23 @@ from sky_music.cli.calibration_command import (
 )
 from sky_music.cli.console_playback import (
     _check_textual_support,
-    _print_profile_comparison_table,
+    _print_hold_comparison_table,
     _wait_key_and_exit,
     play_selected_song,
     print_choices_local,
 )
 from sky_music.cli.doctor_command import run_doctor_command
 from sky_music.config import (
-    CLI_PROFILE_NAMES,
+    VALID_FPS,
     AppConfig,
     HotkeyDefaults,
     apply_config_defaults,
-    canonical_profile_name,
     load_config,
     persist_playback_defaults,
     resolve_game_fps,
     sky_process_names_csv,
 )
+from sky_music.domain.hold_timing import HOLD_FRAME_OPTIONS
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
     merge_session_with_overrides,
@@ -60,6 +60,21 @@ PLAYBACK_DEBUG = False
 DEBUG_LOG_PATH = None
 DEBUG_START_PERF = None
 DEBUG_LOG_BUFFER = []
+
+
+class _RecordExplicitAction(argparse.Action):
+    """Record whether a value was supplied so config defaults cannot override it."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        del parser, option_string
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"_{self.dest}_explicit", True)
 
 
 def init_debug_log() -> None:
@@ -137,31 +152,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # ── Playback Timing ───────────────────────────────────────────────────────
     timing = parser.add_argument_group("Playback timing")
     timing.add_argument(
-        "--timing-profile",
-        choices=list(CLI_PROFILE_NAMES),
-        default="balanced",
-        help=(
-            "Timing profile: "
-            "local-precise (low latency), "
-            "audience-safe (online play / audience audibility), "
-            "balanced (default)"
-        ),
+        "--hold-frames",
+        type=float,
+        choices=HOLD_FRAME_OPTIONS,
+        default=1.0,
+        action=_RecordExplicitAction,
+        help="Key hold length in game frames. Choices: 1.0, 1.25, 1.5. Default: 1.0. The duration is calculated from --fps.",
     )
     timing.add_argument(
         "--tempo-scale",
         type=float,
         default=1.0,
         help="Scale playback tempo: 1.2 = 20%% faster, 0.8 = 20%% slower (default: 1.0)",
-    )
-    timing.add_argument(
-        "--hold-ms",
-        type=float,
-        help="Override key hold duration in ms (overrides profile)",
-    )
-    timing.add_argument(
-        "--min-hold-ms",
-        type=float,
-        help="Override minimum key hold duration in ms (overrides profile)",
     )
     timing.add_argument(
         "--scan-code-mode",
@@ -194,11 +196,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     timing.add_argument(
         "--fps",
         type=int,
+        choices=VALID_FPS,
         default=None,
         metavar="FPS",
         help=(
-            "Game frame rate hint for frame-aware timing (e.g. 30, 60, 120). "
-            "Scales hold timing via FrameTimingPolicy."
+            "FPS selected in Sky (e.g. 30, 60, 120). This value must match the FPS selected by the user inside Sky. "
+            "Sky Auto Player does not auto-detect game FPS."
         ),
     )
 
@@ -284,9 +287,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="allow window title matching when process verification fails",
     )
     diag.add_argument(
-        "--compare-profiles",
+        "--compare-holds",
         action="store_true",
-        help="print a side-by-side timing comparison table of all profiles and exit",
+        help="print the hold-frame comparison table for the selected FPS and exit",
     )
     diag.add_argument(
         "--check-update",
@@ -331,8 +334,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--auto-calibrate",
         action="store_true",
         help=(
-            "analyse the most recent telemetry log and print calibration recommendations "
-            "(profile adjustments, tempo suggestions). Does NOT modify config.json automatically."
+            "analyse the most recent telemetry log and print hold-frame and tempo recommendations. "
+            "Does NOT modify config.json automatically."
         ),
     )
     telem.add_argument(
@@ -356,7 +359,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "apply calibration recommendations from the latest telemetry summary and "
-            "persist profile, tempo, and FPS defaults to config.json."
+            "persist hold, tempo, and FPS defaults to config.json."
         ),
     )
 
@@ -703,7 +706,7 @@ def _run_compare_versions_command(current: str, latest: str) -> int:
 
 
 def prompt_song_selection(
-    profile: str = "balanced",
+    hold_frames: float = 1.0,
     tempo: float = 1.0,
     dry_run: bool = False,
     fps: int | None = None,
@@ -712,12 +715,12 @@ def prompt_song_selection(
 ) -> SongPickerResult | None:
     from sky_music.ui import picker as songs
     session = merge_session_with_overrides(
-        RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+        RUNTIME_STATE.session or PlaybackSessionContext.default(
             tempo_scale=tempo,
             fps=fps,
             scan_code_mode=scan_code_mode,
         ),
-        profile=profile,
+        hold_frames=hold_frames,
         tempo=tempo,
         fps=fps,
     )
@@ -748,7 +751,7 @@ def prompt_song_selection(
         return choose_song_interactively_textual(
             theme_name=songs.ACTIVE_THEME,
             background_mode=background_mode,
-            initial_profile=session.profile_name,
+            initial_hold_frames=session.hold_frames,
             initial_tempo=session.tempo_scale,
             initial_fps=session.fps,
             initial_dry_run=dry_run,
@@ -852,8 +855,8 @@ def main() -> int:
         inspect_telemetry_report(args.inspect_telemetry)
         return 0
 
-    if getattr(args, "compare_profiles", False):
-        _print_profile_comparison_table(user_cfg)
+    if getattr(args, "compare_holds", False):
+        _print_hold_comparison_table(user_cfg, fps=args.fps)
         return 0
 
     if getattr(args, "apply_calibration", False) or getattr(args, "save_calibration", False):
@@ -942,12 +945,12 @@ def main() -> int:
             resolved_fps = resolve_game_fps(args.fps if cli_fps_explicit else user_cfg.game_fps)
 
             session = merge_session_with_overrides(
-                RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+                RUNTIME_STATE.session or PlaybackSessionContext.default(
                     tempo_scale=RUNTIME_STATE.tempo_scale,
                     fps=resolved_fps,
                     scan_code_mode=RUNTIME_STATE.scan_code_mode,
                 ),
-                profile=canonical_profile_name(user_cfg.default_timing_profile),
+                hold_frames=user_cfg.default_hold_frames,
                 tempo=RUNTIME_STATE.tempo_scale,
                 fps=resolved_fps,
             )
@@ -956,7 +959,7 @@ def main() -> int:
                 return run_sky_app_unified(
                     theme_name=songs.ACTIVE_THEME,
                     background_mode=args.ui_background,
-                    initial_profile=session.profile_name,
+                    initial_hold_frames=session.hold_frames,
                     initial_tempo=session.tempo_scale,
                     initial_fps=session.fps,
                     initial_dry_run=RUNTIME_STATE.dry_run,
@@ -975,7 +978,7 @@ def main() -> int:
 
             try:
                 picker_result = prompt_song_selection(
-                    profile=canonical_profile_name(user_cfg.default_timing_profile),
+                    hold_frames=user_cfg.default_hold_frames,
                     tempo=RUNTIME_STATE.tempo_scale,
                     dry_run=RUNTIME_STATE.dry_run,
                     fps=resolved_fps,
@@ -998,7 +1001,7 @@ def main() -> int:
                 controls=controls,
                 overrides=PlaybackOverrides(
                     dry_run=force_dry,
-                    profile=picker_result.profile_name,
+                    hold_frames=picker_result.hold_frames,
                     tempo=picker_result.tempo_scale,
                     fps=picker_result.fps,
                 )
@@ -1009,11 +1012,11 @@ def main() -> int:
             # P0 Fix: Update persistent loop state with picker decision
             # (Allows picker changes to persist across multiple songs)
             updated_session = merge_session_with_overrides(
-                RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+                RUNTIME_STATE.session or PlaybackSessionContext.default(
                     tempo_scale=RUNTIME_STATE.tempo_scale,
                     scan_code_mode=RUNTIME_STATE.scan_code_mode,
                 ),
-                profile=picker_result.profile_name,
+                hold_frames=picker_result.hold_frames,
                 tempo=picker_result.tempo_scale,
                 fps=picker_result.fps,
             )
@@ -1022,7 +1025,7 @@ def main() -> int:
 
             persist_playback_defaults(
                 user_cfg,
-                profile_name=updated_session.profile_name,
+                hold_frames=updated_session.hold_frames,
                 tempo_scale=updated_session.tempo_scale,
                 fps=picker_result.fps,
             )

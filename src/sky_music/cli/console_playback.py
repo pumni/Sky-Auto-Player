@@ -16,11 +16,14 @@ from rich.text import Text
 import sky_music.infrastructure.doctor as doctor
 from sky_music.config import (
     AppConfig,
-    canonical_profile_name,
     load_config,
-    merged_timing_profiles,
-    persist_default_profile,
     resolve_game_fps,
+)
+from sky_music.domain.hold_timing import (
+    HOLD_FRAME_OPTIONS,
+    format_hold_frames,
+    frame_duration_us,
+    materialize_hold_us,
 )
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
@@ -72,13 +75,13 @@ def _resolve_cli_theme_style() -> Style:
     return Style.parse(preset.accent)
 
 
-def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: Any, _policy_override_fn: Any = None) -> tuple[bool, str | None, float | None]:
+def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: Any, _policy_override_fn: Any = None) -> tuple[bool, float | None, float | None]:
     """Display risk analysis, prompt user for action if severity is medium/high.
 
-    Returns (should_continue, new_profile_name_or_None, new_tempo_scale_or_None).
+    Returns (should_continue, new_hold_frames_or_None, new_tempo_scale_or_None).
     """
     severity = report.severity.upper()
-    recommended = report.suggested_profile
+    recommended = report.suggested_hold_frames
     accent = _resolve_cli_theme_style()
 
     danger_style = Style.parse("#ef4444")
@@ -91,8 +94,8 @@ def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: 
     content.append("Schedule Risk Assessment\n", style=Style(bold=True, color=severity_color.color))
     content.append("\nSeverity: ", style=muted_style)
     content.append(severity, style=severity_color + Style(bold=True))
-    content.append("\nRecommended profile: ", style=muted_style)
-    content.append(recommended, style=accent + Style(bold=True))
+    content.append("\nRecommended hold: ", style=muted_style)
+    content.append(f"{recommended:.2f} frames", style=accent + Style(bold=True))
     content.append("\n\nRecommendations:\n", style=muted_style)
     for rec in report.recommendations:
         content.append(f"  • {rec}\n")
@@ -106,7 +109,7 @@ def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: 
 
     options_box = Text()
     options_box.append("What would you like to do?\n\n")
-    options_box.append(f"[1] Switch to '{recommended}' profile\n")
+    options_box.append(f"[1] Use hold {recommended:.2f} frames\n")
     options_box.append("[2] Scale tempo down to 0.92x\n")
     options_box.append("[3] Dry-run first (simulate, no keystrokes)\n")
     options_box.append("[4] Proceed with current settings\n")
@@ -120,12 +123,7 @@ def _handle_risk_analysis(report: Any, _song: Any, is_dry_run: bool, _controls: 
         return False, None, None
 
     if choice == "1":
-        _console.print(f"\n  → Switched to profile: [{accent}]{recommended}[/]")
-        try:
-            user_cfg = load_config()
-            persist_default_profile(user_cfg, recommended)
-        except Exception:
-            pass
+        _console.print(f"\n  → Using hold {recommended:.2f} frames")
         return True, recommended, None
     if choice == "2":
         _console.print("\n  → Tempo scaled to 0.92x")
@@ -156,7 +154,7 @@ def _build_preflight_panel(
     _console.print(Panel(content, title=title, border_style=border_style))
 
 
-def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 1.0, controls: Any = None) -> bool:
+def _mini_preflight(is_dry_run: bool, hold_label: str = "hold 1.00f", tempo: float = 1.0, controls: Any = None) -> bool:
     """Preflight check before real playback — uniform premium TUI panel output."""
     if is_dry_run:
         return True
@@ -175,7 +173,7 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
         while True:
             dry_str = "ON" if is_dry_run else "OFF"
             header_content = Text.assemble(
-                "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+                "Readiness │ ", (hold_label, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
             )
             error_content = Text.assemble(("✗ Sky not found: ", danger), win["msg"])
             status_content = Text("Waiting for Sky focus. Playback has not started yet.", style=warning)
@@ -212,7 +210,7 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
         while True:
             dry_str = "ON" if is_dry_run else "OFF"
             header_content = Text.assemble(
-                "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+                "Readiness │ ", (hold_label, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
             )
 
             check_lines = []
@@ -258,7 +256,7 @@ def _mini_preflight(is_dry_run: bool, profile: str = "balanced", tempo: float = 
 
     dry_str = "ON" if is_dry_run else "OFF"
     header_content = Text.assemble(
-        "Readiness │ profile ", (profile, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
+        "Readiness │ ", (hold_label, accent), " │ tempo ", (f"{tempo:.2f}x", accent), " │ dry ", (dry_str, accent),
     )
 
     check_lines = []
@@ -401,32 +399,30 @@ def play_selected_song(
 
     # Extract overrides into a unified session context
     force_dry_run = overrides.dry_run if overrides else False
-    force_profile = overrides.profile if overrides else None
+    force_hold = overrides.hold_frames if overrides else None
     force_tempo = overrides.tempo if overrides else None
     force_fps = overrides.fps if overrides else None
-    if force_profile is not None:
-        force_profile = canonical_profile_name(force_profile)
 
     user_cfg = load_config()
-    base_session = RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+    base_session = RUNTIME_STATE.session or PlaybackSessionContext.default(
         tempo_scale=RUNTIME_STATE.tempo_scale,
         fps=resolve_game_fps(user_cfg.game_fps),
         scan_code_mode=RUNTIME_STATE.scan_code_mode,
     )
     session = merge_session_with_overrides(
         base_session,
-        profile=force_profile,
+        hold_frames=force_hold,
         tempo=force_tempo,
         fps=force_fps,
     )
 
     is_dry_run = RUNTIME_STATE.dry_run or force_dry_run
-    current_profile = session.display_profile_label()
+    current_hold_label = session.display_hold_label()
     current_tempo = session.tempo_scale
 
     active_policy = resolve_calibrated_policy(session, user_cfg)
 
-    # build_key_actions builds DefaultNoteResolver(profile) when resolver is None; that
+    # build_key_actions builds DefaultNoteResolver(instrument_profile) when resolver is None; that
     # single resolver now handles both physical and mapped scan-code modes.
     resolver = None
 
@@ -438,7 +434,7 @@ def play_selected_song(
             print("\n[FATAL] Real Playback aborted due to severe schedule invariant violations:")
             for violation in fatal_violations:
                 print(f"  - [{violation.code}] {violation.message}")
-            print("  Please try choosing a safer Timing Profile or decrease --tempo-scale.")
+            print("  Please reduce tempo or choose a shorter hold for more same-key repeat room.")
             return False
         return True
 
@@ -455,8 +451,8 @@ def play_selected_song(
             print(f"\n[FATAL] Schedule build failed: {exc}")
             if exc.recommended_tempo_scale is not None:
                 print(f"  Try a slower tempo: --tempo-scale {exc.recommended_tempo_scale:.2f}")
-            if exc.recommended_profile:
-                print(f"  Or switch to a safer profile: --timing-profile {exc.recommended_profile}")
+            if exc.recommended_hold_frames is not None and session.hold_frames != exc.recommended_hold_frames:
+                print(f"  Use a shorter hold: --hold-frames {exc.recommended_hold_frames:.2f}")
             return None
 
     sched_meta = build_schedule(session, active_policy, current_tempo)
@@ -476,16 +472,20 @@ def play_selected_song(
 
     # Pre-playback schedule risk analysis (advisory only — do NOT auto-apply)
     from sky_music.domain.analyzer import analyze_schedule
-    report = analyze_schedule(sched_meta, raw_notes=song.notes)
+    report = analyze_schedule(
+        sched_meta,
+        raw_notes=song.notes,
+        current_hold_frames=session.hold_frames,
+    )
 
-    # If picker already decided (force_profile/tempo supplied), skip the prompt
-    if report.severity != "low" and force_profile is None and force_tempo is None:
+    # If the picker already decided the hold/tempo, skip the prompt.
+    if report.severity != "low" and force_hold is None and force_tempo is None:
         should_prompt = True
         if (report.severity == "medium" and not user_cfg.safety.prompt_on_medium_risk) or (report.severity == "high" and not user_cfg.safety.prompt_on_high_risk):
             should_prompt = False
 
         if should_prompt:
-            should_continue, new_profile, new_tempo = _handle_risk_analysis(
+            should_continue, new_hold, new_tempo = _handle_risk_analysis(
                 report, song, is_dry_run, controls
             )
             if not should_continue:
@@ -497,11 +497,11 @@ def play_selected_song(
                 print(f"  * {rec}")
             print("Proceeding automatically as configured by safety rules.\n")
             should_continue = True
-            new_profile, new_tempo = None, None
-        if new_profile is not None and canonical_profile_name(new_profile) != session.profile_name:
-            session = session.with_profile(new_profile)
+            new_hold, new_tempo = None, None
+        if new_hold is not None and new_hold != session.hold_frames:
+            session = session.with_hold_frames(new_hold)
             active_policy = resolve_calibrated_policy(session, user_cfg)
-            current_profile = session.display_profile_label()
+            current_hold_label = session.display_hold_label()
 
             sched_meta = build_schedule(session, active_policy, current_tempo)
             if sched_meta is None:
@@ -510,7 +510,7 @@ def play_selected_song(
 
             violations = validate_key_actions(actions, policy=active_policy)
             if violations:
-                print("\n[Warning] Schedule Invariant Violations detected after profile change:")
+                print("\n[Warning] Schedule Invariant Violations detected after hold change:")
                 for violation in violations:
                     print(f"  - [{violation.code}] {violation.message}")
                 if not check_and_abort_violations(violations, is_dry_run):
@@ -548,7 +548,7 @@ def play_selected_song(
             print(f"\n[Advisory] {_advisory}")
 
     # Preflight check and window readiness
-    if not _mini_preflight(is_dry_run, profile=current_profile, tempo=current_tempo, controls=controls):
+    if not _mini_preflight(is_dry_run, hold_label=current_hold_label, tempo=current_tempo, controls=controls):
         return PLAYBACK_QUIT
 
     # Check window/readiness only if we are NOT running dry-run mode
@@ -574,7 +574,8 @@ def play_selected_song(
         renderer = ProgressRenderer(
             controls,
             verbose=verbose_hud_mode,
-            profile_name=current_profile,
+            hold_label=current_hold_label,
+            hold_frames=session.hold_frames,
             tempo_scale=current_tempo,
             accent_hex=_theme_tokens.accent,
             theme_name=_active_theme_name,
@@ -594,10 +595,13 @@ def play_selected_song(
         renderer=renderer,
         telemetry_enabled=telemetry_enabled,
         require_focus=not is_dry_run,
-        profile_name=current_profile,
+        hold_label=current_hold_label,
+        hold_frames=session.hold_frames,
         game_fps=int(active_policy.fps),
         tempo_scale=current_tempo,
         min_hold_us=int(active_policy.min_hold_us),
+        min_hold_margin_us=int(active_policy.min_hold_margin_us),
+        min_hold_margin_source=active_policy.min_hold_margin_source,
     )
     engine.telemetry.record_schedule_metadata(sched_meta)
 
@@ -621,58 +625,37 @@ def play_selected_song(
     return result
 
 
-def _print_profile_comparison_table(cfg: AppConfig | None = None) -> None:
-    """Print a rich side-by-side timing comparison table for all profiles."""
+def _print_hold_comparison_table(
+    cfg: AppConfig | None = None,
+    *,
+    fps: int | None = None,
+) -> None:
+    """Print the explicit hold-frame choices for the selected FPS."""
     cfg = cfg or load_config()
-    profiles = merged_timing_profiles(cfg)
-
-    def frame_coupled_ms(
-        data: dict,
-        *,
-        value_key: str,
-        unframed_key: str,
-        fallback_unframed_key: str | None = None,
-    ) -> str:
-        value = data.get(value_key)
-        if value is None:
-            value = data.get(unframed_key)
-        if value is None and fallback_unframed_key is not None:
-            value = data.get(fallback_unframed_key)
-        if value is None:
-            value = 0
-        return f"{int(value) // 1000}"
-
-    COLS = [
-        ("Profile",              lambda n, _d: n),
-        ("hold_ms",              lambda _n, d: frame_coupled_ms(
-            d,
-            value_key="hold_us",
-            unframed_key="hold_unframed_us",
-            fallback_unframed_key="min_hold_unframed_us",
-        )),
-        ("min_hold_ms",          lambda _n, d: frame_coupled_ms(d, value_key="min_hold_us", unframed_key="min_hold_unframed_us")),
-        ("grace_ms",             lambda _n, d: f"{d.get('focus_restore_grace_us', 0) // 1000}"),
-        ("conflict_policy",      lambda _n, d: d.get("same_key_conflict_policy", "drop_chord")),
-    ]
+    fps = resolve_game_fps(fps if fps is not None else cfg.game_fps)
+    margin = 500
+    intents = {1.0: "Sharpest; default; maximum same-key scheduling room", 1.25: "Moderate visibility cushion", 1.5: "Longest visibility; useful when registration reliability matters more than short repeat room"}
 
     accent = _resolve_cli_theme_style()
 
     table = Table(
-        title="Timing Profile Comparison",
+        title=f"Hold Comparison ({fps} FPS)",
         title_style=Style(bold=True),
         border_style=accent,
         header_style=Style(bold=True, color=accent.color),
         show_lines=True,
     )
-    for header, _fmt in COLS:
-        table.add_column(header, justify="left" if header == "Profile" else "right")
-
-    for name, data in sorted(profiles.items()):
-        table.add_row(*[fmt(name, data) for _, fmt in COLS])
+    for header in ("Hold", "Frames", "FPS", "Frame duration", "Base hold", "Device margin", "Effective hold", "Intent"):
+        table.add_column(header, justify="left" if header in ("Hold", "Intent") else "right")
+    frame_us = frame_duration_us(fps)
+    for ratio in HOLD_FRAME_OPTIONS:
+        base = round(ratio * frame_us)
+        effective = materialize_hold_us(ratio, fps, margin)
+        table.add_row(format_hold_frames(ratio), f"{ratio:.2f}", str(fps), f"{frame_us} µs", f"{base} µs", f"{margin} µs", f"{effective} µs", intents[ratio])
 
     _console.print()
     _console.print(table)
     _console.print()
     _console.print(
-        Text("All time values in milliseconds. Use --timing-profile <name> to select.", style=Style(dim=True))
+        Text("Select hold frames directly; FPS must match the value configured inside Sky.", style=Style(dim=True))
     )

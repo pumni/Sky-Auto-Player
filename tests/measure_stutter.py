@@ -32,7 +32,7 @@ HOW TO RECORD A RUN (do this first)
    **16-bit PCM WAV** (Audacity: File > Export > WAV, "WAV signed 16-bit PCM").
 4. In another terminal, play WITH telemetry:
 
-       uv run play --song "blue" --fps 144 --timing-profile local-precise --debug-csv
+       uv run play --song "blue" --fps 144 --hold-frames 1.0 --debug-csv
 
    (Use the SAME song/fps/profile you actually hear stutter with. --debug-csv writes
    logs/playback_telemetry_<id>.csv — note the newest one.)
@@ -308,7 +308,7 @@ def analyze_and_report(
             f"   instrument is too quiet or notes overlap.\n"
             f"   FIX (per Appendix A.1): re-record with a PERCUSSIVE instrument (fast decay), MUTE the\n"
             f"   in-game music/ambience, and use a CONTROLLED probe with well-separated notes, e.g.\n"
-            f"   `uv run play --song TEST_metro_alt_200 --fps 144 --timing-profile local-precise --debug-csv`\n"
+            f"   `uv run play --song TEST_metro_alt_200 --fps 144 --hold-frames 1.0 --debug-csv`\n"
             f"   (or TEST_visibility). Validate the mechanism on a clean probe first, THEN dense songs.\n"
             f"   You can also try tuning the detector (--sensitivity / --min-gap-ms) but a continuous\n"
             f"   energy bed cannot be fixed by thresholds — fix the recording.\n"

@@ -27,7 +27,7 @@ USAGE
         --labels balanced,min100,spin3000
 
 Record each run identically except the one variable under test, e.g.:
-    uv run play --song "blue" --fps 144 --timing-profile local-precise --debug-csv
+    uv run play --song "blue" --fps 144 --hold-frames 1.0 --debug-csv
 """
 from __future__ import annotations
 

@@ -101,13 +101,13 @@ def test_prompt_song_selection_routes_to_textual(monkeypatch):
     expected = SongPickerResult(
         song_path=Path("songs/Alpha.json"),
         action="dry_run",
-        profile_name="balanced",
+        hold_frames=1.0,
         tempo_scale=1.0,
-        fps=None,  # type: ignore[arg-type]
+        fps=60,
     )
 
     def fake_textual_picker(**kwargs: object) -> SongPickerResult:
-        assert kwargs["initial_profile"] == "balanced"
+        assert kwargs["initial_hold_frames"] == 1.0
         assert kwargs["initial_dry_run"] is True
         return expected
 
@@ -146,12 +146,42 @@ def test_cli_calibration_summary_argument():
     assert args.calibration_summary == Path("logs/run.summary.json")
 
 
-def test_profile_comparison_derives_hold_from_min_hold(capsys):
-    main._print_profile_comparison_table(AppConfig())
+def test_hold_comparison_lists_the_three_supported_values(capsys):
+    main._print_hold_comparison_table(AppConfig(game_fps=60))
 
     output = capsys.readouterr().out
-    balanced_row = next(line for line in output.splitlines() if "balanced" in line)
-    assert balanced_row.count("17") == 2
+    assert "Hold Comparison (60 FPS)" in output
+    assert "1.00" in output
+    assert "1.25" in output
+    assert "1.50" in output
+
+
+@pytest.mark.parametrize("value", ["2.0", "0.5"])
+def test_unsupported_hold_values_are_rejected(value: str) -> None:
+    parser = main.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--hold-frames", value])
+
+
+def test_removed_timing_flags_are_rejected() -> None:
+    parser = main.build_arg_parser()
+    for old_flag in ("--timing-profile", "--hold-ms", "--min-hold-ms", "--compare-profiles"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([old_flag, "1"])
+
+
+def test_compare_holds_replaces_compare_profiles() -> None:
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--compare-holds"])
+    assert args.compare_holds is True
+
+
+def test_explicit_default_hold_wins_over_configured_hold() -> None:
+    parser = main.build_arg_parser()
+    args = parser.parse_args(["--hold-frames", "1.0"])
+    main.apply_config_defaults(args, AppConfig(default_hold_frames=1.25))
+
+    assert args.hold_frames == 1.0
 
 
 def test_dynamic_fps_resolution(monkeypatch):
