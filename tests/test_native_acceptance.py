@@ -178,11 +178,21 @@ def test_trace_metrics_reject_missing_required_field() -> None:
 def test_hot_and_cold_action_spacing() -> None:
     hot = ACCEPTANCE._actions(2, 1, gap_profile="hot")
     cold = ACCEPTANCE._actions(2, 1, gap_profile="cold")
-    assert hot[2][2] - hot[0][2] == 10_000
-    assert hot[1][2] - hot[0][2] == 5_000
+    assert hot[2][2] - hot[0][2] == 19_667
+    assert hot[1][2] - hot[0][2] == 9_833
     assert cold[2][2] - cold[0][2] == 60_000
     assert cold[1][2] - cold[0][2] == 30_000
     assert cold[2][2] - cold[1][2] > ACCEPTANCE.SEND_COLD_THRESHOLD_US
+
+
+def test_hot_action_spacing_is_frame_safe_at_supported_fps() -> None:
+    for fps in (30, 60, 120, 240):
+        actions = ACCEPTANCE._actions(2, 15, gap_profile="hot", game_fps=fps)
+        assert actions[2][2] - actions[0][2] >= (
+            (1_000_000 + fps - 1) // fps
+            + 500
+            + ACCEPTANCE.BENCHMARK_HOLD_GUARD_US
+        )
 
 
 def test_warmup_records_are_integrity_input_but_measurement_slice_excludes_them() -> None:

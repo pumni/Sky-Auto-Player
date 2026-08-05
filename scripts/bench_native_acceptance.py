@@ -48,6 +48,18 @@ LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
+BENCHMARK_HOLD_GUARD_US = 2_500
+
+
+def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
+    if not 15 <= game_fps <= 240:
+        raise ValueError("game_fps must be in 15..=240")
+    if gap_profile == "cold":
+        return COLD_CYCLE_US
+    if gap_profile != "hot":
+        raise ValueError("gap_profile must be hot or cold")
+    frame_period_us = (1_000_000 + game_fps - 1) // game_fps
+    return max(HOT_CYCLE_US, frame_period_us + 500 + BENCHMARK_HOLD_GUARD_US)
 
 
 def _actions(
@@ -55,12 +67,13 @@ def _actions(
     polyphony: int,
     *,
     gap_profile: str = "hot",
+    game_fps: int = 60,
 ) -> list[tuple[int, str, int, list[int], str]]:
     if not 1 <= polyphony <= len(SKY_15_SCAN_CODES):
         raise ValueError(f"polyphony must be in 1..{len(SKY_15_SCAN_CODES)}")
     if gap_profile not in {"hot", "cold"}:
         raise ValueError("gap_profile must be hot or cold")
-    cycle_us = HOT_CYCLE_US if gap_profile == "hot" else COLD_CYCLE_US
+    cycle_us = _cycle_us(game_fps=game_fps, gap_profile=gap_profile)
     actions: list[tuple[int, str, int, list[int], str]] = []
     for index in range(count):
         scan_codes = [
@@ -1255,6 +1268,7 @@ def main() -> int:
             args.actions + args.warmup_cycles,
             current_polyphony,
             gap_profile=args.gap_profile,
+            game_fps=args.game_fps,
         )
         try:
             for polyphony in polyphonies:
@@ -1263,6 +1277,7 @@ def main() -> int:
                     args.actions + args.warmup_cycles,
                     polyphony,
                     gap_profile=args.gap_profile,
+                    game_fps=args.game_fps,
                 )
                 run = _run_dispatch(
                     current_actions,
@@ -1343,7 +1358,7 @@ def main() -> int:
 
     command_runs: list[dict[str, int]] = []
     command_failures: list[dict[str, Any]] = []
-    command_actions = _actions(1, 1, gap_profile=args.gap_profile)
+    command_actions = _actions(1, 1, gap_profile=args.gap_profile, game_fps=args.game_fps)
     for sample_index in range(command_samples):
         try:
             command_runs.append(
@@ -1444,7 +1459,12 @@ def main() -> int:
     ]
     by_polyphony: dict[str, Any] = {}
     for polyphony in polyphonies:
-        actions = _actions(args.actions, polyphony, gap_profile=args.gap_profile)
+        actions = _actions(
+            args.actions,
+            polyphony,
+            gap_profile=args.gap_profile,
+            game_fps=args.game_fps,
+        )
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {
             "polyphony": polyphony,
