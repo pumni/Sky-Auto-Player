@@ -73,6 +73,9 @@ class PlaybackSnapshot:
     song_name: str
     status: str = "playing"
     input_path_degraded: bool = False
+    sendinput_path_degraded: bool = False
+    bookkeeping_degraded: bool = False
+    wait_path_degraded: bool = False
     backend_health: BackendHealth | None = None
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +127,9 @@ class SnapshotRenderer:
         status: str = "playing",
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
+        sendinput_path_degraded: bool = False,
+        bookkeeping_degraded: bool = False,
+        wait_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
     ) -> None:
         with self._lock:
@@ -133,6 +139,9 @@ class SnapshotRenderer:
                 song_name=song_name,
                 status=status,
                 input_path_degraded=input_path_degraded,
+                sendinput_path_degraded=sendinput_path_degraded,
+                bookkeeping_degraded=bookkeeping_degraded,
+                wait_path_degraded=wait_path_degraded,
                 backend_health=backend_health,
             )
 
@@ -640,11 +649,27 @@ class PlaybackCard(Static):
         total = snap.total if snap else (self.total_us / 1_000_000)
         status = snap.status if snap else "playing"
         degraded = snap.input_path_degraded if snap else False
+        sendinput_degraded = snap.sendinput_path_degraded if snap else False
+        bookkeeping_degraded = snap.bookkeeping_degraded if snap else False
+        wait_degraded = snap.wait_path_degraded if snap else False
         backend_health = snap.backend_health if snap else None
         notice_state = self._notice_ledger.update(
             input_path_degraded=degraded,
+            sendinput_path_degraded=sendinput_degraded,
+            bookkeeping_degraded=bookkeeping_degraded,
+            wait_path_degraded=wait_degraded,
             keys_dropped=int(getattr(backend_health, "keys_dropped", 0) or 0),
             chord_split_events=int(getattr(backend_health, "chord_split_events", 0) or 0),
+            chords_rejected=int(getattr(backend_health, "chords_rejected", 0) or 0),
+            authored_keys_rejected=int(
+                getattr(backend_health, "authored_keys_rejected", 0) or 0
+            ),
+            sendinput_partial_events=int(
+                getattr(backend_health, "sendinput_partial_events", 0) or 0
+            ),
+            sendinput_zero_progress_failures=int(
+                getattr(backend_health, "sendinput_zero_progress_failures", 0) or 0
+            ),
         )
 
         if self.debug_mode:
@@ -661,6 +686,9 @@ class PlaybackCard(Static):
             song_name=self.song_name,
             status=status,
             input_path_degraded=degraded,
+            sendinput_path_degraded=sendinput_degraded,
+            bookkeeping_degraded=bookkeeping_degraded,
+            wait_path_degraded=wait_degraded,
             backend_health=backend_health,
             late_2ms=stats.late_2ms,
             late_5ms=stats.late_5ms,
@@ -690,10 +718,9 @@ class PlaybackCard(Static):
             messages = ", ".join(v.message for v in self.violations)
             body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
         body.extend(
-            f"{yellow}{notice.message}{_ANSI_RESET}"
-            for notice in notice_state.persistent_notices + notice_state.runtime_notices
+            f"{red if notice.severity == 'danger' else yellow}{notice.message}{_ANSI_RESET}"
+            for notice in notice_state.notices
         )
-        body.extend(f"{red}{notice.message}{_ANSI_RESET}" for notice in notice_state.backend_notices)
         backend = (
             f"{red}stuck keys: {view.backend.stuck_keys}{_ANSI_RESET}"
             if not view.backend.healthy

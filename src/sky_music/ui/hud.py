@@ -173,6 +173,9 @@ class ProgressRenderer:
         status: str = "playing",
         force: bool = False,
         input_path_degraded: bool = False,
+        sendinput_path_degraded: bool = False,
+        bookkeeping_degraded: bool = False,
+        wait_path_degraded: bool = False,
         backend_health: BackendHealth | None = None,
     ) -> None:
         now = time.perf_counter()
@@ -207,6 +210,9 @@ class ProgressRenderer:
             song_name=song_name,
             status=status,
             input_path_degraded=self.input_path_degraded,
+            sendinput_path_degraded=sendinput_path_degraded,
+            bookkeeping_degraded=bookkeeping_degraded,
+            wait_path_degraded=wait_path_degraded,
             backend_health=backend_health,
             late_2ms=self.late_2ms,
             late_5ms=self.late_5ms,
@@ -264,8 +270,21 @@ class ProgressRenderer:
 
         notice_state = self._notice_ledger.update(
             input_path_degraded=self.input_path_degraded,
+            sendinput_path_degraded=sendinput_path_degraded,
+            bookkeeping_degraded=bookkeeping_degraded,
+            wait_path_degraded=wait_path_degraded,
             keys_dropped=keys_dropped,
             chord_split_events=chord_splits,
+            chords_rejected=int(getattr(backend_health, "chords_rejected", 0) or 0),
+            authored_keys_rejected=int(
+                getattr(backend_health, "authored_keys_rejected", 0) or 0
+            ),
+            sendinput_partial_events=int(
+                getattr(backend_health, "sendinput_partial_events", 0) or 0
+            ),
+            sendinput_zero_progress_failures=int(
+                getattr(backend_health, "sendinput_zero_progress_failures", 0) or 0
+            ),
         )
 
         view = build_playback_hud_view(
@@ -274,6 +293,9 @@ class ProgressRenderer:
             song_name=view.song_name,
             status=view.status,
             input_path_degraded=self.input_path_degraded,
+            sendinput_path_degraded=sendinput_path_degraded,
+            bookkeeping_degraded=bookkeeping_degraded,
+            wait_path_degraded=wait_path_degraded,
             backend_health=backend_health,
             late_2ms=self.late_2ms,
             late_5ms=self.late_5ms,

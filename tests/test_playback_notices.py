@@ -40,5 +40,32 @@ def test_playback_card_keeps_schedule_warning_across_polls() -> None:
 
     assert "same-key repeat warning" in first
     assert "same-key repeat warning" in second
-    assert "Input dispatch latency" in first
-    assert "Input dispatch latency" not in second
+    assert "Windows input injection is responding slowly" in first
+    assert "Windows input injection is responding slowly" not in second
+
+
+def test_latency_signals_are_distinct_from_backend_rejection() -> None:
+    ledger = PlaybackNoticeLedger()
+
+    send = ledger.update(sendinput_path_degraded=True)
+    assert [notice.code for notice in send.runtime_notices] == ["sendinput-slow"]
+    assert not send.backend_notices
+
+    wait = PlaybackNoticeLedger().update(wait_path_degraded=True)
+    assert [notice.code for notice in wait.runtime_notices] == ["scheduler-wake-slow"]
+
+    bookkeeping = PlaybackNoticeLedger().update(bookkeeping_degraded=True)
+    assert [notice.code for notice in bookkeeping.runtime_notices] == [
+        "native-bookkeeping-slow"
+    ]
+
+    rejected = PlaybackNoticeLedger().update(
+        chords_rejected=2,
+        authored_keys_rejected=3,
+        sendinput_partial_events=1,
+    )
+    assert [notice.code for notice in rejected.backend_notices] == [
+        "native-input-rejection",
+        "partial-input-packet",
+    ]
+    assert "2 chord(s), 3 authored key(s)" in rejected.backend_notices[0].message

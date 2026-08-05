@@ -54,6 +54,15 @@ terminal snapshot, native telemetry, estimator output, cleanup result, and
 build metadata. Python enriches it only with song/application metadata; it does
 not reinterpret native timing.
 
+The native lifecycle/status domain is separate from UI presentation status:
+`ready`, `playing`, `paused`, `finished`, `quit`, `skipped`, `error`,
+`panicked`, and `poisoned` are native values. A terminal `is_finished` snapshot
+is accepted before live-status validation; Python then joins once, materializes
+`session_report`, parses telemetry and estimator state, and only then surfaces a
+terminal error. Normal completion never invokes panic cleanup. The legacy
+`input_path_degraded` field is the aggregate of SendInput and bookkeeping
+health; wait-path degradation remains a separate signal.
+
 ## Invariants
 
 - Every valid Down owns a generation; authored same-key overlap is rejected.

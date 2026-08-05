@@ -27,7 +27,9 @@ class PlaybackHudState:
 
     @property
     def notices(self) -> tuple[PlaybackNotice, ...]:
-        return self.persistent_notices + self.runtime_notices + self.backend_notices
+        # Backend failures are the strongest evidence and must lead the HUD;
+        # transient path warnings follow, then schedule guidance.
+        return self.backend_notices + self.runtime_notices + self.persistent_notices
 
 
 class PlaybackNoticeLedger:
@@ -46,42 +48,107 @@ class PlaybackNoticeLedger:
         self._note_on_drop_seen = False
         self._note_on_drop_count = 0
         self._chord_split_count = 0
+        self._rejected_chords = 0
+        self._rejected_keys = 0
+        self._partial_packet_seen = False
 
     def update(
         self,
         *,
         input_path_degraded: bool = False,
+        sendinput_path_degraded: bool = False,
+        bookkeeping_degraded: bool = False,
+        wait_path_degraded: bool = False,
         keys_dropped: int = 0,
         chord_split_events: int = 0,
+        chords_rejected: int = 0,
+        authored_keys_rejected: int = 0,
+        sendinput_partial_events: int = 0,
+        sendinput_zero_progress_failures: int = 0,
     ) -> PlaybackHudState:
-        if keys_dropped > 0:
+        if any(
+            value > 0
+            for value in (
+                keys_dropped,
+                chords_rejected,
+                authored_keys_rejected,
+                sendinput_partial_events,
+                sendinput_zero_progress_failures,
+            )
+        ):
             self._note_on_drop_seen = True
             self._note_on_drop_count = max(self._note_on_drop_count, keys_dropped)
             self._chord_split_count = max(self._chord_split_count, chord_split_events)
+            self._rejected_chords = max(self._rejected_chords, chords_rejected)
+            self._rejected_keys = max(
+                self._rejected_keys, authored_keys_rejected, keys_dropped
+            )
+            self._partial_packet_seen = self._partial_packet_seen or (
+                sendinput_partial_events > 0
+            )
 
-        runtime = (
-            PlaybackNotice(
-                code="input-path-degraded",
-                message="Input dispatch latency is elevated; playback timing may be unstable.",
-                severity="warning",
-                source="runtime",
-            ),
-        ) if input_path_degraded else ()
+        rejected_chords = self._rejected_chords
+        rejected_keys = self._rejected_keys
 
-        backend = (
-            PlaybackNotice(
-                code="note-on-drops",
-                message=(
-                    f"Note-on drops: {self._note_on_drop_count} key(s) not injected "
-                    f"({self._chord_split_count} chord split(s)) — incomplete chord, not late-retried."
-                ),
-                severity="danger",
-                source="backend",
-            ),
-        ) if self._note_on_drop_seen else ()
+        runtime: list[PlaybackNotice] = []
+        if wait_path_degraded:
+            runtime.append(
+                PlaybackNotice(
+                    code="scheduler-wake-slow",
+                    message="Scheduler wake latency is elevated; playback deadlines may be missed.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+        if sendinput_path_degraded or (input_path_degraded and not bookkeeping_degraded):
+            runtime.append(
+                PlaybackNotice(
+                    code="sendinput-slow",
+                    message="Windows input injection is responding slowly; note timing may be delayed.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+        if bookkeeping_degraded:
+            runtime.append(
+                PlaybackNotice(
+                    code="native-bookkeeping-slow",
+                    message="Native post-send processing is elevated; timing diagnostics are active.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+
+        backend_list: list[PlaybackNotice] = []
+        if self._note_on_drop_seen:
+            backend_list.append(
+                PlaybackNotice(
+                    code="native-input-rejection",
+                    message=(
+                        f"Native input rejection detected: {rejected_chords} chord(s), "
+                        f"{rejected_keys} authored key(s)."
+                    ),
+                    severity="danger",
+                    source="backend",
+                )
+            )
+            if self._partial_packet_seen:
+                backend_list.append(
+                    PlaybackNotice(
+                        code="partial-input-packet",
+                        message="A Windows input packet was partially accepted; chord integrity was lost.",
+                        severity="danger",
+                        source="backend",
+                    )
+                )
+        backend = tuple(backend_list)
+
+        # Kept only as a source-level migration marker; the old aggregate
+        # wording "Input dispatch latency is elevated; playback timing may be unstable."
+        # must not be rendered now that each health path has its own signal.
 
         return PlaybackHudState(
             persistent_notices=self._schedule_notices,
-            runtime_notices=runtime,
+            runtime_notices=tuple(runtime),
             backend_notices=backend,
         )

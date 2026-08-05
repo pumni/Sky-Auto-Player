@@ -49,6 +49,9 @@ class PlaybackHudViewModel:
     eta_seconds: float
     progress_fraction: float
     input_path_degraded: bool
+    sendinput_path_degraded: bool
+    bookkeeping_degraded: bool
+    wait_path_degraded: bool
     backend: PlaybackBackendView
     timing: PlaybackTimingView
     notices: tuple[PlaybackNotice, ...] = ()
@@ -85,6 +88,9 @@ def build_playback_hud_view(
     song_name: str,
     status: str,
     input_path_degraded: bool = False,
+    sendinput_path_degraded: bool = False,
+    bookkeeping_degraded: bool = False,
+    wait_path_degraded: bool = False,
     backend_health: BackendHealth | None = None,
     late_2ms: int = 0,
     late_5ms: int = 0,
@@ -108,6 +114,9 @@ def build_playback_hud_view(
         eta_seconds=max(0.0, total_seconds - current_safe),
         progress_fraction=min(1.0, current_safe / total_safe),
         input_path_degraded=input_path_degraded,
+        sendinput_path_degraded=sendinput_path_degraded,
+        bookkeeping_degraded=bookkeeping_degraded,
+        wait_path_degraded=wait_path_degraded,
         backend=backend_view(backend_health),
         timing=PlaybackTimingView(
             late_2ms=late_2ms,
