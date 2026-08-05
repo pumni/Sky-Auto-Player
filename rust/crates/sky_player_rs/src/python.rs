@@ -4,6 +4,7 @@ use super::engine::{BackendConfig, DispatchProfile, NativeDispatchSession};
 
 mod conversion;
 mod session;
+mod snapshot;
 mod telemetry;
 
 use pyo3::Borrowed;
@@ -16,8 +17,14 @@ use session::TestDispatchSessionPy;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, RuntimeSchedule};
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_dispatch_win32::mmcss::PriorityMode;
+use snapshot::{BackendHealthSnapshotPy, ProgressSnapshotPy};
 use std::sync::Arc;
 use telemetry::build_info;
+
+#[pyfunction]
+fn instrument_scan_codes() -> Vec<u16> {
+    PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec()
+}
 
 #[cfg(feature = "calibration")]
 use super::calibration;
@@ -152,9 +159,12 @@ impl NativeSessionConfigPy {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSessionConfigPy>()?;
     m.add_class::<NativeDispatchSessionPy>()?;
+    m.add_class::<BackendHealthSnapshotPy>()?;
+    m.add_class::<ProgressSnapshotPy>()?;
     #[cfg(feature = "test-support")]
     m.add_class::<TestDispatchSessionPy>()?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
+    m.add_function(wrap_pyfunction!(instrument_scan_codes, m)?)?;
     #[cfg(feature = "calibration")]
     {
         m.add_function(wrap_pyfunction!(calibration::run_calibration_rs, m)?)?;

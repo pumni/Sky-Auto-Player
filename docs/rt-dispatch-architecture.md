@@ -39,7 +39,8 @@ and strict-completion policy are Rust dispatch-mode details.
 The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
 `panic`), `set_target_hwnd`, `snapshot_lite`, and `session_report`.
 
-`snapshot_lite` is the frequent control/UI read and contains state,
+`snapshot_lite` is the frequent control/UI read and returns a frozen typed
+`ProgressSnapshot` with a nested `BackendHealthSnapshot`. It contains state,
 elapsed/total time, completion error, active/possibly-active/release counts,
 and every live backend counter needed by the HUD. Correctness-critical counters
 are part of the native contract; Python must not replace a missing field with a

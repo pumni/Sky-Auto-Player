@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
-PLAYBACK_FINISHED = "finished"
-PLAYBACK_QUIT = "quit"
-PLAYBACK_SKIPPED = "skipped"
-PLAYBACK_SHUTDOWN_TIMEOUT = "shutdown_timeout"
-PLAYBACK_ERROR = "error"
+
+class PlaybackOutcome(StrEnum):
+    FINISHED = "finished"
+    QUIT = "quit"
+    SKIPPED = "skipped"
+    SHUTDOWN_TIMEOUT = "shutdown_timeout"
+    ERROR = "error"
+
+
+class PlaybackStatus(StrEnum):
+    PLAYING = "playing"
+    PAUSED = "paused"
+    FOCUS_LOST = "focus_lost"
+    WAITING_FOR_FOCUS = "waiting_for_focus"
+    REFOCUS = "refocus"
+    PANIC = "panic"
+    DONE = "done"
+
+
+PLAYBACK_FINISHED = PlaybackOutcome.FINISHED
+PLAYBACK_QUIT = PlaybackOutcome.QUIT
+PLAYBACK_SKIPPED = PlaybackOutcome.SKIPPED
+PLAYBACK_SHUTDOWN_TIMEOUT = PlaybackOutcome.SHUTDOWN_TIMEOUT
+PLAYBACK_ERROR = PlaybackOutcome.ERROR
+STATUS_LABELS: Mapping[PlaybackStatus, str] = {
+    PlaybackStatus.PLAYING: "Playing",
+    PlaybackStatus.PAUSED: "Paused",
+    PlaybackStatus.FOCUS_LOST: "Focus Lost",
+    PlaybackStatus.WAITING_FOR_FOCUS: "Waiting for Focus",
+    PlaybackStatus.REFOCUS: "Refocusing",
+    PlaybackStatus.PANIC: "Panic Release",
+    PlaybackStatus.DONE: "Done",
+}
 RUST_DISPATCH_SCHEMA_VERSION = 2
 
 
@@ -38,6 +68,47 @@ class BackendHealth:
     keys_inserted_before_failure: int = 0
     keys_rolled_back: int = 0
     rollback_residue_keys: int = 0
+
+    @classmethod
+    def from_native(cls, native: object) -> BackendHealth:
+        """Map one complete native health object or final snapshot."""
+
+        def required(name: str) -> object:
+            try:
+                if isinstance(native, Mapping):
+                    return native[name]
+                return getattr(native, name)
+            except (AttributeError, KeyError) as exc:
+                raise ValueError(f"native snapshot is missing required field: {name}") from exc
+
+        def required_int(name: str) -> int:
+            value = required(name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"native snapshot field {name} must be an integer")
+            return value
+
+        last_error = required("last_error")
+        if last_error is not None and not isinstance(last_error, str):
+            raise ValueError("native snapshot field last_error must be a string or null")
+        return cls(
+            active_count=required_int("active_count"),
+            possibly_active_count=required_int("possibly_active_count"),
+            failed_release_count=required_int("failed_release_count"),
+            last_error=last_error,
+            keys_dropped=required_int("keys_dropped"),
+            chord_split_events=required_int("chord_split_events"),
+            sendinput_partial_events=required_int("sendinput_partial_events"),
+            sendinput_zero_progress_failures=required_int(
+                "sendinput_zero_progress_failures"
+            ),
+            chords_rejected=required_int("chords_rejected"),
+            authored_conflict_events=required_int("authored_conflict_events"),
+            authored_chords_rejected=required_int("authored_chords_rejected"),
+            authored_keys_rejected=required_int("authored_keys_rejected"),
+            keys_inserted_before_failure=required_int("keys_inserted_before_failure"),
+            keys_rolled_back=required_int("keys_rolled_back"),
+            rollback_residue_keys=required_int("rollback_residue_keys"),
+        )
 
 
 @dataclass(frozen=True, slots=True)

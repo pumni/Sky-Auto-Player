@@ -9,10 +9,13 @@ and the active test/build interpreter, and asserts that importing
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import os
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 from packaging.tags import Tag
@@ -77,6 +80,46 @@ def verify_wheel_name(wheel: Path) -> None:
             "wheel must have exactly the CPython 3.14t Windows x64 tag "
             f"{EXPECTED_NATIVE_TAG}; found {rendered}"
         )
+
+
+def add_type_stubs_to_wheel(wheel: Path, rust_crate: Path) -> None:
+    """Add the adjacent-module PEP 561 contract to Maturin's extension wheel."""
+
+    stub_path = rust_crate / "type_stubs" / "sky_player_rs.pyi"
+    marker_path = rust_crate / "type_stubs" / "py.typed"
+    if not stub_path.is_file() or not marker_path.is_file():
+        raise RuntimeError("native wheel type-contract files are missing")
+
+    with zipfile.ZipFile(wheel) as source:
+        members = {
+            name: source.read(name)
+            for name in source.namelist()
+            if not name.endswith(".dist-info/RECORD")
+        }
+        record_name = next(
+            (name for name in source.namelist() if name.endswith(".dist-info/RECORD")),
+            None,
+        )
+    if record_name is None:
+        raise RuntimeError("native wheel is missing its RECORD file")
+
+    members["sky_player_rs/__init__.pyi"] = stub_path.read_bytes()
+    members["sky_player_rs/py.typed"] = marker_path.read_bytes()
+    record_lines: list[str] = []
+    for name, content in sorted(members.items()):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=")
+        record_lines.append(f"{name},sha256={digest.decode('ascii')},{len(content)}")
+    record_lines.append(f"{record_name},,")
+    members[record_name] = ("\n".join(record_lines) + "\n").encode("utf-8")
+
+    temporary_wheel = wheel.with_name(f"{wheel.stem}.with-stubs{wheel.suffix}")
+    try:
+        with zipfile.ZipFile(temporary_wheel, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for name, content in members.items():
+                target.writestr(name, content)
+        os.replace(temporary_wheel, wheel)
+    finally:
+        temporary_wheel.unlink(missing_ok=True)
 
 
 def clean_venv_python(venv: Path) -> Path:
@@ -159,6 +202,8 @@ def main() -> int:
 
     latest_wheel = max(wheels, key=os.path.getmtime)
     print(f"[build_rust_wheel] Found built wheel: {latest_wheel.name}")
+
+    add_type_stubs_to_wheel(latest_wheel, cargo_manifest.parent)
 
     try:
         verify_wheel_name(latest_wheel)

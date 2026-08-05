@@ -1,4 +1,5 @@
 use super::conversion::*;
+use super::snapshot::ProgressSnapshotPy;
 use super::*;
 use crate::engine::{
     EstimatorOptions, FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions,
@@ -290,50 +291,8 @@ impl NativeDispatchSessionPy {
         Ok(dict)
     }
 
-    fn snapshot_lite<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let snap = self.session.snapshot();
-        let dict = PyDict::new(py);
-        dict.set_item("state", snap.status)?;
-        dict.set_item("elapsed_us", snap.elapsed_us)?;
-        dict.set_item("total_us", snap.total_us)?;
-        dict.set_item("max_completion_error_us", snap.max_lateness_us)?;
-        dict.set_item("active_keys", snap.active_count)?;
-        dict.set_item("active_count", snap.active_count)?;
-        dict.set_item("possibly_active_count", snap.possibly_active_count)?;
-        dict.set_item("failed_release_count", snap.failed_release_count)?;
-        dict.set_item("last_error", snap.last_error)?;
-        dict.set_item("keys_dropped", snap.keys_dropped)?;
-        dict.set_item("chord_split_events", snap.chord_split_events)?;
-        dict.set_item("sendinput_partial_events", snap.sendinput_partial_events)?;
-        dict.set_item(
-            "sendinput_zero_progress_failures",
-            snap.sendinput_zero_progress_failures,
-        )?;
-        dict.set_item("chords_rejected", snap.chords_rejected)?;
-        dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
-        dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;
-        dict.set_item("authored_keys_rejected", snap.authored_keys_rejected)?;
-        dict.set_item(
-            "keys_inserted_before_failure",
-            snap.keys_inserted_before_failure,
-        )?;
-        dict.set_item("keys_rolled_back", snap.keys_rolled_back)?;
-        dict.set_item("rollback_residue_keys", snap.rollback_residue_keys)?;
-        dict.set_item(
-            "health",
-            if snap.terminal_error.is_some() || snap.failed_release_count > 0 {
-                "error"
-            } else if snap.input_path_degraded {
-                "degraded"
-            } else {
-                "ok"
-            },
-        )?;
-        dict.set_item("is_running", snap.is_running)?;
-        dict.set_item("is_finished", snap.is_finished)?;
-        dict.set_item("is_paused", snap.is_paused)?;
-        dict.set_item("input_path_degraded", snap.input_path_degraded)?;
-        Ok(dict)
+    fn snapshot_lite(&self) -> ProgressSnapshotPy {
+        ProgressSnapshotPy::from_snapshot(&self.session.snapshot())
     }
 
     fn session_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
@@ -519,6 +478,15 @@ impl TestDispatchSessionPy {
 
     fn start(&self) -> PyResult<()> {
         self.session.start().map_err(PyRuntimeError::new_err)
+    }
+
+    /// Keep the test-support session's supervisor lease alive for acceptance
+    /// benchmarks that intentionally run longer than the three-second lease.
+    /// Production callers already publish this heartbeat through the normal
+    /// supervisor adapter; exposing it here keeps the test harness on the
+    /// same lifecycle contract without adding a production backend surface.
+    fn heartbeat(&self) -> PyResult<()> {
+        self.session.heartbeat().map_err(PyRuntimeError::new_err)
     }
 
     fn pause(&self) -> PyResult<()> {

@@ -151,6 +151,70 @@ fn startup_boundary_publishes_after_worker_startup() {
 }
 
 #[test]
+fn native_telemetry_records_are_complete_beyond_303_events() {
+    let actions: Vec<KeyActionInput> = (0_u32..160)
+        .flat_map(|index| {
+            let cycle_us = u64::from(index) * 10_000;
+            [
+                KeyActionInput {
+                    source_action_index: index * 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: cycle_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "long-down".to_string().into(),
+                },
+                KeyActionInput {
+                    source_action_index: index * 2 + 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: cycle_us + 5_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "long-up".to_string().into(),
+                },
+            ]
+        })
+        .collect();
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("long telemetry schedule must compile");
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    options.telemetry.capacity = actions.len();
+
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.start().expect("worker start");
+    while !session.snapshot().is_finished {
+        session.heartbeat().expect("supervisor heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
+    assert_eq!(snapshot.terminal_error, None);
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    assert_eq!(telemetry["attempted"], actions.len());
+    assert_eq!(telemetry["accepted"], actions.len());
+    assert_eq!(telemetry["dropped"], 0);
+    assert_eq!(telemetry["truncated"], false);
+    let records = telemetry["records"].as_array().expect("records array");
+    assert_eq!(records.len(), actions.len());
+    let indices: Vec<u64> = records
+        .iter()
+        .map(|record| record["event_index"].as_u64().expect("event index"))
+        .collect();
+    assert_eq!(indices, (0..actions.len() as u64).collect::<Vec<_>>());
+}
+
+#[test]
 fn startup_failure_does_not_publish_ready_boundary() {
     let session = NativeDispatchSession::new(test_session_options(
         startup_boundary_schedule(),

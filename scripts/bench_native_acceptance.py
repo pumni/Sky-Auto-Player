@@ -208,6 +208,7 @@ def _validate_telemetry_integrity(
     telemetry: dict[str, Any],
     records: list[TelemetryRecord],
     polyphony: int,
+    snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prove that the compact native trace is a complete authored action set.
 
@@ -241,6 +242,19 @@ def _validate_telemetry_integrity(
     ]
     diagnostics: dict[str, Any] = {
         "polyphony": polyphony,
+        "snapshot_status": None if snapshot is None else snapshot.get("status"),
+        "snapshot_outcome": None if snapshot is None else snapshot.get("outcome"),
+        "terminal_error": None if snapshot is None else snapshot.get("terminal_error"),
+        "generation_count": None if snapshot is None else snapshot.get("generation_count"),
+        "generation_status_counts": (
+            None
+            if snapshot is None
+            else snapshot.get("generation_status_counts", {})
+        ),
+        "authored_action_count": len(actions),
+        "trace_expected_count": len(actions),
+        "trace_actual_count": len(records),
+        "last_trace_source_index": actual_indices[-1] if actual_indices else None,
         "expected_count": len(actions),
         "records_count": len(records),
         "attempted": telemetry.get("attempted"),
@@ -634,9 +648,28 @@ def _run_dispatch(
         session.start()
         startup_deadline = time.perf_counter() + min(timeout_ms / 1_000, 60.0)
         while not bool(dict(session.snapshot()).get("startup_ready")):
+            # The native worker has a bounded supervisor lease.  Acceptance
+            # drives the session directly rather than through the normal
+            # Python supervisor, so it must publish the same heartbeat while
+            # waiting for a long schedule to finish.  Without this, a valid
+            # ~5-second benchmark is terminalized at the three-second lease
+            # boundary and looks like missing telemetry (303/528 records).
+            session.heartbeat()
             if time.perf_counter() >= startup_deadline:
                 raise RuntimeError("native worker did not publish startup-ready boundary")
             time.sleep(0.001)
+
+        # Polling and heartbeat publication are supervisor work only; the
+        # Rust worker remains the sole owner of deadlines, waits, dispatch and
+        # key state.  Do not block in join() before the heartbeat has kept the
+        # worker lease alive for the whole authored schedule.
+        completion_deadline = time.perf_counter() + timeout_ms / 1_000
+        while not bool(dict(session.snapshot()).get("is_finished")):
+            session.heartbeat()
+            if time.perf_counter() >= completion_deadline:
+                break
+            time.sleep(0.005)
+
         if not session.join(timeout_ms=timeout_ms):
             session.panic_release()
             session.quit()
@@ -653,6 +686,7 @@ def _run_dispatch(
             telemetry=telemetry,
             records=records,
             polyphony=polyphony,
+            snapshot=snapshot,
         )
         all_metric_rows = _trace_metric_rows(records)
         warmup_record_count = warmup_cycles * 2

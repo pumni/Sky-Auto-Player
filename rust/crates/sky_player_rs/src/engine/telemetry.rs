@@ -299,14 +299,20 @@ impl TelemetryCollector {
 mod tests {
     use super::{
         NativeTelemetrySummary, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_MIXED,
-        TRACE_KIND_UP, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+        TRACE_KIND_UP, TelemetryCollector, TelemetryMode, TraceContext, TraceDelivery, TraceTiming,
+        trace_outcome_code,
     };
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 
-    fn record(kind: u8, requested: usize, sent: usize) -> RtTraceRecord {
+    fn record_with_index(
+        event_index: u32,
+        kind: u8,
+        requested: usize,
+        sent: usize,
+    ) -> RtTraceRecord {
         RtTraceRecord::dispatched(
             TraceContext {
-                event_index: 0,
+                event_index,
                 kind,
                 outcome: trace_outcome_code("sent"),
                 polyphony: requested,
@@ -332,6 +338,10 @@ mod tests {
             },
         )
         .expect("valid telemetry record")
+    }
+
+    fn record(kind: u8, requested: usize, sent: usize) -> RtTraceRecord {
+        record_with_index(0, kind, requested, sent)
     }
 
     #[test]
@@ -360,5 +370,55 @@ mod tests {
         assert_eq!(summary.dispatch_count, 1);
         assert_eq!(summary.requested_key_count, 2);
         assert_eq!(summary.sent_key_count, 2);
+    }
+
+    #[test]
+    fn telemetry_retains_all_records_above_303() {
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 304);
+
+        for event_index in 0..304_u32 {
+            collector
+                .try_push(|| Ok(record_with_index(event_index, TRACE_KIND_UP, 1, 1)))
+                .expect("telemetry record must be representable");
+        }
+
+        let output = collector.output;
+        assert_eq!(output.attempted, 304);
+        assert_eq!(output.accepted, 304);
+        assert_eq!(output.dropped, 0);
+        assert!(!output.truncated);
+        assert_eq!(output.records.len(), 304);
+        assert_eq!(
+            output
+                .records
+                .iter()
+                .map(|record| record.event_index)
+                .collect::<Vec<_>>(),
+            (0..304_u32).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn telemetry_sets_truncated_only_when_capacity_is_exceeded() {
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 304);
+
+        for event_index in 0..305_u32 {
+            collector
+                .try_push(|| Ok(record_with_index(event_index, TRACE_KIND_UP, 1, 1)))
+                .expect("telemetry record must be representable");
+        }
+
+        assert_eq!(collector.output.attempted, 305);
+        assert_eq!(collector.output.accepted, 304);
+        assert_eq!(collector.output.dropped, 1);
+        assert!(collector.output.truncated);
+        assert_eq!(
+            collector
+                .output
+                .records
+                .back()
+                .map(|record| record.event_index),
+            Some(303)
+        );
     }
 }

@@ -7,6 +7,8 @@ import inspect
 import pytest
 import sky_player_rs  # type: ignore[import-not-found,import-untyped]
 
+from sky_music.layouts import SKY_15_SCAN_CODES
+
 
 def test_production_module_exposes_only_native_session_surface() -> None:
     names = {
@@ -30,6 +32,10 @@ def test_session_config_rejects_test_profile() -> None:
         match=r"(profile must be '(production|strict_timing_diagnostic)'|mock_test is available only to Rust test support)",
     ):
         sky_player_rs.SessionConfig(game_fps=60, profile="mock_test")  # type: ignore[attr-defined]
+
+
+def test_python_and_native_scan_code_registries_match() -> None:
+    assert tuple(sky_player_rs.instrument_scan_codes()) == SKY_15_SCAN_CODES
 
 
 
@@ -84,61 +90,41 @@ def test_session_reports_lite_progress_then_one_final_report() -> None:
     session.start()
     assert session.join(timeout_ms=5_000) is True
 
-    live = dict(session.snapshot_lite())  # type: ignore[attr-defined]
-    assert set(live) == {
-        "state",
-        "elapsed_us",
-        "total_us",
-        "max_completion_error_us",
-        "active_keys",
-        "active_count",
-        "possibly_active_count",
-        "failed_release_count",
-        "last_error",
-        "keys_dropped",
-        "chord_split_events",
-        "sendinput_partial_events",
-        "sendinput_zero_progress_failures",
-        "chords_rejected",
-        "authored_conflict_events",
-        "authored_chords_rejected",
-        "authored_keys_rejected",
-        "keys_inserted_before_failure",
-        "keys_rolled_back",
-        "rollback_residue_keys",
-        "health",
-        "is_running",
-        "is_finished",
-        "is_paused",
-        "input_path_degraded",
-    }
-    assert live["is_finished"] is True
+    live = session.snapshot_lite()  # type: ignore[attr-defined]
+    assert isinstance(live, sky_player_rs.ProgressSnapshot)  # type: ignore[attr-defined]
+    assert isinstance(live.backend_health, sky_player_rs.BackendHealthSnapshot)  # type: ignore[attr-defined]
+    assert live.is_finished is True
+    with pytest.raises(AttributeError):
+        live.is_finished = False
     report = dict(session.session_report())  # type: ignore[attr-defined]
     assert set(report) == {"snapshot", "telemetry_json", "estimator_state_json"}
     assert dict(report["snapshot"])["is_finished"] is True
 
 
 def test_health_mapping_rejects_missing_correctness_counter() -> None:
-    snapshot = {
-        "active_count": 0,
-        "possibly_active_count": 0,
-        "failed_release_count": 0,
-        "last_error": None,
-        "keys_dropped": 0,
-        "chord_split_events": 0,
-        "sendinput_partial_events": 0,
-        "sendinput_zero_progress_failures": 0,
-        "chords_rejected": 0,
-        "authored_conflict_events": 0,
-        "authored_chords_rejected": 0,
-        "authored_keys_rejected": 0,
-        "keys_inserted_before_failure": 0,
-        "keys_rolled_back": 0,
-    }
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    snapshot = SimpleNamespace(
+        active_count=0,
+        possibly_active_count=0,
+        failed_release_count=0,
+        last_error=None,
+        keys_dropped=0,
+        chord_split_events=0,
+        sendinput_partial_events=0,
+        sendinput_zero_progress_failures=0,
+        chords_rejected=0,
+        authored_conflict_events=0,
+        authored_chords_rejected=0,
+        authored_keys_rejected=0,
+        keys_inserted_before_failure=0,
+        keys_rolled_back=0,
+    )
     from sky_music.orchestration.native_dispatch import (
         NativeDispatchError,
         RustDispatchRuntime,
     )
 
     with pytest.raises(NativeDispatchError, match="rollback_residue_keys"):
-        RustDispatchRuntime._health(snapshot)
+        RustDispatchRuntime._health(cast(Any, snapshot))

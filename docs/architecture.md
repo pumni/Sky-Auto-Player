@@ -55,13 +55,15 @@ the native profile. `DispatchSession` accepts authored actions and the allowed
 scan-code registry. It exposes only lifecycle commands, `set_target_hwnd`, a
 small `snapshot_lite`, and one final `session_report`.
 
-`snapshot_lite` contains state, elapsed/total time, completion error, active
-and uncertain-key counts, backend failure counters, health, and the
-control-loop flags needed by the HUD. Correctness-critical fields are required
-by the Python adapter rather than silently defaulted. It does not contain trace
-records, hash maps, build provenance, estimator state, or full generation
-counts. `session_report` is materialized only after the worker has stopped and
-is the sole source for final native telemetry.
+`snapshot_lite` returns a frozen typed `ProgressSnapshot` with a nested frozen
+`BackendHealthSnapshot`. It contains state, elapsed/total time, completion
+error, active and uncertain-key counts, backend failure counters, health, and
+the control-loop flags needed by the HUD. Correctness-critical fields are
+required by the Python adapter rather than silently defaulted. It does not
+contain trace records, hash maps, build provenance, estimator state, or full
+generation counts. `session_report` remains the one final mapping and is
+materialized only after the worker has stopped; it is the sole source for final
+native telemetry.
 
 Focus has one source of truth: Python finds and validates the target process,
 then sends its HWND with `set_target_hwnd`. Rust compares that HWND with

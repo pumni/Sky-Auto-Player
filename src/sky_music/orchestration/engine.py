@@ -152,51 +152,7 @@ class PlaybackEngine:
             }
         )
         self.telemetry.record_backend_health(
-            BackendHealth(
-                active_count=int(RustDispatchRuntime._required(snapshot, "active_count")),
-                possibly_active_count=int(
-                    RustDispatchRuntime._required(snapshot, "possibly_active_count")
-                ),
-                failed_release_count=int(
-                    RustDispatchRuntime._required(snapshot, "failed_release_count")
-                ),
-                last_error=RustDispatchRuntime._required(snapshot, "last_error"),
-                keys_dropped=int(RustDispatchRuntime._required(snapshot, "keys_dropped")),
-                chord_split_events=int(
-                    RustDispatchRuntime._required(snapshot, "chord_split_events")
-                ),
-                sendinput_partial_events=int(
-                    RustDispatchRuntime._required(snapshot, "sendinput_partial_events")
-                ),
-                sendinput_zero_progress_failures=int(
-                    RustDispatchRuntime._required(
-                        snapshot, "sendinput_zero_progress_failures"
-                    )
-                ),
-                chords_rejected=int(
-                    RustDispatchRuntime._required(snapshot, "chords_rejected")
-                ),
-                authored_conflict_events=int(
-                    RustDispatchRuntime._required(snapshot, "authored_conflict_events")
-                ),
-                authored_chords_rejected=int(
-                    RustDispatchRuntime._required(snapshot, "authored_chords_rejected")
-                ),
-                authored_keys_rejected=int(
-                    RustDispatchRuntime._required(snapshot, "authored_keys_rejected")
-                ),
-                keys_inserted_before_failure=int(
-                    RustDispatchRuntime._required(
-                        snapshot, "keys_inserted_before_failure"
-                    )
-                ),
-                keys_rolled_back=int(
-                    RustDispatchRuntime._required(snapshot, "keys_rolled_back")
-                ),
-                rollback_residue_keys=int(
-                    RustDispatchRuntime._required(snapshot, "rollback_residue_keys")
-                ),
-            )
+            BackendHealth.from_native(snapshot)
         )
         self.telemetry.record_generation_status_counts(
             {str(k): int(v) for k, v in snapshot.get("generation_status_counts", {}).items()}

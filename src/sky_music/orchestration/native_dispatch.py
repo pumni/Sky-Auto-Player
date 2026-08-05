@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 from sky_music.domain.scheduler_types import KeyAction
 from sky_music.layouts import SKY_15_SCAN_CODES
@@ -21,12 +21,65 @@ from sky_music.orchestration.native_models import (
     PLAYBACK_SHUTDOWN_TIMEOUT,
     PLAYBACK_SKIPPED,
     BackendHealth,
+    PlaybackOutcome,
+    PlaybackStatus,
     ProgressCounters,
 )
 
 
 class NativeDispatchError(RuntimeError):
     """A controlled native worker failure after cleanup and telemetry capture."""
+
+
+class NativeBackendHealthProtocol(Protocol):
+    @property
+    def active_count(self) -> int: ...
+    @property
+    def possibly_active_count(self) -> int: ...
+    @property
+    def failed_release_count(self) -> int: ...
+    @property
+    def last_error(self) -> str | None: ...
+    @property
+    def keys_dropped(self) -> int: ...
+    @property
+    def chord_split_events(self) -> int: ...
+    @property
+    def sendinput_partial_events(self) -> int: ...
+    @property
+    def sendinput_zero_progress_failures(self) -> int: ...
+    @property
+    def chords_rejected(self) -> int: ...
+    @property
+    def authored_conflict_events(self) -> int: ...
+    @property
+    def authored_chords_rejected(self) -> int: ...
+    @property
+    def authored_keys_rejected(self) -> int: ...
+    @property
+    def keys_inserted_before_failure(self) -> int: ...
+    @property
+    def keys_rolled_back(self) -> int: ...
+    @property
+    def rollback_residue_keys(self) -> int: ...
+
+
+class NativeProgressSnapshotProtocol(Protocol):
+    elapsed_us: int
+    total_us: int
+    max_completion_error_us: int
+    late_2ms: int
+    late_5ms: int
+    late_10ms: int
+    release_max_us: int
+    release_late_2ms: int
+    recent_latencies_us: Sequence[int]
+    is_finished: bool
+    is_paused: bool
+    input_path_degraded: bool
+    status: str
+    @property
+    def backend_health(self) -> NativeBackendHealthProtocol: ...
 
 
 class RustDispatchRuntime:
@@ -130,7 +183,7 @@ class RustDispatchRuntime:
     def _handle_command(self, command: str | None) -> str | None:
         def terminal_race_is_done() -> bool:
             try:
-                return bool(self._session.snapshot_lite()["is_finished"])
+                return bool(self._session.snapshot_lite().is_finished)
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 return False
 
@@ -182,44 +235,21 @@ class RustDispatchRuntime:
         return joined
 
     @staticmethod
-    def _required(snapshot: Mapping[str, Any], field: str) -> Any:
+    def _required(snapshot: object, field: str) -> Any:
         """Read a correctness-critical native field without a silent default."""
         try:
-            return snapshot[field]
-        except KeyError as exc:
+            return getattr(snapshot, field)
+        except AttributeError as exc:
             raise NativeDispatchError(
                 f"native snapshot is missing required field: {field}"
             ) from exc
 
     @classmethod
-    def _health(cls, snapshot: Mapping[str, Any]) -> BackendHealth:
-        return BackendHealth(
-            active_count=int(cls._required(snapshot, "active_count")),
-            possibly_active_count=int(cls._required(snapshot, "possibly_active_count")),
-            failed_release_count=int(cls._required(snapshot, "failed_release_count")),
-            last_error=cls._required(snapshot, "last_error"),
-            keys_dropped=int(cls._required(snapshot, "keys_dropped")),
-            chord_split_events=int(cls._required(snapshot, "chord_split_events")),
-            sendinput_partial_events=int(
-                cls._required(snapshot, "sendinput_partial_events")
-            ),
-            sendinput_zero_progress_failures=int(
-                cls._required(snapshot, "sendinput_zero_progress_failures")
-            ),
-            chords_rejected=int(cls._required(snapshot, "chords_rejected")),
-            authored_conflict_events=int(
-                cls._required(snapshot, "authored_conflict_events")
-            ),
-            authored_chords_rejected=int(
-                cls._required(snapshot, "authored_chords_rejected")
-            ),
-            authored_keys_rejected=int(cls._required(snapshot, "authored_keys_rejected")),
-            keys_inserted_before_failure=int(
-                cls._required(snapshot, "keys_inserted_before_failure")
-            ),
-            keys_rolled_back=int(cls._required(snapshot, "keys_rolled_back")),
-            rollback_residue_keys=int(cls._required(snapshot, "rollback_residue_keys")),
-        )
+    def _health(cls, snapshot: NativeBackendHealthProtocol) -> BackendHealth:
+        try:
+            return BackendHealth.from_native(snapshot)
+        except ValueError as exc:
+            raise NativeDispatchError(str(exc)) from exc
 
     def run(self) -> tuple[str, dict[str, Any], dict[str, Any], str | None]:
         """Run supervisor polling until the native worker reaches a terminal state."""
@@ -228,6 +258,7 @@ class RustDispatchRuntime:
         started = False
         joined = False
         requested_outcome: str | None = None
+        live: NativeProgressSnapshotProtocol
         latest: dict[str, Any] = {}
         report: dict[str, Any] | None = None
         try:
@@ -236,31 +267,37 @@ class RustDispatchRuntime:
             self._session.start()
             started = True
             
-            latest = dict(self._session.snapshot_lite())
+            live = self._session.snapshot_lite()
 
-            while not latest["is_finished"]:
+            while not live.is_finished:
                 command = self._controls.poll() if self._controls is not None else None
                 requested_outcome = self._handle_command(command) or requested_outcome
                 self._publish_focus()
                 self._session.heartbeat()
-                latest = dict(self._session.snapshot_lite())
+                live = self._session.snapshot_lite()
+                try:
+                    PlaybackStatus(live.status)
+                except ValueError as exc:
+                    raise NativeDispatchError(
+                        f"unknown native playback status: {live.status}"
+                    ) from exc
 
                 if self._renderer is not None:
                     if hasattr(self._renderer, "update_counters_batch"):
                         self._renderer.update_counters_batch(
                             ProgressCounters(
-                                max_lateness_us=int(latest.get("max_completion_error_us", 0)),
-                                late_2ms=int(latest.get("late_2ms", 0)),
-                                late_5ms=int(latest.get("late_5ms", 0)),
-                                late_10ms=int(latest.get("late_10ms", 0)),
-                                release_max_us=int(latest.get("release_max_us", 0)),
-                                release_late_2ms=int(latest.get("release_late_2ms", 0)),
+                                max_lateness_us=live.max_completion_error_us,
+                                late_2ms=live.late_2ms,
+                                late_5ms=live.late_5ms,
+                                late_10ms=live.late_10ms,
+                                release_max_us=live.release_max_us,
+                                release_late_2ms=live.release_late_2ms,
                                 recent_latencies_us=tuple(
-                                    int(value) for value in latest.get("recent_latencies_us", ())
+                                    int(value) for value in live.recent_latencies_us
                                 ),
                             )
                         )
-                    if latest["is_paused"]:
+                    if live.is_paused:
                         status = (
                             "paused"
                             if self._manual_paused
@@ -272,12 +309,12 @@ class RustDispatchRuntime:
                         status = "playing"
                         self._has_played = True
                     self._renderer.render(
-                        latest["elapsed_us"] / 1_000_000,
+                        live.elapsed_us / 1_000_000,
                         max(self._total_us, 1) / 1_000_000,
                         self._song_name,
                         status=status,
-                        input_path_degraded=bool(latest.get("input_path_degraded", False)),
-                        backend_health=self._health(latest),
+                        input_path_degraded=live.input_path_degraded,
+                        backend_health=self._health(live.backend_health),
                     )
                 time.sleep(self._sleep_s)
 
@@ -290,15 +327,13 @@ class RustDispatchRuntime:
                 if latest.get("status") in {"panicked", "poisoned"}:
                     detail = latest.get("terminal_error") or latest["status"]
                     raise RuntimeError(f"native dispatch terminated: {detail}")
-                outcome = str(latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED)
-                if outcome not in {
-                    PLAYBACK_FINISHED,
-                    PLAYBACK_ERROR,
-                    PLAYBACK_QUIT,
-                    PLAYBACK_SKIPPED,
-                    PLAYBACK_SHUTDOWN_TIMEOUT,
-                }:
-                    raise RuntimeError(f"unknown native playback outcome: {outcome}")
+                raw_outcome = latest.get("outcome") or requested_outcome or PLAYBACK_FINISHED
+                try:
+                    outcome = PlaybackOutcome(str(raw_outcome))
+                except ValueError as exc:
+                    raise NativeDispatchError(
+                        f"unknown native playback outcome: {raw_outcome}"
+                    ) from exc
 
             if self._renderer is not None:
                 verb = {

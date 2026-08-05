@@ -13,7 +13,12 @@ from rich.text import Text
 from sky_music.config import resolve_game_fps
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import PlaybackControls
-from sky_music.orchestration.native_models import BackendHealth
+from sky_music.orchestration.native_models import (
+    STATUS_LABELS,
+    BackendHealth,
+    PlaybackOutcome,
+    PlaybackStatus,
+)
 from sky_music.ui.picker_theme import ThemePreset, get_theme_preset
 from sky_music.ui.playback_notices import PlaybackNoticeLedger
 from sky_music.ui.text_render import (
@@ -21,9 +26,10 @@ from sky_music.ui.text_render import (
     truncate_cells,
 )
 
-PLAYBACK_FINISHED = "finished"
-PLAYBACK_SKIPPED = "skipped"
-PLAYBACK_QUIT = "quit"
+PLAYBACK_FINISHED = PlaybackOutcome.FINISHED
+PLAYBACK_QUIT = PlaybackOutcome.QUIT
+PLAYBACK_SKIPPED = PlaybackOutcome.SKIPPED
+
 PLAYBACK_POLL_SECONDS = 0.025
 PROGRESS_RENDER_INTERVAL_SECONDS = 0.10
 
@@ -186,15 +192,6 @@ class ProgressRenderer:
         styles = self._styles
 
         # Resolve header label & status style
-        status_labels: dict[str, str] = {
-            "playing": "Playing",
-            "paused": "Paused",
-            "focus_lost": "Focus Lost",
-            "waiting_for_focus": "Waiting for Focus",
-            "refocus": "Refocusing",
-            "panic": "Panic Release",
-            "done": "Done",
-        }
         status_colors: dict[str, Style] = {
             "playing": styles["accent"],
             "paused": styles["warning"],
@@ -205,7 +202,10 @@ class ProgressRenderer:
             "done": styles["accent"],
         }
 
-        header_label = status_labels.get(status, status.replace("_", " ").title())
+        try:
+            header_label = STATUS_LABELS[PlaybackStatus(status)]
+        except (KeyError, ValueError):
+            header_label = status.replace("_", " ").title()
         status_style = status_colors.get(status, styles["accent"])
 
         # Session info line

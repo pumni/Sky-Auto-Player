@@ -17,6 +17,7 @@ from textual.widgets import Static
 
 from sky_music.config import load_config, resolve_game_fps
 from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
+from sky_music.orchestration.native_models import STATUS_LABELS, PlaybackStatus
 from sky_music.ui.hud import format_duration
 from sky_music.ui.picker_theme import get_theme_preset
 from sky_music.ui.playback_notices import PlaybackNoticeLedger
@@ -250,15 +251,7 @@ _ANSI_RESET = "\033[0m"
 _ANSI_BOLD = "\033[1m"
 
 # Module-level constant — avoids re-creating this dict on every _playing_body() call (10 Hz).
-_STATUS_LABELS: dict[str, str] = {
-    "playing": "Playing",
-    "paused": "Paused",
-    "focus_lost": "Focus Lost",
-    "waiting_for_focus": "Waiting for Focus",
-    "refocus": "Refocusing",
-    "panic": "Panic Release",
-    "done": "Done",
-}
+_STATUS_LABELS = STATUS_LABELS
 
 
 class PlaybackCard(Static):
@@ -682,7 +675,10 @@ class PlaybackCard(Static):
             chord_split_events=int(getattr(backend_health, "chord_split_events", 0) or 0),
         )
 
-        header_label = _STATUS_LABELS.get(status, status.replace("_", " ").title())
+        try:
+            header_label = _STATUS_LABELS[PlaybackStatus(status)]
+        except (KeyError, ValueError):
+            header_label = status.replace("_", " ").title()
 
         session_line = (
             f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  {accent}{self.hold_label}{_ANSI_RESET}"
