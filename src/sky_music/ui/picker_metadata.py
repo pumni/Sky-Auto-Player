@@ -56,7 +56,7 @@ class SongUiMetadata:
     min_note_gap_ms: float
     min_same_key_gap_ms: float
     risk: Literal["low", "medium", "high", "error"]
-    recommended_profile: str
+    recommended_hold_frames: float
     recommended_tempo_scale: float
     warnings: tuple[str, ...]
     average_notes_per_second: float = 0.0
@@ -66,7 +66,7 @@ class SongUiMetadata:
     chords_count: int = 0
     timing_stress_rate: float = 0.0
     # False = only the cheap, policy-independent "raw" stats are filled
-    # (Time/Notes/density/gaps); risk + recommended profile are still being
+    # (Time/Notes/density/gaps); risk + recommended hold are still being
     # computed in the background. True = full schedule risk analysis is present.
     analyzed: bool = True
 
@@ -85,7 +85,6 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "min_hold_us",
     "min_hold_margin_us",
     "min_hold_margin_source",
-    "spin_threshold_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",
     "frame_us",
@@ -98,7 +97,7 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
 # _persistent_cache_key() is called in the render path (peek_cached_song_ui_metadata)
 # for every visible row on every frame repaint.  Computing stat() + json.dumps() +
 # sha256() per call is expensive.  We cache the result keyed by a cheap tuple
-# (resolved_path_str, mtime_ns, size, profile_name, tempo_scale, fps, …).
+# (resolved_path_str, mtime_ns, size, hold_frames, tempo_scale, fps, …).
 # The cache is automatically invalidated when the file's mtime/size changes.
 _pkey_ram_cache: OrderedDict[tuple[Any, ...], str] = OrderedDict()
 _pkey_ram_lock = RLock()
@@ -130,12 +129,13 @@ _path_session_ram_lock = RLock()
 def _session_signature(session: PlaybackSessionContext) -> tuple[Any, ...]:
     """Cheap, hashable identity for a session (no config file access)."""
     return (
-        session.profile_name,
+        session.hold_frames,
         session.fps,
         session.tempo_scale,
         session.scan_code_mode,
         session.same_key_conflict_policy,
-        session.policy_overrides,
+        session.chord_stagger_us,
+        session.chord_stagger_max_us,
     )
 
 
@@ -176,7 +176,7 @@ def _metadata_to_payload(meta: SongUiMetadata) -> dict[str, Any]:
 def _raw_metadata_payload(meta: SongUiMetadata) -> dict[str, Any]:
     """Serialise only policy-independent fields for the persistent raw table.
 
-    A fully analyzed ``SongUiMetadata`` (risk / recommended profile / tempo /
+    A fully analyzed ``SongUiMetadata`` (risk / recommended hold / tempo /
     warnings derived from a specific session) must NEVER be written verbatim to
     the ``picker_raw_metadata`` table, otherwise a later session could rehydrate
     it, treat the song as analyzed, and reuse stale session-specific results.
@@ -199,7 +199,7 @@ def _raw_metadata_payload(meta: SongUiMetadata) -> dict[str, Any]:
         "chords_count": meta.chords_count,
         "analyzed": False,
         "risk": "low",
-        "recommended_profile": "",
+        "recommended_hold_frames": 1.0,
         "recommended_tempo_scale": 1.0,
         "warnings": (),
         "impossible_repeats": 0,
@@ -221,7 +221,7 @@ def _metadata_from_payload(payload: dict[str, Any]) -> SongUiMetadata | None:
             min_note_gap_ms=float(payload.get("min_note_gap_ms", 0.0)),
             min_same_key_gap_ms=float(payload.get("min_same_key_gap_ms", 0.0)),
             risk=risk,  # type: ignore[arg-type]
-            recommended_profile=str(payload.get("recommended_profile", "balanced")),
+            recommended_hold_frames=float(payload.get("recommended_hold_frames", 1.0)),
             recommended_tempo_scale=float(payload.get("recommended_tempo_scale", 1.0)),
             warnings=tuple(str(item) for item in payload.get("warnings", ())),
             average_notes_per_second=float(payload.get("average_notes_per_second", 0.0)),
@@ -317,12 +317,13 @@ def _persistent_cache_key(
             path_str,
             mtime_ns,
             size,
-            session.profile_name,
+            session.hold_frames,
             session.tempo_scale,
             session.fps,
             session.scan_code_mode,
             session.same_key_conflict_policy,
-            session.policy_overrides,
+            session.chord_stagger_us,
+            session.chord_stagger_max_us,
             PERSISTENT_CACHE_SCHEMA_VERSION,
             sys.platform,
         )
@@ -341,12 +342,13 @@ def _persistent_cache_key(
             "schema": PERSISTENT_CACHE_SCHEMA_VERSION,
             "file": file_identity,
             "session": {
-                "profile_name": session.profile_name,
+                "hold_frames": session.hold_frames,
                 "tempo_scale": session.tempo_scale,
                 "fps": session.fps,
                 "scan_code_mode": session.scan_code_mode,
                 "same_key_conflict_policy": session.same_key_conflict_policy,
-                "policy_overrides": list(session.policy_overrides),
+                "chord_stagger_us": session.chord_stagger_us,
+                "chord_stagger_max_us": session.chord_stagger_max_us,
             },
             "effective_policy": _effective_policy_signature(session, cfg),
             "platform": sys.platform,
@@ -560,7 +562,7 @@ def hydrate_persistent_metadata_for_paths(
     if not paths:
         return 0
 
-    session = session or PlaybackSessionContext.balanced()
+    session = session or PlaybackSessionContext.default()
     key_to_path: dict[str, Path] = {}
     for path in paths:
         key = _persistent_cache_key(path, session, cfg)
@@ -683,34 +685,29 @@ def persistent_metadata_cache_stats() -> dict[str, Any]:
 def session_to_worker_payload(session: PlaybackSessionContext) -> dict[str, Any]:
     """Return a small, picklable session payload for process workers."""
     return {
-        "profile_name": session.profile_name,
+        "hold_frames": session.hold_frames,
         "tempo_scale": session.tempo_scale,
         "fps": session.fps,
         "scan_code_mode": session.scan_code_mode,
         "same_key_conflict_policy": session.same_key_conflict_policy,
-        "policy_overrides": list(session.policy_overrides),
+        "chord_stagger_us": session.chord_stagger_us,
+        "chord_stagger_max_us": session.chord_stagger_max_us,
     }
 
 
 def _session_from_worker_payload(payload: dict[str, Any]) -> PlaybackSessionContext:
-    raw_overrides = payload.get("policy_overrides", ())
-    overrides: list[tuple[str, Any]] = [
-        (str(item[0]), item[1])
-        for item in raw_overrides
-        if isinstance(item, list | tuple) and len(item) == 2
-    ] if isinstance(raw_overrides, list | tuple) else []
-
     conflict_policy = str(payload.get("same_key_conflict_policy", "drop_chord"))
     if conflict_policy not in {"degraded", "drop_chord", "strict"}:
         conflict_policy = "drop_chord"
 
     return PlaybackSessionContext(
-        profile_name=str(payload.get("profile_name", "balanced")),
+        hold_frames=float(payload.get("hold_frames", 1.0)),
         tempo_scale=float(payload.get("tempo_scale", 1.0)),
         fps=payload.get("fps"),  # type: ignore[arg-type]
         scan_code_mode=str(payload.get("scan_code_mode", "physical")),
         same_key_conflict_policy=conflict_policy,  # type: ignore[arg-type]
-        policy_overrides=tuple(overrides),
+        chord_stagger_us=int(payload.get("chord_stagger_us", 0)),
+        chord_stagger_max_us=int(payload.get("chord_stagger_max_us", 15_000)),
     )
 
 
@@ -943,7 +940,7 @@ def get_song_ui_metadata(
     session: PlaybackSessionContext | None = None,
     cfg: AppConfig | None = None,
 ) -> SongUiMetadata:
-    session = session or PlaybackSessionContext.balanced()
+    session = session or PlaybackSessionContext.default()
     try:
         from sky_music.domain.analyzer import analyze_schedule
         from sky_music.domain.scheduler import build_key_actions
@@ -960,7 +957,11 @@ def get_song_ui_metadata(
             resolver=resolver,
             tempo_scale=session.tempo_scale,
         )
-        report = analyze_schedule(sched, raw_notes=song.notes)
+        report = analyze_schedule(
+            sched,
+            raw_notes=song.notes,
+            current_hold_frames=session.hold_frames,
+        )
 
         min_note_gap = (report.min_any_note_gap_us / 1000.0) if report.min_any_note_gap_us is not None else 0.0
         min_same_key_gap = (report.min_same_key_gap_us / 1000.0) if report.min_same_key_gap_us is not None else 0.0
@@ -978,7 +979,7 @@ def get_song_ui_metadata(
             min_note_gap_ms=min_note_gap,
             min_same_key_gap_ms=min_same_key_gap,
             risk=report.severity,
-            recommended_profile=report.suggested_profile,
+            recommended_hold_frames=report.suggested_hold_frames,
             recommended_tempo_scale=report.suggested_tempo_scale,
             warnings=report.recommendations,
             average_notes_per_second=report.average_notes_per_second,
@@ -998,7 +999,7 @@ def get_song_ui_metadata(
             min_note_gap_ms=0.0,
             min_same_key_gap_ms=0.0,
             risk="error",
-            recommended_profile="unplayable",
+            recommended_hold_frames=1.0,
             recommended_tempo_scale=1.0,
             warnings=(f"Failed to analyze song: {e}",),
             average_notes_per_second=0.0,
@@ -1013,7 +1014,7 @@ def get_song_ui_metadata(
 def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
     """Cheap, policy-independent stats straight from parsed notes (no scheduler).
 
-    Fills the columns that do not depend on the timing profile so the picker can
+    Fills the columns that do not depend on the hold selection so the picker can
     show Time/Notes/Density/gaps immediately (~1ms) while the much heavier risk
     analysis (~5ms, schedule + analyze) runs in the background. ``analyzed`` is
     False so the UI knows risk/recommendation are still pending.
@@ -1030,7 +1031,7 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
             return SongUiMetadata(
                 path=song_path, name=song_path.stem, duration_seconds=0.0,
                 note_count=0, max_polyphony=0, min_note_gap_ms=0.0,
-                min_same_key_gap_ms=0.0, risk="low", recommended_profile="",
+                min_same_key_gap_ms=0.0, risk="low", recommended_hold_frames=1.0,
                 recommended_tempo_scale=1.0, warnings=(), analyzed=False,
             )
 
@@ -1081,7 +1082,7 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
             duration_seconds=duration_seconds, note_count=note_count,
             max_polyphony=max_chord_size,  # exact lower bound; refined once analyzed
             min_note_gap_ms=min_note_gap_ms, min_same_key_gap_ms=min_same_key_gap_ms,
-            risk="low", recommended_profile="", recommended_tempo_scale=1.0,
+            risk="low", recommended_hold_frames=1.0, recommended_tempo_scale=1.0,
             warnings=(),
             average_notes_per_second=average_notes_per_second,
             peak_notes_per_second_1s=float(peak),
@@ -1095,7 +1096,7 @@ def compute_raw_song_ui_metadata(song_path: Path) -> SongUiMetadata:
         return SongUiMetadata(
             path=song_path, name=song_path.stem, duration_seconds=0.0,
             note_count=0, max_polyphony=0, min_note_gap_ms=0.0,
-            min_same_key_gap_ms=0.0, risk="error", recommended_profile="unplayable",
+            min_same_key_gap_ms=0.0, risk="error", recommended_hold_frames=1.0,
             recommended_tempo_scale=1.0, warnings=(f"Failed to read song: {exc}",),
             analyzed=True,
         )
@@ -1113,7 +1114,7 @@ def populate_raw_song_ui_metadata_for_paths(
     """
     if not paths:
         return 0
-    session = session or PlaybackSessionContext.balanced()
+    session = session or PlaybackSessionContext.default()
     filled = 0
     global _write_counter
     wrote = False
@@ -1198,7 +1199,7 @@ def get_cached_song_ui_metadata(
     session: PlaybackSessionContext | None = None,
     cfg: AppConfig | None = None,
 ) -> SongUiMetadata:
-    session = session or PlaybackSessionContext.balanced()
+    session = session or PlaybackSessionContext.default()
     try:
         song_file_key = _song_repository.cache_key(song_path)
     except Exception:
@@ -1238,7 +1239,7 @@ def peek_cached_song_ui_metadata(
     on every frame repaint after the first we skip _song_repository.cache_key()
     (and its dict lookup) entirely for paths we have already seen.
     """
-    session = session or PlaybackSessionContext.balanced()
+    session = session or PlaybackSessionContext.default()
     sig = _session_signature(session)
     path_str = str(song_path)
     ps_key = (path_str, sig)
@@ -1301,7 +1302,7 @@ def invalidate_policy_metadata() -> None:
     """Clear only the session/policy-dependent in-memory caches.
 
     Call this after a successful native input-latency calibration so that
-    subsequent picker renders recompute risk and recommended-profile data
+    subsequent picker renders recompute risk and recommended-hold data
     against the new device margin.  Raw song parse results and the
     policy-independent ``_raw_cache`` are intentionally preserved.
 
@@ -1332,6 +1333,6 @@ def _get_song_recommendation(
     song_path: Path,
     session: PlaybackSessionContext | None = None,
     cfg: AppConfig | None = None,
-) -> tuple[str, float]:
+) -> tuple[float, float]:
     meta = get_cached_song_ui_metadata(song_path, session, cfg)
-    return meta.recommended_profile, meta.recommended_tempo_scale
+    return meta.recommended_hold_frames, meta.recommended_tempo_scale

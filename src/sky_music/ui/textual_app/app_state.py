@@ -38,9 +38,9 @@ class PickerConfigState:
     """Read-only configuration snapshot shared between App and PickerScreen."""
     active_theme: str = "textual"
     background_mode: str = "win32"
-    profile_name: str = "default"
+    hold_frames: float = 1.0
     tempo_scale: float = 1.0
-    fps: int = 30
+    fps: int = 60
     dry_run: bool = False
     scan_code_mode: str = "default"
     verbose_hud: bool = False

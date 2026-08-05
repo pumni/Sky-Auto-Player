@@ -22,11 +22,10 @@ from textual.widgets import DataTable, Input
 
 from sky_music.config import (
     AppConfig,
-    canonical_profile_name,
     load_config,
     persist_calibration_defaults,
     persist_default_fps,
-    persist_default_profile,
+    persist_default_hold_frames,
     persist_default_tempo,
     resolve_game_fps,
     save_config,
@@ -35,7 +34,7 @@ from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.infrastructure.background import BackgroundScope, ExecutorResource
 from sky_music.ui.picker import (
     FPS_OPTIONS,
-    PROFILES_INFO,
+    HOLD_OPTIONS,
     TEMPO_OPTIONS,
     SongPickerResult,
 )
@@ -85,9 +84,9 @@ class PickerAppHost(Protocol):
     """
 
     @property
-    def profile_name(self) -> str: ...
-    @profile_name.setter
-    def profile_name(self, value: str) -> None: ...
+    def hold_frames(self) -> float: ...
+    @hold_frames.setter
+    def hold_frames(self, value: float) -> None: ...
 
     @property
     def tempo_scale(self) -> float: ...
@@ -119,7 +118,7 @@ class PickerAppHost(Protocol):
     def on_picker_check_for_update(self) -> None: ...
     def on_picker_open_update_settings(self) -> None: ...
     def on_picker_snapshot_calibration_state(self, choice: CalibrationChoice | None) -> None: ...
-    def on_picker_profile_changed(self, profile_name: str) -> None: ...
+    def on_picker_hold_frames_changed(self, hold_frames: float) -> None: ...
     def on_picker_tempo_changed(self, tempo_scale: float) -> None: ...
     def on_picker_fps_changed(self, fps: int) -> None: ...
     def on_picker_theme_changed(self, theme_name: str, background_mode: str) -> None: ...
@@ -195,7 +194,7 @@ class SongTable(DataTable[Any]):
 
 @dataclass(frozen=True, slots=True)
 class CalibrationChoice:
-    profile_name: str
+    hold_frames: float
     tempo_scale: float
     fps: int
 
@@ -256,7 +255,7 @@ class PickerScreen(Screen[SongPickerResult]):
         Binding("q", "cancel", "Quit", show=False),
         Binding("enter", "confirm", "Play", show=False),
         Binding("/", "open_commands", "Commands", show=False),
-        Binding("p", "open_profile", "Profile", priority=True, show=False),
+        Binding("p", "open_hold", "Hold", priority=True, show=False),
         Binding("t", "open_tempo", "Tempo", priority=True, show=False),
         Binding("f", "open_fps", "FPS", priority=True, show=False),
         Binding("y", "open_theme", "Theme", priority=True, show=False),
@@ -298,11 +297,11 @@ class PickerScreen(Screen[SongPickerResult]):
         """Posted when user requests a manual update check."""
         pass
 
-    class ProfileChanged(Message):
-        """Posted after profile change."""
-        def __init__(self, profile_name: str) -> None:
+    class HoldFramesChanged(Message):
+        """Posted after hold selection change."""
+        def __init__(self, hold_frames: float) -> None:
             super().__init__()
-            self.profile_name = profile_name
+            self.hold_frames = hold_frames
 
     class TempoChanged(Message):
         """Posted after tempo change."""
@@ -337,9 +336,9 @@ class PickerScreen(Screen[SongPickerResult]):
         choices: list[SongChoice] | None = None,
         theme_name: str | None = None,
         background_mode: str | None = None,
-        profile_name: str = "balanced",
+        hold_frames: float = 1.0,
         tempo_scale: float = 1.0,
-        fps: int = 30,
+        fps: int = 60,
         dry_run: bool = False,
         scan_code_mode: str = "physical",
         cfg: AppConfig | None = None,
@@ -347,7 +346,7 @@ class PickerScreen(Screen[SongPickerResult]):
         telemetry_enabled: bool = False,
     ) -> None:
         super().__init__(name=name, id=id)
-        self.profile_name = profile_name
+        self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
         self.dry_run = dry_run
         self.scan_code_mode = scan_code_mode
@@ -362,7 +361,7 @@ class PickerScreen(Screen[SongPickerResult]):
         self.show_risk = True
         self.show_suggested = True
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -865,7 +864,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def _render_status(self) -> None:
         fps_str = f"{self.fps}fps"
-        parts = [self.profile_name, f"{self.tempo_scale:.2f}\u00d7", fps_str, self.active_theme]
+        parts = [f"hold {self.hold_frames:.2f}f", f"{self.tempo_scale:.2f}\u00d7", fps_str, self.active_theme]
         if self.dry_run:
             parts.append("dry-run")
         if self.verbose_hud:
@@ -969,7 +968,7 @@ class PickerScreen(Screen[SongPickerResult]):
                 metadata.analyzed,
                 metadata.risk,
                 metadata.note_count,
-                metadata.recommended_profile,
+                metadata.recommended_hold_frames,
                 metadata.recommended_tempo_scale,
                 metadata.warnings,
                 metadata.duration_seconds,
@@ -1069,7 +1068,7 @@ class PickerScreen(Screen[SongPickerResult]):
         picker_result = SongPickerResult(
             song_path=selected_path,
             action="dry_run" if self.dry_run else "play",
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             verbose_hud=self.verbose_hud,
@@ -1094,7 +1093,7 @@ class PickerScreen(Screen[SongPickerResult]):
         self.picker_scope.retire(self.metadata)
         self.metadata.cancel()
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -1114,22 +1113,22 @@ class PickerScreen(Screen[SongPickerResult]):
             return
         self.app.set_focus(self.app.query_one("#songs", SongTable))
 
-    def action_open_profile(self) -> None:
-        options = [PickerOption(name, f"{name} - {desc}") for name, desc in PROFILES_INFO]
-        from sky_music.ui.timing_guidance import PROFILE_MODAL_INFO
+    def action_open_hold(self) -> None:
+        options = [PickerOption(value, f"{value:.2f} frames — {desc.split('—', 1)[-1].strip()}") for value, desc in HOLD_OPTIONS]
+        from sky_music.ui.timing_guidance import HOLD_MODAL_INFO
         self.app.push_screen(
-            OptionModal("Timing Profile", options, info_text=PROFILE_MODAL_INFO, theme_name=self.active_theme),
-            self._apply_profile,
+            OptionModal("Hold Duration", options, info_text=HOLD_MODAL_INFO, theme_name=self.active_theme),
+            self._apply_hold,
         )
 
-    def _apply_profile(self, value: object | None) -> None:
+    def _apply_hold(self, value: object | None) -> None:
         if value is None:
             self._focus_table()
             return
-        self.profile_name = canonical_profile_name(str(value))
-        persist_default_profile(self.cfg, self.profile_name)
+        self.hold_frames = float(cast(float, value))
+        persist_default_hold_frames(self.cfg, self.hold_frames)
         self._replace_metadata_coordinator()
-        cast(PickerAppHost, self.app).on_picker_profile_changed(self.profile_name)
+        cast(PickerAppHost, self.app).on_picker_hold_frames_changed(self.hold_frames)
 
     def action_open_tempo(self) -> None:
         options = [PickerOption(value, f"{value:.2f}x - {desc}") for value, desc in TEMPO_OPTIONS]
@@ -1204,8 +1203,8 @@ class PickerScreen(Screen[SongPickerResult]):
         if command == "preview":
             self.preview_visible = True
             self._render_detail()
-        elif command == "profile":
-            self.action_open_profile()
+        elif command == "hold":
+            self.action_open_hold()
         elif command == "tempo":
             self.action_open_tempo()
         elif command == "fps":
@@ -1409,7 +1408,7 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def action_open_calibration(self) -> None:
         from sky_music.orchestration.calibration import (
-            calibrate_profile,
+            calibrate_timing,
             calibration_input_from_summary,
             load_latest_telemetry_summary,
         )
@@ -1425,20 +1424,20 @@ class PickerScreen(Screen[SongPickerResult]):
             )
             return
         inp = calibration_input_from_summary(summary)
-        rec = calibrate_profile(inp)
+        rec = calibrate_timing(inp)
         t = self._theme_tokens
         accent = t.accent
         info_lines = [
-            f"[bold {accent}]Profile:[/]   {rec.profile_name}",
+            f"[bold {accent}]Hold:[/]      {rec.hold_frames:.2f} frames",
             f"[bold {accent}]Tempo:[/]     {rec.tempo_scale:.2f}x",
-            f"[bold {accent}]Hold:[/]      {rec.hold_us / 1000:.1f}ms",
+            f"[bold {accent}]Effective:[/] {rec.recommended_hold_us / 1000:.1f}ms",
             f"[bold {accent}]Severity:[/]  {rec.severity.upper()}",
             "",
             f"[bold {accent}]Reason:[/]    {rec.reason}",
         ]
         options = [
             PickerOption(
-                CalibrationChoice(rec.profile_name, rec.tempo_scale, inp.fps),
+                CalibrationChoice(rec.hold_frames, rec.tempo_scale, inp.fps),
                 "Apply Recommendation",
             ),
             PickerOption(None, "Close"),
@@ -1460,11 +1459,11 @@ class PickerScreen(Screen[SongPickerResult]):
             return
         persist_calibration_defaults(
             self.cfg,
-            profile_name=value.profile_name,
+            hold_frames=value.hold_frames,
             tempo_scale=value.tempo_scale,
             fps=value.fps,
         )
-        self.profile_name = canonical_profile_name(value.profile_name)
+        self.hold_frames = value.hold_frames
         self.tempo_scale = value.tempo_scale
         self.fps = resolve_game_fps(value.fps)
         self._replace_metadata_coordinator()

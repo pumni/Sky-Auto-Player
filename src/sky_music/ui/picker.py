@@ -15,10 +15,10 @@ ACTIVE_THEME: str = load_saved_theme()
 __all__ = [
     "ACTIVE_THEME",
     "FPS_OPTIONS",
-    "PROFILES_INFO",
+    "HOLD_OPTIONS",
     "TEMPO_OPTIONS",
     "SongPickerResult",
-    "get_profiles_info",
+    "get_hold_options",
     "save_theme",
 ]
 
@@ -27,20 +27,20 @@ class SongPickerResult:
     """Carries the user's confirmed decision from the song picker."""
     song_path: Path
     action: Literal["play", "dry_run"]
-    profile_name: str
-    tempo_scale: float
+    hold_frames: float = 1.0
+    tempo_scale: float = 1.0
     fps: int = 60
     verbose_hud: bool | None = None
     telemetry_enabled: bool | None = None
 
-PROFILES_INFO = [
-    ("local-precise", "Local Precise: sharp local play, less safe for remote listeners"),
-    ("balanced", "Balanced: default setting for local or online play"),
-    ("audience-safe", "Audience Safe: helps online players hear notes clearly"),
+HOLD_OPTIONS = [
+    (1.0, "1.0 frame — default, sharpest timing"),
+    (1.25, "1.25 frames — moderate visibility cushion"),
+    (1.5, "1.5 frames — longest visibility"),
 ]
 
-def get_profiles_info(_fps: int) -> list[tuple[str, str]]:
-    return list(PROFILES_INFO)
+def get_hold_options() -> list[tuple[float, str]]:
+    return list(HOLD_OPTIONS)
 
 TEMPO_OPTIONS = [
     (0.90, "safer for listeners"),

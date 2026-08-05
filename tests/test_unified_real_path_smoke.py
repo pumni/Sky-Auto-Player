@@ -117,14 +117,14 @@ def test_unified_real_path_quiesces_picker_before_playback(monkeypatch) -> None:
                 Note(time_ms=Millis(0), key=NoteKey("Key0")),
             ),
         )
-        session = PlaybackSessionContext.balanced()
+        session = PlaybackSessionContext.default()
         plan = prepare_playback(song, session, app.cfg, is_dry_run=True)
         assert not isinstance(plan, PlaybackError)
 
         picker_result = SongPickerResult(
             song_path=SONGS[0],
             action="dry_run",
-            profile_name="balanced",
+            hold_frames=1.0,
             tempo_scale=1.0,
             fps=60,
         )
@@ -211,14 +211,14 @@ def test_unified_cleanup_failure_blocks_playback_engine_creation(monkeypatch) ->
                 Note(time_ms=Millis(0), key=NoteKey("Key0")),
             ),
         )
-        session = PlaybackSessionContext.balanced()
+        session = PlaybackSessionContext.default()
         plan = prepare_playback(song, session, app.cfg, is_dry_run=True)
         assert not isinstance(plan, PlaybackError)
 
         picker_result = SongPickerResult(
             song_path=SONGS[0],
             action="dry_run",
-            profile_name="balanced",
+            hold_frames=1.0,
             tempo_scale=1.0,
             fps=60,
         )

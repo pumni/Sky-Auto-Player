@@ -56,14 +56,16 @@ class ProgressRenderer:
         self,
         controls: PlaybackControls | None = None,
         verbose: bool = False,
-        profile_name: str = "balanced",
+        hold_label: str = "hold 1.00f",
+        hold_frames: float = 1.0,
         tempo_scale: float = 1.0,
         accent_hex: str | None = None,
         theme_name: str = "aurora",
     ) -> None:
         self.controls = controls
         self.verbose = verbose
-        self.profile_name = profile_name
+        self.hold_label = hold_label
+        self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
         self.theme_name = theme_name
         self.last_render_at: float = 0.0
@@ -206,8 +208,8 @@ class ProgressRenderer:
         # Session info line
         session_line = Text.assemble(
             (header_label, Style.combine([Style(bold=True), status_style])),
-            "  ·  profile ",
-            (self.profile_name, styles["accent"]),
+            "  ·  ",
+            (self.hold_label, styles["accent"]),
             "  ·  tempo ",
             (f"{self.tempo_scale:.2f}×", styles["accent"]),
             "  ·  theme ",
@@ -349,7 +351,7 @@ class ProgressRenderer:
             frame_us = getattr(pol, "frame_us", 0) or round(1_000_000 / fps)
             frame_label = f"{frame_us}us"
             fps_label = f"{fps}fps"
-            hold_info = f"hold/min: {pol.hold_us}/{pol.min_hold_us}us"
+            hold_info = f"Hold: {pol.hold_frames:.2f} frames  ·  Effective: {pol.hold_us / 1000:.3f} ms"
             timing_line = Text(
                 f"Timing: {fps_label} ({frame_label})  ·  {hold_info}",
                 style=styles["muted"],

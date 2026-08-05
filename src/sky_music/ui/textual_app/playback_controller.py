@@ -36,7 +36,7 @@ class PlaybackError:
     code: str
     message: str
     recommended_tempo_scale: float | None = None
-    recommended_profile: str | None = None
+    recommended_hold_frames: float | None = None
 
 def prepare_playback(
     song_path_or_song: Path | Song,
@@ -70,7 +70,7 @@ def prepare_playback(
             code="build_failed",
             message=str(exc),
             recommended_tempo_scale=getattr(exc, "recommended_tempo_scale", None),
-            recommended_profile=getattr(exc, "recommended_profile", None),
+            recommended_hold_frames=getattr(exc, "recommended_hold_frames", None),
         )
 
     actions = sched_meta.actions
@@ -82,7 +82,7 @@ def prepare_playback(
             msg = "; ".join(f"[{v.code}] {v.message}" for v in fatal_violations)
             return PlaybackError(code="validation_failed", message=msg)
 
-    report = analyze_schedule(sched_meta, raw_notes=song.notes)
+    report = analyze_schedule(sched_meta, raw_notes=song.notes, current_hold_frames=session.hold_frames)
 
     return PlaybackPlan(
         actions=actions,
@@ -99,7 +99,7 @@ def prepare_playback(
 def rebuild_with(
     plan_or_session: PlaybackPlan | PlaybackSessionContext,
     *,
-    profile: str | None = None,
+    hold_frames: float | None = None,
     tempo: float | None = None,
     is_dry_run: bool = False,
     cfg: AppConfig | None = None,
@@ -116,8 +116,8 @@ def rebuild_with(
         resolved_song = song
         resolved_cfg = cfg
 
-    if profile is not None:
-        session = session.with_profile(profile)
+    if hold_frames is not None:
+        session = session.with_hold_frames(hold_frames)
     if tempo is not None:
         session = session.with_tempo(tempo)
 

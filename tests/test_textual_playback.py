@@ -294,13 +294,7 @@ def test_unified_workflow_integration(monkeypatch) -> None:
             source_duration_us=5_000_000,  # type: ignore[arg-type]
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
-        active_policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         active_sleep_policy = SleepPolicy(
             spin_threshold_us=1000,
             poll_s=0.025,
@@ -413,13 +407,7 @@ def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
         song = Song(name="Mock Song", notes=())
-        policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         return PlaybackPlan(
             actions=(),
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
@@ -525,13 +513,7 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
         song = Song(name="Mock Song", notes=())
-        policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         return PlaybackPlan(
             actions=(),
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
@@ -645,13 +627,7 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
         song = Song(name="Mock Song", notes=())
-        policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         return PlaybackPlan(
             actions=(),
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
@@ -777,13 +753,7 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
             )
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
-        policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         return PlaybackPlan(
             actions=(),
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
@@ -908,13 +878,7 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
             )
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
-        policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         return PlaybackPlan(
             actions=(),
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
@@ -997,13 +961,7 @@ def test_timing_line_no_bare_na() -> None:
     framed = PlaybackCard(
         theme_name="aurora",
         song_name="Mock Song",
-        active_policy=FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        ),
+        active_policy=FrameTimingPolicy.from_hold_frames(1.0, 60),
         debug_mode=True,
     )
     framed._mode = "playing"
@@ -1015,13 +973,7 @@ def test_timing_line_no_bare_na() -> None:
     fallback = PlaybackCard(
         theme_name="aurora",
         song_name="Mock Song",
-        active_policy=FrameTimingPolicy(
-            fps=0,
-            frame_us=0,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        ),
+        active_policy=FrameTimingPolicy.from_hold_frames(1.0, 60),
         debug_mode=True,
     )
     fallback._mode = "playing"
@@ -1083,6 +1035,7 @@ def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> Non
         policy = FrameTimingPolicy(
             fps=session.fps,
             frame_us=16666,  # type: ignore[arg-type]
+            hold_frames=1.0,
             hold_us=100000,  # type: ignore[arg-type]
             min_hold_us=50000,  # type: ignore[arg-type]
             focus_restore_grace_us=2000000,  # type: ignore[arg-type]
@@ -1149,7 +1102,7 @@ def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> Non
             for banned in ("unframed", "auto", "N/A"):
                 assert banned not in status_text
                 assert banned not in rendered
-            assert "60fps" in rendered
+            assert "hold 1.00f" in rendered
 
     asyncio.run(run_no_unframed_test())
 
@@ -1215,6 +1168,7 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
         policy = FrameTimingPolicy(
             fps=fps,
             frame_us=16666 if fps else 0,  # type: ignore[arg-type]
+            hold_frames=1.0,
             hold_us=100000,  # type: ignore[arg-type]
             min_hold_us=50000,  # type: ignore[arg-type]
             focus_restore_grace_us=2000000,  # type: ignore[arg-type]
@@ -1276,7 +1230,7 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
             card = app.query_one("#playback-card", PlaybackCard)
             assert card.active_policy is not None
             assert app.fps == card.active_policy.fps
-            assert "60fps" in str(card.render())
+            assert "hold 1.00f" in str(card.render())
 
     asyncio.run(run_match_test())
 
@@ -1338,13 +1292,7 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
             source_duration_us=5_000_000,  # type: ignore[arg-type]
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
-        active_policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         active_sleep_policy = SleepPolicy(
             spin_threshold_us=1000,
             poll_s=0.025,
@@ -1539,13 +1487,7 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             source_duration_us=5_000_000,  # type: ignore[arg-type]
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
-        active_policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         active_sleep_policy = SleepPolicy(
             spin_threshold_us=1000,
             poll_s=0.025,
@@ -1560,7 +1502,7 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             min_same_key_gap_us=None,
             dense_clusters=(),
             recommendations=("Risk recommendation test",),
-            suggested_profile="audience-safe",
+            suggested_hold_frames=1.5,
             suggested_tempo_scale=0.92,
         )
         return PlaybackPlan(
@@ -1745,13 +1687,7 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             source_duration_us=5_000_000,  # type: ignore[arg-type]
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
-        active_policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         active_sleep_policy = SleepPolicy(
             spin_threshold_us=1000,
             poll_s=0.025,
@@ -1929,13 +1865,7 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             source_duration_us=5_000_000,  # type: ignore[arg-type]
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
-        active_policy = FrameTimingPolicy(
-            fps=60,
-            frame_us=16666,  # type: ignore[arg-type]
-            hold_us=100000,  # type: ignore[arg-type]
-            min_hold_us=50000,  # type: ignore[arg-type]
-            focus_restore_grace_us=2000000,  # type: ignore[arg-type]
-        )
+        active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
         active_sleep_policy = SleepPolicy(
             spin_threshold_us=1000,
             poll_s=0.025,

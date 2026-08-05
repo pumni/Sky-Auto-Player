@@ -18,7 +18,7 @@ def test_prepare_playback_success() -> None:
             Note(time_ms=Millis(100), key=NoteKey("Key1")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     plan = prepare_playback(song, session, cfg)
@@ -36,7 +36,7 @@ def test_prepare_playback_build_failed() -> None:
             Note(time_ms=Millis(0), key=NoteKey("KeyInvalid")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     error = prepare_playback(song, session, cfg)
@@ -52,7 +52,7 @@ def test_prepare_playback_validation_failed() -> None:
             Note(time_ms=Millis(-50), key=NoteKey("Key0")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     error = prepare_playback(song, session, cfg, is_dry_run=False)
@@ -67,16 +67,16 @@ def test_rebuild_with_plan() -> None:
             Note(time_ms=Millis(0), key=NoteKey("Key0")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     plan = prepare_playback(song, session, cfg)
     assert isinstance(plan, PlaybackPlan)
 
-    # Rebuild plan with new profile and tempo
-    rebuilt = rebuild_with(plan, profile="audience-safe", tempo=0.9)
+    # Rebuild plan with a new hold selection and tempo
+    rebuilt = rebuild_with(plan, hold_frames=1.5, tempo=0.9)
     assert isinstance(rebuilt, PlaybackPlan)
-    assert rebuilt.session.profile_name == "audience-safe"
+    assert rebuilt.session.hold_frames == 1.5
     assert rebuilt.session.tempo_scale == 0.9
 
 def test_rebuild_with_session() -> None:
@@ -86,13 +86,13 @@ def test_rebuild_with_session() -> None:
             Note(time_ms=Millis(0), key=NoteKey("Key0")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
-    # Rebuild session with new profile and tempo
-    rebuilt = rebuild_with(session, cfg=cfg, song=song, profile="audience-safe", tempo=0.9)
+    # Rebuild session with a new hold selection and tempo
+    rebuilt = rebuild_with(session, cfg=cfg, song=song, hold_frames=1.5, tempo=0.9)
     assert isinstance(rebuilt, PlaybackPlan)
-    assert rebuilt.session.profile_name == "audience-safe"
+    assert rebuilt.session.hold_frames == 1.5
     assert rebuilt.session.tempo_scale == 0.9
 
 def test_prepare_playback_high_risk() -> None:
@@ -104,7 +104,7 @@ def test_prepare_playback_high_risk() -> None:
             Note(time_ms=Millis(2), key=NoteKey("Key0")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     plan = prepare_playback(song, session, cfg, is_dry_run=True)
@@ -119,7 +119,7 @@ def test_prepare_playback_dry_run_with_violations() -> None:
             Note(time_ms=Millis(-50), key=NoteKey("Key0")),
         ),
     )
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0)
+    session = PlaybackSessionContext.default(tempo_scale=1.0)
     cfg = AppConfig()
 
     plan = prepare_playback(song, session, cfg, is_dry_run=True)

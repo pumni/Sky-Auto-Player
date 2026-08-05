@@ -13,7 +13,6 @@ from textual.screen import Screen
 from sky_music import __version__ as VERSION
 from sky_music.config import (
     AppConfig,
-    canonical_profile_name,
     load_config,
     resolve_game_fps,
 )
@@ -85,7 +84,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         *,
         theme_name: str | None = None,
         background_mode: str | None = None,
-        initial_profile: str = "balanced",
+        initial_hold_frames: float = 1.0,
         initial_tempo: float = 1.0,
         initial_fps: int | None = None,
         initial_dry_run: bool = False,
@@ -105,7 +104,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self.theme_name: str
         self.active_theme: str
         self.background_mode: str
-        self.profile_name: str
+        self.hold_frames: float
         self.tempo_scale: float
         self.fps: int
         self.dry_run: bool
@@ -115,14 +114,14 @@ class SkyPickerApp(App[SongPickerResult | None]):
         self._init_params(
             theme_name=theme_name,
             background_mode=background_mode,
-            initial_profile=initial_profile,
+            initial_hold_frames=initial_hold_frames,
             initial_tempo=initial_tempo,
             initial_fps=initial_fps,
             initial_dry_run=initial_dry_run,
         )
 
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -154,12 +153,12 @@ class SkyPickerApp(App[SongPickerResult | None]):
         *,
         theme_name: str | None,
         background_mode: str | None,
-        initial_profile: str,
+        initial_hold_frames: float,
         initial_tempo: float,
         initial_fps: int | None,
         initial_dry_run: bool,
     ) -> None:
-        self.profile_name = canonical_profile_name(initial_profile)
+        self.hold_frames = float(initial_hold_frames)
         self.tempo_scale = initial_tempo
         self.dry_run = initial_dry_run
         self.fps = resolve_game_fps(initial_fps if initial_fps is not None else self.cfg.game_fps)
@@ -202,7 +201,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             choices=None,
             theme_name=self.active_theme,
             background_mode=self.background_mode,
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             dry_run=self.dry_run,
@@ -478,10 +477,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if choice is not None:
             self._apply_calibration_choice(choice)
 
-    def on_picker_profile_changed(self, profile_name: str) -> None:
-        self.profile_name = canonical_profile_name(profile_name)
+    def on_picker_hold_frames_changed(self, hold_frames: float) -> None:
+        self.hold_frames = hold_frames
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -490,7 +489,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_picker_tempo_changed(self, tempo_scale: float) -> None:
         self.tempo_scale = tempo_scale
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -499,7 +498,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def on_picker_fps_changed(self, fps: int) -> None:
         self.fps = resolve_game_fps(fps)
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -536,15 +535,15 @@ class SkyPickerApp(App[SongPickerResult | None]):
         from sky_music.config import persist_calibration_defaults
         persist_calibration_defaults(
             self.cfg,
-            profile_name=choice.profile_name,
+            hold_frames=choice.hold_frames,
             tempo_scale=choice.tempo_scale,
             fps=choice.fps,
         )
-        self.profile_name = canonical_profile_name(choice.profile_name)
+        self.hold_frames = choice.hold_frames
         self.tempo_scale = choice.tempo_scale
         self.fps = resolve_game_fps(choice.fps)
         self.session = PlaybackSessionContext(
-            profile_name=self.profile_name,
+            hold_frames=self.hold_frames,
             tempo_scale=self.tempo_scale,
             fps=self.fps,
             scan_code_mode=self.scan_code_mode,
@@ -593,28 +592,28 @@ class SkyPickerApp(App[SongPickerResult | None]):
         if picker is not None:
             self.call_after_refresh(picker._run_command, value)
 
-    def action_open_profile(self) -> None:
+    def action_open_hold(self) -> None:
         picker = self._find_picker_screen()
         if picker is not None:
-            picker.action_open_profile()
+            picker.action_open_hold()
         else:
-            from sky_music.ui.picker import PROFILES_INFO
+            from sky_music.ui.picker import HOLD_OPTIONS
             from sky_music.ui.textual_app.modals import OptionModal, PickerOption
-            options = [PickerOption(name, f"{name} - {desc}") for name, desc in PROFILES_INFO]
-            self.push_screen(OptionModal("Timing Profile", options, theme_name=self.active_theme), self._on_profile_selected)
+            options = [PickerOption(value, f"{value:.2f} frames - {desc}") for value, desc in HOLD_OPTIONS]
+            self.push_screen(OptionModal("Hold Duration", options, theme_name=self.active_theme), self._on_hold_selected)
 
-    def _on_profile_selected(self, value: object | None) -> None:
+    def _on_hold_selected(self, value: object | None) -> None:
         if value is not None:
-            self.profile_name = canonical_profile_name(str(value))
+            self.hold_frames = float(cast(float, value))
             self.session = PlaybackSessionContext(
-                profile_name=self.profile_name,
+                hold_frames=self.hold_frames,
                 tempo_scale=self.tempo_scale,
                 fps=self.fps,
                 scan_code_mode=self.scan_code_mode,
             )
             picker = self._find_picker_screen()
             if picker is not None:
-                picker.action_open_profile()
+                picker.action_open_hold()
 
     def _find_picker_screen(self) -> PickerScreen | None:
         return self._picker
@@ -641,7 +640,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
     def start_playback_workflow(self, picker_result: SongPickerResult) -> None:
         is_dry_run = picker_result.action == "dry_run"
         session = PlaybackSessionContext(
-            profile_name=picker_result.profile_name,
+            hold_frames=picker_result.hold_frames,
             tempo_scale=picker_result.tempo_scale,
             fps=picker_result.fps,
             scan_code_mode=self.scan_code_mode,
@@ -658,8 +657,8 @@ class SkyPickerApp(App[SongPickerResult | None]):
             self._risk_decisions = (
                 PendingRiskDecision("proceed", "Proceed with current settings"),
                 PendingRiskDecision(
-                    "switch_profile",
-                    f"Switch to recommended '{res.risk_report.suggested_profile}' profile",
+                    "switch_hold",
+                    f"Use recommended hold {res.risk_report.suggested_hold_frames:.2f} frames",
                 ),
                 PendingRiskDecision(
                     "scale_tempo", f"Scale tempo down to {res.risk_report.suggested_tempo_scale:.2f}x"
@@ -747,10 +746,13 @@ class SkyPickerApp(App[SongPickerResult | None]):
             renderer=renderer,
             telemetry_enabled=telemetry_enabled,
             require_focus=not is_dry_run,
-            profile_name=plan.session.display_profile_label(),
+            hold_label=plan.session.display_hold_label(),
+            hold_frames=plan.session.hold_frames,
             game_fps=int(plan.active_policy.fps),
             tempo_scale=plan.session.tempo_scale,
             min_hold_us=int(plan.active_policy.min_hold_us),
+            min_hold_margin_us=int(plan.active_policy.min_hold_margin_us),
+            min_hold_margin_source=plan.active_policy.min_hold_margin_source,
         )
         engine.telemetry.record_schedule_metadata(plan.sched_meta)
 
@@ -791,7 +793,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 total_us=plan.sched_meta.playback_duration_us,
                 violations=plan.violations,
                 active_policy=plan.active_policy,
-                profile_name=plan.session.display_profile_label(),
+                hold_label=plan.session.display_hold_label(),
                 tempo_scale=plan.session.tempo_scale,
                 debug_mode=self.verbose_hud,
                 result_callback=handle_playback_result,
@@ -818,11 +820,11 @@ class SkyPickerApp(App[SongPickerResult | None]):
         )
         user_cfg = load_config()
         updated_session = merge_session_with_overrides(
-            main_mod.RUNTIME_STATE.session or PlaybackSessionContext.balanced(
+            main_mod.RUNTIME_STATE.session or PlaybackSessionContext.default(
                 tempo_scale=main_mod.RUNTIME_STATE.tempo_scale,
                 scan_code_mode=main_mod.RUNTIME_STATE.scan_code_mode,
             ),
-            profile=picker_result.profile_name,
+            hold_frames=picker_result.hold_frames,
             tempo=picker_result.tempo_scale,
             fps=picker_result.fps,
         )
@@ -831,7 +833,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         persist_playback_defaults(
             user_cfg,
-            profile_name=picker_result.profile_name,
+            hold_frames=picker_result.hold_frames,
             tempo_scale=picker_result.tempo_scale,
             fps=picker_result.fps,
         )
@@ -898,10 +900,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
 
         if decision == "proceed":
             self.execute_playback_plan(plan, picker_result)
-        elif decision in {"switch_profile", "scale_tempo", "dry_run"}:
+        elif decision in {"switch_hold", "scale_tempo", "dry_run"}:
             rebuild_kwargs: dict[str, Any]
-            if decision == "switch_profile":
-                rebuild_kwargs = {"profile": plan.risk_report.suggested_profile}
+            if decision == "switch_hold":
+                rebuild_kwargs = {"hold_frames": plan.risk_report.suggested_hold_frames}
             elif decision == "scale_tempo":
                 rebuild_kwargs = {"tempo": plan.risk_report.suggested_tempo_scale}
             else:
@@ -912,7 +914,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 self._show_playback_error("Rebuild Error", result.message)
                 return
 
-            # Apply new plan (profile/tempo/dry-run already baked in)
+            # Apply new plan (hold/tempo/dry-run already baked in)
             if rebuild_kwargs.get("is_dry_run"):
                 picker_result = replace(picker_result, action="dry_run")
             self._risk_plan = result
@@ -1080,7 +1082,7 @@ def _picker_cleanup_failed(cleanup: dict | None) -> bool:
 def choose_song_interactively_textual(
     theme_name: str | None = None,
     background_mode: str | None = None,
-    initial_profile: str = "balanced",
+    initial_hold_frames: float = 1.0,
     initial_tempo: float = 1.0,
     initial_fps: int | None = None,
     initial_dry_run: bool = False,
@@ -1091,7 +1093,7 @@ def choose_song_interactively_textual(
     app = SkyPickerApp(
         theme_name=theme_name,
         background_mode=background_mode,
-        initial_profile=initial_profile,
+        initial_hold_frames=initial_hold_frames,
         initial_tempo=initial_tempo,
         initial_fps=initial_fps,
         initial_dry_run=initial_dry_run,
@@ -1110,7 +1112,7 @@ def choose_song_interactively_textual(
 def run_sky_app_unified(
     theme_name: str | None = None,
     background_mode: str | None = None,
-    initial_profile: str = "balanced",
+    initial_hold_frames: float = 1.0,
     initial_tempo: float = 1.0,
     initial_fps: int | None = None,
     initial_dry_run: bool = False,
@@ -1123,7 +1125,7 @@ def run_sky_app_unified(
     app = SkyPickerApp(
         theme_name=theme_name,
         background_mode=background_mode,
-        initial_profile=initial_profile,
+        initial_hold_frames=initial_hold_frames,
         initial_tempo=initial_tempo,
         initial_fps=initial_fps,
         initial_dry_run=initial_dry_run,

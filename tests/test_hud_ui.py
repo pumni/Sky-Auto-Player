@@ -48,14 +48,7 @@ def test_hud_controls_focus_waiting_keeps_refocus_on_narrow_width() -> None:
 
 def test_verbose_hud_timing_uses_fps_fallback_not_na() -> None:
     renderer = ProgressRenderer(controls=_controls(), verbose=True)
-    renderer.active_policy = FrameTimingPolicy(  # type: ignore[arg-type]
-        fps=0,  # type: ignore[arg-type]
-        frame_us=0,  # type: ignore[arg-type]
-        hold_us=10_000,  # type: ignore[arg-type]
-        min_hold_us=10_000,  # type: ignore[arg-type]
-        focus_restore_grace_us=100_000,  # type: ignore[arg-type]
-        profile_name="fallback",
-    )
+    renderer.active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60, margin_us=0)
 
     renderer.render(0.0, 1.0, "Test Song", force=True)
     renderer.finish()

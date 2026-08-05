@@ -37,7 +37,7 @@ def test_pkey_ram_cache_saves_recomputation(tmp_path: Path) -> None:
     song_path = tmp_path / "dummy_song.json"
     song_path.write_text('{"name": "Dummy", "songNotes": []}', encoding="utf-8")
 
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
 
     # Verify cache is initially empty
@@ -67,7 +67,7 @@ def test_path_session_ram_cache_short_circuits_cache_key(tmp_path: Path) -> None
     song_path = tmp_path / "dummy_song_2.json"
     song_path.write_text('{"name": "Dummy 2", "songNotes": []}', encoding="utf-8")
 
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
 
     # Initially empty
@@ -218,7 +218,7 @@ def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> N
     song_path = tmp_path / "dummy_song_background.json"
     song_path.write_text('{"name": "Background test", "songNotes": []}', encoding="utf-8")
 
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
 
     assert len(_path_session_ram_cache) == 0
@@ -245,7 +245,7 @@ def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> N
         min_note_gap_ms=100.0,
         min_same_key_gap_ms=100.0,
         risk="low",
-        recommended_profile="balanced",
+        recommended_hold_frames=1.0,
         recommended_tempo_scale=1.0,
         warnings=(),
         analyzed=True
@@ -267,7 +267,7 @@ def test_zero_fs_io_on_render_peek_cached_song_ui_metadata(tmp_path: Path) -> No
     song_path = tmp_path / "zero_io_test.json"
     song_path.write_text('{"name": "Zero IO", "songNotes": []}', encoding="utf-8")
 
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
 
     _path_session_ram_cache.clear()
@@ -306,7 +306,7 @@ def test_persistent_relative_path_hit(monkeypatch, tmp_path: Path) -> None:
     song_path = songs_dir / "relative_test.json"
     song_path.write_text('{"name": "Relative", "songNotes": []}', encoding="utf-8")
     
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
     
     meta = SongUiMetadata(
@@ -318,7 +318,7 @@ def test_persistent_relative_path_hit(monkeypatch, tmp_path: Path) -> None:
         min_note_gap_ms=100.0,
         min_same_key_gap_ms=100.0,
         risk="low",
-        recommended_profile="balanced",
+        recommended_hold_frames=1.0,
         recommended_tempo_scale=1.0,
         warnings=(),
         analyzed=True
@@ -352,7 +352,7 @@ def test_persistent_cross_session_raw_hit_reanalyzes(tmp_path: Path) -> None:
     song_path = tmp_path / "cross_session_test.json"
     song_path.write_text('{"name": "Cross", "songNotes": []}', encoding="utf-8")
     
-    session_bal = PlaybackSessionContext.balanced()
+    session_bal = PlaybackSessionContext.default()
     cfg = AppConfig()
     
     meta_bal = SongUiMetadata(
@@ -364,7 +364,7 @@ def test_persistent_cross_session_raw_hit_reanalyzes(tmp_path: Path) -> None:
         min_note_gap_ms=100.0,
         min_same_key_gap_ms=100.0,
         risk="low",
-        recommended_profile="balanced",
+        recommended_hold_frames=1.0,
         recommended_tempo_scale=1.0,
         warnings=(),
         analyzed=True
@@ -377,7 +377,7 @@ def test_persistent_cross_session_raw_hit_reanalyzes(tmp_path: Path) -> None:
     _raw_cache.clear()
     _metadata_cache.clear()
     
-    session_safe = PlaybackSessionContext(profile_name="safe", tempo_scale=1.0, fps=30, scan_code_mode="physical")
+    session_safe = PlaybackSessionContext(hold_frames=1.5, tempo_scale=1.0, fps=30, scan_code_mode="physical")
     n_loaded = hydrate_persistent_metadata_for_paths([song_path], session_safe, cfg)
     
     assert n_loaded >= 1

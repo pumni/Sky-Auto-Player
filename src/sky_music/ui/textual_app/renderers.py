@@ -67,7 +67,7 @@ def _metadata_cells(metadata: SongUiMetadata | None) -> tuple[str, str, str, str
     notes = str(metadata.note_count)
     if not metadata.analyzed:
         return duration, notes, PENDING_FIELD, PENDING_FIELD
-    return duration, notes, metadata.risk.upper(), metadata.recommended_profile
+    return duration, notes, metadata.risk.upper(), f"hold {metadata.recommended_hold_frames:.2f}f"
 
 
 def _warning_summary(warnings: tuple[str, ...], *, max_width: int = 72) -> str:
@@ -106,7 +106,7 @@ def build_detail_text(selected_path: Path, metadata: SongUiMetadata | None, t: T
 
     analyzed = metadata.analyzed
     risk = metadata.risk.upper() if analyzed else "…"
-    suggested = metadata.recommended_profile if analyzed else "…"
+    suggested = f"hold {metadata.recommended_hold_frames:.2f}f" if analyzed else "…"
     risk_style = _risk_style(risk, t.muted, t) if analyzed else t.muted
 
     def label(s: str) -> tuple[str, str]:

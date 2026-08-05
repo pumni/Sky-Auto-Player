@@ -41,10 +41,10 @@ INFO_MODAL_HINTS: list[KeyHint] = [
 
 COMMANDS: list[CommandSpec] = [
     CommandSpec("preview", "v", "Song Details", "View selected song details", "View"),
-    CommandSpec("profile", "p", "Timing Profile", "Change instrument response timing", "Playback"),
+    CommandSpec("hold", "p", "Hold", "Change key hold duration in game frames", "Playback"),
     CommandSpec("tempo", "t", "Adjust Tempo", "Speed up or slow down playback", "Playback"),
     CommandSpec("fps", "f", "FPS Sync", "Synchronize with game frame rate", "Playback"),
-    CommandSpec("calibration", "", "Telemetry Playback Recommendation", "Analyze the latest playback telemetry and suggest profile/tempo changes", "Playback"),
+    CommandSpec("calibration", "", "Telemetry Playback Recommendation", "Analyze the latest playback telemetry and suggest hold/tempo changes", "Playback"),
     CommandSpec("dry_run", "d", "Toggle Dry-run", "Simulate without sending keys", "Playback"),
     CommandSpec("calibrate_latency", "c", "Input Latency Calibration", "Measure host-side injected input delivery latency", "Playback"),
     CommandSpec("hud", "h", "Toggle HUD", "Show/hide TUI HUD and Debug panel", "Interface"),

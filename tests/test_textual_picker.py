@@ -241,7 +241,7 @@ def test_shortcuts_and_arrow_survive_modal_close(monkeypatch) -> None:
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         table = app.query_one("#songs")
-        app.action_open_profile()
+        app.action_open_hold()
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
@@ -284,7 +284,7 @@ def test_textual_metadata_cells_gate_risk_until_analyzed() -> None:
         min_note_gap_ms=100.0,
         min_same_key_gap_ms=200.0,
         risk="low",
-        recommended_profile="balanced",
+        recommended_hold_frames=1.0,
         recommended_tempo_scale=1.0,
         warnings=(),
         analyzed=False,
@@ -304,9 +304,9 @@ def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
         min_note_gap_ms=20.0,
         min_same_key_gap_ms=35.0,
         risk="high",
-        recommended_profile="safe",
+        recommended_hold_frames=1.5,
         recommended_tempo_scale=0.9,
-        warnings=("same-key repeats too tight for the current profile", "high peak density"),
+        warnings=("same-key repeats too tight for the current hold", "high peak density"),
         analyzed=True,
     )
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
@@ -363,9 +363,9 @@ def test_detail_panel_shows_empty_and_no_match_states(monkeypatch) -> None:
     assert no_match_app.return_value is None
 
 
-def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
+def test_hold_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
-    persisted: list[str] = []
+    persisted: list[float] = []
     monkeypatch.setattr("sky_music.ui.picker_helpers.get_song_choices", lambda force_refresh=False: SONGS)
     # sky_picker.py imports ``MetadataCoordinator`` from ``workers`` directly; the
     # App also imports it for its own picker_scope. Patch both modules so the
@@ -374,18 +374,18 @@ def test_profile_modal_persists_and_invalidates_metadata(monkeypatch) -> None:
     # the test's fake-instance count assertion would silently fail.
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
     monkeypatch.setattr(picker_module, "MetadataCoordinator", FakeMetadataCoordinator)
-    monkeypatch.setattr(picker_module, "persist_default_profile", lambda _cfg, profile: persisted.append(profile))
+    monkeypatch.setattr(picker_module, "persist_default_hold_frames", lambda _cfg, hold: persisted.append(hold))
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
-        app.action_open_profile()
+        app.action_open_hold()
         await pilot.pause()
         await pilot.press("enter")
-        assert app.profile_name == "local-precise"
+        assert app.hold_frames == 1.0
         await pilot.press("escape")
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert persisted == ["local-precise"]
+    assert persisted == [1.0]
     assert FakeMetadataCoordinator.instances[0].shutdown_started is True
     assert FakeMetadataCoordinator.instances[0].closed is True
     assert FakeMetadataCoordinator.instances[0].close_waits == [True]
@@ -639,7 +639,7 @@ def test_reload_clears_metadata_and_refreshes_song_list(monkeypatch) -> None:
 
 def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
     FakeMetadataCoordinator.instances.clear()
-    persisted: list[tuple[str, float, int]] = []
+    persisted: list[tuple[float, float, int]] = []
     summary = {
         "song": "Alpha",
         "profile": "balanced",
@@ -659,20 +659,20 @@ def test_calibration_apply_persists_and_updates_session(monkeypatch) -> None:
     monkeypatch.setattr(
         picker_module,
         "persist_calibration_defaults",
-        lambda _cfg, *, profile_name, tempo_scale, fps: persisted.append((profile_name, tempo_scale, fps)),
+        lambda _cfg, *, hold_frames, tempo_scale, fps: persisted.append((hold_frames, tempo_scale, fps)),
     )
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
         app.action_open_calibration()
         await pilot.pause()
         await pilot.press("enter")
-        assert app.profile_name == "audience-safe"
+        assert app.hold_frames == 1.5
         assert app.fps == 30
         await pilot.press("escape")
 
     app = run_picker(_run_app(actions))
     assert app.return_value is None
-    assert persisted == [("audience-safe", 0.88, 30)]
+    assert persisted == [(1.5, 0.9, 30)]
     assert FakeMetadataCoordinator.instances[0].closed is True
 
 
@@ -829,7 +829,7 @@ def test_choose_textual_returns_result_on_clean_cleanup(monkeypatch) -> None:
     sentinel = SongPickerResult(
         song_path=Path("songs/Alpha.json"),
         action="play",
-        profile_name="balanced",
+        hold_frames=1.0,
         tempo_scale=1.0,
     )
 

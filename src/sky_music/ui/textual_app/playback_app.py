@@ -279,7 +279,7 @@ class PlaybackCard(Static):
         renderer: SnapshotRenderer | None = None,
         violations: tuple[ScheduleInvariantViolation, ...] = (),
         active_policy: FrameTimingPolicy | None = None,
-        profile_name: str = "balanced",
+        hold_label: str = "hold 1.00f",
         tempo_scale: float = 1.0,
         debug_mode: bool = False,
         id: str = "playback-card",
@@ -295,7 +295,7 @@ class PlaybackCard(Static):
         self.renderer = renderer or SnapshotRenderer()
         self.violations = violations
         self.active_policy = active_policy
-        self.profile_name = profile_name
+        self.hold_label = hold_label
         self.tempo_scale = tempo_scale
         self.debug_mode = debug_mode
 
@@ -481,7 +481,7 @@ class PlaybackCard(Static):
         total_us: int,
         violations: tuple[ScheduleInvariantViolation, ...],
         active_policy: FrameTimingPolicy,
-        profile_name: str,
+        hold_label: str,
         tempo_scale: float,
         debug_mode: bool,
         result_callback: Any,
@@ -494,7 +494,7 @@ class PlaybackCard(Static):
         self.total_us = total_us
         self.violations = violations
         self.active_policy = active_policy
-        self.profile_name = profile_name
+        self.hold_label = hold_label
         self.tempo_scale = tempo_scale
         self.debug_mode = debug_mode
         controls = getattr(self.app, "controls", None)
@@ -675,7 +675,7 @@ class PlaybackCard(Static):
         header_label = _STATUS_LABELS.get(status, status.replace("_", " ").title())
 
         session_line = (
-            f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  profile {accent}{self.profile_name}{_ANSI_RESET}"
+            f"{_ANSI_BOLD}{header_label}{_ANSI_RESET}  ·  {accent}{self.hold_label}{_ANSI_RESET}"
             f"  ·  tempo {accent}{self.tempo_scale:.2f}×{_ANSI_RESET}  ·  theme {accent}{self.theme_name}{_ANSI_RESET}"
         )
 
@@ -1010,7 +1010,7 @@ class PlaybackScreen(Screen[str]):
         total_us: int,
         violations: tuple[Any, ...] = (),
         active_policy: Any = None,
-        profile_name: str = "balanced",
+        hold_label: str = "hold 1.00f",
         tempo_scale: float = 1.0,
         debug_mode: bool = False,
     ) -> None:
@@ -1024,7 +1024,7 @@ class PlaybackScreen(Screen[str]):
         self.total_us = total_us
         self.violations = violations
         self.active_policy = active_policy
-        self.profile_name = profile_name
+        self.hold_label = hold_label
         self.tempo_scale = tempo_scale
         self.debug_mode = debug_mode
         self._exited = False
@@ -1185,7 +1185,7 @@ class PlaybackScreen(Screen[str]):
             )
             self.query_one("#debug-lateness", Static).update(lateness_str)
             
-            # Line 3: Timing: {fps}fps ({frame_us}us) · hold/min {hold}/{min}us · {profile} {tempo}×
+            # Line 3: Timing: {fps}fps ({frame_us}us) · hold/min {hold}/{min}us · {hold_label} {tempo}×
             if self.active_policy is not None:
                 fps = resolve_game_fps(getattr(self.active_policy, "fps", None))
                 frame_us = getattr(self.active_policy, "frame_us", 0) or round(1_000_000 / fps)
@@ -1198,7 +1198,7 @@ class PlaybackScreen(Screen[str]):
                 min_hold = 0
             timing_str = (
                 f"Timing: {fps}fps ({frame_us}us) · hold/min {hold_us}/{min_hold}us · "
-                f"{self.profile_name} {self.tempo_scale:.2f}×"
+                f"{self.hold_label} {self.tempo_scale:.2f}×"
             )
             self.query_one("#debug-timing", Static).update(timing_str)
 
