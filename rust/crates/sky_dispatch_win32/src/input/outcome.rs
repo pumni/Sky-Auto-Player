@@ -15,6 +15,54 @@ pub struct PlatformSendResult {
     pub timing_error: Option<crate::clock::QpcError>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicalPacket {
+    pub up_mask: u16,
+    pub down_mask: u16,
+}
+
+impl PhysicalPacket {
+    pub const fn new(up_mask: u16, down_mask: u16) -> Self {
+        Self { up_mask, down_mask }
+    }
+
+    pub const fn event_count(self) -> u8 {
+        (self.up_mask.count_ones() + self.down_mask.count_ones()) as u8
+    }
+
+    pub const fn is_up_only(self) -> bool {
+        self.down_mask == 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalSendOutcome {
+    Complete {
+        requested: u8,
+        inserted: u8,
+        attempts: u8,
+        started_ticks: QpcTicks,
+        completed_ticks: QpcTicks,
+    },
+    ZeroProgress {
+        requested: u8,
+        attempts: u8,
+        first_error: u32,
+        last_error: u32,
+        started_ticks: QpcTicks,
+        completed_ticks: QpcTicks,
+    },
+    Partial {
+        requested: u8,
+        inserted_count: u8,
+        attempts: u8,
+        first_error: u32,
+        last_error: u32,
+        started_ticks: QpcTicks,
+        completed_ticks: QpcTicks,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSendResult {
     pub sent: SmallVec<[u16; 15]>,

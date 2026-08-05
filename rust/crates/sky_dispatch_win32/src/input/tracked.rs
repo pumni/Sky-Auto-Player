@@ -2,8 +2,10 @@ use super::down_transaction::{emit_down, emit_down_with};
 #[cfg(any(test, feature = "test-support"))]
 use super::outcome::PlatformSendResult;
 use super::outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, ReleaseAllOutcome,
+    DownSendOutcome, EmitResult, InputSendResult, PhysicalKeyPreflightError, PhysicalPacket,
+    PhysicalSendOutcome, ReleaseAllOutcome,
 };
+use super::packet::send_physical_packet_with_clock;
 use super::physical::{
     InstrumentPhysicalState, instrument_physical_state_for_mask, mask_for_scan_codes,
 };
@@ -309,6 +311,124 @@ impl TrackedKeyState {
                 retried_after_zero_progress: emitted.retried_after_zero_progress,
                 timing_error: emitted.timing_error,
             }
+        }
+    }
+
+    /// Dispatch a compiled physical packet as one SendInput transaction.
+    ///
+    /// Unlike the legacy `key_down`/`key_up` helpers this method never turns a
+    /// partial return count into a list of supposedly inserted keys. A full
+    /// outcome commits the masks as a whole; an uncertain outcome records the
+    /// entire packet as possibly active for fail-closed cleanup.
+    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> DownSendOutcome {
+        let Some(clock) = self.qpc_clock else {
+            self.last_error = Some("packet sender has no QPC clock".to_string());
+            return DownSendOutcome::ZeroProgress {
+                error: None,
+                completed_us: 0,
+                skipped_duplicates: SmallVec::new(),
+                send_attempts: 0,
+                zero_progress_retries: 0,
+                first_error: None,
+                last_error: None,
+                started_ticks: None,
+                completed_ticks: None,
+                timing_error: None,
+            };
+        };
+        let outcome = send_physical_packet_with_clock(packet, clock);
+        let requested_down = scan_codes_from_mask(packet.down_mask)
+            .into_iter()
+            .collect::<SmallVec<[u16; 15]>>();
+        let completed_us = match outcome {
+            PhysicalSendOutcome::Complete {
+                completed_ticks, ..
+            }
+            | PhysicalSendOutcome::ZeroProgress {
+                completed_ticks, ..
+            }
+            | PhysicalSendOutcome::Partial {
+                completed_ticks, ..
+            } => super::super::clock::qpc_ticks_to_us(completed_ticks).unwrap_or(0),
+        };
+        let (started_ticks, completed_ticks, attempts, first_error, last_error) = match outcome {
+            PhysicalSendOutcome::Complete {
+                started_ticks,
+                completed_ticks,
+                attempts,
+                ..
+            } => {
+                let union = packet.up_mask | packet.down_mask;
+                self.active_mask = (self.active_mask & !packet.up_mask) | packet.down_mask;
+                self.possibly_active_mask &= !union;
+                self.failed_release_mask &= !packet.up_mask;
+                self.last_error = None;
+                return DownSendOutcome::Complete {
+                    completed_us,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: Some(completed_ticks),
+                    sent: requested_down,
+                    skipped_duplicates: SmallVec::new(),
+                    send_attempts: attempts,
+                    zero_progress_retries: attempts.saturating_sub(1),
+                    retried_after_zero_progress: attempts > 1,
+                    timing_error: None,
+                };
+            }
+            PhysicalSendOutcome::ZeroProgress {
+                started_ticks,
+                completed_ticks,
+                attempts,
+                first_error,
+                last_error,
+                ..
+            }
+            | PhysicalSendOutcome::Partial {
+                started_ticks,
+                completed_ticks,
+                attempts,
+                first_error,
+                last_error,
+                ..
+            } => (
+                Some(started_ticks),
+                Some(completed_ticks),
+                attempts,
+                Some(first_error).filter(|error| *error != 0),
+                Some(last_error).filter(|error| *error != 0),
+            ),
+        };
+        let uncertain_mask = packet.up_mask | packet.down_mask;
+        self.active_mask &= !uncertain_mask;
+        self.possibly_active_mask |= uncertain_mask;
+        self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
+        if attempts > 1 {
+            self.sendinput_zero_progress_failures =
+                self.sendinput_zero_progress_failures.saturating_add(1);
+        }
+        self.chord_split_events = self.chord_split_events.saturating_add(1);
+        self.chords_rejected = self.chords_rejected.saturating_add(1);
+        self.authored_keys_rejected = self
+            .authored_keys_rejected
+            .saturating_add(u64::from(packet.down_mask.count_ones()));
+        self.last_error = Some(format!(
+            "physical packet transaction failed: {} events requested",
+            packet.event_count()
+        ));
+        DownSendOutcome::IntegrityLost {
+            inserted_before_failure: 0,
+            rolled_back: 0,
+            rollback_residue: packet.event_count(),
+            first_error,
+            last_error,
+            completed_us,
+            started_ticks,
+            completed_ticks,
+            sent: SmallVec::new(),
+            skipped_duplicates: SmallVec::new(),
+            send_attempts: attempts,
+            zero_progress_retries: attempts.saturating_sub(1),
+            timing_error: None,
         }
     }
 
