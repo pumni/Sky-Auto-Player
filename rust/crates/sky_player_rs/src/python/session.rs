@@ -21,6 +21,7 @@ impl NativeDispatchSessionPy {
     ) -> PyResult<Self> {
         let config = config.unwrap_or_default();
         let parsed_profile = config.profile;
+        let game_fps = config.game_fps;
         let min_hold_us = config.min_hold_us;
         let max_lead_us = 2_000;
         let dispatch_lead_us = 0;
@@ -61,6 +62,7 @@ impl NativeDispatchSessionPy {
             backend: BackendConfig::Production,
             allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {
+                game_fps,
                 min_hold_us,
                 max_lead_us,
                 dispatch_lead_us,
@@ -296,6 +298,27 @@ impl NativeDispatchSessionPy {
         dict.set_item("total_us", snap.total_us)?;
         dict.set_item("max_completion_error_us", snap.max_lateness_us)?;
         dict.set_item("active_keys", snap.active_count)?;
+        dict.set_item("active_count", snap.active_count)?;
+        dict.set_item("possibly_active_count", snap.possibly_active_count)?;
+        dict.set_item("failed_release_count", snap.failed_release_count)?;
+        dict.set_item("last_error", snap.last_error)?;
+        dict.set_item("keys_dropped", snap.keys_dropped)?;
+        dict.set_item("chord_split_events", snap.chord_split_events)?;
+        dict.set_item("sendinput_partial_events", snap.sendinput_partial_events)?;
+        dict.set_item(
+            "sendinput_zero_progress_failures",
+            snap.sendinput_zero_progress_failures,
+        )?;
+        dict.set_item("chords_rejected", snap.chords_rejected)?;
+        dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
+        dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;
+        dict.set_item("authored_keys_rejected", snap.authored_keys_rejected)?;
+        dict.set_item(
+            "keys_inserted_before_failure",
+            snap.keys_inserted_before_failure,
+        )?;
+        dict.set_item("keys_rolled_back", snap.keys_rolled_back)?;
+        dict.set_item("rollback_residue_keys", snap.rollback_residue_keys)?;
         dict.set_item(
             "health",
             if snap.terminal_error.is_some() || snap.failed_release_count > 0 {
@@ -447,6 +470,7 @@ impl TestDispatchSessionPy {
             },
             allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {
+                game_fps: 60,
                 min_hold_us,
                 max_lead_us,
                 dispatch_lead_us,

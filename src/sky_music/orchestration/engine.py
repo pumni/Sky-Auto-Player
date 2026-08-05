@@ -49,6 +49,7 @@ class PlaybackEngine:
         require_focus: bool = True,
         focus_guard: FocusGuard | None = None,
         profile_name: str = "balanced",
+        game_fps: int = 60,
         tempo_scale: float = 1.0,
         min_hold_us: int = 0,
         dry_run: bool = False,
@@ -59,6 +60,9 @@ class PlaybackEngine:
         self.renderer = renderer
         self.require_focus = bool(require_focus)
         self.dry_run = bool(dry_run)
+        self.game_fps = int(game_fps)
+        if not 15 <= self.game_fps <= 240:
+            raise ValueError("game_fps must be in 15..=240")
         self.min_hold_us = max(0, int(min_hold_us))
         self.profile_name = profile_name
         self.tempo_scale = tempo_scale
@@ -95,6 +99,7 @@ class PlaybackEngine:
         runtime = RustDispatchRuntime(
             actions=self.actions,
             song_name=self.song.name,
+            game_fps=self.game_fps,
             min_hold_us=self.min_hold_us,
             require_focus=self.require_focus,
             focus_guard=self.focus_guard,
@@ -139,25 +144,49 @@ class PlaybackEngine:
         )
         self.telemetry.record_backend_health(
             BackendHealth(
-                active_count=int(snapshot.get("active_count", 0)),
-                possibly_active_count=int(snapshot.get("possibly_active_count", 0)),
-                failed_release_count=int(snapshot.get("failed_release_count", 0)),
-                last_error=snapshot.get("last_error"),
-                keys_dropped=int(snapshot.get("keys_dropped", 0)),
-                chord_split_events=int(snapshot.get("chord_split_events", 0)),
-                sendinput_partial_events=int(snapshot.get("sendinput_partial_events", 0)),
+                active_count=int(RustDispatchRuntime._required(snapshot, "active_count")),
+                possibly_active_count=int(
+                    RustDispatchRuntime._required(snapshot, "possibly_active_count")
+                ),
+                failed_release_count=int(
+                    RustDispatchRuntime._required(snapshot, "failed_release_count")
+                ),
+                last_error=RustDispatchRuntime._required(snapshot, "last_error"),
+                keys_dropped=int(RustDispatchRuntime._required(snapshot, "keys_dropped")),
+                chord_split_events=int(
+                    RustDispatchRuntime._required(snapshot, "chord_split_events")
+                ),
+                sendinput_partial_events=int(
+                    RustDispatchRuntime._required(snapshot, "sendinput_partial_events")
+                ),
                 sendinput_zero_progress_failures=int(
-                    snapshot.get("sendinput_zero_progress_failures", 0)
+                    RustDispatchRuntime._required(
+                        snapshot, "sendinput_zero_progress_failures"
+                    )
                 ),
-                chords_rejected=int(snapshot.get("chords_rejected", 0)),
-                authored_conflict_events=int(snapshot.get("authored_conflict_events", 0)),
-                authored_chords_rejected=int(snapshot.get("authored_chords_rejected", 0)),
-                authored_keys_rejected=int(snapshot.get("authored_keys_rejected", 0)),
+                chords_rejected=int(
+                    RustDispatchRuntime._required(snapshot, "chords_rejected")
+                ),
+                authored_conflict_events=int(
+                    RustDispatchRuntime._required(snapshot, "authored_conflict_events")
+                ),
+                authored_chords_rejected=int(
+                    RustDispatchRuntime._required(snapshot, "authored_chords_rejected")
+                ),
+                authored_keys_rejected=int(
+                    RustDispatchRuntime._required(snapshot, "authored_keys_rejected")
+                ),
                 keys_inserted_before_failure=int(
-                    snapshot.get("keys_inserted_before_failure", 0)
+                    RustDispatchRuntime._required(
+                        snapshot, "keys_inserted_before_failure"
+                    )
                 ),
-                keys_rolled_back=int(snapshot.get("keys_rolled_back", 0)),
-                rollback_residue_keys=int(snapshot.get("rollback_residue_keys", 0)),
+                keys_rolled_back=int(
+                    RustDispatchRuntime._required(snapshot, "keys_rolled_back")
+                ),
+                rollback_residue_keys=int(
+                    RustDispatchRuntime._required(snapshot, "rollback_residue_keys")
+                ),
             )
         )
         self.telemetry.record_generation_status_counts(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sky_music.domain.scheduler_types import KeyAction
@@ -52,6 +52,7 @@ class RustDispatchRuntime:
         *,
         actions: Sequence[KeyAction],
         song_name: str,
+        game_fps: int,
         min_hold_us: int,
         require_focus: bool,
         focus_guard: Any,
@@ -76,6 +77,7 @@ class RustDispatchRuntime:
             native_actions,
             list(SKY_15_SCAN_CODES),
             config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                game_fps=int(game_fps),
                 min_hold_us=min_hold_us,
                 require_focus=require_focus,
                 telemetry=telemetry_enabled,
@@ -128,7 +130,7 @@ class RustDispatchRuntime:
     def _handle_command(self, command: str | None) -> str | None:
         def terminal_race_is_done() -> bool:
             try:
-                return bool(self._session.snapshot_lite().get("is_finished"))
+                return bool(self._session.snapshot_lite()["is_finished"])
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 return False
 
@@ -180,27 +182,43 @@ class RustDispatchRuntime:
         return joined
 
     @staticmethod
-    def _health(snapshot: dict[str, Any]) -> BackendHealth:
+    def _required(snapshot: Mapping[str, Any], field: str) -> Any:
+        """Read a correctness-critical native field without a silent default."""
+        try:
+            return snapshot[field]
+        except KeyError as exc:
+            raise NativeDispatchError(
+                f"native snapshot is missing required field: {field}"
+            ) from exc
+
+    @classmethod
+    def _health(cls, snapshot: Mapping[str, Any]) -> BackendHealth:
         return BackendHealth(
-            active_count=int(snapshot.get("active_count", snapshot.get("active_keys", 0))),
-            possibly_active_count=int(snapshot.get("possibly_active_count", 0)),
-            failed_release_count=int(snapshot.get("failed_release_count", 0)),
-            last_error=snapshot.get("last_error"),
-            keys_dropped=int(snapshot.get("keys_dropped", 0)),
-            chord_split_events=int(snapshot.get("chord_split_events", 0)),
-            sendinput_partial_events=int(snapshot.get("sendinput_partial_events", 0)),
+            active_count=int(cls._required(snapshot, "active_count")),
+            possibly_active_count=int(cls._required(snapshot, "possibly_active_count")),
+            failed_release_count=int(cls._required(snapshot, "failed_release_count")),
+            last_error=cls._required(snapshot, "last_error"),
+            keys_dropped=int(cls._required(snapshot, "keys_dropped")),
+            chord_split_events=int(cls._required(snapshot, "chord_split_events")),
+            sendinput_partial_events=int(
+                cls._required(snapshot, "sendinput_partial_events")
+            ),
             sendinput_zero_progress_failures=int(
-                snapshot.get("sendinput_zero_progress_failures", 0)
+                cls._required(snapshot, "sendinput_zero_progress_failures")
             ),
-            chords_rejected=int(snapshot.get("chords_rejected", 0)),
-            authored_conflict_events=int(snapshot.get("authored_conflict_events", 0)),
-            authored_chords_rejected=int(snapshot.get("authored_chords_rejected", 0)),
-            authored_keys_rejected=int(snapshot.get("authored_keys_rejected", 0)),
+            chords_rejected=int(cls._required(snapshot, "chords_rejected")),
+            authored_conflict_events=int(
+                cls._required(snapshot, "authored_conflict_events")
+            ),
+            authored_chords_rejected=int(
+                cls._required(snapshot, "authored_chords_rejected")
+            ),
+            authored_keys_rejected=int(cls._required(snapshot, "authored_keys_rejected")),
             keys_inserted_before_failure=int(
-                snapshot.get("keys_inserted_before_failure", 0)
+                cls._required(snapshot, "keys_inserted_before_failure")
             ),
-            keys_rolled_back=int(snapshot.get("keys_rolled_back", 0)),
-            rollback_residue_keys=int(snapshot.get("rollback_residue_keys", 0)),
+            keys_rolled_back=int(cls._required(snapshot, "keys_rolled_back")),
+            rollback_residue_keys=int(cls._required(snapshot, "rollback_residue_keys")),
         )
 
     def run(self) -> tuple[str, dict[str, Any], dict[str, Any], str | None]:

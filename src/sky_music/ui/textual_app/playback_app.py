@@ -700,7 +700,7 @@ class PlaybackCard(Static):
             body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
         if degraded:
             body.append(
-                f"{yellow}Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.{_ANSI_RESET}"
+                f"{yellow}Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.{_ANSI_RESET}"
             )
 
         if self.debug_mode:
@@ -967,7 +967,9 @@ class PlaybackApp(App[str]):
             warnings_to_show.extend(f"[{t.warning}]{w}[/]" for w in self._schedule_warnings)
             self._warnings_shown = True
         if snap.input_path_degraded:
-            warnings_to_show.append(f"[{t.warning}]Input path throttled (Filter Keys?) - playback may stutter[/]")
+            warnings_to_show.append(
+                f"[{t.warning}]Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.[/]"
+            )
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
             warn_widget.styles.display = "block"
@@ -1140,7 +1142,9 @@ class PlaybackScreen(Screen[str]):
         if self.violations:
             warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
         if snap.input_path_degraded:
-            warnings_to_show.append(f"[{t.warning}]Input path throttled (Filter Keys?) - playback may stutter[/]")
+            warnings_to_show.append(
+                f"[{t.warning}]Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.[/]"
+            )
         keys_dropped = 0
         chord_splits = 0
         if snap.backend_health is not None:

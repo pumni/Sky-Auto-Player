@@ -326,7 +326,10 @@ class ProgressRenderer:
         # Input path warning
         if self.input_path_degraded:
             panel_content.append(
-                Text("Input path throttled (global hook / Filter Keys?) - playback may stutter; OS-side.", style=styles["warning"])
+                Text(
+                    "Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.",
+                    style=styles["warning"],
+                )
             )
 
         # Partial note-on drops (SendInput sent < n; remainder not retried — musical policy).
