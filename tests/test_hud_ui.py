@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import HotkeyBinding, PlaybackControls
 from sky_music.ui.hud import ProgressRenderer
@@ -60,3 +62,20 @@ def test_verbose_hud_timing_uses_fps_fallback_not_na() -> None:
 
     assert renderer._live is None
     assert renderer._initialized is False
+
+
+def test_hud_uses_current_input_latency_snapshot_without_latching() -> None:
+    renderer = ProgressRenderer(controls=_controls())
+
+    renderer.render(0.0, 1.0, "Test Song", force=True, input_path_degraded=True)
+    assert renderer.input_path_degraded is True
+    renderer.render(0.0, 1.0, "Test Song", force=True, input_path_degraded=False)
+    assert renderer.input_path_degraded is False
+    renderer.finish()
+
+
+def test_hud_input_latency_warning_is_neutral_and_exact() -> None:
+    source = inspect.getsource(ProgressRenderer.render)
+    assert "Input dispatch latency is elevated; playback timing may be unstable." in source
+    assert "hook" not in source.lower()
+    assert "filter keys" not in source.lower()

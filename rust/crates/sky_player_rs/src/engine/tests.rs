@@ -1070,9 +1070,10 @@ fn input_path_degraded_is_not_key_drop_state() {
     let mut window = VecDeque::with_capacity(64);
     let mut over_warn = 0;
     let mut started = None;
+    let mut healthy_started = None;
     let mut degraded = false;
 
-    for elapsed_us in (0..=1_010_000).step_by(1_000) {
+    for elapsed_us in (0..=1_070_000).step_by(1_000) {
         record_input_path_health(
             400,
             elapsed_us,
@@ -1080,6 +1081,7 @@ fn input_path_degraded_is_not_key_drop_state() {
             &mut window,
             &mut over_warn,
             &mut started,
+            &mut healthy_started,
             &mut degraded,
         );
     }
@@ -1093,6 +1095,7 @@ fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
     let initial_capacity = window.capacity();
     let mut over_warn = 0;
     let mut started = None;
+    let mut healthy_started = None;
     let mut degraded = false;
 
     for _ in 0..10_000 {
@@ -1103,6 +1106,7 @@ fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
             &mut window,
             &mut over_warn,
             &mut started,
+            &mut healthy_started,
             &mut degraded,
         );
     }
@@ -1119,12 +1123,86 @@ fn input_path_health_window_stays_bounded_and_tracks_latest_samples() {
             &mut window,
             &mut over_warn,
             &mut started,
+            &mut healthy_started,
             &mut degraded,
         );
     }
 
     assert_eq!(window.len(), INPUT_PATH_WINDOW_CAPACITY);
     assert_eq!(over_warn, 0);
+}
+
+#[test]
+fn input_path_health_uses_full_window_and_recovers_without_latching() {
+    let mut window = VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY);
+    let mut over_warn = 0;
+    let mut warn_started = None;
+    let mut healthy_started = None;
+    let mut degraded = false;
+
+    for sample in 0..INPUT_PATH_WINDOW_CAPACITY {
+        record_input_path_health(
+            400,
+            sample as u64 * 1_000,
+            300,
+            &mut window,
+            &mut over_warn,
+            &mut warn_started,
+            &mut healthy_started,
+            &mut degraded,
+        );
+    }
+    assert!(!degraded, "a partial duration must not degrade the warning");
+    record_input_path_health(
+        400,
+        1_063_000,
+        300,
+        &mut window,
+        &mut over_warn,
+        &mut warn_started,
+        &mut healthy_started,
+        &mut degraded,
+    );
+    assert!(degraded);
+
+    for elapsed_us in (1_064_000..=1_127_000).step_by(1_000) {
+        record_input_path_health(
+            100,
+            elapsed_us,
+            300,
+            &mut window,
+            &mut over_warn,
+            &mut warn_started,
+            &mut healthy_started,
+            &mut degraded,
+        );
+    }
+    assert!(degraded, "healthy samples need the full recovery duration");
+    record_input_path_health(
+        100,
+        3_127_000,
+        300,
+        &mut window,
+        &mut over_warn,
+        &mut warn_started,
+        &mut healthy_started,
+        &mut degraded,
+    );
+    assert!(!degraded);
+
+    record_input_path_health(
+        400,
+        3_128_000,
+        0,
+        &mut window,
+        &mut over_warn,
+        &mut warn_started,
+        &mut healthy_started,
+        &mut degraded,
+    );
+    assert!(!degraded);
+    assert!(warn_started.is_none());
+    assert!(healthy_started.is_none());
 }
 
 #[test]
@@ -1350,6 +1428,68 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
             .iter()
             .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
     );
+}
+
+#[test]
+fn mixed_same_key_retrigger_success_commits_new_generation() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Down,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "retrigger-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "retrigger-up".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "release-one".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "release-two".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid mixed retrigger schedule");
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "finished");
+    assert_eq!(snapshot.generation_status_counts["released"], 3);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
 }
 
 #[test]

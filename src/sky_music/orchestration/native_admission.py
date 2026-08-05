@@ -131,7 +131,7 @@ def _packaged_application_commit() -> str:
 
     try:
         from sky_music._native_build import (
-            APP_BUILD_COMMIT,  # type: ignore[reportMissingImports]
+            APP_BUILD_COMMIT,
         )
     except (AttributeError, ImportError) as exc:
         raise NativeAdmissionError(
