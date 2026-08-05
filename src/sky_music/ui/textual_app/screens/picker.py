@@ -42,6 +42,7 @@ from sky_music.ui.picker import (
 from sky_music.ui.picker_helpers import save_theme
 from sky_music.ui.picker_metadata import (
     clear_metadata_cache,
+    invalidate_policy_metadata,
     peek_cached_song_ui_metadata,
 )
 from sky_music.ui.picker_theme import (
@@ -264,6 +265,7 @@ class PickerScreen(Screen[SongPickerResult]):
         Binding("h", "toggle_hud", "HUD", priority=True, show=False),
         Binding("f3", "toggle_telemetry", "Telemetry", priority=True, show=False),
         Binding("ctrl+r", "reload_songs", "Reload", priority=True, show=False),
+        Binding("c", "calibrate_input_latency", "Input calibration", priority=True, show=False),
     ]
 
     search_query: reactive[str] = reactive("", init=False)  # type: ignore[override]
@@ -1334,19 +1336,51 @@ class PickerScreen(Screen[SongPickerResult]):
     async def _run_latency_calibration_worker(self) -> None:
         import asyncio
 
+        from sky_music.infrastructure.calibration_loader import (
+            load_calibrated_margin_recommendation,
+        )
         from sky_music.platform.win32.native_calibration import run_native_calibration
-        
+
         try:
             loop = asyncio.get_running_loop()
             res = await loop.run_in_executor(None, run_native_calibration)
-            
+
+            # Verify the cache was written and accepted by the loader.
+            margin_us, source = load_calibrated_margin_recommendation()
+            if source != "device_cache":
+                # Cache was written but the loader rejected it (e.g. n < 20 or out-of-bounds).
+                raw_n = res.get("n", "?")
+                self.app.push_screen(
+                    InfoModal(
+                        "Calibration Incomplete",
+                        f"Calibration ran but the cache was rejected by the loader.\n\n"
+                        f"Raw sample count: {raw_n}\n"
+                        f"Minimum required: 20 samples\n\n"
+                        "Cache: .cache/input_latency.json\n"
+                        "Please re-run calibration and ensure the window stays focused.",
+                        theme_name=self.active_theme,
+                    )
+                )
+                return
+
+            # Invalidate session/policy-dependent picker metadata so the next render
+            # uses the new device_cache margin.
+            invalidate_policy_metadata()
+            self._replace_metadata_coordinator()
+
+            down = res.get("down_us", {})
+            up = res.get("up_us", {})
             self.app.push_screen(
                 InfoModal(
-                    "Calibration Complete",
-                    f"Sampled Down Latency (us): p50={res['down_us']['p50']}, p90={res['down_us']['p90']}, p99={res['down_us']['p99']}\n"
-                    f"Sampled Up Latency   (us): p50={res['up_us']['p50']}, p90={res['up_us']['p90']}, p99={res['up_us']['p99']}\n\n"
-                "Calibration saved to .cache/input_latency.json successfully!\n\n"
-                "Evidence: injected_raw_input_delivery_proxy (SendInput -> app-owned WM_INPUT).",
+                    "Input Latency Calibration Complete",
+                    f"Device margin: {margin_us} \u00b5s\n"
+                    f"Source: {source}\n"
+                    f"Cache: .cache/input_latency.json\n\n"
+                    f"Down latency (\u00b5s): p50={down.get('p50', '?')}, "
+                    f"p90={down.get('p90', '?')}, p99={down.get('p99', '?')}\n"
+                    f"Up latency   (\u00b5s): p50={up.get('p50', '?')}, "
+                    f"p90={up.get('p90', '?')}, p99={up.get('p99', '?')}\n\n"
+                    "Evidence: injected_raw_input_delivery_proxy (SendInput \u2192 app-owned WM_INPUT).",
                     theme_name=self.active_theme,
                 )
             )

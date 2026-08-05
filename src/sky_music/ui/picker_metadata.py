@@ -84,6 +84,7 @@ _PERSISTENT_POLICY_ATTRS: tuple[str, ...] = (
     "hold_us",
     "min_hold_us",
     "min_hold_margin_us",
+    "min_hold_margin_source",
     "spin_threshold_us",
     "focus_restore_grace_us",
     "same_key_conflict_policy",
@@ -255,7 +256,15 @@ def _stable_file_identity(song_path: Path) -> dict[str, Any]:
 
 
 def _effective_policy_signature(session: PlaybackSessionContext, cfg: AppConfig | None) -> dict[str, Any]:
-    policy = session.resolve_effective_policy(cfg)
+    """Return a dict of policy attributes for the persistent cache key.
+
+    Uses :func:`~sky_music.orchestration.calibrated_policy.resolve_calibrated_policy`
+    so that ``min_hold_margin_us`` and ``min_hold_margin_source`` reflect the
+    device-calibrated margin — cache keys derived from a ``default_500`` run
+    will never match entries produced after ``device_cache`` calibration.
+    """
+    from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
+    policy = resolve_calibrated_policy(session, cfg if cfg is not None else AppConfig())
     return {
         attr: getattr(policy, attr)
         for attr in _PERSISTENT_POLICY_ATTRS
@@ -1286,6 +1295,37 @@ def clear_metadata_cache(*, clear_persistent: bool = False) -> None:
             _write_counter = 0
         with contextlib.suppress(Exception):
             PERSISTENT_CACHE_PATH.unlink(missing_ok=True)
+
+
+def invalidate_policy_metadata() -> None:
+    """Clear only the session/policy-dependent in-memory caches.
+
+    Call this after a successful native input-latency calibration so that
+    subsequent picker renders recompute risk and recommended-profile data
+    against the new device margin.  Raw song parse results and the
+    policy-independent ``_raw_cache`` are intentionally preserved.
+
+    What is cleared:
+
+    * ``_metadata_cache`` — the full session-keyed in-memory result cache.
+    * ``_pkey_ram_cache`` — the SHA-256 key shortcut (keyed by session
+      attributes including ``min_hold_margin_source``).
+    * ``_path_session_ram_cache`` — the path+session → ram_key shortcut.
+
+    What is **not** cleared:
+
+    * ``_raw_cache`` — policy-independent raw song statistics.
+    * ``_persistent_cache`` — the in-memory mirror of the SQLite store; the
+      SQLite store will be naturally superseded once new entries are written
+      with the updated calibration key.
+    * Song parse results held by ``_song_repository``.
+    """
+    with _cache_lock:
+        _metadata_cache.clear()
+    with _pkey_ram_lock:
+        _pkey_ram_cache.clear()
+    with _path_session_ram_lock:
+        _path_session_ram_cache.clear()
 
 
 def _get_song_recommendation(

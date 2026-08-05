@@ -39,6 +39,7 @@ def isolate_input_latency_cache(request, monkeypatch):
         "test_calibrated_margin_resolution" in nodeid
         or "test_calibrated_margin_recommendation_poison_cases" in nodeid
         or "test_calibrated_margin_rejects_low_sample_count" in nodeid
+        or "test_calibration_regression" in nodeid
     ):
         return
     import sky_music.infrastructure.calibration_loader as loader_module

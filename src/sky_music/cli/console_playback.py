@@ -27,6 +27,7 @@ from sky_music.domain.session_context import (
     merge_session_with_overrides,
 )
 from sky_music.infrastructure.hotkeys import PlaybackControls
+from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 from sky_music.orchestration.runtime_session import (
     RUNTIME_STATE,
     PlaybackOverrides,
@@ -423,7 +424,7 @@ def play_selected_song(
     current_profile = session.display_profile_label()
     current_tempo = session.tempo_scale
 
-    active_policy = session.resolve_effective_policy(user_cfg)
+    active_policy = resolve_calibrated_policy(session, user_cfg)
 
     # build_key_actions builds DefaultNoteResolver(profile) when resolver is None; that
     # single resolver now handles both physical and mapped scan-code modes.
@@ -499,7 +500,7 @@ def play_selected_song(
             new_profile, new_tempo = None, None
         if new_profile is not None and canonical_profile_name(new_profile) != session.profile_name:
             session = session.with_profile(new_profile)
-            active_policy = session.resolve_effective_policy(user_cfg)
+            active_policy = resolve_calibrated_policy(session, user_cfg)
             current_profile = session.display_profile_label()
 
             sched_meta = build_schedule(session, active_policy, current_tempo)
@@ -518,7 +519,7 @@ def play_selected_song(
         if new_tempo is not None:
             session = session.with_tempo(new_tempo)
             current_tempo = session.tempo_scale
-            active_policy = session.resolve_effective_policy(user_cfg)
+            active_policy = resolve_calibrated_policy(session, user_cfg)
             sched_meta = build_schedule(session, active_policy, current_tempo)
             if sched_meta is None:
                 return PLAYBACK_QUIT
