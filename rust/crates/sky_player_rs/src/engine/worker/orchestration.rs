@@ -14,20 +14,21 @@ use super::super::{
 use super::super::{CommandTimingCleanup, create_mock_backend};
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, DispatchHealthOptions, DispatchPath,
-    DownAdmission, FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals,
-    FinalizeState, FinalizeTiming, HealthWindow, StartupResources, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, WorkerHealthState, WorkerResources,
-    WorkerTimingState, anchored_dispatch_target_ticks_typed, build_dispatch_budget,
-    cancel_coordinator_or_terminal, classify_latency_class, cpu_metrics_sample_due,
-    derive_spin_threshold_us, describe_release_outcome, ensure_preflight_for_target,
+    CommandControlRuntime, CommandControlSignals, DispatchHealthObservation, DispatchHealthOptions,
+    DispatchPath, DownAdmission, FinalizeInput, FinalizePublication, FinalizeResources,
+    FinalizeSignals, FinalizeState, FinalizeTiming, HealthWindow, StartupResources, WaitBoundary,
+    WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker,
+    WorkerHealthState, WorkerResources, WorkerTimingState, anchored_dispatch_target_ticks_typed,
+    build_dispatch_budget, cancel_coordinator_or_terminal, classify_latency_class,
+    cpu_metrics_sample_due, derive_spin_threshold_us, describe_release_outcome,
+    ensure_preflight_for_target, estimate_dispatch_path_lead, estimator_kind_for_path,
     final_down_admission, finalize_worker, focus_matches, focus_matches_hwnd, initialize_startup,
-    lease_bounded_ticks, load_target_stamp, process_command_control, publish_backend_metrics,
-    publish_wake_error_stats, record_degraded_sample, record_input_path_health, record_lateness,
-    record_lead_saturation, record_termination_error, release_runtime_outcome,
-    release_state_verified, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
-    suspend_live_input, target_stamp_still_current, update_estimator_after_send_class,
-    wait_failure_message, wait_for_next_boundary,
+    lease_bounded_ticks, load_target_stamp, observe_dispatch_health, process_command_control,
+    publish_backend_metrics, publish_wake_error_stats, record_lateness, record_lead_saturation,
+    record_termination_error, release_runtime_outcome, release_state_verified, signed_delta,
+    signed_ticks_to_us, signed_timeline_delta_ticks, suspend_live_input,
+    target_stamp_still_current, update_estimator_after_send_class, wait_failure_message,
+    wait_for_next_boundary,
 };
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use smallvec::SmallVec;
@@ -1466,23 +1467,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
                 local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
                 let send_duration_us = result.send_completed_us.saturating_sub(started_us);
-                let _ = record_input_path_health(
-                    send_duration_us,
-                    send_warn_threshold_us,
-                    completed_effective,
-                    health.options.window_policy(),
-                    &mut health.send_pure_window,
-                );
-                local_metrics.sendinput_path_degraded = health.send_pure_window.is_degraded();
-                record_degraded_sample(
-                    send_duration_us,
-                    send_warn_threshold_us,
-                    &mut local_metrics.sendinput_degraded_samples,
-                );
-                if send_duration_us > send_warn_threshold_us {
-                    local_metrics.send_up_degraded_samples =
-                        local_metrics.send_up_degraded_samples.saturating_add(1);
-                }
                 if config.estimator.enable_adaptive_lead
                     && let Err(error) = update_estimator_after_send_class(
                         estimator,
@@ -1500,42 +1484,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     runtime.terminal_error = Some(format!("estimator update failure: {error}"));
                     break;
                 }
-                let iteration_ready_us = qpc_us_or_terminal!();
-                let bookkeeping_after_send_us =
-                    iteration_ready_us.saturating_sub(result.send_completed_us);
-                local_metrics.post_send_max_us = local_metrics
-                    .post_send_max_us
-                    .max(bookkeeping_after_send_us);
-                local_metrics.dispatch_occupancy_max_us = local_metrics
-                    .dispatch_occupancy_max_us
-                    .max(send_duration_us.saturating_add(bookkeeping_after_send_us));
-                let _ = record_input_path_health(
-                    bookkeeping_after_send_us,
-                    frozen_budget.bookkeeping_warn_us,
-                    completed_effective,
-                    health.options.window_policy(),
-                    &mut health.bookkeeping_window,
-                );
-                local_metrics.bookkeeping_degraded = health.bookkeeping_window.is_degraded();
-                local_metrics.send_window_bad_count = health.send_pure_window.bad_count() as u64;
-                local_metrics.bookkeeping_window_bad_count =
-                    health.bookkeeping_window.bad_count() as u64;
-                local_metrics.send_window_sample_count =
-                    health.send_pure_window.sample_count() as u64;
-                local_metrics.bookkeeping_window_sample_count =
-                    health.bookkeeping_window.sample_count() as u64;
-                record_degraded_sample(
-                    bookkeeping_after_send_us,
-                    frozen_budget.bookkeeping_warn_us,
-                    &mut local_metrics.bookkeeping_degraded_samples,
-                );
-                record_degraded_sample(
-                    bookkeeping_after_send_us,
-                    frozen_budget.bookkeeping_warn_us,
-                    &mut local_metrics.post_send_degraded_samples,
-                );
-                local_metrics.input_path_degraded =
-                    local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
                 let deferred_release = deferred_by_us > 0;
                 record_lateness(
                     signed_delta(completed_effective, scheduled_us),
@@ -1549,6 +1497,22 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     metrics,
                     qpc_us_or_terminal!(),
                     !clean_up_sample || recovery_required,
+                );
+                let iteration_ready_us = qpc_us_or_terminal!();
+                observe_dispatch_health(
+                    DispatchHealthObservation {
+                        send_duration_us,
+                        post_send_duration_us: iteration_ready_us
+                            .saturating_sub(result.send_completed_us),
+                        path: frozen_budget.path,
+                        send_warn_us: send_warn_threshold_us,
+                        bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
+                        elapsed_us: completed_effective,
+                    },
+                    health.options.window_policy(),
+                    &mut health.send_pure_window,
+                    &mut health.bookkeeping_window,
+                    local_metrics,
                 );
                 if recovery_required {
                     runtime.verified_target = None;
@@ -1632,25 +1596,17 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         up_count,
                         down_count,
                     )) => {
-                        let up_estimate = estimator.estimate_lead_with_class_and_policy(
-                            ActionKind::Up,
-                            up_count,
+                        let estimate = estimate_dispatch_path_lead(
+                            estimator,
+                            DispatchPath::Mixed {
+                                up_count,
+                                down_count,
+                            },
                             latency_class,
                             config.timing.strict_timing,
+                            config.timing.max_lead_us,
                         );
-                        let down_estimate = estimator.estimate_lead_with_class_and_policy(
-                            ActionKind::Down,
-                            down_count,
-                            latency_class,
-                            config.timing.strict_timing,
-                        );
-                        (
-                            up_estimate
-                                .applied_us
-                                .saturating_add(down_estimate.applied_us)
-                                .min(config.timing.max_lead_us),
-                            up_estimate.saturated || down_estimate.saturated,
-                        )
+                        (estimate.applied_us, estimate.saturated)
                     }
                     _ => {
                         let estimate = estimator.estimate_lead_with_class_and_policy(
@@ -2098,7 +2054,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             result_skipped_duplicates,
                             result_send_attempts,
                             _result_zero_progress_retries,
-                            result_retried_after_zero_progress,
+                            result_retry_reason,
                             result_chord_integrity_lost,
                             _result_first_win32_error,
                             result_last_win32_error,
@@ -2112,7 +2068,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
-                                retried_after_zero_progress,
+                                retry_reason,
                                 ..
                             } => (
                                 started_ticks,
@@ -2122,7 +2078,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
-                                retried_after_zero_progress,
+                                retry_reason,
                                 false,
                                 None,
                                 None,
@@ -2135,6 +2091,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
+                                retry_reason,
                                 first_error,
                                 last_error,
                                 ..
@@ -2146,7 +2103,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
-                                zero_progress_retries > 0,
+                                retry_reason,
                                 false,
                                 first_error,
                                 last_error,
@@ -2160,6 +2117,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
+                                retry_reason,
                                 first_error,
                                 last_error,
                                 ..
@@ -2171,7 +2129,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 skipped_duplicates,
                                 send_attempts,
                                 zero_progress_retries,
-                                zero_progress_retries > 0,
+                                retry_reason,
                                 true,
                                 first_error,
                                 last_error,
@@ -2324,17 +2282,38 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     break;
                                 }
                             };
-                        let clean_down_sample = result_success
-                            && result_sent.len() == batch_intent_count
+                        let requested_count = dispatch_path.event_count();
+                        let delivered_count = if packet_mode {
+                            usize::from(result_success) * requested_count
+                        } else {
+                            result_sent.len()
+                        };
+                        let estimator_kind = estimator_kind_for_path(dispatch_path);
+                        let clean_directional_sample = result_success
                             && result_skipped_duplicates.is_empty()
                             && result_send_attempts == 1
-                            && !result_chord_integrity_lost;
-                        let recovered_retry_late = result_retried_after_zero_progress
+                            && !result_chord_integrity_lost
+                            && !matches!(dispatch_path, DispatchPath::Mixed { .. })
+                            && estimator_kind.is_some()
+                            && delivered_count == requested_count;
+                        let recovered_zero_progress = matches!(
+                            result_retry_reason,
+                            sky_dispatch_win32::input::PacketRetryReason::ZeroProgress
+                        );
+                        let recovered_partial_up = matches!(
+                            (dispatch_path, result_retry_reason),
+                            (
+                                DispatchPath::UpOnly { .. },
+                                sky_dispatch_win32::input::PacketRetryReason::PartialProgress { .. }
+                            )
+                        ) && result_success;
+                        let recovered_retry_late = recovered_zero_progress
+                            && result_success
                             && completion_lateness_ticks
                                 .is_some_and(|late| late > timing.retry_late_threshold_ticks);
                         let retry_late_abort = config.timing.strict_timing && recovered_retry_late;
                         let strict_down_completion_late = config.timing.strict_timing
-                            && clean_down_sample
+                            && clean_directional_sample
                             && completion_lateness_ticks.is_some_and(|late| {
                                 late > timing.strict_down_completion_late_ticks
                             });
@@ -2353,8 +2332,19 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             && health.down_saturation_positive_streak
                                 >= STRICT_SATURATION_ABORT_STREAK;
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
+                        if recovered_zero_progress && result_success {
+                            local_metrics.recovered_zero_progress_retries = local_metrics
+                                .recovered_zero_progress_retries
+                                .saturating_add(1);
+                        }
+                        if recovered_partial_up {
+                            local_metrics.recovered_partial_up_retries =
+                                local_metrics.recovered_partial_up_retries.saturating_add(1);
+                        }
                         let down_outcome = if recovered_retry_late {
                             "recovered_zero_progress_but_late"
+                        } else if recovered_partial_up {
+                            "recovered_partial_up_retry"
                         } else if strict_down_completion_late {
                             "strict_completion_slo_exceeded"
                         } else if result_chord_integrity_lost {
@@ -2367,7 +2357,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             "partial_note_on"
                         };
                         force_dispatch_publish = !result_success
-                            || result_retried_after_zero_progress
+                            || !matches!(
+                                result_retry_reason,
+                                sky_dispatch_win32::input::PacketRetryReason::None
+                            )
                             || result_chord_integrity_lost;
                         let mut trace_flags = 0;
                         let send_completed_fully = packet_masks.is_some_and(|_| result_success)
@@ -2407,7 +2400,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 TraceDelivery {
                                     requested: batch_intent_count,
                                     sent: if packet_masks.is_some() && result_success {
-                                        batch_intent_count
+                                        requested_count
                                     } else {
                                         result_sent.len()
                                     },
@@ -2449,51 +2442,17 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             }
                         }
                         local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-                        let _ = record_input_path_health(
-                            sender_duration_us,
-                            send_warn_threshold_us,
-                            completed_effective,
-                            health.options.window_policy(),
-                            &mut health.send_pure_window,
-                        );
-                        local_metrics.sendinput_path_degraded =
-                            health.send_pure_window.is_degraded();
-                        record_degraded_sample(
-                            sender_duration_us,
-                            send_warn_threshold_us,
-                            &mut local_metrics.sendinput_degraded_samples,
-                        );
-                        if sender_duration_us > send_warn_threshold_us {
-                            match dispatch_path {
-                                DispatchPath::DownOnly { .. } => {
-                                    local_metrics.send_down_degraded_samples =
-                                        local_metrics.send_down_degraded_samples.saturating_add(1);
-                                }
-                                DispatchPath::UpOnly { .. } => {
-                                    local_metrics.send_up_degraded_samples =
-                                        local_metrics.send_up_degraded_samples.saturating_add(1);
-                                }
-                                DispatchPath::Mixed { .. } => {
-                                    local_metrics.send_mixed_degraded_samples =
-                                        local_metrics.send_mixed_degraded_samples.saturating_add(1);
-                                }
-                            }
-                        }
                         if config.estimator.enable_adaptive_lead
-                            && let Some(kind) = match dispatch_path {
-                                DispatchPath::DownOnly { .. } => Some(ActionKind::Down),
-                                DispatchPath::UpOnly { .. } => Some(ActionKind::Up),
-                                DispatchPath::Mixed { .. } => None,
-                            }
+                            && let Some(kind) = estimator_kind
                             && let Err(error) = update_estimator_after_send_class(
                                 estimator,
                                 kind,
                                 sender_duration_us,
-                                result_sent.len(),
+                                delivered_count,
                                 batch_intent_count,
                                 lead_down,
                                 completion_error_us,
-                                clean_down_sample,
+                                clean_directional_sample,
                                 latency_class,
                             )
                         {
@@ -2502,48 +2461,26 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 Some(format!("estimator update failure: {error}"));
                             break;
                         }
-                        let iteration_ready_us = qpc_us_or_terminal!();
-                        let bookkeeping_after_send_us =
-                            iteration_ready_us.saturating_sub(result_completed_us);
-                        local_metrics.post_send_max_us = local_metrics
-                            .post_send_max_us
-                            .max(bookkeeping_after_send_us);
-                        local_metrics.dispatch_occupancy_max_us = local_metrics
-                            .dispatch_occupancy_max_us
-                            .max(sender_duration_us.saturating_add(bookkeeping_after_send_us));
-                        let _ = record_input_path_health(
-                            bookkeeping_after_send_us,
-                            frozen_budget.bookkeeping_warn_us,
-                            completed_effective,
-                            health.options.window_policy(),
-                            &mut health.bookkeeping_window,
-                        );
-                        local_metrics.bookkeeping_degraded =
-                            health.bookkeeping_window.is_degraded();
-                        local_metrics.send_window_bad_count =
-                            health.send_pure_window.bad_count() as u64;
-                        local_metrics.bookkeeping_window_bad_count =
-                            health.bookkeeping_window.bad_count() as u64;
-                        local_metrics.send_window_sample_count =
-                            health.send_pure_window.sample_count() as u64;
-                        local_metrics.bookkeeping_window_sample_count =
-                            health.bookkeeping_window.sample_count() as u64;
-                        record_degraded_sample(
-                            bookkeeping_after_send_us,
-                            frozen_budget.bookkeeping_warn_us,
-                            &mut local_metrics.bookkeeping_degraded_samples,
-                        );
-                        record_degraded_sample(
-                            bookkeeping_after_send_us,
-                            frozen_budget.bookkeeping_warn_us,
-                            &mut local_metrics.post_send_degraded_samples,
-                        );
-                        local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
-                            || local_metrics.bookkeeping_degraded;
                         record_lateness(
                             signed_delta(completed_effective, authored_batch_scheduled_us),
                             false,
                             false,
+                            local_metrics,
+                        );
+                        let iteration_ready_us = qpc_us_or_terminal!();
+                        observe_dispatch_health(
+                            DispatchHealthObservation {
+                                send_duration_us: sender_duration_us,
+                                post_send_duration_us: iteration_ready_us
+                                    .saturating_sub(result_completed_us),
+                                path: frozen_budget.path,
+                                send_warn_us: send_warn_threshold_us,
+                                bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
+                                elapsed_us: completed_effective,
+                            },
+                            health.options.window_policy(),
+                            &mut health.send_pure_window,
+                            &mut health.bookkeeping_window,
                             local_metrics,
                         );
                         if result_chord_integrity_lost {

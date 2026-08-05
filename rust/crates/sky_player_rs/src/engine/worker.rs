@@ -28,10 +28,13 @@ use control::{
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
 pub(crate) use health::HealthWindowPolicy;
+#[cfg(test)]
+pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
-    DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY, HealthWindow,
-    build_dispatch_budget, focus_gate_matches, publish_backend_metrics, record_degraded_sample,
-    record_input_path_health, record_lateness,
+    DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
+    HealthWindow, build_dispatch_budget, estimate_dispatch_path_lead, estimator_kind_for_path,
+    focus_gate_matches, observe_dispatch_health, observe_wait_health, publish_backend_metrics,
+    record_lateness,
 };
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]

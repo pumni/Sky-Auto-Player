@@ -55,7 +55,6 @@ pub(super) struct WaitBoundaryInput<'a> {
     pub(super) signals: WaitSignals<'a>,
     pub(super) mutable: WaitMutable<'a>,
 }
-
 pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
     let WaitBoundaryInput {
         deadline,
@@ -96,9 +95,7 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         return WaitBoundary::Exit;
     };
 
-    // Take the QPC tick and its logical elapsed-time sample from the same
-    // instant. Reusing an older sample shifts the absolute target late by the
-    // whole bookkeeping interval.
+    // Sample QPC and logical elapsed time together to avoid shifting the target.
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -120,7 +117,6 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     if deadline_ticks <= target_sample_elapsed_ticks {
         return WaitBoundary::Ready;
     }
-
     let target_qpc = match clock_state
         .epoch
         .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
@@ -179,7 +175,6 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         .spin_time_us
         .saturating_add(wait_result.spin_us);
     *pending_pre_send_spin_us = wait_result.spin_us;
-
     let wake_qpc_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -218,6 +213,14 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Deadline => {
             local_metrics.wait_target_error_us =
                 local_metrics.wait_target_error_us.max(wake_error_us);
+            super::observe_wait_health(
+                wake_error_us,
+                wait_warn_us,
+                wake_elapsed_ticks.as_u64(),
+                wait_policy,
+                wait_window,
+                local_metrics,
+            );
         }
         WaitOutcome::Failed(failure) => {
             if matches!(failure, WaitFailure::Clock) {
@@ -239,22 +242,9 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);
+            *pending_pre_send_spin_us = 0;
+            return WaitBoundary::Continue;
         }
-    }
-    if wait_warn_us == 0 {
-        wait_window.reset();
-    } else if wake_error_us > wait_warn_us {
-        let _ = wait_window.observe(true, wake_elapsed_ticks.as_u64(), wait_policy);
-        local_metrics.wait_degraded_samples = local_metrics.wait_degraded_samples.saturating_add(1);
-    } else {
-        let _ = wait_window.observe(false, wake_elapsed_ticks.as_u64(), wait_policy);
-    }
-    local_metrics.wait_path_degraded = wait_window.is_degraded();
-    local_metrics.wait_window_bad_count = wait_window.bad_count() as u64;
-    local_metrics.wait_window_sample_count = wait_window.sample_count() as u64;
-    if wait_result.outcome == WaitOutcome::Interrupted {
-        *pending_pre_send_spin_us = 0;
-        return WaitBoundary::Continue;
     }
     WaitBoundary::Ready
 }

@@ -629,6 +629,40 @@ mod tests {
     }
 
     #[test]
+    fn repeated_prepare_does_not_double_count_worker_late_rebase() {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "late packet".into(),
+            }],
+            &[0x15],
+        )
+        .unwrap();
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
+        coordinator.set_frame_period_ticks(DurationTicks::from_raw(10));
+
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.effective_scheduled_ticks.as_u64(), 120);
+        assert_eq!(coordinator.timeline_rebase_count(), 1);
+        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
+
+        let second = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.effective_scheduled_ticks.as_u64(), 120);
+        assert_eq!(coordinator.timeline_rebase_count(), 1);
+        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
+    }
+
+    #[test]
     fn up_only_release_floor_is_not_reduced_by_dispatch_lead() {
         let schedule = compile_runtime_intents(
             &[
@@ -1889,15 +1923,24 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(delta)?;
-        self.timeline_rebase_count = self.timeline_rebase_count.saturating_add(1);
-        self.timeline_rebase_total_ticks = self
+        let next_offset = self.recovery_offset_ticks.checked_add(delta)?;
+        let next_count =
+            self.timeline_rebase_count
+                .checked_add(1)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        let next_total = self
             .timeline_rebase_total_ticks
             .checked_add(delta.as_u64())
             .ok_or(CoordinatorError::Time(
                 crate::time::TimeArithmeticError::Overflow,
             ))?;
-        self.timeline_rebase_max_ticks = self.timeline_rebase_max_ticks.max(delta.as_u64());
+        let next_max = self.timeline_rebase_max_ticks.max(delta.as_u64());
+        self.recovery_offset_ticks = next_offset;
+        self.timeline_rebase_count = next_count;
+        self.timeline_rebase_total_ticks = next_total;
+        self.timeline_rebase_max_ticks = next_max;
         self.last_timeline_rebase_reason = Some(reason);
         Ok(())
     }

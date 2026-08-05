@@ -3,18 +3,19 @@ use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
 use super::{
-    BackendConfig, CommandTimingResult, CommandTimingState, DownAdmission, EstimatorOptions,
-    FaultInjectionScript, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
-    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
-    RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
-    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
-    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
-    classify_latency_class, cpu_metrics_sample_due, deadline_target_ticks,
-    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
-    final_down_admission, focus_gate_matches, focus_matches_hwnd, record_input_path_health,
-    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
-    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
+    BackendConfig, CommandTimingResult, CommandTimingState, DispatchPath, DownAdmission,
+    EstimatorOptions, FaultInjectionScript, FocusOptions, HealthWindow, HealthWindowPolicy,
+    InjectedSendOutcome, NativeDispatchSession, NativeSessionOptions, PlatformSendResult,
+    PriorityOptions, RELEASE_RETRY_BACKOFF_US, RtTraceRecord, SharedMetrics, TRACE_FLAG_SENT_FULL,
+    TRACE_KIND_DOWN, TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions,
+    TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions,
+    WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
+    anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
+    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
+    estimator_kind_for_path, exact_sender_durations, final_down_admission, focus_gate_matches,
+    focus_matches_hwnd, record_input_path_health, record_termination_error,
+    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
+    target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
@@ -1250,6 +1251,34 @@ fn failed_send_does_not_seed_estimator_or_residual() {
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
     assert_eq!(estimator.export_state().residuals[0].count, 1);
+}
+
+#[test]
+fn directional_estimator_training_is_not_cross_contaminated() {
+    let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
+
+    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    let after_up = estimator.export_state();
+    assert_eq!(after_up.hist_up[2].hot_pairs, vec![[36, 1]]);
+    assert_eq!(after_up.hist_down[2].hot_pairs, Vec::<[u64; 2]>::new());
+
+    // Mixed packets deliberately have no estimator kind in this phase.
+    let before_mixed = estimator.export_state();
+    if let Some(kind) = estimator_kind_for_path(DispatchPath::Mixed {
+        up_count: 2,
+        down_count: 2,
+    }) {
+        update_estimator_after_send(&mut estimator, kind, 900, 2, 2, 500, 120, true);
+    }
+    let after_mixed = estimator.export_state();
+    assert_eq!(
+        serde_json::to_string(&after_mixed.hist_up).unwrap(),
+        serde_json::to_string(&before_mixed.hist_up).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_string(&after_mixed.hist_down).unwrap(),
+        serde_json::to_string(&before_mixed.hist_down).unwrap()
+    );
 }
 
 #[test]

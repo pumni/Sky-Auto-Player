@@ -99,12 +99,69 @@ impl DispatchPath {
     }
 }
 
+pub(crate) fn estimator_kind_for_path(path: DispatchPath) -> Option<ActionKind> {
+    match path {
+        DispatchPath::DownOnly { .. } => Some(ActionKind::Down),
+        DispatchPath::UpOnly { .. } => Some(ActionKind::Up),
+        DispatchPath::Mixed { .. } => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrozenDispatchBudget {
     pub(crate) path: DispatchPath,
     pub(crate) observed_polyphony: usize,
     pub(crate) send_warn_us: u64,
     pub(crate) bookkeeping_warn_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DispatchLeadEstimate {
+    pub(crate) applied_us: u64,
+    pub(crate) saturated: bool,
+}
+
+pub(crate) fn estimate_dispatch_path_lead(
+    estimator: &SendLatencyEstimator,
+    path: DispatchPath,
+    latency_class: LatencyClass,
+    strict_timing: bool,
+    max_lead_us: u64,
+) -> DispatchLeadEstimate {
+    let estimate = |kind, count| {
+        estimator.estimate_lead_with_class_and_policy(kind, count, latency_class, strict_timing)
+    };
+    match path {
+        DispatchPath::DownOnly { down_count } => {
+            let value = estimate(ActionKind::Down, down_count);
+            DispatchLeadEstimate {
+                applied_us: value.applied_us.min(max_lead_us),
+                saturated: value.saturated,
+            }
+        }
+        DispatchPath::UpOnly { up_count } => {
+            let value = estimate(ActionKind::Up, up_count);
+            DispatchLeadEstimate {
+                applied_us: value.applied_us.min(max_lead_us),
+                saturated: value.saturated,
+            }
+        }
+        DispatchPath::Mixed {
+            up_count,
+            down_count,
+        } => {
+            let up = estimate(ActionKind::Up, up_count);
+            let down = estimate(ActionKind::Down, down_count);
+            let extra_events = up_count.min(down_count);
+            let uncapped = up.applied_us.max(down.applied_us).saturating_add(
+                MIXED_PACKET_PER_EXTRA_EVENT_US.saturating_mul(extra_events as u64),
+            );
+            DispatchLeadEstimate {
+                applied_us: uncapped.min(max_lead_us),
+                saturated: up.saturated || down.saturated || uncapped > max_lead_us,
+            }
+        }
+    }
 }
 
 pub(crate) fn build_dispatch_budget(
@@ -154,8 +211,7 @@ pub(crate) fn build_dispatch_budget(
                 .syscall_us
                 .max(down.components.syscall_us)
                 .saturating_add(
-                    MIXED_PACKET_PER_EXTRA_EVENT_US
-                        .saturating_mul(path.event_count().saturating_sub(1) as u64),
+                    MIXED_PACKET_PER_EXTRA_EVENT_US.saturating_mul(up_count.min(down_count) as u64),
                 )
         }
     };
@@ -330,6 +386,113 @@ pub(crate) fn record_input_path_health<const N: usize>(
     window.observe(observed_us > budget_us, elapsed_us, policy)
 }
 
+pub(crate) fn observe_wait_health(
+    wake_error_us: u64,
+    wait_warn_us: u64,
+    elapsed_us: u64,
+    policy: HealthWindowPolicy,
+    window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    if wait_warn_us == 0 {
+        window.reset();
+    } else {
+        let over_budget = wake_error_us > wait_warn_us;
+        let _ = window.observe(over_budget, elapsed_us, policy);
+        if over_budget {
+            local_metrics.wait_degraded_samples =
+                local_metrics.wait_degraded_samples.saturating_add(1);
+        }
+    }
+    local_metrics.wait_path_degraded = window.is_degraded();
+    local_metrics.wait_window_bad_count = window.bad_count() as u64;
+    local_metrics.wait_window_sample_count = window.sample_count() as u64;
+}
+
+pub(crate) fn observe_dispatch_health(
+    observation: DispatchHealthObservation,
+    policy: HealthWindowPolicy,
+    send_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    bookkeeping_window: &mut HealthWindow<HEALTH_WINDOW_CAPACITY>,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    let DispatchHealthObservation {
+        send_duration_us,
+        post_send_duration_us,
+        path,
+        send_warn_us,
+        bookkeeping_warn_us,
+        elapsed_us,
+    } = observation;
+    let _ = record_input_path_health(
+        send_duration_us,
+        send_warn_us,
+        elapsed_us,
+        policy,
+        send_window,
+    );
+    let _ = record_input_path_health(
+        post_send_duration_us,
+        bookkeeping_warn_us,
+        elapsed_us,
+        policy,
+        bookkeeping_window,
+    );
+    local_metrics.sendinput_path_degraded = send_window.is_degraded();
+    local_metrics.bookkeeping_degraded = bookkeeping_window.is_degraded();
+    local_metrics.send_window_bad_count = send_window.bad_count() as u64;
+    local_metrics.bookkeeping_window_bad_count = bookkeeping_window.bad_count() as u64;
+    local_metrics.send_window_sample_count = send_window.sample_count() as u64;
+    local_metrics.bookkeeping_window_sample_count = bookkeeping_window.sample_count() as u64;
+    local_metrics.input_path_degraded =
+        local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
+    local_metrics.post_send_max_us = local_metrics.post_send_max_us.max(post_send_duration_us);
+    local_metrics.dispatch_occupancy_max_us = local_metrics
+        .dispatch_occupancy_max_us
+        .max(send_duration_us.saturating_add(post_send_duration_us));
+    record_degraded_sample(
+        send_duration_us,
+        send_warn_us,
+        &mut local_metrics.sendinput_degraded_samples,
+    );
+    record_degraded_sample(
+        post_send_duration_us,
+        bookkeeping_warn_us,
+        &mut local_metrics.bookkeeping_degraded_samples,
+    );
+    record_degraded_sample(
+        post_send_duration_us,
+        bookkeeping_warn_us,
+        &mut local_metrics.post_send_degraded_samples,
+    );
+    if send_duration_us > send_warn_us {
+        match path {
+            DispatchPath::DownOnly { .. } => {
+                local_metrics.send_down_degraded_samples =
+                    local_metrics.send_down_degraded_samples.saturating_add(1);
+            }
+            DispatchPath::UpOnly { .. } => {
+                local_metrics.send_up_degraded_samples =
+                    local_metrics.send_up_degraded_samples.saturating_add(1);
+            }
+            DispatchPath::Mixed { .. } => {
+                local_metrics.send_mixed_degraded_samples =
+                    local_metrics.send_mixed_degraded_samples.saturating_add(1);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DispatchHealthObservation {
+    pub(crate) send_duration_us: u64,
+    pub(crate) post_send_duration_us: u64,
+    pub(crate) path: DispatchPath,
+    pub(crate) send_warn_us: u64,
+    pub(crate) bookkeeping_warn_us: u64,
+    pub(crate) elapsed_us: u64,
+}
+
 pub(crate) fn focus_gate_matches(
     require_focus: bool,
     validated_focus_active: bool,
@@ -374,8 +537,9 @@ pub(crate) fn publish_backend_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        DispatchHealthOptions, DispatchPath, HealthState, HealthTransition, HealthWindow,
-        HealthWindowPolicy, SEND_WARNING_MARGIN_US, build_dispatch_budget, record_degraded_sample,
+        DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY, HealthState, HealthTransition,
+        HealthWindow, HealthWindowPolicy, SEND_WARNING_MARGIN_US, WorkerMetricsLocal,
+        build_dispatch_budget, observe_wait_health, record_degraded_sample,
         record_input_path_health,
     };
     use sky_dispatch_core::estimator::LatencyClass;
@@ -527,5 +691,30 @@ mod tests {
             false,
         );
         assert!(mixed.send_warn_us < down.send_warn_us.saturating_add(up.send_warn_us));
+    }
+
+    #[test]
+    fn wait_health_observation_only_records_explicit_deadline_samples() {
+        let mut window = HealthWindow::<{ HEALTH_WINDOW_CAPACITY }>::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        let policy = HealthWindowPolicy {
+            minimum_samples: 1,
+            bad_sample_count: 1,
+            degrade_hold_us: 0,
+            recovery_hold_us: 0,
+        };
+        observe_wait_health(301, 300, 0, policy, &mut window, &mut metrics);
+        assert_eq!(window.sample_count(), 1);
+        assert_eq!(window.bad_count(), 1);
+        assert_eq!(metrics.wait_degraded_samples, 1);
+
+        // Interrupted and backend-failure paths return before this helper;
+        // they therefore cannot manufacture a latency sample.
+        let before = (
+            window.sample_count(),
+            window.bad_count(),
+            window.is_degraded(),
+        );
+        assert_eq!(before, (1, 1, true));
     }
 }
