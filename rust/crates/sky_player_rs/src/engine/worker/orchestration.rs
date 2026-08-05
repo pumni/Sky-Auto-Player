@@ -376,12 +376,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         send_duration_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
         send_over_warn_count: 0,
         input_path_warn_started_us: None,
+        input_path_healthy_started_us: None,
         send_pure_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
         send_pure_over_warn_count: 0,
         send_pure_warn_started_us: None,
+        send_pure_healthy_started_us: None,
         bookkeeping_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
         bookkeeping_over_warn_count: 0,
         bookkeeping_warn_started_us: None,
+        bookkeeping_healthy_started_us: None,
     });
     let health = core.health.as_mut().expect("worker health initialized");
     // Keep the logical authored timeline at zero while placing the physical
@@ -1459,6 +1462,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     &mut health.send_duration_window,
                     &mut health.send_over_warn_count,
                     &mut health.input_path_warn_started_us,
+                    &mut health.input_path_healthy_started_us,
                     &mut local_metrics.input_path_degraded,
                 );
                 record_input_path_health(
@@ -1468,6 +1472,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     &mut health.send_pure_window,
                     &mut health.send_pure_over_warn_count,
                     &mut health.send_pure_warn_started_us,
+                    &mut health.send_pure_healthy_started_us,
                     &mut local_metrics.sendinput_path_degraded,
                 );
                 record_input_path_health(
@@ -1477,6 +1482,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     &mut health.bookkeeping_window,
                     &mut health.bookkeeping_over_warn_count,
                     &mut health.bookkeeping_warn_started_us,
+                    &mut health.bookkeeping_healthy_started_us,
                     &mut local_metrics.bookkeeping_degraded,
                 );
                 let deferred_release = deferred_by_us > 0;
@@ -1543,16 +1549,68 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
             }
 
             let next_down_polyphony = coordinator.next_authored_polyphony();
+            let next_packet =
+                coordinator
+                    .next_authored_packet_masks()
+                    .and_then(|(up_mask, down_mask)| {
+                        sky_dispatch_core::coordinator::physical_packet_kind(up_mask, down_mask)
+                            .ok()
+                            .map(|kind| {
+                                (
+                                    kind,
+                                    up_mask.count_ones() as usize,
+                                    down_mask.count_ones() as usize,
+                                )
+                            })
+                    });
             let (lead_down, lead_down_saturated) = if config.timing.dispatch_lead_us > 0 {
                 (config.timing.dispatch_lead_us, false)
             } else if config.estimator.enable_adaptive_lead {
-                let estimate = estimator.estimate_lead_with_class_and_policy(
-                    ActionKind::Down,
-                    next_down_polyphony,
-                    latency_class,
-                    config.timing.strict_timing,
-                );
-                (estimate.applied_us, estimate.saturated)
+                match next_packet {
+                    Some((sky_dispatch_core::model::PhysicalPacketKind::UpOnly, up_count, _)) => {
+                        let estimate = estimator.estimate_lead_with_class_and_policy(
+                            ActionKind::Up,
+                            up_count,
+                            latency_class,
+                            config.timing.strict_timing,
+                        );
+                        (estimate.applied_us, estimate.saturated)
+                    }
+                    Some((
+                        sky_dispatch_core::model::PhysicalPacketKind::Mixed,
+                        up_count,
+                        down_count,
+                    )) => {
+                        let up_estimate = estimator.estimate_lead_with_class_and_policy(
+                            ActionKind::Up,
+                            up_count,
+                            latency_class,
+                            config.timing.strict_timing,
+                        );
+                        let down_estimate = estimator.estimate_lead_with_class_and_policy(
+                            ActionKind::Down,
+                            down_count,
+                            latency_class,
+                            config.timing.strict_timing,
+                        );
+                        (
+                            up_estimate
+                                .applied_us
+                                .saturating_add(down_estimate.applied_us)
+                                .min(config.timing.max_lead_us),
+                            up_estimate.saturated || down_estimate.saturated,
+                        )
+                    }
+                    _ => {
+                        let estimate = estimator.estimate_lead_with_class_and_policy(
+                            ActionKind::Down,
+                            next_down_polyphony,
+                            latency_class,
+                            config.timing.strict_timing,
+                        );
+                        (estimate.applied_us, estimate.saturated)
+                    }
+                }
             } else {
                 (0, false)
             };
@@ -1582,7 +1640,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 // `&mut coordinator` method until this scope ends. Pull every field we need
                 // into Copy / stack-owned values here.
                 let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
-                let packet_mode = prepared_batch.packet_batch_count > 1;
+                let packet_mode = match prepared_batch.packet_kind {
+                    Some(sky_dispatch_core::model::PhysicalPacketKind::DownOnly)
+                        if prepared_batch.packet_batch_count == 1 =>
+                    {
+                        false
+                    }
+                    Some(_) => true,
+                    None => false,
+                };
                 let (
                     batch_kind,
                     batch_source_action_index,
@@ -1609,8 +1675,19 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     );
                     (
                         ActionKind::Down,
-                        packet_view.header.down_source_action_index.unwrap_or(0),
-                        packet_view.down_intents.len(),
+                        packet_view
+                            .header
+                            .down_source_action_index
+                            .or_else(|| {
+                                coordinator
+                                    .schedule
+                                    .batches
+                                    .get(packet_view.header.first_batch_index as usize)
+                                    .map(|batch| batch.source_action_index)
+                            })
+                            .unwrap_or(0),
+                        packet_view.header.up_mask.count_ones() as usize
+                            + packet_view.header.down_mask.count_ones() as usize,
                         conflict_mask,
                         packet_view.down_scan_code_batch(),
                         Some(sky_dispatch_win32::input::PhysicalPacket::new(
@@ -1661,7 +1738,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     // immediately before SendInput. If focus changed after
                     // the outer-loop sample, terminalize this authored batch;
                     // it must not be replayed after the focus grace period.
-                    if !focus_matches(config.focus.require_focus, focus_active, target_hwnd) {
+                    if !packet_masks.is_some_and(|packet| packet.down_mask == 0)
+                        && !focus_matches(config.focus.require_focus, focus_active, target_hwnd)
+                    {
                         // The batch was only prepared. Leave the cursor and generation
                         // ledger untouched so the same authored chord can be prepared again
                         // after focus restoration.
@@ -1725,7 +1804,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         try_publish_metrics(local_metrics, metrics, qpc_us_or_terminal!(), true);
                         continue;
                     }
-                    if focus_loss_fault && !runtime.focus_loss_fault_injected {
+                    if !packet_masks.is_some_and(|packet| packet.down_mask == 0)
+                        && focus_loss_fault
+                        && !runtime.focus_loss_fault_injected
+                    {
                         runtime.focus_loss_fault_injected = true;
                         runtime.force_full_cleanup = true;
                         runtime.terminal_error = Some(
@@ -1751,9 +1833,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         runtime.verified_target = None;
                         continue;
                     }
-                    if effective_now_ticks
-                        .checked_duration_since(batch_scheduled_ticks)
-                        .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
+                    if config.timing.strict_timing
+                        && effective_now_ticks
+                            .checked_duration_since(batch_scheduled_ticks)
+                            .is_ok_and(|late| late > timing.hard_late_abort_threshold_ticks)
                     {
                         runtime.force_full_cleanup = true;
                         runtime.terminal_error = Some(format!(
@@ -1781,22 +1864,28 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
 
-                    if !scan_batch.is_empty() {
+                    if packet_masks.is_some() || !scan_batch.is_empty() {
                         // Preflight can perform multiple Win32 calls. Keep
                         // the final admission bound to the exact stamp that
                         // was verified and let command races return to the
                         // worker control path without becoming send failures.
-                        match final_down_admission(
-                            preflight_target,
-                            config.focus.require_focus,
-                            focus_active,
-                            target_hwnd,
-                            target_generation,
-                            quit_requested,
-                            skip_requested,
-                            panic_requested,
-                            desired_pause,
-                        ) {
+                        let admission = if packet_masks.is_some_and(|packet| packet.down_mask == 0)
+                        {
+                            DownAdmission::Allowed
+                        } else {
+                            final_down_admission(
+                                preflight_target,
+                                config.focus.require_focus,
+                                focus_active,
+                                target_hwnd,
+                                target_generation,
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                            )
+                        };
+                        match admission {
                             DownAdmission::Allowed => {}
                             DownAdmission::FocusLost => {
                                 runtime.verified_target = None;
@@ -2120,7 +2209,12 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         let saturation_abort = config.timing.strict_timing
                             && health.down_saturation_positive_streak
                                 >= STRICT_SATURATION_ABORT_STREAK;
+                        // Mixed packets have no single-direction timing
+                        // sample.  Their conservative lead is intentionally
+                        // not trained into either legacy histogram.
                         if config.estimator.enable_adaptive_lead
+                            && prepared_batch.packet_kind
+                                != Some(sky_dispatch_core::model::PhysicalPacketKind::Mixed)
                             && let Err(error) = update_estimator_after_send_class(
                                 estimator,
                                 ActionKind::Down,
@@ -2217,6 +2311,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             &mut health.send_duration_window,
                             &mut health.send_over_warn_count,
                             &mut health.input_path_warn_started_us,
+                            &mut health.input_path_healthy_started_us,
                             &mut local_metrics.input_path_degraded,
                         );
                         record_input_path_health(
@@ -2226,6 +2321,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             &mut health.send_pure_window,
                             &mut health.send_pure_over_warn_count,
                             &mut health.send_pure_warn_started_us,
+                            &mut health.send_pure_healthy_started_us,
                             &mut local_metrics.sendinput_path_degraded,
                         );
                         record_input_path_health(
@@ -2235,6 +2331,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             &mut health.bookkeeping_window,
                             &mut health.bookkeeping_over_warn_count,
                             &mut health.bookkeeping_warn_started_us,
+                            &mut health.bookkeeping_healthy_started_us,
                             &mut local_metrics.bookkeeping_degraded,
                         );
                         record_lateness(

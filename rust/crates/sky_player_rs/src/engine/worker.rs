@@ -100,12 +100,15 @@ pub(super) struct WorkerHealthState {
     pub(super) send_duration_window: VecDeque<u64>,
     pub(super) send_over_warn_count: usize,
     pub(super) input_path_warn_started_us: Option<u64>,
+    pub(super) input_path_healthy_started_us: Option<u64>,
     pub(super) send_pure_window: VecDeque<u64>,
     pub(super) send_pure_over_warn_count: usize,
     pub(super) send_pure_warn_started_us: Option<u64>,
+    pub(super) send_pure_healthy_started_us: Option<u64>,
     pub(super) bookkeeping_window: VecDeque<u64>,
     pub(super) bookkeeping_over_warn_count: usize,
     pub(super) bookkeeping_warn_started_us: Option<u64>,
+    pub(super) bookkeeping_healthy_started_us: Option<u64>,
 }
 
 pub(super) struct WorkerResources {

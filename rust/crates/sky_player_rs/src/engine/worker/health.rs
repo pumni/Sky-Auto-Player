@@ -33,6 +33,7 @@ pub(crate) fn record_lateness(
     local_metrics.recent_latencies.push(lateness_us);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_input_path_health(
     send_duration_us: u64,
     elapsed_us: u64,
@@ -40,9 +41,13 @@ pub(crate) fn record_input_path_health(
     window: &mut VecDeque<u64>,
     over_warn_count: &mut usize,
     warn_started_us: &mut Option<u64>,
+    healthy_started_us: &mut Option<u64>,
     degraded: &mut bool,
 ) {
     if warn_us == 0 {
+        *warn_started_us = None;
+        *healthy_started_us = None;
+        *degraded = false;
         return;
     }
     if window.len() == INPUT_PATH_WINDOW_CAPACITY
@@ -58,22 +63,29 @@ pub(crate) fn record_input_path_health(
         *over_warn_count += 1;
     }
 
-    let length = window.len();
-    let required_warn_samples = (0.95_f64 * (length.saturating_sub(1) as f64)).round() as usize;
-    if *over_warn_count
-        <= length
-            .saturating_sub(1)
-            .saturating_sub(required_warn_samples)
-    {
+    if window.len() < INPUT_PATH_WINDOW_CAPACITY {
         *warn_started_us = None;
+        *healthy_started_us = None;
         return;
     }
-    if warn_started_us.is_none() {
-        *warn_started_us = Some(elapsed_us);
-        return;
-    }
-    if elapsed_us.saturating_sub(warn_started_us.unwrap_or(elapsed_us)) >= 1_000_000 {
-        *degraded = true;
+    let bad_window = *over_warn_count >= 4;
+    if bad_window {
+        *healthy_started_us = None;
+        let started = warn_started_us.get_or_insert(elapsed_us);
+        if elapsed_us.saturating_sub(*started) >= 1_000_000 {
+            *degraded = true;
+        }
+    } else {
+        *warn_started_us = None;
+        if *degraded {
+            let started = healthy_started_us.get_or_insert(elapsed_us);
+            if elapsed_us.saturating_sub(*started) >= 2_000_000 {
+                *degraded = false;
+                *healthy_started_us = None;
+            }
+        } else {
+            *healthy_started_us = None;
+        }
     }
 }
 

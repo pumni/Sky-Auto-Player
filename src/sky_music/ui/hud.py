@@ -170,7 +170,7 @@ class ProgressRenderer:
             return
 
         self.last_render_at = now
-        self.input_path_degraded = self.input_path_degraded or input_path_degraded
+        self.input_path_degraded = bool(input_path_degraded)
 
         if not self.run_id:
             self.run_id = time.strftime("%Y%m%d-%H%M%S")
@@ -327,7 +327,7 @@ class ProgressRenderer:
         if self.input_path_degraded:
             panel_content.append(
                 Text(
-                    "Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.",
+                    "Input dispatch latency is elevated; playback timing may be unstable.",
                     style=styles["warning"],
                 )
             )

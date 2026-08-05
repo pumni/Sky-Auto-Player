@@ -700,7 +700,7 @@ class PlaybackCard(Static):
             body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
         if degraded:
             body.append(
-                f"{yellow}Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.{_ANSI_RESET}"
+                f"{yellow}Input dispatch latency is elevated; playback timing may be unstable.{_ANSI_RESET}"
             )
 
         if self.debug_mode:
@@ -968,7 +968,7 @@ class PlaybackApp(App[str]):
             self._warnings_shown = True
         if snap.input_path_degraded:
             warnings_to_show.append(
-                f"[{t.warning}]Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.[/]"
+                f"[{t.warning}]Input dispatch latency is elevated; playback timing may be unstable.[/]"
             )
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
@@ -1143,7 +1143,7 @@ class PlaybackScreen(Screen[str]):
             warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
         if snap.input_path_degraded:
             warnings_to_show.append(
-                f"[{t.warning}]Input path latency elevated; inspect wait, sender, and bookkeeping telemetry.[/]"
+                f"[{t.warning}]Input dispatch latency is elevated; playback timing may be unstable.[/]"
             )
         keys_dropped = 0
         chord_splits = 0
