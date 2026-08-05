@@ -1,7 +1,8 @@
 use parking_lot::Mutex;
 use sky_dispatch_win32::input::ReleaseAllOutcome;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RecentLatencyRing {
@@ -80,9 +81,65 @@ pub struct WorkerMetricsLocal {
     pub(crate) recent_latencies: RecentLatencyRing,
 }
 
+pub(crate) struct SnapshotBuffer {
+    buffers: [UnsafeCell<WorkerMetricsLocal>; 2],
+    active: AtomicU8,
+    readers: [AtomicU32; 2],
+}
+
+// Safety: only the worker writes the inactive slot, and it skips a slot while
+// a reader has pinned it. Readers validate the active index before and after
+// copying, so an active slot is never concurrently overwritten.
+unsafe impl Sync for SnapshotBuffer {}
+
+impl Default for SnapshotBuffer {
+    fn default() -> Self {
+        Self {
+            buffers: [
+                UnsafeCell::new(WorkerMetricsLocal::default()),
+                UnsafeCell::new(WorkerMetricsLocal::default()),
+            ],
+            active: AtomicU8::new(0),
+            readers: [AtomicU32::new(0), AtomicU32::new(0)],
+        }
+    }
+}
+
+impl SnapshotBuffer {
+    pub(crate) fn load(&self) -> WorkerMetricsLocal {
+        loop {
+            let index = self.active.load(Ordering::Acquire) as usize;
+            self.readers[index].fetch_add(1, Ordering::Acquire);
+            if self.active.load(Ordering::Acquire) as usize == index {
+                let value = unsafe { (*self.buffers[index].get()).clone() };
+                let stable = self.active.load(Ordering::Acquire) as usize == index;
+                self.readers[index].fetch_sub(1, Ordering::Release);
+                if stable {
+                    return value;
+                }
+            } else {
+                self.readers[index].fetch_sub(1, Ordering::Release);
+            }
+        }
+    }
+
+    pub(crate) fn try_publish(&self, local: &WorkerMetricsLocal) -> bool {
+        let current = self.active.load(Ordering::Acquire) as usize;
+        let target = 1 - current;
+        if self.readers[target].load(Ordering::Acquire) != 0 {
+            return false;
+        }
+        unsafe {
+            *self.buffers[target].get() = local.clone();
+        }
+        self.active.store(target as u8, Ordering::Release);
+        true
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct SharedMetrics {
-    pub(crate) snapshot: parking_lot::Mutex<WorkerMetricsLocal>,
+    pub(crate) snapshot: SnapshotBuffer,
     pub(crate) last_publish_us: AtomicU64,
     pub(crate) is_paused: AtomicBool,
     pub(crate) panicked: AtomicBool,
@@ -104,10 +161,7 @@ pub(crate) fn try_publish_metrics(
     force: bool,
 ) {
     let last = shared.last_publish_us.load(Ordering::Relaxed);
-    if (force || now_us.saturating_sub(last) >= 50_000)
-        && let Some(mut guard) = shared.snapshot.try_lock()
-    {
-        *guard = local.clone();
+    if (force || now_us.saturating_sub(last) >= 50_000) && shared.snapshot.try_publish(local) {
         shared.last_publish_us.store(now_us, Ordering::Relaxed);
         #[cfg(test)]
         shared.publish_count.fetch_add(1, Ordering::Relaxed);
@@ -116,4 +170,32 @@ pub(crate) fn try_publish_metrics(
 
 pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_us: u64) -> bool {
     now_us.saturating_sub(last_sample_us) >= interval_us
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SnapshotBuffer, WorkerMetricsLocal};
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn snapshot_buffer_never_publishes_torn_scalar_pair() {
+        let buffer = Arc::new(SnapshotBuffer::default());
+        let writer_buffer = Arc::clone(&buffer);
+        let writer = thread::spawn(move || {
+            for value in 1..=10_000u64 {
+                let local = WorkerMetricsLocal {
+                    elapsed_us: value,
+                    total_us: value,
+                    ..WorkerMetricsLocal::default()
+                };
+                let _ = writer_buffer.try_publish(&local);
+            }
+        });
+        for _ in 0..10_000 {
+            let snapshot = buffer.load();
+            assert_eq!(snapshot.elapsed_us, snapshot.total_us);
+        }
+        writer.join().expect("snapshot writer thread");
+    }
 }

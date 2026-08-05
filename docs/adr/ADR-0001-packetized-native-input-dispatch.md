@@ -38,7 +38,11 @@ transaction is migrated and its acceptance tests pass.
   frame-grid snapping or overdue catch-up bursts.
 - PR-6: MMCSS Auto/Mmcss acquisition order is Games, Low Latency, Audio.
   Estimator and spin changes remain gated on Windows before/after evidence.
-- PR-7 and later: not implemented in this checkpoint.
+- PR-7: live worker metrics now publish through a two-slot lock-free snapshot
+  buffer with reader pinning and coherence validation; the worker no longer
+  takes a telemetry mutex for healthy publication.
+- PR-8 and PR-9: not implemented in this checkpoint. Low-level keyboard-hook
+  observation remains explicitly prohibited by the security boundary.
 
 ## Security boundary
 

@@ -31,7 +31,9 @@ impl NativeDispatchSession {
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
         let metrics = SharedMetrics::default();
-        metrics.snapshot.lock().total_us = total_us;
+        let mut initial_metrics = metrics.snapshot.load();
+        initial_metrics.total_us = total_us;
+        let _ = metrics.snapshot.try_publish(&initial_metrics);
         let shared = Arc::new(SessionShared {
             commands: SessionCommands {
                 interrupt,
@@ -378,7 +380,7 @@ impl NativeDispatchSession {
             LIFECYCLE_POISONED => "poisoned",
             _ => "invalid",
         };
-        let local = self.shared.publication.metrics.snapshot.lock().clone();
+        let local = self.shared.publication.metrics.snapshot.load();
         let startup_ready = self
             .shared
             .publication
