@@ -69,3 +69,11 @@ def test_latency_signals_are_distinct_from_backend_rejection() -> None:
         "partial-input-packet",
     ]
     assert "2 chord(s), 3 authored key(s)" in rejected.backend_notices[0].message
+
+
+def test_recovered_partial_release_has_neutral_warning() -> None:
+    notices = PlaybackNoticeLedger().update(recovered_partial_up_retries=1)
+    assert [notice.code for notice in notices.runtime_notices] == [
+        "recovered-partial-up-retry"
+    ]
+    assert "partially accepted a release packet" in notices.runtime_notices[0].message

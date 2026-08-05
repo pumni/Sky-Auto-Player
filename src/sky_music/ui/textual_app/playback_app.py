@@ -673,6 +673,9 @@ class PlaybackCard(Static):
             recovered_zero_progress_but_late=int(
                 getattr(snap, "recovered_zero_progress_but_late", 0) or 0
             ),
+            recovered_partial_up_retries=int(
+                getattr(snap, "recovered_partial_up_retries", 0) or 0
+            ),
             wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
             wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),
         )
@@ -982,6 +985,9 @@ class PlaybackApp(App[str]):
             recovered_zero_progress_but_late=int(
                 getattr(snap, "recovered_zero_progress_but_late", 0) or 0
             ),
+            recovered_partial_up_retries=int(
+                getattr(snap, "recovered_partial_up_retries", 0) or 0
+            ),
             wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
             wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),
             keys_dropped=keys_dropped,
@@ -1170,6 +1176,9 @@ class PlaybackScreen(Screen[str]):
             input_path_degraded=snap.input_path_degraded,
             recovered_zero_progress_but_late=int(
                 getattr(snap, "recovered_zero_progress_but_late", 0) or 0
+            ),
+            recovered_partial_up_retries=int(
+                getattr(snap, "recovered_partial_up_retries", 0) or 0
             ),
             wait_backend_failures=int(getattr(snap, "wait_backend_failures", 0) or 0),
             wait_clock_failures=int(getattr(snap, "wait_clock_failures", 0) or 0),

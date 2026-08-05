@@ -115,6 +115,10 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) recovered_zero_progress_but_late: u64,
     #[pyo3(get)]
+    pub(super) recovered_zero_progress_retries: u64,
+    #[pyo3(get)]
+    pub(super) recovered_partial_up_retries: u64,
+    #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
     pub(super) health: String,
@@ -170,6 +174,8 @@ impl ProgressSnapshotPy {
             dispatch_occupancy_max_us: snapshot.dispatch_occupancy_max_us,
             post_send_degraded_samples: snapshot.post_send_degraded_samples,
             recovered_zero_progress_but_late: snapshot.recovered_zero_progress_but_late,
+            recovered_zero_progress_retries: snapshot.recovered_zero_progress_retries,
+            recovered_partial_up_retries: snapshot.recovered_partial_up_retries,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {

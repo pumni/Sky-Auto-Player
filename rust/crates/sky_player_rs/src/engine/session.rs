@@ -452,6 +452,8 @@ impl NativeDispatchSession {
             dispatch_occupancy_max_us: local.dispatch_occupancy_max_us,
             post_send_degraded_samples: local.post_send_degraded_samples,
             recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
+            recovered_zero_progress_retries: local.recovered_zero_progress_retries,
+            recovered_partial_up_retries: local.recovered_partial_up_retries,
         }
     }
 
@@ -531,6 +533,8 @@ impl NativeDispatchSession {
             lead_saturation_count_up: local.lead_saturation_count_up.to_vec(),
             positive_residual_at_cap: local.positive_residual_at_cap,
             recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
+            recovered_zero_progress_retries: local.recovered_zero_progress_retries,
+            recovered_partial_up_retries: local.recovered_partial_up_retries,
             outcome: self.terminal_outcome().map(str::to_string),
             rt_priority_acquired: self.shared.publication.priority_acquired.lock().clone(),
             effective_spin_threshold_us: local.effective_spin_threshold_us,

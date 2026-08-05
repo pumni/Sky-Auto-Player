@@ -29,14 +29,28 @@ class NativePlaybackDiagnosis:
     evidence: tuple[str, ...]
 
 
+def _positive(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, (list, tuple)):
+        return any(_positive(item) for item in value)
+    return False
+
+
 def diagnose_native_playback(
     snapshot: Mapping[str, object],
 ) -> NativePlaybackDiagnosis:
     """Return the highest-priority native observation in ``snapshot``."""
 
     def positive(name: str) -> bool:
-        value = snapshot.get(name, 0)
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        return _positive(snapshot.get(name, 0))
+
+    generation_counts = snapshot.get("generation_status_counts", {})
+    dropped_backend = isinstance(generation_counts, Mapping) and _positive(
+        generation_counts.get("dropped_backend", 0)
+    )
 
     backend_names = (
         "keys_dropped",
@@ -48,7 +62,7 @@ def diagnose_native_playback(
         "failed_release_count",
         "rollback_residue_keys",
     )
-    backend = any(positive(name) for name in backend_names)
+    backend = dropped_backend or any(positive(name) for name in backend_names)
     recovered_late = positive("recovered_zero_progress_but_late")
     wait = bool(snapshot.get("wait_path_degraded", False)) or positive(
         "wait_degraded_samples"

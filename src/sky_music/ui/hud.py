@@ -179,6 +179,7 @@ class ProgressRenderer:
         wait_backend_failures: int = 0,
         wait_clock_failures: int = 0,
         recovered_zero_progress_but_late: int = 0,
+        recovered_partial_up_retries: int = 0,
         backend_health: BackendHealth | None = None,
     ) -> None:
         now = time.perf_counter()
@@ -289,6 +290,7 @@ class ProgressRenderer:
                 getattr(backend_health, "sendinput_zero_progress_failures", 0) or 0
             ),
             recovered_zero_progress_but_late=recovered_zero_progress_but_late,
+            recovered_partial_up_retries=recovered_partial_up_retries,
             wait_backend_failures=wait_backend_failures,
             wait_clock_failures=wait_clock_failures,
         )

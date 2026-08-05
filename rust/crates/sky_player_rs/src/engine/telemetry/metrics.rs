@@ -60,6 +60,8 @@ pub struct WorkerMetricsLocal {
     pub lead_saturation_count_down: [u64; 16],
     pub lead_saturation_count_up: [u64; 16],
     pub positive_residual_at_cap: u64,
+    pub recovered_zero_progress_retries: u64,
+    pub recovered_partial_up_retries: u64,
     pub recovered_zero_progress_but_late: u64,
     pub effective_spin_threshold_us: u64,
     pub wake_error_p50_us: u64,

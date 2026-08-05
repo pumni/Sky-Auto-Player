@@ -53,6 +53,7 @@ class PlaybackNoticeLedger:
         self._partial_packet_seen = False
         self._zero_progress_failure_seen = False
         self._recovered_retry_late_seen = False
+        self._recovered_partial_up_seen = False
         self._wait_backend_failure_seen = False
         self._wait_clock_failure_seen = False
 
@@ -70,6 +71,7 @@ class PlaybackNoticeLedger:
         sendinput_partial_events: int = 0,
         sendinput_zero_progress_failures: int = 0,
         recovered_zero_progress_but_late: int = 0,
+        recovered_partial_up_retries: int = 0,
         wait_backend_failures: int = 0,
         wait_clock_failures: int = 0,
     ) -> PlaybackHudState:
@@ -102,6 +104,9 @@ class PlaybackNoticeLedger:
         self._recovered_retry_late_seen = self._recovered_retry_late_seen or (
             recovered_zero_progress_but_late > 0
         )
+        self._recovered_partial_up_seen = self._recovered_partial_up_seen or (
+            recovered_partial_up_retries > 0
+        )
         self._wait_backend_failure_seen = self._wait_backend_failure_seen or (
             wait_backend_failures > 0
         )
@@ -118,6 +123,15 @@ class PlaybackNoticeLedger:
                 PlaybackNotice(
                     code="recovered-zero-progress-late",
                     message="Windows initially accepted no input events; retry succeeded after the deadline.",
+                    severity="warning",
+                    source="runtime",
+                )
+            )
+        if self._recovered_partial_up_seen:
+            runtime.append(
+                PlaybackNotice(
+                    code="recovered-partial-up-retry",
+                    message="Windows partially accepted a release packet; a full release retry completed.",
                     severity="warning",
                     source="runtime",
                 )

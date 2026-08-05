@@ -38,6 +38,8 @@ pub struct EngineSnapshot {
     pub lead_saturation_count_up: Vec<u64>,
     pub positive_residual_at_cap: u64,
     pub recovered_zero_progress_but_late: u64,
+    pub recovered_zero_progress_retries: u64,
+    pub recovered_partial_up_retries: u64,
     pub outcome: Option<String>,
     pub rt_priority_acquired: String,
     pub effective_spin_threshold_us: u64,
@@ -155,4 +157,6 @@ pub struct EngineProgressSnapshot {
     pub dispatch_occupancy_max_us: u64,
     pub post_send_degraded_samples: u64,
     pub recovered_zero_progress_but_late: u64,
+    pub recovered_zero_progress_retries: u64,
+    pub recovered_partial_up_retries: u64,
 }
