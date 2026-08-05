@@ -124,6 +124,7 @@ pub(crate) fn publish_backend_metrics(
     local_metrics.sendinput_partial_events = backend.sendinput_partial_events;
     local_metrics.sendinput_zero_progress_failures = backend.sendinput_zero_progress_failures;
     local_metrics.chords_rejected = backend.chords_rejected;
+    local_metrics.authored_keys_rejected = backend.authored_keys_rejected;
     local_metrics.keys_inserted_before_failure = backend.keys_inserted_before_failure;
     local_metrics.keys_rolled_back = backend.keys_rolled_back;
     local_metrics.rollback_residue_keys = backend.rollback_residue_keys;
