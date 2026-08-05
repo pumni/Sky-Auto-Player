@@ -68,7 +68,7 @@ def build_report(runs: list[tuple[float, Path]]) -> dict[str, Any]:
             {
                 "hold_frames": hold,
                 "artifact": str(path),
-                "outcome": snapshot.get("outcome"),
+                "outcome": snapshot.get("outcome", snapshot.get("outcomes")),
                 "status": snapshot.get("status"),
                 "diagnosis": diagnosis.category,
                 "evidence": list(diagnosis.evidence),
