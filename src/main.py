@@ -555,6 +555,7 @@ def _run_rust_selftest() -> int:
             [],
             [0x15],
             config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+                game_fps=60,
                 min_hold_us=0,
                 require_focus=False,
                 telemetry=False,

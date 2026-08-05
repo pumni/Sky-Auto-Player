@@ -741,6 +741,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
             telemetry_enabled=telemetry_enabled,
             require_focus=not is_dry_run,
             profile_name=plan.session.display_profile_label(),
+            game_fps=int(plan.active_policy.fps),
             tempo_scale=plan.session.tempo_scale,
             min_hold_us=int(plan.active_policy.min_hold_us),
         )

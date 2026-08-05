@@ -30,7 +30,7 @@ app-owned delivery proxy and must not be described as game receipt.
 
 ## Session contract
 
-`SessionConfig` exposes only session/user inputs: `min_hold_us`,
+`SessionConfig` exposes only session/user inputs: resolved `game_fps` (15..=240), `min_hold_us`,
 `require_focus`, `target_hwnd`, telemetry enablement, and the native profile.
 Internal wait strategy, priority, retry, estimator, telemetry capacity, lease,
 and strict-completion policy are Rust profile details.
@@ -38,10 +38,14 @@ and strict-completion policy are Rust profile details.
 The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
 `panic`), `set_target_hwnd`, `snapshot_lite`, and `session_report`.
 
-`snapshot_lite` is the frequent control/UI read and contains only state,
-elapsed/total time, completion error, active key count, health, and the flags
-needed to render. It has no trace, hash maps, generation ledger, estimator
-internals, or build provenance.
+`snapshot_lite` is the frequent control/UI read and contains state,
+elapsed/total time, completion error, active/possibly-active/release counts,
+and every live backend counter needed by the HUD. Correctness-critical counters
+are part of the native contract; Python must not replace a missing field with a
+zero. It has no trace, hash maps, generation ledger, estimator internals, or
+build provenance. Latency degradation is reported as an input-path health
+signal; UI text must not infer an OS hook, Filter Keys, or game-side cause from
+that signal.
 
 `session_report` is called once after worker termination. It contains the full
 terminal snapshot, native telemetry, estimator output, cleanup result, and
@@ -51,7 +55,14 @@ not reinterpret native timing.
 ## Invariants
 
 - Every valid Down owns a generation; authored same-key overlap is rejected.
+- Actions sharing an authored timestamp compile to one physical packet; one
+  `SendInput` call emits all Up events before all Down events.
 - Stale Up is suppressed and no Up precedes the minimum hold floor.
+- The native worker anchors the physical hold at the actual Down completion,
+  using `max(configured_min_hold_us, frame_period_us + 500us)` as its initial
+  frame-safe floor. It never snaps note-on timestamps to a frame grid.
+- A packet late by at least one frame rebases the effective timeline once and
+  preserves later packet spacing; it is not replayed as a catch-up burst.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.

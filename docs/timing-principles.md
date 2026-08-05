@@ -84,6 +84,14 @@ universal constant. A schedule can therefore be authored-feasible while still pr
 runtime conflict under a slow or contended input path; fidelity-oriented tooling should warn or
 reject such repeats instead of silently treating them as guaranteed.
 
+The native session requires a resolved `game_fps` in the inclusive range
+15..=240. At runtime its physical floor is at least one nominal frame plus the
+initial 500 µs jitter guard, unless the configured floor is larger. This is a
+sender-side visibility safeguard, not proof that the game observed the key.
+A packet that arrives one or more frames late shifts the effective timeline
+forward by its lateness, preserving relative packet spacing and avoiding
+overdue catch-up bursts. Note-on timestamps are never rounded to frame phases.
+
 If the authored interval is smaller than `min_hold_us`:
 1. **Strict Mode:** The scheduler rejects the playback and recommends a lower tempo.
 2. **Runtime invariant failure:** The compiler rejects authored overlap; if a conflict appears at

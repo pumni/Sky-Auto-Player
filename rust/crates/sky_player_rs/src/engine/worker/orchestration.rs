@@ -144,7 +144,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         // turn a playback session into a keyboard cleanup failure.
         let _ = estimator.import_state(raw);
     }
-    let min_hold_ticks = match qpc_clock.duration_from_us(config.timing.min_hold_us) {
+    let frame_period_us = 1_000_000u64.div_ceil(u64::from(config.timing.game_fps));
+    // The native worker owns the physical visibility floor. Python supplies
+    // the resolved FPS, but note-on timestamps remain authored timestamps;
+    // only the minimum post-Down hold is frame-safe.
+    let effective_min_hold_us = config
+        .timing
+        .min_hold_us
+        .max(frame_period_us.saturating_add(500));
+    let min_hold_ticks = match qpc_clock.duration_from_us(effective_min_hold_us) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
@@ -269,9 +277,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         };
     }
     let delivery_margin_ticks = DurationTicks::ZERO;
-    let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
-        config.timing.min_hold_us,
+        effective_min_hold_us,
         min_hold_ticks,
         0,
         delivery_margin_ticks,
@@ -290,6 +298,17 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
             );
         }
     };
+    let frame_period_ticks = match qpc_clock.duration_from_us(frame_period_us) {
+        Ok(value) => value,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("frame period conversion failed: {error:?}"),
+            );
+        }
+    };
+    coordinator.set_frame_period_ticks(frame_period_ticks);
     local_metrics.total_us = match coordinator.effective_total_ticks().and_then(|ticks| {
         qpc_clock
             .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
@@ -1563,20 +1582,64 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 // `&mut coordinator` method until this scope ends. Pull every field we need
                 // into Copy / stack-owned values here.
                 let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
-                let batch_view = match coordinator
-                    .schedule
-                    .view_batch_ticks(batch_index, batch_scheduled_ticks)
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        runtime.force_full_cleanup = true;
-                        runtime.terminal_error =
-                            Some(format!("runtime schedule view failure: {error}"));
-                        break;
-                    }
+                let packet_mode = prepared_batch.packet_batch_count > 1;
+                let (
+                    batch_kind,
+                    batch_source_action_index,
+                    batch_intent_count,
+                    conflict_mask,
+                    scan_batch,
+                    packet_masks,
+                ) = if packet_mode {
+                    let packet_view = match coordinator
+                        .schedule
+                        .view_packet_ticks(prepared_batch.packet_index, batch_scheduled_ticks)
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("runtime packet view failure: {error}"));
+                            break;
+                        }
+                    };
+                    let conflict_mask =
+                        coordinator.check_down_conflicts_compact(packet_view.down_intents);
+                    (
+                        ActionKind::Down,
+                        packet_view.header.down_source_action_index.unwrap_or(0),
+                        packet_view.down_intents.len(),
+                        conflict_mask,
+                        packet_view.down_scan_code_batch(),
+                        Some(sky_dispatch_win32::input::PhysicalPacket::new(
+                            packet_view.up_mask(),
+                            packet_view.down_mask(),
+                        )),
+                    )
+                } else {
+                    let batch_view = match coordinator
+                        .schedule
+                        .view_batch_ticks(batch_index, batch_scheduled_ticks)
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            runtime.force_full_cleanup = true;
+                            runtime.terminal_error =
+                                Some(format!("runtime schedule view failure: {error}"));
+                            break;
+                        }
+                    };
+                    let conflict_mask =
+                        coordinator.check_down_conflicts_compact(batch_view.intents);
+                    (
+                        batch_view.kind(),
+                        batch_view.source_action_index(),
+                        batch_view.intents.len(),
+                        conflict_mask,
+                        batch_view.scan_code_batch_excluding_mask(conflict_mask),
+                        None,
+                    )
                 };
-                let batch_kind = batch_view.kind();
-                let batch_source_action_index = batch_view.source_action_index();
                 let batch_scheduled_us = match qpc_clock.timeline_to_us(batch_scheduled_ticks) {
                     Ok(value) => value,
                     Err(error) => {
@@ -1587,12 +1650,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     }
                 };
                 let authored_batch_scheduled_ticks = coordinator.batch_scheduled_ticks[batch_index];
-                let batch_intent_count = batch_view.intents.len();
-                // Conflict check: O(N) bitwise, no allocation.
-                let conflict_mask = coordinator.check_down_conflicts_compact(batch_view.intents);
                 let has_conflicts = conflict_mask != 0;
-                // Scan codes for SendInput: stack-only buffer.
-                let scan_batch = batch_view.scan_code_batch_excluding_mask(conflict_mask);
                 // --- End of borrow scope: all data is now in stack-local copies ---
 
                 let mut force_dispatch_publish = false;
@@ -1782,8 +1840,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 continue;
                             }
                         }
-                        // SendInput uses the stack-only scan code buffer — no allocation.
-                        let result = backend.key_down(scan_batch.as_slice());
+                        // A compiled same-timestamp packet crosses the
+                        // platform boundary exactly once. Legacy single
+                        // batches retain their existing sender seam until
+                        // the compatibility path is removed.
+                        let result = if let Some(packet) = packet_masks {
+                            backend.key_down_physical_packet(packet)
+                        } else {
+                            backend.key_down(scan_batch.as_slice())
+                        };
                         if let Some(error) = backend.timing_error.take() {
                             runtime.force_full_cleanup = true;
                             runtime.terminal_error =
@@ -1966,12 +2031,21 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         let completed_effective =
                             qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
                         runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
-                        if let Err(error) = coordinator.commit_down_success(
-                            prepared_batch,
-                            &result_sent,
-                            sender_started_effective_ticks,
-                            completed_effective_ticks,
-                        ) {
+                        let commit_result = if packet_mode {
+                            coordinator.commit_packet_success(
+                                prepared_batch,
+                                sender_started_effective_ticks,
+                                completed_effective_ticks,
+                            )
+                        } else {
+                            coordinator.commit_down_success(
+                                prepared_batch,
+                                &result_sent,
+                                sender_started_effective_ticks,
+                                completed_effective_ticks,
+                            )
+                        };
+                        if let Err(error) = commit_result {
                             runtime.force_full_cleanup = true;
                             runtime.terminal_error =
                                 Some(format!("coordinator activation failure: {error}"));

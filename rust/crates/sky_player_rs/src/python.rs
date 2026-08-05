@@ -44,6 +44,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for StrictU64 {
 #[pyclass(name = "SessionConfig", frozen, from_py_object)]
 #[derive(Clone, Copy)]
 struct NativeSessionConfigPy {
+    game_fps: u16,
     min_hold_us: u64,
     require_focus: bool,
     target_hwnd: isize,
@@ -54,6 +55,7 @@ struct NativeSessionConfigPy {
 impl Default for NativeSessionConfigPy {
     fn default() -> Self {
         Self {
+            game_fps: 60,
             min_hold_us: 50_000,
             require_focus: false,
             target_hwnd: 0,
@@ -67,6 +69,7 @@ impl Default for NativeSessionConfigPy {
 impl NativeSessionConfigPy {
     #[new]
     #[pyo3(signature = (
+        game_fps,
         min_hold_us = StrictU64(50000),
         require_focus = false,
         target_hwnd = StrictU64(0),
@@ -74,6 +77,7 @@ impl NativeSessionConfigPy {
         profile = "production"
     ))]
     fn new(
+        game_fps: StrictU64,
         min_hold_us: StrictU64,
         require_focus: bool,
         target_hwnd: StrictU64,
@@ -94,13 +98,24 @@ impl NativeSessionConfigPy {
                 "min_hold_us must be at most 60000000",
             ));
         }
+        let game_fps = u16::try_from(game_fps.0)
+            .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
+        if !(15..=240).contains(&game_fps) {
+            return Err(PyValueError::new_err("game_fps must be in 15..=240"));
+        }
         Ok(Self {
+            game_fps,
             min_hold_us: min_hold_us.0,
             require_focus,
             target_hwnd,
             telemetry,
             profile,
         })
+    }
+
+    #[getter]
+    fn game_fps(&self) -> u16 {
+        self.game_fps
     }
 
     #[getter]

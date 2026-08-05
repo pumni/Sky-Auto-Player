@@ -38,6 +38,7 @@ fn test_session_options(
         backend,
         allowed_count,
         timing: TimingOptions {
+            game_fps: 60,
             min_hold_us: 0,
             max_lead_us: 2_000,
             dispatch_lead_us: 0,

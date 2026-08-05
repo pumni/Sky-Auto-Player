@@ -56,10 +56,12 @@ scan-code registry. It exposes only lifecycle commands, `set_target_hwnd`, a
 small `snapshot_lite`, and one final `session_report`.
 
 `snapshot_lite` contains state, elapsed/total time, completion error, active
-key count, health, and the control-loop flags needed by the HUD. It does not
-contain trace records, hash maps, build provenance, estimator state, or full
-generation counts. `session_report` is materialized only after the worker has
-stopped and is the sole source for final native telemetry.
+and uncertain-key counts, backend failure counters, health, and the
+control-loop flags needed by the HUD. Correctness-critical fields are required
+by the Python adapter rather than silently defaulted. It does not contain trace
+records, hash maps, build provenance, estimator state, or full generation
+counts. `session_report` is materialized only after the worker has stopped and
+is the sole source for final native telemetry.
 
 Focus has one source of truth: Python finds and validates the target process,
 then sends its HWND with `set_target_hwnd`. Rust compares that HWND with

@@ -186,6 +186,7 @@ mod tests {
     use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
     use crate::model::{ActionKind, KeyActionInput};
+    use crate::time::{DurationTicks, TimelineTicks};
 
     #[test]
     fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -390,6 +391,82 @@ mod tests {
         assert_eq!(
             active.down_dispatch_completed_ticks,
             crate::time::TimelineTicks::from_raw(150)
+        );
+    }
+
+    #[test]
+    fn packet_commit_releases_before_retrigger_down_and_advances_once() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "first".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "retrigger release".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x15, 0x16].into(),
+                    reason: "retrigger chord".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid packet schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
+
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .expect("prepare first packet")
+            .expect("first packet is due");
+        assert_eq!(first.packet_batch_count, 1);
+        coordinator
+            .commit_packet_success(
+                first,
+                TimelineTicks::from_raw(10),
+                TimelineTicks::from_raw(20),
+            )
+            .expect("commit first packet");
+
+        let retrigger = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+            .expect("prepare retrigger packet")
+            .expect("retrigger packet is due");
+        assert_eq!(retrigger.packet_batch_count, 2);
+        let packet = coordinator
+            .schedule
+            .view_packet_ticks(retrigger.packet_index, retrigger.effective_scheduled_ticks)
+            .expect("packet view");
+        assert_eq!(packet.up_mask(), 0b01);
+        assert_eq!(packet.down_mask(), 0b11);
+        coordinator
+            .commit_packet_success(
+                retrigger,
+                TimelineTicks::from_raw(1_010),
+                TimelineTicks::from_raw(1_020),
+            )
+            .expect("commit retrigger packet");
+
+        assert_eq!(coordinator.cursor, 3);
+        assert_eq!(coordinator.active_mask, 0b11);
+        assert_eq!(coordinator.active_for_slot(0).unwrap().generation_id, 1);
+        assert_eq!(coordinator.active_for_slot(1).unwrap().generation_id, 2);
+        assert_eq!(
+            coordinator
+                .generation_status_counts()
+                .get(GenerationStatus::Released.as_str()),
+            Some(&1)
         );
     }
 
@@ -1355,6 +1432,11 @@ pub struct PreparedBatch {
     pub index: usize,
     pub effective_scheduled_ticks: TimelineTicks,
     pub effective_lead_ticks: DurationTicks,
+    /// Packet metadata is carried alongside the legacy batch preparation so
+    /// the worker can atomically dispatch all authored actions at one
+    /// timestamp without maintaining a second cursor.
+    pub packet_index: usize,
+    pub packet_batch_count: usize,
 }
 
 #[derive(Debug)]
@@ -1383,6 +1465,7 @@ pub struct RuntimeDispatchCoordinator {
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     recovery_offset_ticks: DurationTicks,
+    frame_period_ticks: DurationTicks,
     release_recovery_started_ticks: Option<TimelineTicks>,
 }
 
@@ -1453,6 +1536,7 @@ impl RuntimeDispatchCoordinator {
             generation_states,
             generation_count,
             recovery_offset_ticks: DurationTicks::ZERO,
+            frame_period_ticks: DurationTicks::ZERO,
             release_recovery_started_ticks: None,
         })
     }
@@ -1474,6 +1558,10 @@ impl RuntimeDispatchCoordinator {
 
     pub fn recovery_offset_ticks(&self) -> DurationTicks {
         self.recovery_offset_ticks
+    }
+
+    pub fn set_frame_period_ticks(&mut self, frame_period_ticks: DurationTicks) {
+        self.frame_period_ticks = frame_period_ticks;
     }
 
     pub fn effective_total_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
@@ -2102,7 +2190,7 @@ impl RuntimeDispatchCoordinator {
     }
 
     pub fn prepare_next_due_authored(
-        &self,
+        &mut self,
         now: TimelineTicks,
         dispatch_lead: DurationTicks,
     ) -> Result<Option<PreparedBatch>, CoordinatorError> {
@@ -2117,12 +2205,43 @@ impl RuntimeDispatchCoordinator {
             .batches
             .get(index)
             .ok_or(CoordinatorError::InvalidBatchIndex { index })?;
-        let authored = self
+        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet id does not fit in usize".to_string(),
+            ))
+        })?;
+        let packet = self
+            .schedule
+            .packets
+            .get(packet_index)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIndex {
+                    index: packet_index,
+                },
+            ))?;
+        if packet.first_batch_index as usize != index {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "packet first batch does not match coordinator cursor".to_string(),
+                ),
+            ));
+        }
+        let mut authored = self
             .batch_scheduled_ticks
             .get(index)
             .copied()
             .ok_or(CoordinatorError::InvalidBatchIndex { index })?
             .checked_add_duration(self.recovery_offset_ticks)?;
+        if self.frame_period_ticks != DurationTicks::ZERO
+            && now > authored
+            && now
+                .checked_duration_since(authored)
+                .is_ok_and(|late| late >= self.frame_period_ticks)
+        {
+            let late = now.checked_duration_since(authored)?;
+            self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(late)?;
+            authored = now;
+        }
         let effective_lead = if authored >= TimelineTicks::from_raw(dispatch_lead.as_u64()) {
             dispatch_lead
         } else {
@@ -2136,7 +2255,142 @@ impl RuntimeDispatchCoordinator {
             index,
             effective_scheduled_ticks: authored,
             effective_lead_ticks: effective_lead,
+            packet_index,
+            packet_batch_count: usize::from(packet.batch_count),
         }))
+    }
+
+    /// Commit one physical packet after the sender reported a complete
+    /// transaction. The logical Up transition is applied before Down so a
+    /// same-key retrigger replaces the previous generation atomically.
+    pub fn commit_packet_success(
+        &mut self,
+        prepared: PreparedBatch,
+        started: TimelineTicks,
+        completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        if prepared.index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.index,
+                cursor: self.cursor,
+            });
+        }
+        let (up_intents, down_intents, down_source_action_index) = {
+            let packet = self
+                .schedule
+                .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)?;
+            if packet.header.first_batch_index as usize != prepared.index
+                || usize::from(packet.header.batch_count) != prepared.packet_batch_count
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "prepared packet metadata changed before commit".to_string(),
+                    ),
+                ));
+            }
+            (
+                packet
+                    .up_intents
+                    .iter()
+                    .copied()
+                    .collect::<SmallVec<[_; MAX_KEYS]>>(),
+                packet
+                    .down_intents
+                    .iter()
+                    .copied()
+                    .collect::<SmallVec<[_; MAX_KEYS]>>(),
+                packet.header.down_source_action_index,
+            )
+        };
+        if prepared.packet_batch_count == 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "compiled packet must contain at least one authored batch".to_string(),
+                ),
+            ));
+        }
+        let release_not_before_ticks = completed
+            .checked_add_duration(self.min_hold_ticks)
+            .and_then(|ticks| ticks.checked_add_duration(self.delivery_margin_ticks))?;
+
+        // Apply releases first. Stale Up intents are present for authored
+        // diagnostics but deliberately have NO_GENERATION_ID and no physical
+        // event in the packet.
+        for compact in up_intents {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let Some(active) = self.active_for_slot(slot).cloned() else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "packet release has no active generation".to_string(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "packet release generation does not own its key slot".to_string(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Active,
+                GenerationStatus::ReleasePending,
+            )?;
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::ReleasePending,
+                GenerationStatus::Released,
+            )?;
+            self.active_by_slot[usize::from(slot)] = None;
+            self.active_mask &= !Self::bit_for_slot(slot);
+            self.blocked_mask &= !Self::bit_for_slot(slot);
+        }
+
+        // Full SendInput success means every Down identity in the immutable
+        // packet was inserted; no returned-count prefix is consulted.
+        for compact in down_intents {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let scan_code = self
+                .schedule
+                .key_registry
+                .scan_code_for(slot)
+                .ok_or(CoordinatorError::InvalidKeySlot { slot })?;
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            )?;
+            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
+                generation_id,
+                scan_code,
+                key_slot: slot,
+                source_action_index: down_source_action_index.unwrap_or(0),
+                scheduled_down_ticks: prepared.effective_scheduled_ticks,
+                down_dispatch_started_ticks: started,
+                down_dispatch_completed_ticks: completed,
+                release_not_before_ticks,
+            });
+            self.active_mask |= Self::bit_for_slot(slot);
+            self.blocked_mask |= Self::bit_for_slot(slot);
+        }
+
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.check_invariants()?;
+        Ok(())
     }
 
     pub fn commit_down_success(

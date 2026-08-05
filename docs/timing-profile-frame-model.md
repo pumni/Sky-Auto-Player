@@ -53,6 +53,11 @@ An explicit `hold_us`, `hold_frames`, or `hold_unframed_us` remains an escape ha
 * Explicit hold/min-hold ordering remains `0 < min_hold_us <= hold_us`.
 * Unknown legacy keys, including former `*_floor_us` keys, are ignored.
 
+The native `SessionConfig.game_fps` is separately validated to 15..=240. The
+worker uses the resolved FPS only for the physical hold floor and frame-relative
+lateness recovery; it does not infer a render phase or snap authored note-on
+timestamps to a frame grid.
+
 There is no audience-specific absolute-duration validator. `audience_safe` is validated by the same frame-relative rules as the other profiles.
 
 ---

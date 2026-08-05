@@ -1,0 +1,52 @@
+# ADR-0001: Packetized Native Input Dispatch
+
+Status: accepted for phased implementation
+
+## Decision
+
+Actions sharing one authored timestamp will have one immutable physical packet
+view. The packet canonical order is every release before every activation. The
+packet sender accepts validated instrument masks and builds one bounded
+`SendInput` array of at most 30 events. A partial activation or mixed result is
+not interpreted as a known prefix.
+
+The existing authored `CompiledBatch` table remains during migration for source
+metadata and compatibility. The packet table is additive until the worker
+transaction is migrated and its acceptance tests pass.
+
+## Implementation status
+
+- PR-0: repository gates and security baseline run; no perf baseline artifact
+  was written because the repository instructions require explicit approval for
+  immutable baseline artifacts.
+- PR-1: live snapshot carries backend counters; Python rejects missing
+  correctness-critical fields; latency warnings do not infer hooks, Filter
+  Keys, or game-side causes.
+- PR-2: `CompiledPacket` and zero-copy `PacketView` added; compiler groups by
+  timestamp, canonicalizes Up before Down, suppresses stale Up masks, and
+  rejects duplicate Up/multiple Down actions.
+- PR-3: Win32 `PhysicalPacket` and bounded transaction outcome added; full
+  mixed packets use one `SendInput` call, with bounded whole-packet retry only
+  for zero progress and Up-only recovery.
+- PR-4: multi-batch same-timestamp packets use one worker sender transaction;
+  full success commits the packet once, while partial/zero activation fails
+  closed through the existing cleanup path. Single-batch compatibility remains
+  for migration coverage.
+- PR-5: resolved `game_fps` is validated at the native boundary; the worker
+  applies a frame-safe physical hold floor and rebases late timelines without
+  frame-grid snapping or overdue catch-up bursts.
+- PR-6: MMCSS Auto/Mmcss acquisition order is Games, Low Latency, Audio.
+  Estimator and spin changes remain gated on Windows before/after evidence.
+- PR-7 and later: not implemented in this checkpoint.
+
+## Security boundary
+
+This ADR does not authorize game tampering, memory access, debugger or process
+injection, anti-cheat bypass, keyboard hooks, or any input mechanism other than
+Windows `SendInput`. The proposed keyboard-hook observer is rejected by the
+P0 security mandate and is not part of acceptance evidence.
+
+## Evidence boundary
+
+`SendInput` return timestamps are sender-side evidence only. They do not prove
+game polling, frame registration, rendering, or audio onset.

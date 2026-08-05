@@ -65,6 +65,7 @@ pub(super) struct WorkerConfig {
 }
 
 pub(crate) struct TimingOptions {
+    pub(crate) game_fps: u16,
     pub(crate) min_hold_us: u64,
     pub(crate) max_lead_us: u64,
     pub(crate) dispatch_lead_us: u64,

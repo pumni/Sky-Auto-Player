@@ -594,6 +594,7 @@ def play_selected_song(
         telemetry_enabled=telemetry_enabled,
         require_focus=not is_dry_run,
         profile_name=current_profile,
+        game_fps=int(active_policy.fps),
         tempo_scale=current_tempo,
         min_hold_us=int(active_policy.min_hold_us),
     )
