@@ -10,7 +10,7 @@ from sky_music.orchestration.native_admission import RustBuildInfo
 @dataclass(frozen=True, slots=True)
 class PlaybackOverrides:
     dry_run: bool = False
-    profile: str | None = None
+    hold_frames: float | None = None
     tempo: float | None = None
     fps: int | None = None
 
@@ -24,7 +24,8 @@ class RuntimeSessionState:
     telemetry_csv_enabled: bool = False
     dry_run: bool = False
     tempo_scale: float = 1.0
-    timing_profile_name: str = "balanced"
+    hold_frames: float = 1.0
+    hold_label: str = "hold 1.00f"
     verbose_hud: bool = False
     # When True, the launch-time auto update check is suppressed (set via
     # ``--no-update`` / ``--no-update-check``); manual checks via the ``u``
@@ -50,7 +51,8 @@ class RuntimeSessionState:
         )
         self.scan_code_mode = session.scan_code_mode
         self.tempo_scale = session.tempo_scale
-        self.timing_profile_name = session.display_profile_label()
+        self.hold_frames = session.hold_frames
+        self.hold_label = session.display_hold_label()
 
     def clear_session(self) -> None:
         """Drop the last PlaybackSessionContext after playback ends (RAM hygiene)."""

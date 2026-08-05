@@ -2,168 +2,80 @@ from pathlib import Path
 
 import pytest
 
-from sky_music.config import AppConfig, FrameTimingDefaults, clear_config_cache
+from sky_music.config import AppConfig
 from sky_music.domain.session_context import (
     PlaybackSessionContext,
-    apply_recommendation_to_context,
     merge_session_with_overrides,
 )
-from sky_music.ui.picker_metadata import (
-    clear_metadata_cache,
-    get_song_ui_metadata,
-)
 
 
-@pytest.fixture(autouse=True)
-def _reset_caches():
-    clear_config_cache()
-    clear_metadata_cache()
-    yield
-    clear_config_cache()
-    clear_metadata_cache()
+def test_default_session_uses_one_frame_and_60_fps() -> None:
+    session = PlaybackSessionContext.default()
 
-def test_with_profile_preserves_fps():
-    session = PlaybackSessionContext(
-        profile_name="balanced",
-        fps=60,
-    ).with_profile("audience-safe")
-    assert session.profile_name == "audience-safe"
+    assert session.hold_frames == 1.0
     assert session.fps == 60
+    assert session.display_hold_label() == "hold 1.00f"
 
 
-def test_merge_session_with_overrides_keeps_fps_when_profile_changes():
-    base = PlaybackSessionContext.balanced(fps=120)
-    merged = merge_session_with_overrides(base, profile="local-precise")
-    assert merged.profile_name == "local-precise"
-    assert merged.fps == 120
+@pytest.mark.parametrize("value", [True, 1.2, float("nan"), float("inf"), "1.0"])
+def test_invalid_hold_selection_is_rejected(value: object) -> None:
+    with pytest.raises(ValueError):
+        PlaybackSessionContext(hold_frames=value)  # type: ignore[arg-type]
 
 
-def test_risk_profile_switch_keeps_fps():
-    session = PlaybackSessionContext.balanced(fps=30)
-    switched = session.with_profile("local-precise")
-    before = session.resolve_effective_policy(AppConfig())
-    after = switched.resolve_effective_policy(AppConfig())
-    assert before.fps == after.fps == 30
-    assert after.hold_us != before.hold_us or switched.profile_name != session.profile_name
+def test_hold_change_preserves_user_selected_fps() -> None:
+    session = PlaybackSessionContext(hold_frames=1.0, fps=120)
+    changed = session.with_hold_frames(1.25)
+
+    assert changed.hold_frames == 1.25
+    assert changed.fps == 120
+    assert changed.display_hold_label() == "hold 1.25f"
 
 
-def test_metadata_cache_key_differs_by_fps():
-    song = Path("songs/All Of Me.json")
-    no_fps = PlaybackSessionContext.balanced()
-    at_30 = PlaybackSessionContext.balanced(fps=30)
-    assert no_fps.metadata_cache_key(song) != at_30.metadata_cache_key(song)
+def test_merge_overrides_updates_hold_tempo_and_fps() -> None:
+    base = PlaybackSessionContext.default()
+    merged = merge_session_with_overrides(base, hold_frames=1.5, tempo=0.9, fps=144)
+
+    assert merged.hold_frames == 1.5
+    assert merged.tempo_scale == 0.9
+    assert merged.fps == 144
 
 
-def test_metadata_uses_session_fps_for_schedule():
-    song = Path("songs/All Of Me.json")
-    meta_no_fps = get_song_ui_metadata(song, PlaybackSessionContext.balanced())
-    meta_30 = get_song_ui_metadata(song, PlaybackSessionContext.balanced(fps=30))
-    assert meta_no_fps.note_count == meta_30.note_count
-    assert meta_no_fps.duration_seconds != meta_30.duration_seconds
+def test_metadata_cache_key_changes_when_hold_or_fps_changes() -> None:
+    song = Path("songs/example.json")
+    base = PlaybackSessionContext.default()
+
+    assert base.metadata_cache_key(song) != base.with_hold_frames(1.25).metadata_cache_key(song)
+    assert base.metadata_cache_key(song) != base.with_fps(120).metadata_cache_key(song)
 
 
-def test_frame_timing_config_overrides_ratios():
-    cfg = AppConfig(
-        frame_timing=FrameTimingDefaults(
-            min_visible_hold_frames=2.0,
-            min_hold_min_frame_ratio=0.25,
-        )
+def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
+    session = PlaybackSessionContext(hold_frames=1.25, fps=60)
+    policy = session.resolve_effective_policy(
+        AppConfig(), calibrated_margin_us=800, calibrated_margin_source="device_cache"
     )
-    session = PlaybackSessionContext(profile_name="local-precise", fps=30)
-    policy = session.resolve_effective_policy(cfg)
-    # Built-in frame-model profiles declare their own frame margins (local_precise = 1.0 frame);
-    # global frame_timing ratios are retained only for legacy _us-only policies. 30fps frame =
-    # ceil(1e6/30) = 33334, plus the 500us device-delivery margin.
-    assert policy.hold_us == 33_834
-    assert policy.min_hold_us == 33_834
+
+    assert policy.hold_frames == 1.25
+    assert policy.hold_us == policy.min_hold_us == 21_634
+    assert policy.min_hold_margin_us == 800
+    assert policy.min_hold_margin_source == "device_cache"
+    assert policy.focus_restore_grace_us == 100_000
+    assert session.resolve_sleep_policy(AppConfig()) == (800, 0.025)
 
 
-def test_apply_recommendation_to_context_updates_session():
-    from sky_music.orchestration.calibration import CalibrationRecommendation
-
-    session = PlaybackSessionContext.balanced(tempo_scale=1.0, fps=60)
-    rec = CalibrationRecommendation(
-        profile_name="local-precise",
-        tempo_scale=0.9,
-        hold_us=30_000,
-        reason="test",
-        severity="moderate",
-    )
-    updated = apply_recommendation_to_context(session, rec)
-    assert updated.profile_name == "local-precise"
-    assert updated.tempo_scale == 0.9
-    policy = updated.resolve_effective_policy(AppConfig())
-    assert policy.hold_us > 0
-
-
-def test_from_cli_args_applies_hold_override():
+def test_cli_exposes_hold_frames_and_rejects_removed_absolute_flags() -> None:
     import main
 
     parser = main.build_arg_parser()
-    args = parser.parse_args(["--timing-profile", "balanced", "--hold-ms", "30", "--fps", "60"])
+    args = parser.parse_args(["--hold-frames", "1.25", "--fps", "120"])
     session = PlaybackSessionContext.from_cli_args(args, AppConfig())
-    policy = session.resolve_effective_policy(AppConfig())
-    assert session.fps == 60
-    assert policy.hold_us >= 30_000
 
-
-def test_cli_hold_and_min_hold_overrides_keep_compression_band():
-    import main
-    from sky_music.domain.scheduler import plan_same_key_hold
-
-    parser = main.build_arg_parser()
-    args = parser.parse_args([
-        "--timing-profile", "balanced",
-        "--hold-ms", "24",
-        "--min-hold-ms", "10",
-    ])
-    policy = PlaybackSessionContext.from_cli_args(args, AppConfig()).resolve_effective_policy(
-        AppConfig()
-    )
-
-    assert policy.hold_us == 24_000
-    assert policy.min_hold_us == 10_000
-    planned = plan_same_key_hold(
-        target_hold_us=policy.hold_us,
-        min_hold_us=policy.min_hold_us,
-        effective_delta_us=21_000,
-    )
-    assert planned.risk == "moderate"
-    assert planned.hold_us == 21_000
-    assert planned.compressed is True
-
-
-def test_picker_lists_exactly_the_three_profiles():
-    from sky_music.ui.picker import get_profiles_info
-    names = [p[0] for p in get_profiles_info(120)]
-    assert names == ["local-precise", "balanced", "audience-safe"]
-
-
-def test_strict_timing_profile_validation_enforcement():
-    # 1. Test general 60fps limit override
-    cfg_unsafe = AppConfig(
-        timing_profiles={
-            "balanced": {
-                "hold_us": 10000,
-                "min_hold_us": 8000,
-            }
-        }
-    )
-    # Trying to resolve "balanced" at 60 FPS should fail validation due to min_hold_us < one frame.
-    session = PlaybackSessionContext(profile_name="balanced", fps=60)
-    with pytest.raises(ValueError, match=r"Unsafe min_hold_us|min_hold_us below 10000us"):
-        session.resolve_effective_policy(cfg_unsafe)
-
-    # 2. Audience-safe now uses the same frame visibility validation as other profiles.
-    cfg_unsafe_audience = AppConfig(
-        timing_profiles={
-            "audience_safe": {
-                "hold_us": 34000,
-                "min_hold_us": 15000,
-            }
-        }
-    )
-    session_audience = PlaybackSessionContext(profile_name="audience-safe", fps=60)
-    with pytest.raises(ValueError, match="Unsafe min_hold_us"):
-        session_audience.resolve_effective_policy(cfg_unsafe_audience)
-
+    assert session.hold_frames == 1.25
+    assert session.fps == 120
+    for old_args in (
+        ["--timing-profile", "balanced"],
+        ["--hold-ms", "30"],
+        ["--min-hold-ms", "10"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(old_args)

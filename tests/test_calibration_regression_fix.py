@@ -53,7 +53,7 @@ class TestResolveCalibratedPolicy:
         """resolve_calibrated_policy forwards device_cache margin into policy."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
@@ -66,7 +66,7 @@ class TestResolveCalibratedPolicy:
         """resolve_calibrated_policy falls back to 500 µs when cache is absent."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(_LOADER_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
@@ -80,7 +80,7 @@ class TestResolveCalibratedPolicy:
         """resolve_calibrated_policy falls back gracefully when loader rejects cache."""
         from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(_LOADER_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
@@ -116,7 +116,7 @@ class TestPreparePlaybackUsesCalibration:
         )
 
         song = self._make_song()
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(self._PREP_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
@@ -134,7 +134,7 @@ class TestPreparePlaybackUsesCalibration:
         )
 
         song = self._make_song()
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         # Explicitly mock the loader — this test opts out of the conftest autouse mock
@@ -191,7 +191,7 @@ class TestRebuildPreservesCalibration:
             notes=(Note(time_ms=Millis(0), key=NoteKey("Key0")),),
         )
 
-    def test_rebuild_with_profile_keeps_device_cache(self) -> None:
+    def test_rebuild_with_hold_keeps_device_cache(self) -> None:
         from sky_music.ui.textual_app.playback_controller import (
             PlaybackPlan,
             prepare_playback,
@@ -199,13 +199,13 @@ class TestRebuildPreservesCalibration:
         )
 
         song = self._make_song()
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
             plan = prepare_playback(song, session, cfg)
             assert isinstance(plan, PlaybackPlan)
-            rebuilt = rebuild_with(plan, profile="audience-safe")
+            rebuilt = rebuild_with(plan, hold_frames=1.5)
 
         assert isinstance(rebuilt, PlaybackPlan)
         assert rebuilt.active_policy.min_hold_margin_source == SOURCE_DEVICE_CACHE
@@ -219,7 +219,7 @@ class TestRebuildPreservesCalibration:
         )
 
         song = self._make_song()
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(_LOADER_PATCH, return_value=(_EXPECTED_MARGIN_US, SOURCE_DEVICE_CACHE)):
@@ -245,7 +245,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
     def test_signature_changes_when_margin_changes(self) -> None:
         from sky_music.ui.picker_metadata import _effective_policy_signature
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         with patch(self._SIG_PATCH, return_value=(None, SOURCE_DEFAULT_500)):
@@ -264,7 +264,7 @@ class TestPickerMetadataSignatureIncludesCalibration:
     def test_signature_includes_min_hold_margin_source(self) -> None:
         from sky_music.ui.picker_metadata import _effective_policy_signature
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         # conftest returns default_500
@@ -410,7 +410,7 @@ class TestCalibrationRegressionIntegration:
         assert margin_us == _EXPECTED_MARGIN_US
 
         # Build a policy through the resolver using the loaded margin
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
         policy = session.resolve_effective_policy(
             cfg,
@@ -434,7 +434,7 @@ class TestCalibrationRegressionIntegration:
             ),
         )
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
         policy = session.resolve_effective_policy(
             cfg,
@@ -454,7 +454,7 @@ class TestCalibrationRegressionIntegration:
         """Persistent cache keys from default_500 must differ from device_cache keys."""
         from sky_music.ui.picker_metadata import _effective_policy_signature
 
-        session = PlaybackSessionContext.balanced(fps=60)
+        session = PlaybackSessionContext.default(fps=60)
         cfg = AppConfig()
 
         _SIG_PATCH = "sky_music.orchestration.calibrated_policy.load_calibrated_margin_recommendation"
@@ -712,4 +712,3 @@ class TestCalibrationProgressModalUX:
             stack.remove("CalibrationProgressModal")
         stack.append("InfoModal")
         assert stack == ["PickerScreen", "InfoModal"]
-

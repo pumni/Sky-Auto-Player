@@ -1,4 +1,4 @@
-"""Unified playback session state: profile + FPS + timing overrides → effective policy."""
+"""Unified playback session state: selected hold frames, FPS, and tempo."""
 
 from __future__ import annotations
 
@@ -6,16 +6,20 @@ from copy import replace as copy_replace
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sky_music.config import (
-    AppConfig,
-    canonical_profile_name,
-    display_profile_name,
-    load_config,
-    profile_dict_for,
-    resolve_game_fps,
-    spin_threshold_for_profile,
+from sky_music.config import DEFAULT_GAME_FPS, AppConfig, resolve_game_fps
+from sky_music.domain.domain import Microseconds
+from sky_music.domain.hold_timing import (
+    DEFAULT_HOLD_FRAMES,
+    format_hold_frames,
+    validate_hold_frames,
 )
-from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
+from sky_music.domain.scheduler_types import (
+    DEFAULT_CHORD_STAGGER_MAX_US,
+    DEFAULT_CHORD_STAGGER_US,
+    DEFAULT_FOCUS_RESTORE_GRACE_US,
+    FrameTimingPolicy,
+    TimingPolicy,
+)
 
 if TYPE_CHECKING:
     from sky_music.orchestration.calibration import CalibrationRecommendation
@@ -25,77 +29,46 @@ ConflictPolicy = Literal["degraded", "drop_chord", "strict"]
 
 @dataclass(frozen=True, slots=True)
 class PlaybackSessionContext:
-    """Single source of truth for profile, tempo, FPS, and CLI timing overrides."""
-
-    profile_name: str
+    hold_frames: float = DEFAULT_HOLD_FRAMES
     tempo_scale: float = 1.0
-    fps: int = 60
+    fps: int = DEFAULT_GAME_FPS
     scan_code_mode: str = "physical"
     same_key_conflict_policy: ConflictPolicy = "drop_chord"
-    policy_overrides: tuple[tuple[str, Any], ...] = ()
+    focus_restore_grace_us: int = DEFAULT_FOCUS_RESTORE_GRACE_US
+    chord_stagger_us: int = DEFAULT_CHORD_STAGGER_US
+    chord_stagger_max_us: int = DEFAULT_CHORD_STAGGER_MAX_US
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "profile_name", canonical_profile_name(self.profile_name))
+        object.__setattr__(self, "hold_frames", validate_hold_frames(self.hold_frames))
         if self.tempo_scale <= 0:
             raise ValueError("tempo_scale must be > 0")
         object.__setattr__(self, "fps", resolve_game_fps(self.fps))
 
     @classmethod
-    def balanced(
+    def default(
         cls,
         tempo_scale: float = 1.0,
         fps: int | None = None,
         scan_code_mode: str = "physical",
     ) -> PlaybackSessionContext:
-        return cls(
-            profile_name="balanced",
-            tempo_scale=tempo_scale,
-            fps=resolve_game_fps(fps),
-            scan_code_mode=scan_code_mode,
-        )
+        return cls(tempo_scale=tempo_scale, fps=resolve_game_fps(fps), scan_code_mode=scan_code_mode)
 
     @classmethod
     def from_cli_args(cls, args: Any, cfg: AppConfig | None = None) -> PlaybackSessionContext:
-        """Build session from argparse namespace after apply_config_defaults."""
-        cfg = cfg or load_config()
-        profile = canonical_profile_name(args.timing_profile)
-        fps_raw = getattr(args, "fps", None)
-        fps = resolve_game_fps(fps_raw)
-
-        def ms_to_us(value: float | int) -> int:
-            return round(float(value) * 1000)
-
-        base_dict = profile_dict_for(cfg, profile)
-        base_policy = TimingPolicy.from_dict(base_dict)
-        conflict: ConflictPolicy = (
-            args.same_key_conflict_policy
-            if getattr(args, "same_key_conflict_policy", None) is not None
-            else base_policy.same_key_conflict_policy  # type: ignore[assignment]
-        )
-
-        overrides: list[tuple[str, Any]] = []
-        if getattr(args, "hold_ms", None) is not None:
-            overrides.append(("hold_us", ms_to_us(args.hold_ms)))
-        if getattr(args, "min_hold_ms", None) is not None:
-            overrides.append(("min_hold_us", ms_to_us(args.min_hold_ms)))
-        if getattr(args, "focus_restore_grace_ms", None) is not None:
-            overrides.append(("focus_restore_grace_us", ms_to_us(args.focus_restore_grace_ms)))
-        if getattr(args, "chord_stagger_us", None) is not None:
-            overrides.append(("chord_stagger_us", max(0, int(args.chord_stagger_us))))
-        if getattr(args, "chord_stagger_max_us", None) is not None:
-            overrides.append(("chord_stagger_max_us", max(0, int(args.chord_stagger_max_us))))
-
+        del cfg
         return cls(
-            profile_name=profile,
+            hold_frames=validate_hold_frames(getattr(args, "hold_frames", DEFAULT_HOLD_FRAMES)),
             tempo_scale=float(args.tempo_scale),
-            fps=fps,
+            fps=resolve_game_fps(getattr(args, "fps", DEFAULT_GAME_FPS)),
             scan_code_mode=str(args.scan_code_mode),
-            same_key_conflict_policy=conflict,
-            policy_overrides=tuple(overrides),
+            same_key_conflict_policy=getattr(args, "same_key_conflict_policy", "drop_chord"),
+            focus_restore_grace_us=DEFAULT_FOCUS_RESTORE_GRACE_US,
+            chord_stagger_us=max(0, int(getattr(args, "chord_stagger_us", None) or DEFAULT_CHORD_STAGGER_US)),
+            chord_stagger_max_us=max(0, int(getattr(args, "chord_stagger_max_us", None) or DEFAULT_CHORD_STAGGER_MAX_US)),
         )
 
-    def with_profile(self, profile_name: str) -> PlaybackSessionContext:
-        return copy_replace(self, profile_name=canonical_profile_name(profile_name))
+    def with_hold_frames(self, hold_frames: float) -> PlaybackSessionContext:
+        return copy_replace(self, hold_frames=validate_hold_frames(hold_frames))
 
     def with_tempo(self, tempo_scale: float) -> PlaybackSessionContext:
         if tempo_scale <= 0:
@@ -103,73 +76,26 @@ class PlaybackSessionContext:
         return copy_replace(self, tempo_scale=tempo_scale)
 
     def with_fps(self, fps: int | None) -> PlaybackSessionContext:
-        normalized = resolve_game_fps(fps)
-        return copy_replace(self, fps=normalized)
+        return copy_replace(self, fps=resolve_game_fps(fps))
 
     def with_scan_code_mode(self, mode: str) -> PlaybackSessionContext:
         return copy_replace(self, scan_code_mode=mode)
 
-    def display_profile_label(self) -> str:
-        return display_profile_name(self.profile_name, self.fps)
+    def display_hold_label(self) -> str:
+        return format_hold_frames(self.hold_frames)
 
-    def metadata_cache_key(self, song_path: Any, cfg: AppConfig | None = None) -> tuple[Any, ...]:  # noqa: ARG002
-        # Phase 2A: cfg was previously loaded here via load_config() but was never
-        # used in the returned tuple – removing that dead call eliminates a
-        # config-file lookup from every render-path invocation of
-        # peek_cached_song_ui_metadata(). The parameter is kept for API compat.
+    def metadata_cache_key(self, song_path: Any, cfg: AppConfig | None = None) -> tuple[Any, ...]:
+        del cfg
         return (
             song_path,
-            self.profile_name,
+            self.hold_frames,
             self.fps,
             self.tempo_scale,
             self.scan_code_mode,
             self.same_key_conflict_policy,
-            self.policy_overrides,
+            self.chord_stagger_us,
+            self.chord_stagger_max_us,
         )
-
-    def _base_timing_policy(
-        self,
-        cfg: AppConfig | None = None,
-        *,
-        calibrated_margin_us: int | None = None,
-        calibrated_margin_source: str = "default_500",
-    ) -> TimingPolicy:
-        cfg = cfg or load_config()
-        p_dict = dict(profile_dict_for(cfg, self.profile_name))
-
-        # Strict enforcement of timing invariants on the base profile (built-ins +
-        # config.json). This catches structurally-broken shipped values such as a
-        # profile whose hold_us sits below its own min_hold_us (validate_hold_ordering).
-        # CLI/calibration overrides below are an intentional expert escape hatch and are
-        # deliberately NOT subjected to the conservative built-in floors, so timing
-        # experiments (e.g. --hold-ms 1 to probe the in-game visibility floor) stay
-        # possible. The schedule-level validator (validate_key_actions) still flags any
-        # resulting risk at playback time.
-        from sky_music.domain.validation import validate_builtin_timing_profile
-        profile_fields = {
-            "hold_us", "min_hold_us",
-            "hold_frames", "min_hold_frames",
-        }
-        validate_builtin_timing_profile(
-            self.profile_name,
-            {k: v for k, v in p_dict.items() if k in profile_fields},
-            selected_fps=self.fps,
-        )
-
-        p_dict.update(self.policy_overrides)
-
-        policy = TimingPolicy.from_dict(
-            p_dict,
-            calibrated_margin_us=calibrated_margin_us,
-            calibrated_margin_source=calibrated_margin_source,
-        )
-        if self.same_key_conflict_policy != policy.same_key_conflict_policy:
-            return TimingPolicy.from_dict(
-                {**p_dict, "same_key_conflict_policy": self.same_key_conflict_policy},
-                calibrated_margin_us=calibrated_margin_us,
-                calibrated_margin_source=calibrated_margin_source,
-            )
-        return policy
 
     def resolve_effective_policy(
         self,
@@ -178,64 +104,37 @@ class PlaybackSessionContext:
         calibrated_margin_us: int | None = None,
         calibrated_margin_source: str = "default_500",
     ) -> FrameTimingPolicy:
-        """Profile dict + CLI overrides + frame-aware scaling (single entry point).
-
-        Pure: no console output. ``calibrated_margin_us`` and
-        ``calibrated_margin_source`` are forwarded from the orchestration
-        caller that resolved ``.cache/input_latency.json`` once at session
-        build time (see ``infrastructure.calibration_loader``).
-        """
-        cfg = cfg or load_config()
-
-        effective_self = self
-
-        base = effective_self._base_timing_policy(
-            cfg,
-            calibrated_margin_us=calibrated_margin_us,
-            calibrated_margin_source=calibrated_margin_source,
+        del cfg
+        policy = TimingPolicy(
+            hold_frames=self.hold_frames,
+            focus_restore_grace_us=Microseconds(self.focus_restore_grace_us),
+            same_key_conflict_policy=self.same_key_conflict_policy,
+            chord_stagger_us=Microseconds(self.chord_stagger_us),
+            chord_stagger_max_us=Microseconds(self.chord_stagger_max_us),
+            min_hold_margin_us=Microseconds(max(0, calibrated_margin_us if calibrated_margin_us is not None else 500)),
+            min_hold_margin_source=calibrated_margin_source if calibrated_margin_us is not None else "default_500",
         )
-
-        return FrameTimingPolicy.from_timing_policy(
-            base,
-            fps=effective_self.fps,
-            same_key_conflict_policy=effective_self.same_key_conflict_policy,
-            profile_name=effective_self.profile_name,
-            **cfg.frame_timing.as_policy_kwargs(),
-        )
+        return FrameTimingPolicy.from_timing_policy(policy, fps=self.fps)
 
     def resolve_sleep_policy(
         self,
         cfg: AppConfig | None = None,
         spin_threshold_us: int | None = None,
     ) -> tuple[int, float]:
-        """Return ``(spin_threshold_us, poll_s)`` primitives.
-
-        The orchestration caller (and any CLI/Textual plumbing) is
-        responsible for materialising the infrastructure ``SleepPolicy``
-        dataclass from these primitives -- ``domain`` no longer imports
-        ``sky_music.infrastructure.timing`` so the layer boundary stays
-        clean (AGENTS.md Architecture Invariants).
-        """
-        cfg = cfg or load_config()
-        spin = (
-            spin_threshold_us
-            if spin_threshold_us is not None
-            else spin_threshold_for_profile(cfg, self.profile_name)
-        )
-        return int(spin), 0.025
+        del cfg, spin_threshold_us
+        return 800, 0.025
 
 
 def merge_session_with_overrides(
     base: PlaybackSessionContext,
     *,
-    profile: str | None = None,
+    hold_frames: float | None = None,
     tempo: float | None = None,
     fps: int | None = None,
 ) -> PlaybackSessionContext:
-    """Apply picker / playback overrides while preserving FPS when not overridden."""
     session = base
-    if profile is not None:
-        session = session.with_profile(profile)
+    if hold_frames is not None:
+        session = session.with_hold_frames(hold_frames)
     if tempo is not None:
         session = session.with_tempo(tempo)
     if fps is not None:
@@ -247,11 +146,8 @@ def apply_recommendation_to_context(
     session: PlaybackSessionContext,
     recommendation: CalibrationRecommendation,
 ) -> PlaybackSessionContext:
-    """Apply telemetry calibration advice to an in-memory session (does not persist config)."""
-    override_map = dict(session.policy_overrides)
     return copy_replace(
         session,
-        profile_name=canonical_profile_name(recommendation.profile_name),
+        hold_frames=validate_hold_frames(recommendation.hold_frames),
         tempo_scale=recommendation.tempo_scale,
-        policy_overrides=tuple(override_map.items()),
     )

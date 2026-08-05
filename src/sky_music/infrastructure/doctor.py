@@ -192,7 +192,7 @@ def print_fps_advisory() -> None:
     if fps > 60:
         print(f"\nFPS Advisory: Configured game FPS is {fps}. Notes shorter than one 60 fps frame")
         print("  (~16.7ms) may not register if the game runs below the configured FPS.")
-        print("  Consider lowering game_fps in the config or using a safer timing profile.")
+        print("  Consider lowering game_fps to match Sky or using a longer hold for visibility.")
         print()
 
 

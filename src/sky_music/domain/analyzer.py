@@ -24,7 +24,7 @@ class ScheduleRiskReport:
     recommendations: tuple[str, ...]
     average_notes_per_second: float = 0.0
     peak_notes_per_second_1s: float = 0.0
-    suggested_profile: str = "balanced"
+    suggested_hold_frames: float = 1.0
     suggested_tempo_scale: float = 1.0
     reason: str = ""
     max_chord_size: int = 0
@@ -172,11 +172,16 @@ def _evaluate_risk_severity(res: ScheduleMetadata, dense_clusters_list: list[Den
         )
         
     if not recommendations:
-        recommendations.append("No timing conflicts detected. Balanced playback is recommended.")
+        recommendations.append("No timing conflicts detected. Keep the selected hold.")
     
     return severity, recommendations, reasons_list
 
-def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Note, ...] | None = None) -> ScheduleRiskReport:
+def analyze_schedule(
+    res: ScheduleMetadata,
+    raw_notes: tuple[Note, ...] | None = None,
+    *,
+    current_hold_frames: float = 1.0,
+) -> ScheduleRiskReport:
     """Analyze a ScheduleMetadata and optional raw notes to detect timing conflicts, density risks, and suggest overrides."""
     down_events = sorted([action for action in res.actions if action.kind == "down"], key=lambda a: a.at_us)
     
@@ -199,18 +204,26 @@ def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Note, ...] | None =
     reason = f"{' and '.join(reasons_list)} detected" if reasons_list else "No timing conflicts detected."
     
     # 7. Unified Recommendation Engine decisions (P1.3)
-    has_repeats = res.impossible_same_key_repeats > 0 or res.risky_same_key_repeats > 0
-    high_poly = res.max_polyphony >= 5
-    
-    if severity == "high":
-        suggested_profile = "local-precise" if has_repeats else "audience-safe"
-        suggested_tempo_scale = 0.92
+    if res.impossible_same_key_repeats > 0:
+        suggested_hold_frames = 1.0
+        suggested_tempo_scale = min(0.92, 1.0)
+        recommendations.append(
+            "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        )
+    elif res.risky_same_key_repeats > 5 or res.compressed_holds > 10:
+        suggested_hold_frames = 1.0
+        suggested_tempo_scale = min(0.95, 1.0)
+    elif res.max_polyphony >= 5 or (
+        dense_clusters_list and severity in ("medium", "high")
+    ):
+        suggested_hold_frames = 1.5
+        suggested_tempo_scale = 0.95 if severity != "low" else 1.0
     elif severity == "medium":
-        suggested_profile = "audience-safe" if high_poly else "balanced"
+        suggested_hold_frames = 1.25
         suggested_tempo_scale = 0.95
     else:
-        suggested_profile = "balanced"
-        suggested_tempo_scale = 1.00
+        suggested_hold_frames = current_hold_frames
+        suggested_tempo_scale = 1.0
         
     max_chord_size = max(len(a.scan_codes) for a in down_events) if down_events else 0
     chords_count = sum(1 for a in down_events if len(a.scan_codes) > 1)
@@ -229,7 +242,7 @@ def analyze_schedule(res: ScheduleMetadata, raw_notes: tuple[Note, ...] | None =
         recommendations=tuple(recommendations),
         average_notes_per_second=average_notes_per_second,
         peak_notes_per_second_1s=float(peak_notes_per_second_1s),
-        suggested_profile=suggested_profile,
+        suggested_hold_frames=suggested_hold_frames,
         suggested_tempo_scale=suggested_tempo_scale,
         reason=reason,
         max_chord_size=max_chord_size,

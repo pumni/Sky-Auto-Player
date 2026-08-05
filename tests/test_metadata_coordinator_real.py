@@ -23,7 +23,7 @@ class FakeApp:
 
 def test_metadata_coordinator_state_transitions() -> None:
     app = FakeApp()
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
     
     coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
@@ -41,7 +41,7 @@ def test_metadata_coordinator_state_transitions() -> None:
 
 def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
     app = FakeApp()
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
     
     coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]
@@ -80,7 +80,7 @@ def test_metadata_coordinator_cancel_stages(monkeypatch) -> None:
 def test_metadata_coordinator_debounce_request_id(monkeypatch) -> None:
     import time
     app = FakeApp()
-    session = PlaybackSessionContext.balanced()
+    session = PlaybackSessionContext.default()
     cfg = AppConfig()
     
     coord = MetadataCoordinator(app, session, cfg)  # type: ignore[arg-type]

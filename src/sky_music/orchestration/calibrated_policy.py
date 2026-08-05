@@ -53,7 +53,7 @@ def resolve_calibrated_policy(
     Parameters
     ----------
     session:
-        The current playback session (profile, tempo, FPS, overrides).
+        The current playback session (hold selection, tempo, FPS, and controls).
     cfg:
         The loaded :class:`~sky_music.config.AppConfig`.
 

@@ -689,20 +689,26 @@ class TelemetryLogger:
         self,
         song_name: str,
         enabled: bool = False,
-        profile_name: str = "balanced",
+        hold_frames: float = 1.0,
+        hold_label: str = "hold 1.00f",
         tempo_scale: float = 1.0,
         run_id: str | None = None,
         fps: int | None = None,
         min_hold_us: int = 0,
+        min_hold_margin_us: int = 500,
+        min_hold_margin_source: str = "default_500",
         *,
         retain_records_after_save: bool = False,
     ):
         self.song_name = song_name
         self.enabled = enabled
-        self.profile_name = profile_name
+        self.hold_frames = hold_frames
+        self.hold_label = hold_label
         self.tempo_scale = tempo_scale
         self.fps = fps
         self.min_hold_us = max(0, min_hold_us)
+        self.min_hold_margin_us = max(0, int(min_hold_margin_us))
+        self.min_hold_margin_source = str(min_hold_margin_source)
         self.records: list[TelemetryRecord] = []
         # Summary computed by save()/get_summary() before records are dropped for hygiene.
         # Keeps get_summary() callable for late callers (engine _log_timing_summary, CLI,
@@ -1483,8 +1489,13 @@ class TelemetryLogger:
         summary = {
             "run_id": self.run_id,
             "song": self.song_name,
-            "profile": self.profile_name,
+            "hold_frames": self.hold_frames,
+            "hold_label": self.hold_label,
+            "effective_hold_us": self.min_hold_us,
+            "min_hold_us": self.min_hold_us,
             "fps": self.fps,
+            "min_hold_margin_us": self.min_hold_margin_us,
+            "min_hold_margin_source": self.min_hold_margin_source,
             "tempo_scale": self.tempo_scale,
             "total_events": len(rows),
             "telemetry_truncated": self._truncated,
@@ -1790,7 +1801,7 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
                 f"\nPlayback: {data.get('song', 'Unknown')} at {data.get('timestamp', 'Unknown')} [Run ID: {data.get('run_id', 'N/A')}]"
             )
             print(
-                f"  Profile: {data.get('profile', 'balanced')} | Tempo Scale: {data.get('tempo_scale', 1.0)}"
+                f"  Hold: {data.get('hold_label', 'hold 1.00f')} | Tempo Scale: {data.get('tempo_scale', 1.0)}"
             )
             print(f"  Total Event Count: {data.get('total_events', 0)}")
             print(
@@ -1856,18 +1867,18 @@ def inspect_telemetry_report(target_path: str, recommend: bool = False) -> None:
             # Perform calibration recommendation if requested
             if recommend:
                 from sky_music.orchestration.calibration import (
-                    calibrate_profile,
+                    calibrate_timing,
                     calibration_input_from_summary,
                 )
 
                 inp = calibration_input_from_summary(data)
-                rec = calibrate_profile(inp)
+                rec = calibrate_timing(inp)
 
                 print("\n  Calibration Recommendation:")
-                print(f"    * Suggested Profile : {rec.profile_name}")
+                print(f"    * Suggested Hold : {rec.hold_frames:.2f} frames")
                 print(f"    * Suggested Tempo   : {rec.tempo_scale:.2f}x")
                 print(
-                    f"    * Hold Duration (us): {rec.hold_us} ({rec.hold_us / 1000:.1f} ms)"
+                    f"    * Effective Hold (us): {rec.recommended_hold_us} ({rec.recommended_hold_us / 1000:.1f} ms)"
                 )
                 print(f"    * Severity Level    : {rec.severity.upper()}")
                 print(f"    * Reason            : {rec.reason}")

@@ -24,7 +24,7 @@ def run_auto_calibrate(summary_path: Path | str | None = None) -> int:
     ANSI_YELLOW = "\033[33m"
 
     from sky_music.orchestration.calibration import (
-        calibrate_profile,
+        calibrate_timing,
         calibration_input_from_summary,
         load_telemetry_summary,
     )
@@ -42,20 +42,20 @@ def run_auto_calibrate(summary_path: Path | str | None = None) -> int:
     print()
 
     inp = calibration_input_from_summary(summary)
-    rec = calibrate_profile(inp)
+    rec = calibrate_timing(inp)
     lat = summary.get("lateness_us", {})
     dur = summary.get("send_duration_us", {})
     print(f"  Song          : {summary.get('song', 'unknown')}")
-    print(f"  Profile used  : {inp.profile_name}")
+    print(f"  Hold used     : {inp.hold_frames:.2f} frames")
     print(f"  FPS           : {inp.fps}")
     print(f"  p95 lateness  : {lat.get('p95_us', 0) / 1000:.1f} ms")
     print(f"  p99 lateness  : {lat.get('p99_us', 0) / 1000:.1f} ms")
     print(f"  p95 send      : {dur.get('p95_us', 0) / 1000:.1f} ms")
     print()
     print("  Calibration Recommendation:")
-    print(f"    Suggested Profile : {rec.profile_name}")
+    print(f"    Suggested Hold    : {rec.hold_frames:.2f} frames")
     print(f"    Suggested Tempo   : {rec.tempo_scale:.2f}x")
-    print(f"    Hold Target       : {rec.hold_us / 1000:.1f} ms")
+    print(f"    Effective Hold    : {rec.recommended_hold_us / 1000:.1f} ms")
     print(f"    Severity          : {rec.severity.upper()}")
     print(f"    Reason            : {rec.reason}")
     print()
@@ -78,7 +78,7 @@ def apply_calibration_from_telemetry(
     ANSI_DIM    = "\033[2m"
 
     from sky_music.orchestration.calibration import (
-        calibrate_profile,
+        calibrate_timing,
         calibration_input_from_summary,
         load_telemetry_summary,
     )
@@ -92,8 +92,8 @@ def apply_calibration_from_telemetry(
         return CalibrationCommandResult(exit_code=1, applied=False)
 
     inp = calibration_input_from_summary(summary)
-    rec = calibrate_profile(inp)
-    base = runtime_state.session or PlaybackSessionContext.balanced(
+    rec = calibrate_timing(inp)
+    base = runtime_state.session or PlaybackSessionContext.default(
         tempo_scale=cfg.default_tempo_scale,
         fps=resolve_game_fps(cfg.game_fps),
     )
@@ -104,15 +104,15 @@ def apply_calibration_from_telemetry(
     
     print()
     print(f"  {ANSI_BOLD}{ANSI_CYAN}Applied calibration to session{ANSI_RESET}")
-    print(f"    Profile     : {rec.profile_name}")
+    print(f"    Hold        : {rec.hold_frames:.2f} frames")
     print(f"    Tempo scale : {rec.tempo_scale:.2f}x")
-    print(f"    Hold target : {rec.hold_us / 1000:.1f} ms ({ANSI_DIM}via FrameTimingPolicy{ANSI_RESET})")
+    print(f"    Effective   : {rec.recommended_hold_us / 1000:.1f} ms ({ANSI_DIM}via FrameTimingPolicy{ANSI_RESET})")
     print(f"    Severity    : {rec.severity.upper()}")
     print(f"    Reason      : {rec.reason}")
     if persist:
         persist_calibration_defaults(
             cfg,
-            profile_name=rec.profile_name,
+            hold_frames=rec.hold_frames,
             tempo_scale=rec.tempo_scale,
             fps=inp.fps,
         )

@@ -48,10 +48,13 @@ class PlaybackEngine:
         telemetry_enabled: bool = False,
         require_focus: bool = True,
         focus_guard: FocusGuard | None = None,
-        profile_name: str = "balanced",
+        hold_label: str = "hold 1.00f",
+        hold_frames: float = 1.0,
         game_fps: int = 60,
         tempo_scale: float = 1.0,
         min_hold_us: int = 0,
+        min_hold_margin_us: int = 500,
+        min_hold_margin_source: str = "default_500",
         dry_run: bool = False,
     ) -> None:
         self.song = song
@@ -64,7 +67,8 @@ class PlaybackEngine:
         if not 15 <= self.game_fps <= 240:
             raise ValueError("game_fps must be in 15..=240")
         self.min_hold_us = max(0, int(min_hold_us))
-        self.profile_name = profile_name
+        self.hold_label = hold_label
+        self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
         self.total_time_us = max((int(action.at_us) for action in self.actions), default=0)
         self._input_path_degraded = False
@@ -73,7 +77,12 @@ class PlaybackEngine:
         self.telemetry = TelemetryLogger(
             song.name,
             enabled=telemetry_enabled,
-            profile_name=profile_name,
+            hold_frames=hold_frames,
+            hold_label=hold_label,
+            fps=self.game_fps,
+            min_hold_us=self.min_hold_us,
+            min_hold_margin_us=min_hold_margin_us,
+            min_hold_margin_source=min_hold_margin_source,
             tempo_scale=tempo_scale,
             retain_records_after_save=False,
         )

@@ -1,80 +1,26 @@
-"""Strict acceptance checks for unified profile + FPS timing flow (Phases 0–4)."""
-
 import pytest
 
 import main
-from sky_music.config import (
-    AppConfig,
-    apply_config_defaults,
-    canonical_profile_name,
-    clear_config_cache,
-)
+from sky_music.config import AppConfig, apply_config_defaults
 from sky_music.domain.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import ScheduleBuildError, build_key_actions
-from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
-from sky_music.domain.session_context import (
-    PlaybackSessionContext,
-)
-from sky_music.orchestration.calibration import CalibrationInput, calibrate_profile
+from sky_music.domain.scheduler_types import FrameTimingPolicy
+from sky_music.domain.session_context import PlaybackSessionContext
+from sky_music.orchestration.calibration import CalibrationInput, calibrate_timing
 
 
-@pytest.fixture(autouse=True)
-def _reset():
-    clear_config_cache()
-    yield
-    clear_config_cache()
-
-
-def test_configure_and_session_resolve_same_policy():
-    cfg = AppConfig(default_timing_profile="audience-safe", game_fps=60)
+def test_configured_hold_and_fps_reach_the_session() -> None:
+    cfg = AppConfig(default_hold_frames=1.5, game_fps=120)
     parser = main.build_arg_parser()
     args = parser.parse_args([])
     apply_config_defaults(args, cfg)
-    main.configure_from_args(args, cfg)
-    assert main.RUNTIME_STATE.timing_policy == main.RUNTIME_STATE.session.resolve_effective_policy(cfg)  # type: ignore[attr-defined]
+
+    session = PlaybackSessionContext.from_cli_args(args, cfg)
+    assert session.hold_frames == 1.5
+    assert session.fps == 120
 
 
-def test_play_fallback_balanced_accepts_scan_code_mode():
-    session = PlaybackSessionContext.balanced(
-        tempo_scale=1.0,
-        fps=30,
-        scan_code_mode="mapped",
-    )
-    assert session.scan_code_mode == "mapped"
-    assert session.fps == 30
-
-
-def test_play_fallback_uses_game_fps_when_no_session():
-    cfg = AppConfig(game_fps=120)
-    fallback = PlaybackSessionContext.balanced(
-        tempo_scale=1.0,
-        fps=cfg.game_fps if cfg.game_fps > 0 else None,
-        scan_code_mode="physical",
-    )
-    assert fallback.fps == 120
-
-
-def test_removed_profile_falls_back_to_balanced_and_preserves_fps():
-    cfg = AppConfig()
-    balanced = PlaybackSessionContext.balanced(fps=120)
-    removed = balanced.with_profile("dense-safe")
-    assert removed.profile_name == "balanced"
-    assert removed.fps == 120
-    p_bal = balanced.resolve_effective_policy(cfg)
-    p_removed = removed.resolve_effective_policy(cfg)
-    assert p_bal.fps == p_removed.fps == 120
-    assert not hasattr(p_bal, "repeat_release_gap_us")
-    assert p_bal.hold_us == p_removed.hold_us
-
-
-def test_no_orphan_timing_policy_wrap_in_src():
-    """build_key_actions must not accept raw TimingPolicy (silent fps loss)."""
-    song = Song("t", notes=(Note(Millis(0), NoteKey("Key0")),))
-    with pytest.raises(TypeError):
-        build_key_actions(song, policy=TimingPolicy.balanced())  # type: ignore[arg-type]
-
-
-def test_strict_policy_aborts_build():
+def test_strict_policy_recommends_short_hold_for_impossible_repeat() -> None:
     song = Song(
         "t",
         notes=(
@@ -82,42 +28,32 @@ def test_strict_policy_aborts_build():
             Note(Millis(1001), NoteKey("Key0")),
         ),
     )
-    policy = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_dict({}),
-        same_key_conflict_policy="strict",
+    policy = FrameTimingPolicy.from_hold_frames(
+        1.5, 60, same_key_conflict_policy="strict"
     )
+
     with pytest.raises(ScheduleBuildError) as exc:
         build_key_actions(song, policy=policy)
-    assert exc.value.recommended_profile
+
+    assert exc.value.recommended_hold_frames == 1.0
     assert exc.value.recommended_tempo_scale is not None
 
 
-def test_saved_profile_name_has_no_fps_suffix():
-    cfg = AppConfig(default_timing_profile="audience-safe@60fps", game_fps=60)
-    parser = main.build_arg_parser()
-    args = parser.parse_args([])
-    apply_config_defaults(args, cfg)
-    main.configure_from_args(args, cfg)
-    assert canonical_profile_name(main.RUNTIME_STATE.session.profile_name) == "audience-safe"  # type: ignore[attr-defined]
-    assert main.RUNTIME_STATE.timing_profile_name == "audience-safe@60fps"
-
-
-def test_calibration_hold_matches_resolve_path():
-    inp = CalibrationInput(
-        profile_name="balanced",
-        tempo_scale=1.0,
-        fps=30,
-        p95_lateness_us=1000,
-        p99_lateness_us=2000,
-        p95_send_duration_us=500,
-        late_over_10ms=0,
-        impossible_same_key_repeats=0,
-        risky_same_key_repeats=0,
-        failed_release_count=0,
+def test_calibration_recommendation_uses_hold_frames() -> None:
+    rec = calibrate_timing(
+        CalibrationInput(
+            hold_frames=1.25,
+            tempo_scale=1.0,
+            fps=60,
+            p95_lateness_us=0,
+            p99_lateness_us=0,
+            p95_send_duration_us=0,
+            late_over_10ms=0,
+            impossible_same_key_repeats=0,
+            risky_same_key_repeats=0,
+            failed_release_count=0,
+        )
     )
-    rec = calibrate_profile(inp)
-    eff = FrameTimingPolicy.from_timing_policy(
-        TimingPolicy.from_profile_name("balanced"),
-        fps=30,
-    )
-    assert rec.hold_us == eff.hold_us
+
+    assert rec.hold_frames == 1.25
+    assert rec.recommended_hold_us == 21_334
