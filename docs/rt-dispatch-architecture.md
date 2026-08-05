@@ -46,8 +46,14 @@ and every live backend counter needed by the HUD. Correctness-critical counters
 are part of the native contract; Python must not replace a missing field with a
 zero. It has no trace, hash maps, generation ledger, estimator internals, or
 build provenance. Latency degradation is reported as an input-path health
-signal; UI text must not infer an OS hook, Filter Keys, or game-side cause from
-that signal.
+signal; the typed snapshot separates `sendinput_path_degraded`,
+`bookkeeping_degraded`, and `wait_path_degraded`. The legacy
+`input_path_degraded` value remains the SendInput-or-bookkeeping aggregate.
+SendInput warning thresholds use the estimator's polyphony-aware syscall
+budget plus a fixed margin and a conservative cold prior; bookkeeping and wait
+thresholds remain independent. Each path also publishes its degraded-sample
+count and active threshold. UI text must not infer an OS hook, Filter Keys, or
+game-side cause from any of these sender-side signals.
 
 `session_report` is called once after worker termination. It contains the full
 terminal snapshot, native telemetry, estimator output, cleanup result, and
