@@ -63,6 +63,29 @@ mod tests {
     }
 
     #[test]
+    fn mixed_physical_packet_partial_result_marks_entire_packet_uncertain() {
+        let mut state = input::TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: 1,
+            started_ticks: clock::QpcTicks::from_raw(10),
+            completed_ticks: Some(clock::QpcTicks::from_raw(20)),
+            completed_us: 2,
+            win32_error: 5,
+            timing_error: None,
+        });
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b01, 0b11));
+        assert!(matches!(
+            outcome,
+            input::DownSendOutcome::IntegrityLost {
+                send_attempts: 1,
+                ..
+            }
+        ));
+        assert_eq!(state.active_mask, 0);
+        assert_eq!(state.possibly_active_mask, 0b11);
+    }
+
+    #[test]
     fn test_hybrid_sleeper() {
         let now = clock::qpc_now_us().expect("test QPC clock");
         let target = now + 1_000; // 1 ms in future

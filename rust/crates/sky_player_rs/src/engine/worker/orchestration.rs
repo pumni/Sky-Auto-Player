@@ -1603,8 +1603,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             break;
                         }
                     };
-                    let conflict_mask =
-                        coordinator.check_down_conflicts_compact(packet_view.down_intents);
+                    let conflict_mask = coordinator.check_packet_down_conflicts(
+                        packet_view.up_mask(),
+                        packet_view.down_intents,
+                    );
                     (
                         ActionKind::Down,
                         packet_view.header.down_source_action_index.unwrap_or(0),

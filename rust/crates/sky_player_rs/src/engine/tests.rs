@@ -1285,6 +1285,74 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
 }
 
 #[test]
+fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "retrigger-up".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "retrigger-down".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("valid mixed packet schedule");
+    let script = FaultInjectionScript {
+        entries: vec![(
+            1,
+            InjectedSendOutcome::Partial {
+                inserted: 1,
+                latency_ticks: 0,
+                win32_error: 5,
+            },
+        )],
+        ..FaultInjectionScript::none()
+    };
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: script,
+        },
+    ))
+    .expect("test session admission");
+
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "error");
+    assert!(snapshot.sendinput_partial_events >= 1);
+    assert!(snapshot.chord_split_events >= 1);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records array");
+    assert!(
+        !records
+            .iter()
+            .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
+    );
+}
+
+#[test]
 fn join_timeout_does_not_poison_running_session() {
     let actions = vec![
         KeyActionInput {

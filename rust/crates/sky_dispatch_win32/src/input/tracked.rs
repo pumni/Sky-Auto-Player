@@ -27,6 +27,44 @@ use std::fmt;
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
+#[cfg(any(test, feature = "test-support"))]
+fn classify_custom_packet(
+    packet: PhysicalPacket,
+    result: PlatformSendResult,
+) -> PhysicalSendOutcome {
+    let requested = packet.event_count();
+    let inserted = result.inserted.min(u32::from(requested)) as u8;
+    let completed_ticks = result.completed_ticks.unwrap_or(result.started_ticks);
+    if inserted >= requested && result.timing_error.is_none() {
+        PhysicalSendOutcome::Complete {
+            requested,
+            inserted,
+            attempts: 1,
+            started_ticks: result.started_ticks,
+            completed_ticks,
+        }
+    } else if inserted == 0 {
+        PhysicalSendOutcome::ZeroProgress {
+            requested,
+            attempts: 1,
+            first_error: result.win32_error,
+            last_error: result.win32_error,
+            started_ticks: result.started_ticks,
+            completed_ticks,
+        }
+    } else {
+        PhysicalSendOutcome::Partial {
+            requested,
+            inserted_count: inserted,
+            attempts: 1,
+            first_error: result.win32_error,
+            last_error: result.win32_error,
+            started_ticks: result.started_ticks,
+            completed_ticks,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct TrackedKeyState {
     pub active_mask: u16,
@@ -321,22 +359,54 @@ impl TrackedKeyState {
     /// outcome commits the masks as a whole; an uncertain outcome records the
     /// entire packet as possibly active for fail-closed cleanup.
     pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> DownSendOutcome {
-        let Some(clock) = self.qpc_clock else {
-            self.last_error = Some("packet sender has no QPC clock".to_string());
-            return DownSendOutcome::ZeroProgress {
-                error: None,
-                completed_us: 0,
-                skipped_duplicates: SmallVec::new(),
-                send_attempts: 0,
-                zero_progress_retries: 0,
-                first_error: None,
-                last_error: None,
-                started_ticks: None,
-                completed_ticks: None,
-                timing_error: None,
-            };
+        let outcome = {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(emitter) = self.custom_emitter.as_ref() {
+                // Test-only backend seam: represent the complete packet as
+                // one emitter call. Production never enters this branch and
+                // uses the stack INPUT[30] sender below.
+                let requested_codes = scan_codes_from_mask(packet.up_mask | packet.down_mask);
+                let result = emitter(&requested_codes, false);
+                self.timing_error = result.timing_error;
+                classify_custom_packet(packet, result)
+            } else {
+                let Some(clock) = self.qpc_clock else {
+                    self.last_error = Some("packet sender has no QPC clock".to_string());
+                    return DownSendOutcome::ZeroProgress {
+                        error: None,
+                        completed_us: 0,
+                        skipped_duplicates: SmallVec::new(),
+                        send_attempts: 0,
+                        zero_progress_retries: 0,
+                        first_error: None,
+                        last_error: None,
+                        started_ticks: None,
+                        completed_ticks: None,
+                        timing_error: None,
+                    };
+                };
+                send_physical_packet_with_clock(packet, clock)
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                let Some(clock) = self.qpc_clock else {
+                    self.last_error = Some("packet sender has no QPC clock".to_string());
+                    return DownSendOutcome::ZeroProgress {
+                        error: None,
+                        completed_us: 0,
+                        skipped_duplicates: SmallVec::new(),
+                        send_attempts: 0,
+                        zero_progress_retries: 0,
+                        first_error: None,
+                        last_error: None,
+                        started_ticks: None,
+                        completed_ticks: None,
+                        timing_error: None,
+                    };
+                };
+                send_physical_packet_with_clock(packet, clock)
+            }
         };
-        let outcome = send_physical_packet_with_clock(packet, clock);
         let requested_down = scan_codes_from_mask(packet.down_mask)
             .into_iter()
             .collect::<SmallVec<[u16; 15]>>();

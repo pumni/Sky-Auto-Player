@@ -31,7 +31,8 @@ transaction is migrated and its acceptance tests pass.
 - PR-4: multi-batch same-timestamp packets use one worker sender transaction;
   full success commits the packet once, while partial/zero activation fails
   closed through the existing cleanup path. Single-batch compatibility remains
-  for migration coverage.
+  for migration coverage. Mixed-packet partial fault injection now verifies
+  that the retrigger is not committed and uncertain physical state is cleaned.
 - PR-5: resolved `game_fps` is validated at the native boundary; the worker
   applies a frame-safe physical hold floor and rebases late timelines without
   frame-grid snapping or overdue catch-up bursts.
