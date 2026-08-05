@@ -511,6 +511,52 @@ mod tests {
     }
 
     #[test]
+    fn multi_up_only_packet_has_up_only_kind() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: smallvec::smallvec![1, 2],
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "up one".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![2],
+                    reason: "up two".into(),
+                },
+            ],
+            &[1, 2],
+        )
+        .unwrap();
+        let packet = schedule.packets[1];
+        assert_eq!(packet.up_mask, 0b11);
+        assert_eq!(packet.down_mask, 0);
+        assert_eq!(
+            crate::coordinator::physical_packet_kind(packet.up_mask, packet.down_mask),
+            Ok(PhysicalPacketKind::UpOnly)
+        );
+    }
+
+    #[test]
+    fn empty_packet_is_rejected_as_invariant_error() {
+        assert!(matches!(
+            crate::coordinator::physical_packet_kind(0, 0),
+            Err(crate::coordinator::CoordinatorError::Invariant(_))
+        ));
+    }
+
+    #[test]
     fn test_rejects_non_monotonic_and_untrusted_actions() {
         let allowed = vec![1];
         let invalid = vec![

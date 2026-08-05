@@ -124,6 +124,20 @@ pub enum CoordinatorError {
     TimeConversion(String),
 }
 
+pub fn physical_packet_kind(
+    up_mask: u16,
+    down_mask: u16,
+) -> Result<PhysicalPacketKind, CoordinatorError> {
+    match (up_mask != 0, down_mask != 0) {
+        (true, false) => Ok(PhysicalPacketKind::UpOnly),
+        (false, true) => Ok(PhysicalPacketKind::DownOnly),
+        (true, true) => Ok(PhysicalPacketKind::Mixed),
+        (false, false) => Err(CoordinatorError::Invariant(
+            CoordinatorInvariantError::Accounting("compiled physical packet is empty".into()),
+        )),
+    }
+}
+
 /// Counter-only generation summary.
 ///
 /// Active and release-pending counts are derived from `active_mask`/`pending_mask`
@@ -185,7 +199,7 @@ pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
 mod tests {
     use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
-    use crate::model::{ActionKind, KeyActionInput};
+    use crate::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
     use crate::time::{DurationTicks, TimelineTicks};
 
     #[test]
@@ -444,6 +458,7 @@ mod tests {
             .expect("prepare retrigger packet")
             .expect("retrigger packet is due");
         assert_eq!(retrigger.packet_batch_count, 2);
+        assert_eq!(retrigger.packet_kind, Some(PhysicalPacketKind::Mixed));
         let packet = coordinator
             .schedule
             .view_packet_ticks(retrigger.packet_index, retrigger.effective_scheduled_ticks)
@@ -468,6 +483,143 @@ mod tests {
                 .get(GenerationStatus::Released.as_str()),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn multi_up_only_packet_advances_all_batches_once() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15, 0x16].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up one".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16].into(),
+                    reason: "up two".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .unwrap();
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(10))
+            .unwrap();
+        let release = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(release.packet_kind, Some(PhysicalPacketKind::UpOnly));
+        coordinator
+            .commit_packet_success(
+                release,
+                TimelineTicks::from_raw(100),
+                TimelineTicks::from_raw(110),
+            )
+            .unwrap();
+        assert_eq!(coordinator.cursor, 3);
+        assert_eq!(coordinator.active_mask, 0);
+        assert_eq!(coordinator.pending_mask, 0);
+        assert_eq!(
+            coordinator
+                .generation_status_counts()
+                .get(GenerationStatus::Released.as_str()),
+            Some(&2)
+        );
+    }
+
+    #[test]
+    fn mixed_packet_waits_until_release_not_before_and_rebases_following_action() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "first".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16].into(),
+                    reason: "retrigger".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "release".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200,
+                    scan_codes: vec![0x17].into(),
+                    reason: "following".into(),
+                },
+            ],
+            &[0x15, 0x16, 0x17],
+        )
+        .unwrap();
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 100, 0, TimelineTicks::from_raw);
+        let first = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(first, TimelineTicks::ZERO, TimelineTicks::from_raw(20))
+            .unwrap();
+
+        assert!(
+            coordinator
+                .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+                .unwrap()
+                .is_none()
+        );
+        let mixed = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mixed.packet_kind, Some(PhysicalPacketKind::Mixed));
+        coordinator
+            .commit_packet_success(
+                mixed,
+                TimelineTicks::from_raw(120),
+                TimelineTicks::from_raw(130),
+            )
+            .unwrap();
+        assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 20);
+        let following = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(219), DurationTicks::ZERO)
+            .unwrap();
+        assert!(following.is_none());
+        let following = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(220), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(following.effective_scheduled_ticks.as_u64(), 220);
     }
 
     #[test]
@@ -1437,6 +1589,10 @@ pub struct PreparedBatch {
     /// timestamp without maintaining a second cursor.
     pub packet_index: usize,
     pub packet_batch_count: usize,
+    /// `None` is reserved for an authored stale-Up batch whose compiler
+    /// metadata contains no physical event and is handled by the legacy
+    /// suppression path.
+    pub packet_kind: Option<PhysicalPacketKind>,
 }
 
 #[derive(Debug)]
@@ -1694,12 +1850,12 @@ impl RuntimeDispatchCoordinator {
         let Some(batch) = self.schedule.batches.get(self.cursor) else {
             return Ok(None);
         };
-        let authored = self
-            .batch_scheduled_ticks
-            .get(self.cursor)
-            .copied()
-            .ok_or(CoordinatorError::InvalidBatchIndex { index: self.cursor })?;
-        let effective = authored.checked_add_duration(self.recovery_offset_ticks)?;
+        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "packet id does not fit in usize".to_string(),
+            ))
+        })?;
+        let effective = self.packet_effective_deadline_ticks(packet_index)?;
         if dispatch_lead == DurationTicks::ZERO || self.early_pop_blocked(batch) {
             return Ok(Some(effective));
         }
@@ -1711,6 +1867,82 @@ impl RuntimeDispatchCoordinator {
         Ok(Some(effective.checked_sub_duration(effective_lead)?))
     }
 
+    /// Return the effective authored target for one physical packet.
+    ///
+    /// A packet containing releases cannot be dispatched before the latest
+    /// sender-side minimum-hold floor owned by its physical Up mask.  Waiting
+    /// and preparation both use this single calculation.
+    pub fn packet_effective_deadline_ticks(
+        &self,
+        packet_index: usize,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        let packet = self
+            .schedule
+            .packets
+            .get(packet_index)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIndex {
+                    index: packet_index,
+                },
+            ))?;
+        let first_batch_index = packet.first_batch_index as usize;
+        let authored = self
+            .batch_scheduled_ticks
+            .get(first_batch_index)
+            .copied()
+            .ok_or(CoordinatorError::InvalidBatchIndex {
+                index: first_batch_index,
+            })?
+            .checked_add_duration(self.recovery_offset_ticks)?;
+        let up_start = packet.up_intent_start as usize;
+        let up_end = up_start.checked_add(packet.up_intent_len as usize).ok_or(
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: packet_index,
+            }),
+        )?;
+        let up_intents =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: packet_index,
+                    },
+                ))?;
+        // Single-batch Up remains on the legacy release-request path for
+        // compatibility; its pending-release scheduler already applies the
+        // hold floor.  Physical packets (mixed or multi-batch) must gate the
+        // transaction before it reaches SendInput.
+        let needs_release_gate = packet.down_mask != 0 || packet.batch_count > 1;
+        let mut release_gate = TimelineTicks::ZERO;
+        if !needs_release_gate {
+            return Ok(authored);
+        }
+        for compact in up_intents {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let Some(active) = self.active_for_slot(slot) else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "packet release has no active generation".to_string(),
+                    ),
+                ));
+            };
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "packet release generation does not own its key slot".to_string(),
+                    ),
+                ));
+            }
+            release_gate = release_gate.max(active.release_not_before_ticks);
+        }
+        Ok(authored.max(release_gate))
+    }
+
     /// Polyphony of the next authored down batch, used to select its lead
     /// before the batch is popped from the schedule.
     pub fn next_authored_polyphony(&self) -> usize {
@@ -1719,6 +1951,12 @@ impl RuntimeDispatchCoordinator {
             .get(self.cursor)
             .filter(|batch| batch.kind == ActionKind::Down)
             .map_or(1, |batch| batch.intent_len as usize)
+    }
+
+    pub fn next_authored_packet_masks(&self) -> Option<(u16, u16)> {
+        let batch = self.schedule.batches.get(self.cursor)?;
+        let packet = self.schedule.packets.get(batch.packet_id as usize)?;
+        Some((packet.up_mask, packet.down_mask))
     }
 
     #[cfg(test)]
@@ -2226,12 +2464,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let mut authored = self
-            .batch_scheduled_ticks
-            .get(index)
-            .copied()
-            .ok_or(CoordinatorError::InvalidBatchIndex { index })?
-            .checked_add_duration(self.recovery_offset_ticks)?;
+        let mut authored = self.effective_batch_scheduled_ticks(index)?;
         if self.frame_period_ticks != DurationTicks::ZERO
             && now > authored
             && now
@@ -2242,6 +2475,7 @@ impl RuntimeDispatchCoordinator {
             self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(late)?;
             authored = now;
         }
+        authored = authored.max(self.packet_effective_deadline_ticks(packet_index)?);
         let effective_lead = if authored >= TimelineTicks::from_raw(dispatch_lead.as_u64()) {
             dispatch_lead
         } else {
@@ -2251,12 +2485,37 @@ impl RuntimeDispatchCoordinator {
         if deadline > now || (authored > now && self.early_pop_blocked(batch)) {
             return Ok(None);
         }
+        let packet_kind = match physical_packet_kind(packet.up_mask, packet.down_mask) {
+            Ok(kind) => Some(kind),
+            Err(error)
+                if packet.up_intent_len > 0
+                    && packet.down_intent_len == 0
+                    && self
+                        .schedule
+                        .intents
+                        .get(
+                            packet.up_intent_start as usize
+                                ..(packet.up_intent_start as usize
+                                    + usize::from(packet.up_intent_len)),
+                        )
+                        .is_some_and(|intents| {
+                            intents
+                                .iter()
+                                .all(|intent| intent.generation_id() == NO_GENERATION_ID)
+                        }) =>
+            {
+                let _ = error;
+                None
+            }
+            Err(error) => return Err(error),
+        };
         Ok(Some(PreparedBatch {
             index,
             effective_scheduled_ticks: authored,
             effective_lead_ticks: effective_lead,
             packet_index,
             packet_batch_count: usize::from(packet.batch_count),
+            packet_kind,
         }))
     }
 
@@ -2308,6 +2567,16 @@ impl RuntimeDispatchCoordinator {
                     "compiled packet must contain at least one authored batch".to_string(),
                 ),
             ));
+        }
+        let authored_before_packet_gate = self.effective_batch_scheduled_ticks(prepared.index)?;
+        if prepared.effective_scheduled_ticks > authored_before_packet_gate {
+            let deferral = prepared
+                .effective_scheduled_ticks
+                .checked_duration_since(authored_before_packet_gate)?;
+            // A release-floor deferral is a timeline event, not permission to
+            // burst overdue authored actions.  Rebase all future actions only
+            // after this packet has completed successfully.
+            self.recovery_offset_ticks = self.recovery_offset_ticks.checked_add(deferral)?;
         }
         let release_not_before_ticks = completed
             .checked_add_duration(self.min_hold_ticks)
