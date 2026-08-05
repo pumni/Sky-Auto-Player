@@ -1461,7 +1461,17 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     );
                 }
                 runtime.pending_pre_send_spin_us = 0;
-                let send_warn_threshold_us = health.options.send_warn_threshold_us(lead_up);
+                let expected_send_us = estimator
+                    .estimate_lead_with_class_and_policy(
+                        ActionKind::Up,
+                        scan_codes.len(),
+                        latency_class,
+                        config.timing.strict_timing,
+                    )
+                    .components
+                    .syscall_us;
+                let send_warn_threshold_us =
+                    health.options.send_warn_threshold_us(expected_send_us);
                 local_metrics.send_warn_threshold_us = send_warn_threshold_us;
                 local_metrics.bookkeeping_warn_threshold_us = health.options.bookkeeping_warn_us;
                 local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
@@ -2345,8 +2355,17 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         runtime.pending_pre_send_spin_us = 0;
                         let bookkeeping_after_send_us =
                             bookkeeping_completed_us.saturating_sub(result_completed_us);
+                        let expected_send_us = estimator
+                            .estimate_lead_with_class_and_policy(
+                                ActionKind::Down,
+                                batch_intent_count,
+                                latency_class,
+                                config.timing.strict_timing,
+                            )
+                            .components
+                            .syscall_us;
                         let send_warn_threshold_us =
-                            health.options.send_warn_threshold_us(lead_down);
+                            health.options.send_warn_threshold_us(expected_send_us);
                         local_metrics.send_warn_threshold_us = send_warn_threshold_us;
                         local_metrics.bookkeeping_warn_threshold_us =
                             health.options.bookkeeping_warn_us;
