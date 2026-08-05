@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -6,6 +7,8 @@ from sky_music.domain.domain import InstrumentProfile, Song
 from sky_music.domain.parser import parse_song_file
 from sky_music.domain.validation import SongParseError
 from sky_music.layouts import SKY_15_KEY_PROFILE
+
+_SONG_REPO_CACHE_MAX = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,8 +29,8 @@ class SongRepository:
     """
 
     def __init__(self) -> None:
-        self._cache: dict[SongFileIdentity, Song] = {}
-        self._identity_cache: dict[tuple[Path, int], SongFileIdentity] = {}
+        self._cache: OrderedDict[SongFileIdentity, Song] = OrderedDict()
+        self._identity_cache: OrderedDict[tuple[Path, int], SongFileIdentity] = OrderedDict()
 
     def load(self, song_path: Path, profile: InstrumentProfile | None = None) -> Song:
         resolved_profile = profile or SKY_15_KEY_PROFILE
@@ -46,6 +49,8 @@ class SongRepository:
 
         song = parse_song_file(song_path, resolved_profile)
         self._cache[identity] = song
+        if len(self._cache) > _SONG_REPO_CACHE_MAX:
+            self._cache.popitem(last=False)
         return song
 
     def clear(self) -> None:
@@ -73,6 +78,8 @@ class SongRepository:
             profile_id=id(profile),
         )
         self._identity_cache[cache_key] = identity
+        if len(self._identity_cache) > _SONG_REPO_CACHE_MAX:
+            self._identity_cache.popitem(last=False)
         return identity
 
 

@@ -259,7 +259,8 @@ def test_background_threads_populate_path_session_ram_cache(tmp_path: Path) -> N
     _path_session_ram_cache.clear()
 
     # Hydrate from SQLite and check if it seeds path+session cache
-    hydrate_persistent_metadata_for_paths([song_path], session, cfg)
+    n_loaded = hydrate_persistent_metadata_for_paths([song_path], session, cfg)
+    assert n_loaded >= 1
     assert len(_path_session_ram_cache) == 1
 
 def test_zero_fs_io_on_render_peek_cached_song_ui_metadata(tmp_path: Path) -> None:

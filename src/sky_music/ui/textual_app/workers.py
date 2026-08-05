@@ -192,8 +192,13 @@ class MetadataCoordinator:
         try:
             get_priority = getattr(self._app, "get_metadata_priority_paths", None)
             if callable(get_priority):
-                current_priority = set(cast(list[Path], get_priority()))
-                return sorted(paths, key=lambda p: 0 if p in current_priority else 1)
+                snapshot: Any = get_priority()
+                if hasattr(snapshot, "ordered_paths"):
+                    priority_paths = snapshot.ordered_paths()
+                else:
+                    priority_paths = cast(list[Path], snapshot)
+                priority_rank = {path: rank for rank, path in enumerate(priority_paths)}
+                return sorted(paths, key=lambda p: priority_rank.get(p, 999999))
         except Exception:
             pass
         return paths
@@ -275,8 +280,13 @@ class MetadataCoordinator:
             try:
                 get_priority = getattr(self._app, "get_metadata_priority_paths", None)
                 if callable(get_priority):
-                    current_priority = set(cast(list[Path], get_priority()))
-                    pending.sort(key=lambda p: 0 if p in current_priority else 1)
+                    snapshot2: Any = get_priority()
+                    if hasattr(snapshot2, "ordered_paths"):
+                        priority_paths = snapshot2.ordered_paths()
+                    else:
+                        priority_paths = cast(list[Path], snapshot2)
+                    priority_rank = {path: rank for rank, path in enumerate(priority_paths)}
+                    pending.sort(key=lambda p: priority_rank.get(p, 999999))
             except Exception:
                 pass
                 

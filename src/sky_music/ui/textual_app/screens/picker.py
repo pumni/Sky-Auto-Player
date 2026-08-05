@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -31,7 +32,7 @@ from sky_music.config import (
     save_config,
 )
 from sky_music.domain.session_context import PlaybackSessionContext
-from sky_music.infrastructure.background import BackgroundScope
+from sky_music.infrastructure.background import BackgroundScope, ExecutorResource
 from sky_music.ui.picker import (
     FPS_OPTIONS,
     PROFILES_INFO,
@@ -198,6 +199,32 @@ class CalibrationChoice:
     fps: int
 
 
+@dataclass
+class CatalogScanned(Message):
+    choices: list[SongChoice]
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataPrioritySnapshot:
+    selected: list[Path]
+    visible: list[Path]
+    overscan: list[Path]
+    filtered: list[Path]
+    
+    def ordered_paths(self) -> list[Path]:
+        priority: list[Path] = []
+        seen: set[Path] = set()
+        
+        for paths_list in (self.selected, self.visible, self.overscan, self.filtered):
+            for p in paths_list:
+                if p not in seen:
+                    priority.append(p)
+                    seen.add(p)
+                    
+        return priority
+
+
 @dataclass(frozen=True, slots=True)
 class PendingRiskDecision:
     decision: str
@@ -342,13 +369,21 @@ class PickerScreen(Screen[SongPickerResult]):
         self.choices: list[SongChoice] = []
         self.filtered: list[SongChoice] = []
         self.picker_scope = BackgroundScope(phase="picker")
+        self._catalog_generation = 0
+        self._catalog_executor = ExecutorResource(
+            name="textual-picker-catalog", 
+            phase="picker-catalog", 
+            executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="CatalogScanner")
+        )
+        self.picker_scope.register(self._catalog_executor)
         self.metadata: MetadataHandle = cast(MetadataHandle, self.picker_scope.register(MetadataCoordinator(self, self.session, self.cfg)))
         self._search_timer = None
         self._detail_timer = None
         self._quiesced = False
         self._row_meta_sig: dict[str, tuple[str, str, str, str]] = {}
         self._detail_sig: tuple[object, ...] | None = None
-        self._priority_paths: list[Path] = []
+        self._search_query: str = ""
+        self._priority_paths: MetadataPrioritySnapshot = MetadataPrioritySnapshot([], [], [], [])
 
     @staticmethod
     def _normalize_theme_name(theme_name: str | None) -> str:
@@ -454,17 +489,16 @@ class PickerScreen(Screen[SongPickerResult]):
         self.call_after_refresh(self._deferred_startup)
 
     def _deferred_startup(self) -> None:
-        # Ignore type checking here since MetadataCoordinator is not imported to avoid cycles
-        coord = self.metadata
-        if hasattr(coord, "_coord_executor"):
-            coord._coord_executor.submit(self._scan_catalog_worker)  # type: ignore
-        else:
-            self._scan_catalog_worker(from_thread=False)
+        self._catalog_generation += 1
+        self._catalog_executor.submit(self._scan_catalog_worker, self._catalog_generation)
 
-    def _scan_catalog_worker(self, from_thread: bool = True) -> None:
+    def _scan_catalog_worker(self, generation: int) -> None:
         from sky_music.ui.picker_helpers import get_song_choices
         from sky_music.ui.picker_theme import remove_accents
         
+        if self._quiesced or self._catalog_generation != generation:
+            return
+            
         if self._provided_choices is None:
             paths = get_song_choices(force_refresh=True)
             new_choices = [
@@ -474,12 +508,17 @@ class PickerScreen(Screen[SongPickerResult]):
         else:
             new_choices = list(self._provided_choices)
             
-        if from_thread:
-            self.app.call_from_thread(self._on_catalog_scanned, new_choices)
-        else:
-            self._on_catalog_scanned(new_choices)
+        if self._quiesced or self._catalog_generation != generation:
+            return
+            
+        self.post_message(CatalogScanned(choices=new_choices, generation=generation))
 
-    def _on_catalog_scanned(self, choices: list[SongChoice]) -> None:
+    def on_catalog_scanned(self, message: CatalogScanned) -> None:
+        if self._quiesced or self._catalog_generation != message.generation:
+            return
+        self._apply_catalog_choices(message.choices)
+
+    def _apply_catalog_choices(self, choices: list[SongChoice]) -> None:
         self.choices = choices
         self.filtered = rank_song_choices(self.choices, self.search_query)
         self._render_table()
@@ -584,7 +623,7 @@ class PickerScreen(Screen[SongPickerResult]):
                 self._detail_timer.stop()
             self._detail_timer = None
         try:
-            self.picker_scope.close_all(wait=True)
+            self.quiesce()
             from sky_music.platform.win32 import window_target
             if getattr(window_target, "PLAYBACK_DEBUG", False):
                 for snap in self.picker_scope.snapshots():
@@ -646,8 +685,8 @@ class PickerScreen(Screen[SongPickerResult]):
                 self._search_timer.stop()
             self._search_timer = self.set_timer(0.15, self._perform_search)
 
-    def get_metadata_priority_paths(self) -> list[Path]:
-        """Return paths prioritized by relevance: selected > visible > overscan > filtered."""
+    def get_metadata_priority_paths(self) -> MetadataPrioritySnapshot:
+        """Return snapshot of paths prioritized by relevance."""
         return self._priority_paths
 
     def _visible_row_indices(self) -> range | None:
@@ -669,13 +708,13 @@ class PickerScreen(Screen[SongPickerResult]):
 
     def _update_priority_paths(self) -> None:
         if not self.filtered:
-            self._priority_paths = []
+            self._priority_paths = MetadataPrioritySnapshot([], [], [], [])
             return
         
         try:
             table = self.app.query_one("#songs", SongTable)
         except Exception:
-            self._priority_paths = [c.path for c in self.filtered]
+            self._priority_paths = MetadataPrioritySnapshot([], [], [], [c.path for c in self.filtered])
             return
             
         cursor_row = max(0, min(table.cursor_row, len(self.filtered) - 1))
@@ -687,27 +726,12 @@ class PickerScreen(Screen[SongPickerResult]):
         o_min = max(0, y_min - overscan)
         o_max = min(len(self.filtered), y_max + overscan)
         
-        priority: list[Path] = []
-        seen: set[Path] = set()
-        
-        def _add(idx: int) -> None:
-            if 0 <= idx < len(self.filtered):
-                p = self.filtered[idx].path
-                if p not in seen:
-                    priority.append(p)
-                    seen.add(p)
-        
-        _add(cursor_row)
-        for i in range(y_min, y_max):
-            _add(i)
-        for i in range(o_min, o_max):
-            _add(i)
-        for choice in self.filtered:
-            if choice.path not in seen:
-                priority.append(choice.path)
-                seen.add(choice.path)
+        selected = [self.filtered[cursor_row].path] if 0 <= cursor_row < len(self.filtered) else []
+        visible = [self.filtered[i].path for i in range(y_min, y_max) if 0 <= i < len(self.filtered)]
+        overscan_paths = [self.filtered[i].path for i in range(o_min, o_max) if 0 <= i < len(self.filtered)]
+        filtered = [c.path for c in self.filtered]
                 
-        self._priority_paths = priority
+        self._priority_paths = MetadataPrioritySnapshot(selected, visible, overscan_paths, filtered)
 
     def _perform_search(self) -> None:
         self._search_timer = None

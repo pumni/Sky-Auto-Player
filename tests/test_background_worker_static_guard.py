@@ -11,6 +11,7 @@ def test_static_drift_guard() -> None:
     allowed_thread_pool = {
         "sky_music/ui/picker_background.py",
         "sky_music/ui/textual_app/workers.py",
+        "sky_music/ui/textual_app/screens/picker.py",
     }
     
     allowed_process_pool = {

@@ -311,6 +311,14 @@ def test_detail_panel_surfaces_metadata_warnings(monkeypatch) -> None:
     monkeypatch.setattr(picker_module, "peek_cached_song_ui_metadata", lambda *_args, **_kwargs: metadata)
 
     async def actions(app: SkyPickerApp, pilot: Any) -> None:
+        # The catalog scan runs on a background thread and applies via a posted
+        # message, so a single pilot.pause() is racy. Await row population before
+        # asserting on the detail panel.
+        table = app.query_one("#songs")
+        for _ in range(100):
+            if table.row_count:  # type: ignore[attr-defined]
+                break
+            await pilot.pause()
         detail = app.query_one("#detail")
         rendered = str(detail.render())
         assert "warning" in rendered

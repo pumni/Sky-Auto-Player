@@ -628,8 +628,6 @@ class SkyPickerApp(App[SongPickerResult | None]):
         try:
             picker = self._find_picker_screen()
             if picker is not None:
-                picker.quiesce()
-                
                 from sky_music.platform.win32 import window_target
                 if getattr(window_target, "PLAYBACK_DEBUG", False):
                     for snap in picker.picker_scope.snapshots():

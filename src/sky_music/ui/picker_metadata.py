@@ -303,6 +303,57 @@ def _persistent_cache_key(
         return None
 
 
+def _persistent_raw_cache_key(
+    song_path: Path,
+    *,
+    song_file_key: tuple[Any, ...] | None = None,
+) -> str | None:
+    try:
+        if song_file_key is not None:
+            path_str = str(song_file_key[0])
+            mtime_ns = int(song_file_key[1])
+            size = int(song_file_key[2])
+        else:
+            stat = song_path.stat()
+            try:
+                path_str = str(song_path.resolve())
+            except Exception:
+                path_str = str(song_path)
+            mtime_ns = stat.st_mtime_ns
+            size = stat.st_size
+
+        ram_key = (
+            path_str,
+            mtime_ns,
+            size,
+            "RAW",
+            PERSISTENT_CACHE_SCHEMA_VERSION,
+        )
+        with _pkey_ram_lock:
+            cached_key = _lru_get(_pkey_ram_cache, ram_key)
+        if cached_key is not None:
+            return cached_key
+
+        file_identity = {
+            "path": path_str,
+            "mtime_ns": mtime_ns,
+            "size": size,
+        }
+        payload = {
+            "schema": PERSISTENT_CACHE_SCHEMA_VERSION,
+            "file": file_identity,
+            "raw_only": True,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        result = hashlib.sha256(encoded).hexdigest()
+
+        with _pkey_ram_lock:
+            _lru_set(_pkey_ram_cache, ram_key, result, maxsize=_PKEY_RAM_CACHE_MAX)
+        return result
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Phase 1B – SQLite connection management
 # ---------------------------------------------------------------------------
@@ -339,6 +390,19 @@ def _connect_persistent_cache() -> sqlite3.Connection:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_picker_metadata_updated_at ON picker_metadata(updated_at)"
+    )
+    
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS picker_raw_metadata (
+            cache_key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_picker_raw_metadata_updated_at ON picker_raw_metadata(updated_at)"
     )
     conn.commit()
     _tls.db_conn = conn
@@ -459,6 +523,36 @@ def hydrate_persistent_metadata_for_paths(
             f"SELECT cache_key, payload FROM picker_metadata WHERE cache_key IN ({placeholders})",
             tuple(missing_keys),
         ).fetchall()
+        
+        # Also attempt to hydrate raw metadata for paths that we missed or need raw for
+        raw_keys_to_path = {}
+        for path in paths:
+            raw_key = _persistent_raw_cache_key(path)
+            if raw_key is not None:
+                raw_keys_to_path[raw_key] = path
+                
+        if raw_keys_to_path:
+            raw_missing = [rk for rk in raw_keys_to_path if _lru_get(_raw_cache, _song_repository.cache_key(raw_keys_to_path[rk])) is None]
+            if raw_missing:
+                raw_placeholders = ",".join("?" for _ in raw_missing)
+                raw_rows = conn.execute(
+                    f"SELECT cache_key, payload FROM picker_raw_metadata WHERE cache_key IN ({raw_placeholders})",
+                    tuple(raw_missing),
+                ).fetchall()
+                
+                with _cache_lock:
+                    for rk, payload_text in raw_rows:
+                        try:
+                            payload = json.loads(str(payload_text))
+                            meta = _metadata_from_payload(payload)
+                            if meta is not None:
+                                song_path = raw_keys_to_path[rk]
+                                sf_key = _song_repository.cache_key(song_path)
+                                _lru_set(_raw_cache, sf_key, meta, maxsize=_RAW_CACHE_MAX)
+                                ram_key = session.metadata_cache_key(sf_key, cfg)
+                                _update_path_session_ram_cache(song_path, session, ram_key, sf_key)
+                        except Exception:
+                            continue
     except Exception:
         return 0
 
@@ -579,24 +673,29 @@ def store_computed_song_ui_metadata_payloads(
     yielding a massive speedup on disk writes.
     """
     stored = 0
+    global _write_counter
     if not payloads:
         return 0
 
+    conn = _connect_persistent_cache()
     try:
-        conn = _connect_persistent_cache()
-        conn.execute("BEGIN")
-
+        # NOTE: do not call conn.execute("BEGIN") here. Other cache writers
+        # (e.g. populate_raw_song_ui_metadata_for_paths) run on the same
+        # thread-local connection and may leave an implicit transaction open,
+        # which would make an explicit BEGIN raise "cannot start a transaction
+        # within a transaction". We let SQLite open an implicit transaction and
+        # commit once at the end.
         for payload in payloads:
-            meta = _metadata_from_payload(payload)
-            if meta is None:
-                continue
             try:
+                meta = _metadata_from_payload(payload)
+                if meta is None:
+                    continue
                 song_file_key = _song_repository.cache_key(meta.path)
                 ram_key = session.metadata_cache_key(song_file_key, cfg)
                 with _cache_lock:
                     _lru_set(_metadata_cache, ram_key, meta, maxsize=_METADATA_CACHE_MAX)
                 _update_path_session_ram_cache(meta.path, session, ram_key, song_file_key)
-                
+
                 # Inline _store_persistent_metadata logic to run inside the batch transaction
                 if meta.analyzed:
                     key = _persistent_cache_key(meta.path, session, cfg, song_file_key=song_file_key)
@@ -604,7 +703,7 @@ def store_computed_song_ui_metadata_payloads(
                         payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
                         with _cache_lock:
                             _lru_set(_persistent_cache, key, meta, maxsize=_PERSISTENT_CACHE_MAX)
-                        
+
                         conn.execute(
                             """
                             INSERT OR REPLACE INTO picker_metadata(cache_key, payload, updated_at)
@@ -613,18 +712,29 @@ def store_computed_song_ui_metadata_payloads(
                             (key, payload_str, time.time()),
                         )
                         stored += 1
+
+                raw_key = _persistent_raw_cache_key(meta.path, song_file_key=song_file_key)
+                if raw_key is not None:
+                    raw_payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO picker_raw_metadata(cache_key, payload, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (raw_key, raw_payload_str, time.time()),
+                    )
             except Exception:
+                # A single malformed payload must not abort the whole batch.
                 continue
 
         conn.commit()
 
         # Opportunistic pruning check after transaction completes
         if stored > 0:
-            global _write_counter
             with _write_counter_lock:
                 _write_counter += stored
                 should_prune = (_write_counter // _PRUNE_EVERY_N_WRITES) > ((_write_counter - stored) // _PRUNE_EVERY_N_WRITES)
-            
+
             if should_prune:
                 try:
                     conn.execute(
@@ -637,12 +747,22 @@ def store_computed_song_ui_metadata_payloads(
                         )
                         """
                     )
+                    conn.execute(
+                        f"""
+                        DELETE FROM picker_raw_metadata
+                        WHERE cache_key NOT IN (
+                            SELECT cache_key FROM picker_raw_metadata
+                            ORDER BY updated_at DESC
+                            LIMIT {_PERSISTENT_CACHE_MAX_SQLITE}
+                        )
+                        """
+                    )
                     conn.commit()
                 except Exception:
                     pass
     except Exception:
         with contextlib.suppress(Exception):
-            conn.rollback()  # type: ignore[possibly-unbound]
+            conn.rollback()
         return 0
 
     return stored
@@ -907,6 +1027,9 @@ def populate_raw_song_ui_metadata_for_paths(
         return 0
     session = session or PlaybackSessionContext.balanced()
     filled = 0
+    global _write_counter
+    wrote = False
+    conn: sqlite3.Connection | None = None
     for path in paths:
         try:
             song_file_key = _song_repository.cache_key(path)
@@ -926,6 +1049,43 @@ def populate_raw_song_ui_metadata_for_paths(
                 _lru_set(_raw_cache, song_file_key, meta, maxsize=_RAW_CACHE_MAX)
                 filled += 1
         _update_path_session_ram_cache(path, session, ram_key, song_file_key)
+
+        try:
+            raw_key = _persistent_raw_cache_key(path, song_file_key=song_file_key)
+            if raw_key is not None:
+                raw_payload_str = json.dumps(_metadata_to_payload(meta), ensure_ascii=False, separators=(",", ":"))
+                conn = _connect_persistent_cache()
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO picker_raw_metadata(cache_key, payload, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (raw_key, raw_payload_str, time.time()),
+                )
+                wrote = True
+
+                with _write_counter_lock:
+                    _write_counter += 1
+                    should_prune = (_write_counter % _PRUNE_EVERY_N_WRITES) == 0
+                if should_prune:
+                    conn.execute(
+                        f"""
+                        DELETE FROM picker_raw_metadata
+                        WHERE cache_key NOT IN (
+                            SELECT cache_key FROM picker_raw_metadata
+                            ORDER BY updated_at DESC
+                            LIMIT {_PERSISTENT_CACHE_MAX_SQLITE}
+                        )
+                        """
+                    )
+        except Exception:
+            pass
+    # Commit once so we never leave an implicit transaction open on the shared
+    # thread-local connection (a dangling transaction makes a later explicit
+    # BEGIN from another writer raise "cannot start a transaction ...").
+    if wrote and conn is not None:
+        with contextlib.suppress(Exception):
+            conn.commit()
     return filled
 
 
