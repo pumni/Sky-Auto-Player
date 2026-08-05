@@ -71,6 +71,18 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) wait_path_degraded: bool,
     #[pyo3(get)]
+    pub(super) send_warn_threshold_us: u64,
+    #[pyo3(get)]
+    pub(super) bookkeeping_warn_threshold_us: u64,
+    #[pyo3(get)]
+    pub(super) wait_warn_threshold_us: u64,
+    #[pyo3(get)]
+    pub(super) sendinput_degraded_samples: u64,
+    #[pyo3(get)]
+    pub(super) bookkeeping_degraded_samples: u64,
+    #[pyo3(get)]
+    pub(super) wait_degraded_samples: u64,
+    #[pyo3(get)]
     pub(super) status: String,
     #[pyo3(get)]
     pub(super) health: String,
@@ -104,6 +116,12 @@ impl ProgressSnapshotPy {
             sendinput_path_degraded: snapshot.sendinput_path_degraded,
             bookkeeping_degraded: snapshot.bookkeeping_degraded,
             wait_path_degraded: snapshot.wait_path_degraded,
+            send_warn_threshold_us: snapshot.send_warn_threshold_us,
+            bookkeeping_warn_threshold_us: snapshot.bookkeeping_warn_threshold_us,
+            wait_warn_threshold_us: snapshot.wait_warn_threshold_us,
+            sendinput_degraded_samples: snapshot.sendinput_degraded_samples,
+            bookkeeping_degraded_samples: snapshot.bookkeeping_degraded_samples,
+            wait_degraded_samples: snapshot.wait_degraded_samples,
             status: snapshot.status.clone(),
             health: health.to_string(),
             backend_health: BackendHealthSnapshotPy {

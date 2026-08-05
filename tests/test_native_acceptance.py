@@ -304,6 +304,58 @@ def test_test_support_pause_timing_waits_for_startup_ready_boundary() -> None:
     assert result["requested_ticks"] <= result["observed_ticks"]
 
 
+@pytest.mark.windows
+@pytest.mark.parametrize(
+    ("fault_mode", "expected_outcome", "counter"),
+    [
+        ("none", "finished", None),
+        ("zero_progress_recovered", "finished", None),
+        ("zero_progress_failed", "error", "sendinput_zero_progress_failures"),
+        ("partial", "error", "sendinput_partial_events"),
+    ],
+)
+def test_test_support_fault_matrix_publishes_terminal_counters(
+    fault_mode: str,
+    expected_outcome: str,
+    counter: str | None,
+) -> None:
+    if not callable(getattr(sky_player_rs, "TestDispatchSession", None)):
+        pytest.skip("requires the test-support native wheel")
+
+    actions = ACCEPTANCE._actions(4, 3, gap_profile="hot", game_fps=60)
+    session = sky_player_rs.TestDispatchSession(  # type: ignore[attr-defined]
+        actions,
+        list(ACCEPTANCE.SKY_15_SCAN_CODES),
+        min_hold_us=100,
+        game_fps=60,
+        mock_latency_base_us=0,
+        mock_latency_per_key_us=0,
+        telemetry_capacity=256,
+        fault_mode=fault_mode,
+    )
+    session.start()
+    deadline = ACCEPTANCE.time.perf_counter() + 5.0
+    while not bool(dict(session.snapshot()).get("is_finished")):
+        session.heartbeat()
+        if ACCEPTANCE.time.perf_counter() >= deadline:
+            session.panic_release()
+            session.quit()
+            session.join(timeout_ms=5_000)
+            raise AssertionError(f"fault mode did not finish: {fault_mode}")
+        ACCEPTANCE.time.sleep(0.001)
+    assert session.join(timeout_ms=5_000) is True
+    snapshot = dict(session.snapshot())
+    assert snapshot["outcome"] == expected_outcome
+    session.take_telemetry_json()
+    if counter is None:
+        assert snapshot["sendinput_partial_events"] == 0
+        assert snapshot["sendinput_zero_progress_failures"] == 0
+        assert snapshot["chords_rejected"] == 0
+        assert snapshot["authored_keys_rejected"] == 0
+    else:
+        assert int(snapshot[counter]) > 0
+
+
 @pytest.mark.parametrize(
     ("base_latency_us", "per_key_latency_us"),
     [(0, 1), (1, 0), (80, 40)],

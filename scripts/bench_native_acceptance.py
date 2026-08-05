@@ -576,6 +576,7 @@ def _new_session(
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
     game_fps: int = 60,
+    fault_mode: str = "none",
 ) -> Any:
     import sky_player_rs
 
@@ -600,6 +601,7 @@ def _new_session(
             enable_adaptive_spin=adaptive_spin,
             dispatch_lead_us=fixed_lead_us,
             enable_adaptive_lead=lead_mode == "adaptive",
+            fault_mode=fault_mode,
         )
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
@@ -628,6 +630,7 @@ def _run_dispatch(
     game_fps: int = 60,
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
+    fault_mode: str = "none",
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -639,6 +642,7 @@ def _run_dispatch(
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
         game_fps=game_fps,
+        fault_mode=fault_mode,
     )
     snapshot: dict[str, Any] | None = None
     telemetry: dict[str, Any] | None = None
@@ -731,10 +735,27 @@ def _run_dispatch(
             "keys_dropped": int(snapshot.get("keys_dropped", 0)),
             "failed_release_count": int(snapshot.get("failed_release_count", 0)),
             "chord_split_events": int(snapshot.get("chord_split_events", 0)),
+            "chords_rejected": int(snapshot.get("chords_rejected", 0)),
+            "authored_keys_rejected": int(snapshot.get("authored_keys_rejected", 0)),
             "sendinput_partial_events": int(snapshot.get("sendinput_partial_events", 0)),
             "sendinput_zero_progress_failures": int(
                 snapshot.get("sendinput_zero_progress_failures", 0)
             ),
+            "sendinput_path_degraded": bool(snapshot.get("sendinput_path_degraded", False)),
+            "bookkeeping_degraded": bool(snapshot.get("bookkeeping_degraded", False)),
+            "wait_path_degraded": bool(snapshot.get("wait_path_degraded", False)),
+            "send_warn_threshold_us": int(snapshot.get("send_warn_threshold_us", 0)),
+            "bookkeeping_warn_threshold_us": int(
+                snapshot.get("bookkeeping_warn_threshold_us", 0)
+            ),
+            "wait_warn_threshold_us": int(snapshot.get("wait_warn_threshold_us", 0)),
+            "sendinput_degraded_samples": int(
+                snapshot.get("sendinput_degraded_samples", 0)
+            ),
+            "bookkeeping_degraded_samples": int(
+                snapshot.get("bookkeeping_degraded_samples", 0)
+            ),
+            "wait_degraded_samples": int(snapshot.get("wait_degraded_samples", 0)),
             "lead_saturation_count_down": list(
                 snapshot.get("lead_saturation_count_down", [])
             ),
@@ -1533,12 +1554,33 @@ def main() -> int:
             "keys_dropped": sum(run["keys_dropped"] for run in runs),
             "failed_release_count": sum(run["failed_release_count"] for run in runs),
             "chord_split_events": sum(run["chord_split_events"] for run in runs),
+            "chords_rejected": sum(run["chords_rejected"] for run in runs),
+            "authored_keys_rejected": sum(run["authored_keys_rejected"] for run in runs),
             "sendinput_partial_events": sum(
                 run["sendinput_partial_events"] for run in runs
             ),
             "sendinput_zero_progress_failures": sum(
                 run["sendinput_zero_progress_failures"] for run in runs
             ),
+            "sendinput_path_degraded": any(run["sendinput_path_degraded"] for run in runs),
+            "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in runs),
+            "wait_path_degraded": any(run["wait_path_degraded"] for run in runs),
+            "send_warn_threshold_us": _stats(
+                [run["send_warn_threshold_us"] for run in runs]
+            ),
+            "bookkeeping_warn_threshold_us": _stats(
+                [run["bookkeeping_warn_threshold_us"] for run in runs]
+            ),
+            "wait_warn_threshold_us": _stats(
+                [run["wait_warn_threshold_us"] for run in runs]
+            ),
+            "sendinput_degraded_samples": sum(
+                run["sendinput_degraded_samples"] for run in runs
+            ),
+            "bookkeeping_degraded_samples": sum(
+                run["bookkeeping_degraded_samples"] for run in runs
+            ),
+            "wait_degraded_samples": sum(run["wait_degraded_samples"] for run in runs),
             "positive_residual_at_cap": sum(
                 run["positive_residual_at_cap"] for run in runs
             ),
@@ -1621,11 +1663,38 @@ def main() -> int:
         "keys_dropped": sum(run["keys_dropped"] for run in dispatch_runs),
         "failed_release_count": sum(run["failed_release_count"] for run in dispatch_runs),
         "chord_split_events": sum(run["chord_split_events"] for run in dispatch_runs),
+        "chords_rejected": sum(run["chords_rejected"] for run in dispatch_runs),
+        "authored_keys_rejected": sum(
+            run["authored_keys_rejected"] for run in dispatch_runs
+        ),
         "sendinput_partial_events": sum(
             run["sendinput_partial_events"] for run in dispatch_runs
         ),
         "sendinput_zero_progress_failures": sum(
             run["sendinput_zero_progress_failures"] for run in dispatch_runs
+        ),
+        "sendinput_path_degraded": any(
+            run["sendinput_path_degraded"] for run in dispatch_runs
+        ),
+        "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in dispatch_runs),
+        "wait_path_degraded": any(run["wait_path_degraded"] for run in dispatch_runs),
+        "send_warn_threshold_us": _stats(
+            [run["send_warn_threshold_us"] for run in dispatch_runs]
+        ),
+        "bookkeeping_warn_threshold_us": _stats(
+            [run["bookkeeping_warn_threshold_us"] for run in dispatch_runs]
+        ),
+        "wait_warn_threshold_us": _stats(
+            [run["wait_warn_threshold_us"] for run in dispatch_runs]
+        ),
+        "sendinput_degraded_samples": sum(
+            run["sendinput_degraded_samples"] for run in dispatch_runs
+        ),
+        "bookkeeping_degraded_samples": sum(
+            run["bookkeeping_degraded_samples"] for run in dispatch_runs
+        ),
+        "wait_degraded_samples": sum(
+            run["wait_degraded_samples"] for run in dispatch_runs
         ),
         "positive_residual_at_cap": sum(
             run["positive_residual_at_cap"] for run in dispatch_runs

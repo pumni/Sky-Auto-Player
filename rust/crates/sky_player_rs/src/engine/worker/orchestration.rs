@@ -14,19 +14,20 @@ use super::super::{
 use super::super::{CommandTimingCleanup, create_mock_backend};
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, DownAdmission, FinalizeInput,
-    FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState, FinalizeTiming,
-    StartupResources, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
-    WaitTiming, Worker, WorkerHealthState, WorkerResources, WorkerTimingState,
+    CommandControlRuntime, CommandControlSignals, DispatchHealthOptions, DownAdmission,
+    FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
+    FinalizeTiming, StartupResources, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable,
+    WaitSignals, WaitTiming, Worker, WorkerHealthState, WorkerResources, WorkerTimingState,
     anchored_dispatch_target_ticks_typed, cancel_coordinator_or_terminal, classify_latency_class,
     cpu_metrics_sample_due, derive_spin_threshold_us, describe_release_outcome,
     ensure_preflight_for_target, final_down_admission, finalize_worker, focus_matches,
     focus_matches_hwnd, initialize_startup, lease_bounded_ticks, load_target_stamp,
     process_command_control, publish_backend_metrics, publish_wake_error_stats,
-    record_input_path_health, record_lateness, record_lead_saturation, record_termination_error,
-    release_runtime_outcome, release_state_verified, signed_delta, signed_ticks_to_us,
-    signed_timeline_delta_ticks, suspend_live_input, target_stamp_still_current,
-    update_estimator_after_send_class, wait_failure_message, wait_for_next_boundary,
+    record_degraded_sample, record_input_path_health_with_options, record_lateness,
+    record_lead_saturation, record_termination_error, release_runtime_outcome,
+    release_state_verified, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
+    suspend_live_input, target_stamp_still_current, update_estimator_after_send_class,
+    wait_failure_message, wait_for_next_boundary,
 };
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use smallvec::SmallVec;
@@ -371,9 +372,14 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     // Cold/hot classification must use physical QPC time.  The authored
     // playback clock deliberately freezes during pause/focus recovery, so a
     // logical gap cannot tell us whether the CPU/input path has gone cold.
+    let health_options = DispatchHealthOptions {
+        wait_warn_us: config.timing.input_path_warn_us,
+        ..DispatchHealthOptions::default()
+    };
     core.health = Some(WorkerHealthState {
         down_saturation_positive_streak: 0,
         up_saturation_positive_streak: 0,
+        options: health_options,
         send_pure_window: VecDeque::with_capacity(INPUT_PATH_WINDOW_CAPACITY),
         send_pure_over_warn_count: 0,
         send_pure_warn_started_us: None,
@@ -384,6 +390,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         bookkeeping_healthy_started_us: None,
     });
     let health = core.health.as_mut().expect("worker health initialized");
+    local_metrics.send_warn_threshold_us = health.options.send_warn_floor_us;
+    local_metrics.bookkeeping_warn_threshold_us = health.options.bookkeeping_warn_us;
+    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
     // Keep the logical authored timeline at zero while placing the physical
     // anchor in the future.  This gives a t=0 action a real opportunity to
     // dispatch early by its measured lead instead of being forced late by the
@@ -1452,25 +1461,47 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     );
                 }
                 runtime.pending_pre_send_spin_us = 0;
-                record_input_path_health(
+                let send_warn_threshold_us = health.options.send_warn_threshold_us(lead_up);
+                local_metrics.send_warn_threshold_us = send_warn_threshold_us;
+                local_metrics.bookkeeping_warn_threshold_us = health.options.bookkeeping_warn_us;
+                local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+                record_input_path_health_with_options(
                     result.send_completed_us.saturating_sub(started_us),
                     completed_effective,
-                    config.timing.input_path_warn_us,
+                    send_warn_threshold_us,
+                    health.options.window_capacity,
+                    health.options.bad_sample_count,
+                    health.options.degrade_hold_us,
+                    health.options.recovery_hold_us,
                     &mut health.send_pure_window,
                     &mut health.send_pure_over_warn_count,
                     &mut health.send_pure_warn_started_us,
                     &mut health.send_pure_healthy_started_us,
                     &mut local_metrics.sendinput_path_degraded,
                 );
-                record_input_path_health(
+                record_degraded_sample(
+                    result.send_completed_us.saturating_sub(started_us),
+                    send_warn_threshold_us,
+                    &mut local_metrics.sendinput_degraded_samples,
+                );
+                record_input_path_health_with_options(
                     bookkeeping_completed_us.saturating_sub(result.send_completed_us),
                     completed_effective,
-                    config.timing.input_path_warn_us,
+                    health.options.bookkeeping_warn_us,
+                    health.options.window_capacity,
+                    health.options.bad_sample_count,
+                    health.options.degrade_hold_us,
+                    health.options.recovery_hold_us,
                     &mut health.bookkeeping_window,
                     &mut health.bookkeeping_over_warn_count,
                     &mut health.bookkeeping_warn_started_us,
                     &mut health.bookkeeping_healthy_started_us,
                     &mut local_metrics.bookkeeping_degraded,
+                );
+                record_degraded_sample(
+                    bookkeeping_completed_us.saturating_sub(result.send_completed_us),
+                    health.options.bookkeeping_warn_us,
+                    &mut local_metrics.bookkeeping_degraded_samples,
                 );
                 local_metrics.input_path_degraded =
                     local_metrics.sendinput_path_degraded || local_metrics.bookkeeping_degraded;
@@ -2314,25 +2345,49 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         runtime.pending_pre_send_spin_us = 0;
                         let bookkeeping_after_send_us =
                             bookkeeping_completed_us.saturating_sub(result_completed_us);
-                        record_input_path_health(
+                        let send_warn_threshold_us =
+                            health.options.send_warn_threshold_us(lead_down);
+                        local_metrics.send_warn_threshold_us = send_warn_threshold_us;
+                        local_metrics.bookkeeping_warn_threshold_us =
+                            health.options.bookkeeping_warn_us;
+                        local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+                        record_input_path_health_with_options(
                             sender_duration_us,
                             completed_effective,
-                            config.timing.input_path_warn_us,
+                            send_warn_threshold_us,
+                            health.options.window_capacity,
+                            health.options.bad_sample_count,
+                            health.options.degrade_hold_us,
+                            health.options.recovery_hold_us,
                             &mut health.send_pure_window,
                             &mut health.send_pure_over_warn_count,
                             &mut health.send_pure_warn_started_us,
                             &mut health.send_pure_healthy_started_us,
                             &mut local_metrics.sendinput_path_degraded,
                         );
-                        record_input_path_health(
+                        record_degraded_sample(
+                            sender_duration_us,
+                            send_warn_threshold_us,
+                            &mut local_metrics.sendinput_degraded_samples,
+                        );
+                        record_input_path_health_with_options(
                             bookkeeping_after_send_us,
                             completed_effective,
-                            config.timing.input_path_warn_us,
+                            health.options.bookkeeping_warn_us,
+                            health.options.window_capacity,
+                            health.options.bad_sample_count,
+                            health.options.degrade_hold_us,
+                            health.options.recovery_hold_us,
                             &mut health.bookkeeping_window,
                             &mut health.bookkeeping_over_warn_count,
                             &mut health.bookkeeping_warn_started_us,
                             &mut health.bookkeeping_healthy_started_us,
                             &mut local_metrics.bookkeeping_degraded,
+                        );
+                        record_degraded_sample(
+                            bookkeeping_after_send_us,
+                            health.options.bookkeeping_warn_us,
+                            &mut local_metrics.bookkeeping_degraded_samples,
                         );
                         local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
                             || local_metrics.bookkeeping_degraded;
@@ -2561,7 +2616,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     waiter,
                     interrupt,
                     strict_timing: config.timing.strict_timing,
-                    input_path_warn_us: config.timing.input_path_warn_us,
+                    wait_warn_us: health.options.wait_warn_us,
                 },
                 mutable: WaitMutable {
                     local_metrics,

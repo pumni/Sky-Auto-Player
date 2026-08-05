@@ -268,6 +268,21 @@ impl NativeDispatchSessionPy {
         dict.set_item("sendinput_path_degraded", snap.sendinput_path_degraded)?;
         dict.set_item("bookkeeping_degraded", snap.bookkeeping_degraded)?;
         dict.set_item("wait_path_degraded", snap.wait_path_degraded)?;
+        dict.set_item("send_warn_threshold_us", snap.send_warn_threshold_us)?;
+        dict.set_item(
+            "bookkeeping_warn_threshold_us",
+            snap.bookkeeping_warn_threshold_us,
+        )?;
+        dict.set_item("wait_warn_threshold_us", snap.wait_warn_threshold_us)?;
+        dict.set_item(
+            "sendinput_degraded_samples",
+            snap.sendinput_degraded_samples,
+        )?;
+        dict.set_item(
+            "bookkeeping_degraded_samples",
+            snap.bookkeeping_degraded_samples,
+        )?;
+        dict.set_item("wait_degraded_samples", snap.wait_degraded_samples)?;
         dict.set_item("wait_target_error_us", snap.wait_target_error_us)?;
         dict.set_item("idle_wake_count", snap.idle_wake_count)?;
         dict.set_item("terminal_error", snap.terminal_error)?;
@@ -363,7 +378,8 @@ impl TestDispatchSessionPy {
         enable_waitable_timer = true,
         enable_event_wait = true,
         enable_adaptive_spin = true,
-        enable_adaptive_lead = true
+        enable_adaptive_lead = true,
+        fault_mode = "none"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -380,6 +396,7 @@ impl TestDispatchSessionPy {
         enable_event_wait: bool,
         enable_adaptive_spin: bool,
         enable_adaptive_lead: bool,
+        fault_mode: &str,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
         let game_fps = u16::try_from(game_fps.0)
@@ -424,6 +441,18 @@ impl TestDispatchSessionPy {
                 ));
             }
         };
+        let fault_script = match fault_mode {
+            "none" => FaultInjectionScript::none(),
+            "zero_progress_recovered" => FaultInjectionScript::zero_progress_down_once(),
+            "zero_progress_failed" => FaultInjectionScript::persistent_zero_down(),
+            "partial" => FaultInjectionScript::partial_down_first_attempt(),
+            "partial_after_zero_retry" => FaultInjectionScript::partial_down_after_zero_retry(),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "fault_mode must be none, zero_progress_recovered, zero_progress_failed, partial, or partial_after_zero_retry",
+                ));
+            }
+        };
         let max_lead_us = 2_000;
         let (schedule, allowed_scan_codes) = parse_schedule(py_actions, allowed_scan_codes)?;
         validate_schedule_timing(&schedule, min_hold_us, max_lead_us, dispatch_lead_us)?;
@@ -432,7 +461,7 @@ impl TestDispatchSessionPy {
             backend: BackendConfig::Mock {
                 latency_base_us: mock_latency_base_us,
                 latency_per_key_us: mock_latency_per_key_us,
-                fault_script: FaultInjectionScript::none(),
+                fault_script,
             },
             allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {

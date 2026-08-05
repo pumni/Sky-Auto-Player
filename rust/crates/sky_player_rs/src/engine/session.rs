@@ -421,6 +421,12 @@ impl NativeDispatchSession {
             sendinput_path_degraded: local.sendinput_path_degraded,
             bookkeeping_degraded: local.bookkeeping_degraded,
             wait_path_degraded: local.wait_path_degraded,
+            send_warn_threshold_us: local.send_warn_threshold_us,
+            bookkeeping_warn_threshold_us: local.bookkeeping_warn_threshold_us,
+            wait_warn_threshold_us: local.wait_warn_threshold_us,
+            sendinput_degraded_samples: local.sendinput_degraded_samples,
+            bookkeeping_degraded_samples: local.bookkeeping_degraded_samples,
+            wait_degraded_samples: local.wait_degraded_samples,
         }
     }
 
@@ -524,6 +530,12 @@ impl NativeDispatchSession {
             sendinput_path_degraded: local.sendinput_path_degraded,
             bookkeeping_degraded: local.bookkeeping_degraded,
             wait_path_degraded: local.wait_path_degraded,
+            send_warn_threshold_us: local.send_warn_threshold_us,
+            bookkeeping_warn_threshold_us: local.bookkeeping_warn_threshold_us,
+            wait_warn_threshold_us: local.wait_warn_threshold_us,
+            sendinput_degraded_samples: local.sendinput_degraded_samples,
+            bookkeeping_degraded_samples: local.bookkeeping_degraded_samples,
+            wait_degraded_samples: local.wait_degraded_samples,
             wait_target_error_us: local.wait_target_error_us,
             idle_wake_count: local.idle_wake_count,
             terminal_error: self

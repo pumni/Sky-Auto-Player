@@ -34,7 +34,7 @@ pub(super) struct WaitSignals<'a> {
     pub(super) waiter: &'a HybridWaiter,
     pub(super) interrupt: &'a OwnedEvent,
     pub(super) strict_timing: bool,
-    pub(super) input_path_warn_us: u64,
+    pub(super) wait_warn_us: u64,
 }
 
 pub(super) struct WaitMutable<'a> {
@@ -76,7 +76,7 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         waiter,
         interrupt,
         strict_timing,
-        input_path_warn_us,
+        wait_warn_us,
     } = signals;
     let WaitMutable {
         local_metrics,
@@ -225,8 +225,9 @@ pub(super) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         }
         WaitOutcome::Interrupted => {}
     }
-    if input_path_warn_us > 0 && wake_error_us > input_path_warn_us {
+    if wait_warn_us > 0 && wake_error_us > wait_warn_us {
         local_metrics.wait_path_degraded = true;
+        local_metrics.wait_degraded_samples = local_metrics.wait_degraded_samples.saturating_add(1);
     }
     if wait_result.outcome == WaitOutcome::Interrupted {
         *pending_pre_send_spin_us = 0;

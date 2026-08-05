@@ -51,6 +51,12 @@ class ProgressSnapshot:
     sendinput_path_degraded: bool
     bookkeeping_degraded: bool
     wait_path_degraded: bool
+    send_warn_threshold_us: int
+    bookkeeping_warn_threshold_us: int
+    wait_warn_threshold_us: int
+    sendinput_degraded_samples: int
+    bookkeeping_degraded_samples: int
+    wait_degraded_samples: int
     status: str
     health: Literal["ok", "degraded", "error"]
     backend_health: BackendHealthSnapshot
