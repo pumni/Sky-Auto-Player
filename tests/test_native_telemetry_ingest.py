@@ -71,6 +71,21 @@ def test_native_trace_materializer_decodes_current_compact_schema() -> None:
     assert record.skipped_scan_codes == ()
 
 
+def test_native_trace_materializer_preserves_zero_relative_send_start() -> None:
+    output = _compact_output()
+    output["records"][0]["authored_ticks"] = 0
+    output["records"][0]["effective_deadline_ticks"] = 0
+    output["records"][0]["wake_ticks"] = 0
+    output["records"][0]["send_started_ticks"] = 0
+    output["records"][0]["send_completed_ticks"] = 25
+
+    record = materialize_native_trace(output)[0]
+
+    assert record.sender_started_us == 0
+    assert record.sender_completed_us == 2
+    assert record.send_duration_us == 2
+
+
 def test_native_trace_materializer_rejects_missing_bookkeeping_duration() -> None:
     output = _compact_output()
     del output["records"][0]["bookkeeping_duration_us"]

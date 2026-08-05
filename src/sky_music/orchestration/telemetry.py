@@ -610,14 +610,11 @@ def materialize_native_trace(
         authored_us = ticks_to_us(authored_ticks, "authored_ticks")
         effective_us = ticks_to_us(effective_ticks, "effective_deadline_ticks")
         wake_us = ticks_to_us(wake_ticks, "wake_ticks")
-        started_us = (
-            ticks_to_us(started_ticks, "send_started_ticks") if started_ticks else None
-        )
-        completed_us = (
-            ticks_to_us(completed_ticks, "send_completed_ticks")
-            if completed_ticks
-            else wake_us
-        )
+        # Zero is a valid QPC-relative timestamp for the first dispatch.  The
+        # compact native schema stores timestamps as fixed-width integers, so
+        # it must not be treated as an absent optional value here.
+        started_us = ticks_to_us(started_ticks, "send_started_ticks")
+        completed_us = ticks_to_us(completed_ticks, "send_completed_ticks")
         sender_completion_error_us = signed_ticks_to_us(completion_error_ticks)
         authored_completion_error_us = signed_ticks_to_us(authored_completion_error_ticks)
         send_duration_us = (
