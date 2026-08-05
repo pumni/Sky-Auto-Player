@@ -395,6 +395,7 @@ impl TestDispatchSessionPy {
         py_actions,
         allowed_scan_codes,
         min_hold_us = StrictU64(100),
+        game_fps = StrictU64(60),
         mock_latency_base_us = StrictU64(80),
         mock_latency_per_key_us = StrictU64(40),
          telemetry_capacity = StrictU64(1024),
@@ -410,6 +411,7 @@ impl TestDispatchSessionPy {
         py_actions: &Bound<'_, PyAny>,
         allowed_scan_codes: &Bound<'_, PyAny>,
         min_hold_us: StrictU64,
+        game_fps: StrictU64,
         mock_latency_base_us: StrictU64,
         mock_latency_per_key_us: StrictU64,
         telemetry_capacity: StrictU64,
@@ -421,6 +423,11 @@ impl TestDispatchSessionPy {
         enable_adaptive_lead: bool,
     ) -> PyResult<Self> {
         let min_hold_us = min_hold_us.0;
+        let game_fps = u16::try_from(game_fps.0)
+            .map_err(|_| PyValueError::new_err("game_fps must be an integer in 15..=240"))?;
+        if !(15..=240).contains(&game_fps) {
+            return Err(PyValueError::new_err("game_fps must be in 15..=240"));
+        }
         let mock_latency_base_us = mock_latency_base_us.0;
         let mock_latency_per_key_us = mock_latency_per_key_us.0;
         let dispatch_lead_us = dispatch_lead_us.0;
@@ -470,7 +477,7 @@ impl TestDispatchSessionPy {
             },
             allowed_count: allowed_scan_codes.len(),
             timing: TimingOptions {
-                game_fps: 60,
+                game_fps,
                 min_hold_us,
                 max_lead_us,
                 dispatch_lead_us,

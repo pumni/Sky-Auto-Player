@@ -84,9 +84,10 @@ def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_three_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
+        "game_fps": 60,
         "rt_priority_mode": "off",
         "adaptive_spin": True,
         "waitable_timer": True,
@@ -101,7 +102,7 @@ def test_schema_three_baseline_requires_matching_timing_domain_and_config() -> N
         "warmup_cycles": 8,
     }
     report = {
-        "benchmark_schema_version": 3,
+        "benchmark_schema_version": 4,
         "command_timing_domain": "native_qpc_v1",
         "latency_segment_domain": "native_trace_v1",
         "benchmark_config": config,

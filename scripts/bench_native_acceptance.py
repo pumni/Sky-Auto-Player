@@ -42,7 +42,7 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 3
+BENCHMARK_SCHEMA_VERSION = 4
 COMMAND_TIMING_DOMAIN = "native_qpc_v1"
 LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
@@ -115,6 +115,7 @@ def _benchmark_config(
 ) -> dict[str, Any]:
     return {
         "backend": args.backend,
+        "game_fps": args.game_fps,
         "rt_priority_mode": args.rt_priority_mode,
         "adaptive_spin": not args.no_adaptive_spin,
         "waitable_timer": True,
@@ -547,6 +548,7 @@ def _new_session(
     rt_priority_mode: str,
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
+    game_fps: int = 60,
 ) -> Any:
     import sky_player_rs
 
@@ -561,6 +563,7 @@ def _new_session(
             actions,
             list(SKY_15_SCAN_CODES),
             min_hold_us=100,
+            game_fps=game_fps,
             mock_latency_base_us=mock_base_latency_us,
             mock_latency_per_key_us=mock_per_key_latency_us,
             telemetry_capacity=min(4_096, max(64, len(actions) + 64)),
@@ -575,6 +578,7 @@ def _new_session(
         actions,
         list(SKY_15_SCAN_CODES),
         config=sky_player_rs.SessionConfig(  # type: ignore[attr-defined]
+            game_fps=game_fps,
             min_hold_us=100,
             require_focus=False,
             telemetry=True,
@@ -594,6 +598,7 @@ def _run_dispatch(
     rt_priority_mode: str,
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
+    game_fps: int = 60,
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
 ) -> dict[str, Any]:
@@ -606,6 +611,7 @@ def _run_dispatch(
         rt_priority_mode=rt_priority_mode,
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
+        game_fps=game_fps,
     )
     snapshot: dict[str, Any] | None = None
     telemetry: dict[str, Any] | None = None
@@ -734,6 +740,7 @@ def _measure_command_interrupt(
     rt_priority_mode: str,
     lead_mode: str = "fixed",
     fixed_lead_us: int = 0,
+    game_fps: int = 60,
 ) -> dict[str, int]:
     # The deadline is intentionally far away; the only expected wake is the
     # command event. No input can be emitted before the pause is observed.
@@ -747,6 +754,7 @@ def _measure_command_interrupt(
         rt_priority_mode=rt_priority_mode,
         lead_mode=lead_mode,
         fixed_lead_us=fixed_lead_us,
+        game_fps=game_fps,
     )
     session.start()
     deadline = time.perf_counter() + 2.0
@@ -880,6 +888,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fixed-lead-us", type=int, default=0)
     parser.add_argument("--gap-profile", choices=("hot", "cold"), default="hot")
+    parser.add_argument("--game-fps", type=int, default=60)
     parser.add_argument("--expected-native-build-commit")
     parser.add_argument(
         "--baseline",
@@ -1197,6 +1206,8 @@ def main() -> int:
     lead_mode, fixed_lead_us = _resolve_lead_config(args)
     if args.actions <= 0:
         raise SystemExit("--actions must be positive")
+    if not 15 <= args.game_fps <= 240:
+        raise SystemExit("--game-fps must be between 15 and 240")
     if args.warmup_cycles < 0:
         raise SystemExit("--warmup-cycles must be non-negative")
     if (
@@ -1263,6 +1274,7 @@ def main() -> int:
                     rt_priority_mode=args.rt_priority_mode,
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
+                    game_fps=args.game_fps,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
                 )
@@ -1343,6 +1355,7 @@ def main() -> int:
                     rt_priority_mode=args.rt_priority_mode,
                     lead_mode=lead_mode,
                     fixed_lead_us=fixed_lead_us,
+                    game_fps=args.game_fps,
                 )
             )
         except Exception as exc:

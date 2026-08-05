@@ -97,6 +97,8 @@ def _benchmark_command(
             str(args.command_samples),
             "--polyphony",
             args.polyphony,
+            "--game-fps",
+            str(args.game_fps),
             "--lead-mode",
             args.lead_mode,
             "--fixed-lead-us",
@@ -132,6 +134,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dispatch-repeats", type=int, required=True)
     parser.add_argument("--command-samples", type=int, required=True)
     parser.add_argument("--polyphony", default="1,2,3,5,8,15")
+    parser.add_argument("--game-fps", type=int, default=60)
     parser.add_argument("--lead-mode", choices=("fixed", "adaptive"), required=True)
     parser.add_argument("--fixed-lead-us", type=int, default=0)
     parser.add_argument("--gap-profile", choices=("hot", "cold"), required=True)
@@ -226,6 +229,7 @@ def main() -> int:
                     "dispatch_repeats": args.dispatch_repeats,
                     "command_samples": args.command_samples,
                     "polyphony": args.polyphony,
+                    "game_fps": args.game_fps,
                     "lead_mode": args.lead_mode,
                     "fixed_lead_us": args.fixed_lead_us,
                     "gap_profile": args.gap_profile,
