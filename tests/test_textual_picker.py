@@ -923,6 +923,7 @@ def test_textual_picker_calibrate_latency_command(monkeypatch) -> None:
     harness_called = False
 
     from pathlib import Path
+
     from sky_music.infrastructure.calibration_loader import CalibrationQuantiles
     from sky_music.platform.win32.native_calibration import PublishedCalibrationResult
 

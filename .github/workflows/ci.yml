@@ -154,13 +154,21 @@ jobs:
       - name: Updater — UTF-8 BOM + Windows PowerShell 5.1 parse
         uses: ./.github/actions/updater-ps51-gate
 
-      - name: Rust — format, lint, tests, and native wheel
-        run: |
-          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-          cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
-          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
-          cargo test --manifest-path rust/Cargo.toml --workspace --all-features
-          uv run --env-file .env python scripts/build_rust_wheel.py --test-support
+      - name: Rust — format
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+
+      - name: Rust — check
+        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+
+      - name: Rust — clippy
+        run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust — unit tests
+        run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features
+
+      - name: Rust — build wheel
+        run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
+
 
       - name: Pester — installer tests
         uses: ./.github/actions/run-pester

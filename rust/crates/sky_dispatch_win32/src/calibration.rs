@@ -131,7 +131,6 @@ pub enum CalibrationError {
     },
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationFailureReport {
     pub kind: String,
@@ -712,23 +711,25 @@ struct SharedCalibState {
 }
 
 #[cfg(test)]
+type ForegroundProbe = Box<dyn Fn(isize) -> bool + Send + Sync>;
+
+#[cfg(test)]
 thread_local! {
-    static TEST_FOREGROUND_OVERRIDE: std::cell::RefCell<Option<Box<dyn Fn(isize) -> bool + Send + Sync>>> = const { std::cell::RefCell::new(None) };
+    static TEST_FOREGROUND_OVERRIDE: std::cell::RefCell<Option<ForegroundProbe>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 pub fn set_test_foreground_override<F: Fn(isize) -> bool + Send + Sync + 'static>(f: Option<F>) {
     TEST_FOREGROUND_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = f.map(|func| Box::new(func) as Box<dyn Fn(isize) -> bool + Send + Sync>);
+        *cell.borrow_mut() = f.map(|func| Box::new(func) as ForegroundProbe);
     });
 }
 
 pub fn check_foreground_owned(hwnd: isize) -> bool {
     #[cfg(test)]
     {
-        let overridden = TEST_FOREGROUND_OVERRIDE.with(|cell| {
-            cell.borrow().as_ref().map(|f| f(hwnd))
-        });
+        let overridden =
+            TEST_FOREGROUND_OVERRIDE.with(|cell| cell.borrow().as_ref().map(|f| f(hwnd)));
         if let Some(res) = overridden {
             return res;
         }
@@ -739,7 +740,8 @@ pub fn check_foreground_owned(hwnd: isize) -> bool {
             return false;
         }
         unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == (hwnd as windows_sys::Win32::Foundation::HWND)
+            windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow()
+                == (hwnd as windows_sys::Win32::Foundation::HWND)
         }
     }
     #[cfg(not(windows))]
@@ -747,7 +749,6 @@ pub fn check_foreground_owned(hwnd: isize) -> bool {
         true
     }
 }
-
 
 // ─── Platform-specific implementation ────────────────────────────────────────
 
@@ -759,20 +760,16 @@ mod platform {
 
     use std::sync::{Arc, Condvar, Mutex};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows_sys::Win32::UI::Input::{
         GetRawInputData, GetRegisteredRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
         RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RegisterRawInputDevices,
     };
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        MSG, PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
+        PostMessageW, RegisterClassExW, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage,
         WM_CLOSE, WM_DESTROY, WM_INPUT, WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
     };
-
-
-
-
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
     const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
@@ -962,7 +959,6 @@ mod platform {
                 0
             }
 
-
             _ => {
                 // SAFETY: forwarding to the default handler is always safe.
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1017,7 +1013,6 @@ mod platform {
             }
         }
 
-
         let window_name: Vec<u16> = "Sky Auto Player — Input Latency Calibration\0"
             .encode_utf16()
             .collect();
@@ -1052,8 +1047,6 @@ mod platform {
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
         }
-
-
 
         // Register Raw Input for keyboard on this window.
         let rid = RAWINPUTDEVICE {
@@ -1279,7 +1272,6 @@ mod platform {
             }
         }
 
-
         pub fn ensure_foreground_owned(&mut self) -> Result<(), CalibrationError> {
             self.ensure_budget()?;
             let (lock, _cvar) = self.shared.as_ref();
@@ -1301,7 +1293,6 @@ mod platform {
             }
             Ok(())
         }
-
 
         pub fn set_measurement_deadline(&mut self, deadline: QpcTicks) {
             self.measurement_deadline = Some(deadline);
@@ -1371,7 +1362,6 @@ mod platform {
         }
 
         pub(crate) fn cleanup_keyboard(&mut self) -> CleanupOutcome {
-
             let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
             let expected = attempted.len() as u32;
             let mut cleanup_success = false;
@@ -3170,7 +3160,10 @@ mod tests {
     fn no_send_before_foreground_acquired() {
         set_test_foreground_override(Some(|_| false));
         let res = CalibrationSession::open();
-        assert!(matches!(res, Err(CalibrationError::ForegroundAcquireFailed)));
+        assert!(matches!(
+            res,
+            Err(CalibrationError::ForegroundAcquireFailed)
+        ));
         set_test_foreground_override::<fn(isize) -> bool>(None);
     }
 
@@ -3209,7 +3202,10 @@ mod tests {
             guard.window_closed = true;
         }
         let res = session.ensure_foreground_owned();
-        assert!(matches!(res, Err(CalibrationError::CalibrationWindowClosed)));
+        assert!(matches!(
+            res,
+            Err(CalibrationError::CalibrationWindowClosed)
+        ));
         set_test_foreground_override::<fn(isize) -> bool>(None);
     }
 
@@ -3231,6 +3227,4 @@ mod tests {
         assert!(session.ensure_foreground_owned().is_ok());
         set_test_foreground_override::<fn(isize) -> bool>(None);
     }
-
 }
-
