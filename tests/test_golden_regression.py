@@ -1,28 +1,58 @@
 import json
 from pathlib import Path
 
-from sky_music.domain.parser import parse_song_file
+from sky_music.domain import Millis, Note, NoteKey, Song
 from sky_music.domain.scheduler import build_key_actions
-from sky_music.domain.scheduler_types import FrameTimingPolicy, TimingPolicy
+from sky_music.domain.scheduler_types import FrameTimingPolicy
 
 
-def get_golden_songs():
-    # Map song name keywords to their parsed Song objects
-    mapping = {
-        "golden_chord_15_keys": "chord_15_keys.json",
-        "golden_dense_fast_song": "dense_fast_song.json",
-        "golden_impossible_repeat_1ms": "impossible_repeat_1ms.json",
-        "golden_long_song_3min": "long_song_3min.json",
-        "golden_pause_focus_lost": "pause_focus_lost.json",
-        "golden_same_key_repeat_15ms": "same_key_repeat_15ms.json",
+def get_golden_songs() -> dict[str, Song]:
+    """Build the deterministic songs used by the snapshot generator."""
+    return {
+        "golden_chord_15_keys": Song(
+            name="Golden Chord 15 Keys",
+            notes=tuple(Note(time_ms=Millis(1000), key=NoteKey(f"Key{i}")) for i in range(15)),
+        ),
+        "golden_same_key_repeat_15ms": Song(
+            name="Golden Same Key Repeat 15ms",
+            notes=(
+                Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+                Note(time_ms=Millis(1015), key=NoteKey("Key0")),
+            ),
+        ),
+        "golden_impossible_repeat_1ms": Song(
+            name="Golden Impossible Repeat 1ms",
+            notes=(
+                Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+                Note(time_ms=Millis(1001), key=NoteKey("Key0")),
+            ),
+        ),
+        "golden_dense_fast_song": Song(
+            name="Golden Dense Fast Song",
+            notes=(
+                Note(time_ms=Millis(1000), key=NoteKey("Key0")),
+                Note(time_ms=Millis(1010), key=NoteKey("Key1")),
+                Note(time_ms=Millis(1020), key=NoteKey("Key2")),
+                Note(time_ms=Millis(1030), key=NoteKey("Key0")),
+                Note(time_ms=Millis(1040), key=NoteKey("Key1")),
+                Note(time_ms=Millis(1050), key=NoteKey("Key2")),
+            ),
+        ),
+        "golden_long_song_3min": Song(
+            name="Golden Long Song 3min",
+            notes=tuple(
+                Note(time_ms=Millis(time_ms), key=NoteKey(f"Key{time_ms % 15}"))
+                for time_ms in range(0, 180000, 500)
+            ),
+        ),
+        "golden_pause_focus_lost": Song(
+            name="Golden Pause Focus Lost",
+            notes=tuple(
+                Note(time_ms=Millis(time_ms), key=NoteKey(f"Key{time_ms // 100}"))
+                for time_ms in (0, 100, 200)
+            ),
+        ),
     }
-    
-    songs = {}
-    for key, filename in mapping.items():
-        song_path = Path(__file__).parent.parent / "songs" / filename
-        if song_path.exists():
-            songs[key] = parse_song_file(song_path)
-    return songs
 
 def test_golden_schedules_regression():
     """Verify that the scheduler's output timelines match the frozen baseline snapshots exactly."""
@@ -31,8 +61,8 @@ def test_golden_schedules_regression():
     
     assert snapshots_dir.exists(), "Golden schedules directory must exist."
     
-    # Use a default timing policy to match the old golden snapshots
-    policy = FrameTimingPolicy.from_timing_policy(TimingPolicy.from_dict({}))
+    # Golden candidates use the new explicit default: one frame at 60 FPS.
+    policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
 
     for key, song in songs.items():
         snapshot_file = snapshots_dir / f"{key}.json"

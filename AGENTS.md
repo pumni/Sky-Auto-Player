@@ -21,7 +21,7 @@ If instructions conflict, follow the lower priority number. P3 cannot override P
 
 - **P0 Security:** `<SECURITY_MANDATES>` above. Immutable. Enforced by `scripts/audit_security_mandates.py` as a CI gate.
 - **P1 Enforced Config:** `pyproject.toml`, `.python-version`, `Sky-Auto-Player.spec`, CI commands.
-- **P2 Architecture & conventions:** `docs/architecture.md`, `docs/rt-dispatch-architecture.md`, `docs/timing-principles.md`, `docs/timing-profile-frame-model.md`, `docs/distribution-and-update.md`. `docs/INDEX.md` defines the hierarchy of truth.
+- **P2 Architecture & conventions:** `docs/architecture.md`, `docs/rt-dispatch-architecture.md`, `docs/timing-principles.md`, `docs/hold-frame-model.md`, `docs/distribution-and-update.md`. `docs/INDEX.md` defines the hierarchy of truth.
 - **P3 Local Evidence:** Nearby production code, tests, and feature patterns.
 - **P4 Task Intent:** The user prompt or bug report.
 
@@ -85,7 +85,7 @@ Read the matching row **before** touching the area.
 | Scheduler / orchestration core | `docs/rt-dispatch-architecture.md`, `docs/timing-principles.md` | Keep pure; no wall-clock, no `SendInput`. Unit-test timing edges. |
 | Infrastructure glue (`src/sky_music/infrastructure/`) | `docs/architecture.md`, `docs/rt-dispatch-architecture.md` | May import `platform/`; must not be imported by `domain/`. No `ctypes` here. |
 | Windows backend (`src/sky_music/platform/`) | `docs/rt-dispatch-architecture.md`, `SECURITY.md` | Only place `ctypes`/`SendInput` may live. Validate inputs strictly. |
-| Timing profiles / frame model | `docs/timing-profile-frame-model.md`, `docs/timing-principles.md` | Profiles are frozen dataclasses; defaults: `local_precise`, `balanced`, `audience_safe`. |
+| Hold-frame timing model | `docs/hold-frame-model.md`, `docs/timing-principles.md` | Explicit selections: `1.0`, `1.25`, and `1.5` frames; default `1.0` at user-selected FPS. |
 | Overall architecture / layering | `docs/architecture.md` | 4-layer DDD; do not leak platform into domain. |
 | Distribution / updater | `docs/distribution-and-update.md` | Updater must not touch `config.json` or `songs/`. |
 | External updater (`installer/updater.ps1`) | `docs/distribution-and-update.md`, `installer/updater.ps1` header comment | Security-sensitive: HTTPS allow-list, SHA256-verify-before-mutate, preserve-list. Verify changes directly. |

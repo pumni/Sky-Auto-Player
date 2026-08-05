@@ -5,15 +5,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 20000,
+        "at_us": 17167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 500000,
@@ -21,15 +21,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 520000,
+        "at_us": 517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 1000000,
@@ -37,15 +37,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1020000,
+        "at_us": 1017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 1500000,
@@ -53,15 +53,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1520000,
+        "at_us": 1517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 2000000,
@@ -69,15 +69,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 2020000,
+        "at_us": 2017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 2500000,
@@ -85,15 +85,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 2520000,
+        "at_us": 2517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 3000000,
@@ -101,15 +101,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 3020000,
+        "at_us": 3017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 3500000,
@@ -117,15 +117,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 3520000,
+        "at_us": 3517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 4000000,
@@ -133,15 +133,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 4020000,
+        "at_us": 4017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 4500000,
@@ -149,15 +149,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 4520000,
+        "at_us": 4517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 5000000,
@@ -165,15 +165,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 5020000,
+        "at_us": 5017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 5500000,
@@ -181,15 +181,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 5520000,
+        "at_us": 5517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 6000000,
@@ -197,15 +197,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 6020000,
+        "at_us": 6017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 6500000,
@@ -213,15 +213,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 6520000,
+        "at_us": 6517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 7000000,
@@ -229,15 +229,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 7020000,
+        "at_us": 7017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 7500000,
@@ -245,15 +245,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 7520000,
+        "at_us": 7517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 8000000,
@@ -261,15 +261,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 8020000,
+        "at_us": 8017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 8500000,
@@ -277,15 +277,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 8520000,
+        "at_us": 8517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 9000000,
@@ -293,15 +293,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 9020000,
+        "at_us": 9017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 9500000,
@@ -309,15 +309,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 9520000,
+        "at_us": 9517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 10000000,
@@ -325,15 +325,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 10020000,
+        "at_us": 10017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 10500000,
@@ -341,15 +341,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 10520000,
+        "at_us": 10517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 11000000,
@@ -357,15 +357,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 11020000,
+        "at_us": 11017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 11500000,
@@ -373,15 +373,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 11520000,
+        "at_us": 11517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 12000000,
@@ -389,15 +389,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 12020000,
+        "at_us": 12017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 12500000,
@@ -405,15 +405,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 12520000,
+        "at_us": 12517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 13000000,
@@ -421,15 +421,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 13020000,
+        "at_us": 13017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 13500000,
@@ -437,15 +437,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 13520000,
+        "at_us": 13517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 14000000,
@@ -453,15 +453,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 14020000,
+        "at_us": 14017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 14500000,
@@ -469,15 +469,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 14520000,
+        "at_us": 14517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 15000000,
@@ -485,15 +485,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 15020000,
+        "at_us": 15017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 15500000,
@@ -501,15 +501,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 15520000,
+        "at_us": 15517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 16000000,
@@ -517,15 +517,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 16020000,
+        "at_us": 16017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 16500000,
@@ -533,15 +533,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 16520000,
+        "at_us": 16517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 17000000,
@@ -549,15 +549,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 17020000,
+        "at_us": 17017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 17500000,
@@ -565,15 +565,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 17520000,
+        "at_us": 17517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 18000000,
@@ -581,15 +581,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 18020000,
+        "at_us": 18017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 18500000,
@@ -597,15 +597,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 18520000,
+        "at_us": 18517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 19000000,
@@ -613,15 +613,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 19020000,
+        "at_us": 19017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 19500000,
@@ -629,15 +629,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 19520000,
+        "at_us": 19517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 20000000,
@@ -645,15 +645,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 20020000,
+        "at_us": 20017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 20500000,
@@ -661,15 +661,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 20520000,
+        "at_us": 20517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 21000000,
@@ -677,15 +677,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 21020000,
+        "at_us": 21017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 21500000,
@@ -693,15 +693,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 21520000,
+        "at_us": 21517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 22000000,
@@ -709,15 +709,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 22020000,
+        "at_us": 22017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 22500000,
@@ -725,15 +725,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 22520000,
+        "at_us": 22517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 23000000,
@@ -741,15 +741,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 23020000,
+        "at_us": 23017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 23500000,
@@ -757,15 +757,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 23520000,
+        "at_us": 23517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 24000000,
@@ -773,15 +773,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 24020000,
+        "at_us": 24017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 24500000,
@@ -789,15 +789,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 24520000,
+        "at_us": 24517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 25000000,
@@ -805,15 +805,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 25020000,
+        "at_us": 25017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 25500000,
@@ -821,15 +821,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 25520000,
+        "at_us": 25517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 26000000,
@@ -837,15 +837,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 26020000,
+        "at_us": 26017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 26500000,
@@ -853,15 +853,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 26520000,
+        "at_us": 26517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 27000000,
@@ -869,15 +869,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 27020000,
+        "at_us": 27017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 27500000,
@@ -885,15 +885,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 27520000,
+        "at_us": 27517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 28000000,
@@ -901,15 +901,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 28020000,
+        "at_us": 28017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 28500000,
@@ -917,15 +917,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 28520000,
+        "at_us": 28517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 29000000,
@@ -933,15 +933,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 29020000,
+        "at_us": 29017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 29500000,
@@ -949,15 +949,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 29520000,
+        "at_us": 29517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 30000000,
@@ -965,15 +965,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 30020000,
+        "at_us": 30017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 30500000,
@@ -981,15 +981,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 30520000,
+        "at_us": 30517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 31000000,
@@ -997,15 +997,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 31020000,
+        "at_us": 31017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 31500000,
@@ -1013,15 +1013,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 31520000,
+        "at_us": 31517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 32000000,
@@ -1029,15 +1029,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 32020000,
+        "at_us": 32017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 32500000,
@@ -1045,15 +1045,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 32520000,
+        "at_us": 32517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 33000000,
@@ -1061,15 +1061,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 33020000,
+        "at_us": 33017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 33500000,
@@ -1077,15 +1077,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 33520000,
+        "at_us": 33517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 34000000,
@@ -1093,15 +1093,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 34020000,
+        "at_us": 34017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 34500000,
@@ -1109,15 +1109,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 34520000,
+        "at_us": 34517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 35000000,
@@ -1125,15 +1125,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 35020000,
+        "at_us": 35017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 35500000,
@@ -1141,15 +1141,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 35520000,
+        "at_us": 35517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 36000000,
@@ -1157,15 +1157,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 36020000,
+        "at_us": 36017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 36500000,
@@ -1173,15 +1173,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 36520000,
+        "at_us": 36517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 37000000,
@@ -1189,15 +1189,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 37020000,
+        "at_us": 37017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 37500000,
@@ -1205,15 +1205,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 37520000,
+        "at_us": 37517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 38000000,
@@ -1221,15 +1221,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 38020000,
+        "at_us": 38017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 38500000,
@@ -1237,15 +1237,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 38520000,
+        "at_us": 38517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 39000000,
@@ -1253,15 +1253,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 39020000,
+        "at_us": 39017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 39500000,
@@ -1269,15 +1269,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 39520000,
+        "at_us": 39517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 40000000,
@@ -1285,15 +1285,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 40020000,
+        "at_us": 40017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 40500000,
@@ -1301,15 +1301,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 40520000,
+        "at_us": 40517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 41000000,
@@ -1317,15 +1317,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 41020000,
+        "at_us": 41017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 41500000,
@@ -1333,15 +1333,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 41520000,
+        "at_us": 41517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 42000000,
@@ -1349,15 +1349,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 42020000,
+        "at_us": 42017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 42500000,
@@ -1365,15 +1365,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 42520000,
+        "at_us": 42517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 43000000,
@@ -1381,15 +1381,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 43020000,
+        "at_us": 43017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 43500000,
@@ -1397,15 +1397,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 43520000,
+        "at_us": 43517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 44000000,
@@ -1413,15 +1413,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 44020000,
+        "at_us": 44017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 44500000,
@@ -1429,15 +1429,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 44520000,
+        "at_us": 44517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 45000000,
@@ -1445,15 +1445,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 45020000,
+        "at_us": 45017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 45500000,
@@ -1461,15 +1461,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 45520000,
+        "at_us": 45517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 46000000,
@@ -1477,15 +1477,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 46020000,
+        "at_us": 46017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 46500000,
@@ -1493,15 +1493,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 46520000,
+        "at_us": 46517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 47000000,
@@ -1509,15 +1509,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 47020000,
+        "at_us": 47017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 47500000,
@@ -1525,15 +1525,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 47520000,
+        "at_us": 47517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 48000000,
@@ -1541,15 +1541,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 48020000,
+        "at_us": 48017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 48500000,
@@ -1557,15 +1557,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 48520000,
+        "at_us": 48517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 49000000,
@@ -1573,15 +1573,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 49020000,
+        "at_us": 49017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 49500000,
@@ -1589,15 +1589,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 49520000,
+        "at_us": 49517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 50000000,
@@ -1605,15 +1605,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 50020000,
+        "at_us": 50017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 50500000,
@@ -1621,15 +1621,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 50520000,
+        "at_us": 50517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 51000000,
@@ -1637,15 +1637,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 51020000,
+        "at_us": 51017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 51500000,
@@ -1653,15 +1653,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 51520000,
+        "at_us": 51517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 52000000,
@@ -1669,15 +1669,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 52020000,
+        "at_us": 52017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 52500000,
@@ -1685,15 +1685,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 52520000,
+        "at_us": 52517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 53000000,
@@ -1701,15 +1701,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 53020000,
+        "at_us": 53017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 53500000,
@@ -1717,15 +1717,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 53520000,
+        "at_us": 53517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 54000000,
@@ -1733,15 +1733,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 54020000,
+        "at_us": 54017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 54500000,
@@ -1749,15 +1749,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 54520000,
+        "at_us": 54517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 55000000,
@@ -1765,15 +1765,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 55020000,
+        "at_us": 55017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 55500000,
@@ -1781,15 +1781,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 55520000,
+        "at_us": 55517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 56000000,
@@ -1797,15 +1797,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 56020000,
+        "at_us": 56017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 56500000,
@@ -1813,15 +1813,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 56520000,
+        "at_us": 56517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 57000000,
@@ -1829,15 +1829,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 57020000,
+        "at_us": 57017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 57500000,
@@ -1845,15 +1845,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 57520000,
+        "at_us": 57517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 58000000,
@@ -1861,15 +1861,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 58020000,
+        "at_us": 58017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 58500000,
@@ -1877,15 +1877,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 58520000,
+        "at_us": 58517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 59000000,
@@ -1893,15 +1893,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 59020000,
+        "at_us": 59017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 59500000,
@@ -1909,15 +1909,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 59520000,
+        "at_us": 59517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 60000000,
@@ -1925,15 +1925,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 60020000,
+        "at_us": 60017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 60500000,
@@ -1941,15 +1941,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 60520000,
+        "at_us": 60517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 61000000,
@@ -1957,15 +1957,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 61020000,
+        "at_us": 61017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 61500000,
@@ -1973,15 +1973,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 61520000,
+        "at_us": 61517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 62000000,
@@ -1989,15 +1989,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 62020000,
+        "at_us": 62017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 62500000,
@@ -2005,15 +2005,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 62520000,
+        "at_us": 62517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 63000000,
@@ -2021,15 +2021,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 63020000,
+        "at_us": 63017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 63500000,
@@ -2037,15 +2037,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 63520000,
+        "at_us": 63517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 64000000,
@@ -2053,15 +2053,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 64020000,
+        "at_us": 64017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 64500000,
@@ -2069,15 +2069,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 64520000,
+        "at_us": 64517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 65000000,
@@ -2085,15 +2085,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 65020000,
+        "at_us": 65017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 65500000,
@@ -2101,15 +2101,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 65520000,
+        "at_us": 65517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 66000000,
@@ -2117,15 +2117,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 66020000,
+        "at_us": 66017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 66500000,
@@ -2133,15 +2133,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 66520000,
+        "at_us": 66517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 67000000,
@@ -2149,15 +2149,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 67020000,
+        "at_us": 67017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 67500000,
@@ -2165,15 +2165,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 67520000,
+        "at_us": 67517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 68000000,
@@ -2181,15 +2181,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 68020000,
+        "at_us": 68017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 68500000,
@@ -2197,15 +2197,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 68520000,
+        "at_us": 68517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 69000000,
@@ -2213,15 +2213,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 69020000,
+        "at_us": 69017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 69500000,
@@ -2229,15 +2229,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 69520000,
+        "at_us": 69517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 70000000,
@@ -2245,15 +2245,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 70020000,
+        "at_us": 70017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 70500000,
@@ -2261,15 +2261,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 70520000,
+        "at_us": 70517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 71000000,
@@ -2277,15 +2277,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 71020000,
+        "at_us": 71017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 71500000,
@@ -2293,15 +2293,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 71520000,
+        "at_us": 71517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 72000000,
@@ -2309,15 +2309,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 72020000,
+        "at_us": 72017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 72500000,
@@ -2325,15 +2325,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 72520000,
+        "at_us": 72517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 73000000,
@@ -2341,15 +2341,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 73020000,
+        "at_us": 73017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 73500000,
@@ -2357,15 +2357,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 73520000,
+        "at_us": 73517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 74000000,
@@ -2373,15 +2373,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 74020000,
+        "at_us": 74017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 74500000,
@@ -2389,15 +2389,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 74520000,
+        "at_us": 74517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 75000000,
@@ -2405,15 +2405,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 75020000,
+        "at_us": 75017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 75500000,
@@ -2421,15 +2421,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 75520000,
+        "at_us": 75517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 76000000,
@@ -2437,15 +2437,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 76020000,
+        "at_us": 76017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 76500000,
@@ -2453,15 +2453,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 76520000,
+        "at_us": 76517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 77000000,
@@ -2469,15 +2469,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 77020000,
+        "at_us": 77017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 77500000,
@@ -2485,15 +2485,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 77520000,
+        "at_us": 77517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 78000000,
@@ -2501,15 +2501,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 78020000,
+        "at_us": 78017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 78500000,
@@ -2517,15 +2517,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 78520000,
+        "at_us": 78517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 79000000,
@@ -2533,15 +2533,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 79020000,
+        "at_us": 79017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 79500000,
@@ -2549,15 +2549,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 79520000,
+        "at_us": 79517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 80000000,
@@ -2565,15 +2565,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 80020000,
+        "at_us": 80017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 80500000,
@@ -2581,15 +2581,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 80520000,
+        "at_us": 80517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 81000000,
@@ -2597,15 +2597,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 81020000,
+        "at_us": 81017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 81500000,
@@ -2613,15 +2613,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 81520000,
+        "at_us": 81517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 82000000,
@@ -2629,15 +2629,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 82020000,
+        "at_us": 82017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 82500000,
@@ -2645,15 +2645,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 82520000,
+        "at_us": 82517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 83000000,
@@ -2661,15 +2661,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 83020000,
+        "at_us": 83017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 83500000,
@@ -2677,15 +2677,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 83520000,
+        "at_us": 83517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 84000000,
@@ -2693,15 +2693,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 84020000,
+        "at_us": 84017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 84500000,
@@ -2709,15 +2709,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 84520000,
+        "at_us": 84517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 85000000,
@@ -2725,15 +2725,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 85020000,
+        "at_us": 85017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 85500000,
@@ -2741,15 +2741,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 85520000,
+        "at_us": 85517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 86000000,
@@ -2757,15 +2757,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 86020000,
+        "at_us": 86017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 86500000,
@@ -2773,15 +2773,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 86520000,
+        "at_us": 86517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 87000000,
@@ -2789,15 +2789,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 87020000,
+        "at_us": 87017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 87500000,
@@ -2805,15 +2805,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 87520000,
+        "at_us": 87517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 88000000,
@@ -2821,15 +2821,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 88020000,
+        "at_us": 88017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 88500000,
@@ -2837,15 +2837,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 88520000,
+        "at_us": 88517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 89000000,
@@ -2853,15 +2853,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 89020000,
+        "at_us": 89017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 89500000,
@@ -2869,15 +2869,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 89520000,
+        "at_us": 89517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 90000000,
@@ -2885,15 +2885,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 90020000,
+        "at_us": 90017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 90500000,
@@ -2901,15 +2901,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 90520000,
+        "at_us": 90517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 91000000,
@@ -2917,15 +2917,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 91020000,
+        "at_us": 91017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 91500000,
@@ -2933,15 +2933,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 91520000,
+        "at_us": 91517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 92000000,
@@ -2949,15 +2949,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 92020000,
+        "at_us": 92017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 92500000,
@@ -2965,15 +2965,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 92520000,
+        "at_us": 92517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 93000000,
@@ -2981,15 +2981,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 93020000,
+        "at_us": 93017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 93500000,
@@ -2997,15 +2997,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 93520000,
+        "at_us": 93517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 94000000,
@@ -3013,15 +3013,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 94020000,
+        "at_us": 94017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 94500000,
@@ -3029,15 +3029,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 94520000,
+        "at_us": 94517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 95000000,
@@ -3045,15 +3045,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 95020000,
+        "at_us": 95017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 95500000,
@@ -3061,15 +3061,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 95520000,
+        "at_us": 95517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 96000000,
@@ -3077,15 +3077,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 96020000,
+        "at_us": 96017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 96500000,
@@ -3093,15 +3093,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 96520000,
+        "at_us": 96517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 97000000,
@@ -3109,15 +3109,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 97020000,
+        "at_us": 97017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 97500000,
@@ -3125,15 +3125,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 97520000,
+        "at_us": 97517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 98000000,
@@ -3141,15 +3141,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 98020000,
+        "at_us": 98017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 98500000,
@@ -3157,15 +3157,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 98520000,
+        "at_us": 98517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 99000000,
@@ -3173,15 +3173,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 99020000,
+        "at_us": 99017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 99500000,
@@ -3189,15 +3189,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 99520000,
+        "at_us": 99517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 100000000,
@@ -3205,15 +3205,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 100020000,
+        "at_us": 100017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 100500000,
@@ -3221,15 +3221,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 100520000,
+        "at_us": 100517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 101000000,
@@ -3237,15 +3237,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 101020000,
+        "at_us": 101017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 101500000,
@@ -3253,15 +3253,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 101520000,
+        "at_us": 101517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 102000000,
@@ -3269,15 +3269,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 102020000,
+        "at_us": 102017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 102500000,
@@ -3285,15 +3285,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 102520000,
+        "at_us": 102517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 103000000,
@@ -3301,15 +3301,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 103020000,
+        "at_us": 103017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 103500000,
@@ -3317,15 +3317,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 103520000,
+        "at_us": 103517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 104000000,
@@ -3333,15 +3333,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 104020000,
+        "at_us": 104017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 104500000,
@@ -3349,15 +3349,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 104520000,
+        "at_us": 104517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 105000000,
@@ -3365,15 +3365,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 105020000,
+        "at_us": 105017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 105500000,
@@ -3381,15 +3381,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 105520000,
+        "at_us": 105517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 106000000,
@@ -3397,15 +3397,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 106020000,
+        "at_us": 106017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 106500000,
@@ -3413,15 +3413,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 106520000,
+        "at_us": 106517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 107000000,
@@ -3429,15 +3429,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 107020000,
+        "at_us": 107017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 107500000,
@@ -3445,15 +3445,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 107520000,
+        "at_us": 107517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 108000000,
@@ -3461,15 +3461,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 108020000,
+        "at_us": 108017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 108500000,
@@ -3477,15 +3477,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 108520000,
+        "at_us": 108517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 109000000,
@@ -3493,15 +3493,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 109020000,
+        "at_us": 109017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 109500000,
@@ -3509,15 +3509,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 109520000,
+        "at_us": 109517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 110000000,
@@ -3525,15 +3525,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 110020000,
+        "at_us": 110017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 110500000,
@@ -3541,15 +3541,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 110520000,
+        "at_us": 110517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 111000000,
@@ -3557,15 +3557,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 111020000,
+        "at_us": 111017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 111500000,
@@ -3573,15 +3573,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 111520000,
+        "at_us": 111517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 112000000,
@@ -3589,15 +3589,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 112020000,
+        "at_us": 112017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 112500000,
@@ -3605,15 +3605,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 112520000,
+        "at_us": 112517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 113000000,
@@ -3621,15 +3621,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 113020000,
+        "at_us": 113017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 113500000,
@@ -3637,15 +3637,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 113520000,
+        "at_us": 113517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 114000000,
@@ -3653,15 +3653,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 114020000,
+        "at_us": 114017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 114500000,
@@ -3669,15 +3669,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 114520000,
+        "at_us": 114517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 115000000,
@@ -3685,15 +3685,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 115020000,
+        "at_us": 115017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 115500000,
@@ -3701,15 +3701,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 115520000,
+        "at_us": 115517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 116000000,
@@ -3717,15 +3717,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 116020000,
+        "at_us": 116017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 116500000,
@@ -3733,15 +3733,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 116520000,
+        "at_us": 116517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 117000000,
@@ -3749,15 +3749,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 117020000,
+        "at_us": 117017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 117500000,
@@ -3765,15 +3765,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 117520000,
+        "at_us": 117517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 118000000,
@@ -3781,15 +3781,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 118020000,
+        "at_us": 118017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 118500000,
@@ -3797,15 +3797,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 118520000,
+        "at_us": 118517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 119000000,
@@ -3813,15 +3813,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 119020000,
+        "at_us": 119017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 119500000,
@@ -3829,15 +3829,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 119520000,
+        "at_us": 119517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 120000000,
@@ -3845,15 +3845,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 120020000,
+        "at_us": 120017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 120500000,
@@ -3861,15 +3861,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 120520000,
+        "at_us": 120517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 121000000,
@@ -3877,15 +3877,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 121020000,
+        "at_us": 121017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 121500000,
@@ -3893,15 +3893,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 121520000,
+        "at_us": 121517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 122000000,
@@ -3909,15 +3909,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 122020000,
+        "at_us": 122017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 122500000,
@@ -3925,15 +3925,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 122520000,
+        "at_us": 122517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 123000000,
@@ -3941,15 +3941,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 123020000,
+        "at_us": 123017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 123500000,
@@ -3957,15 +3957,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 123520000,
+        "at_us": 123517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 124000000,
@@ -3973,15 +3973,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 124020000,
+        "at_us": 124017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 124500000,
@@ -3989,15 +3989,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 124520000,
+        "at_us": 124517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 125000000,
@@ -4005,15 +4005,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 125020000,
+        "at_us": 125017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 125500000,
@@ -4021,15 +4021,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 125520000,
+        "at_us": 125517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 126000000,
@@ -4037,15 +4037,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 126020000,
+        "at_us": 126017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 126500000,
@@ -4053,15 +4053,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 126520000,
+        "at_us": 126517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 127000000,
@@ -4069,15 +4069,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 127020000,
+        "at_us": 127017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 127500000,
@@ -4085,15 +4085,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 127520000,
+        "at_us": 127517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 128000000,
@@ -4101,15 +4101,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 128020000,
+        "at_us": 128017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 128500000,
@@ -4117,15 +4117,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 128520000,
+        "at_us": 128517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 129000000,
@@ -4133,15 +4133,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 129020000,
+        "at_us": 129017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 129500000,
@@ -4149,15 +4149,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 129520000,
+        "at_us": 129517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 130000000,
@@ -4165,15 +4165,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 130020000,
+        "at_us": 130017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 130500000,
@@ -4181,15 +4181,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 130520000,
+        "at_us": 130517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 131000000,
@@ -4197,15 +4197,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 131020000,
+        "at_us": 131017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 131500000,
@@ -4213,15 +4213,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 131520000,
+        "at_us": 131517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 132000000,
@@ -4229,15 +4229,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 132020000,
+        "at_us": 132017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 132500000,
@@ -4245,15 +4245,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 132520000,
+        "at_us": 132517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 133000000,
@@ -4261,15 +4261,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 133020000,
+        "at_us": 133017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 133500000,
@@ -4277,15 +4277,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 133520000,
+        "at_us": 133517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 134000000,
@@ -4293,15 +4293,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 134020000,
+        "at_us": 134017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 134500000,
@@ -4309,15 +4309,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 134520000,
+        "at_us": 134517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 135000000,
@@ -4325,15 +4325,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 135020000,
+        "at_us": 135017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 135500000,
@@ -4341,15 +4341,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 135520000,
+        "at_us": 135517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 136000000,
@@ -4357,15 +4357,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 136020000,
+        "at_us": 136017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 136500000,
@@ -4373,15 +4373,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 136520000,
+        "at_us": 136517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 137000000,
@@ -4389,15 +4389,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 137020000,
+        "at_us": 137017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 137500000,
@@ -4405,15 +4405,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 137520000,
+        "at_us": 137517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 138000000,
@@ -4421,15 +4421,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 138020000,
+        "at_us": 138017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 138500000,
@@ -4437,15 +4437,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 138520000,
+        "at_us": 138517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 139000000,
@@ -4453,15 +4453,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 139020000,
+        "at_us": 139017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 139500000,
@@ -4469,15 +4469,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 139520000,
+        "at_us": 139517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 140000000,
@@ -4485,15 +4485,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 140020000,
+        "at_us": 140017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 140500000,
@@ -4501,15 +4501,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 140520000,
+        "at_us": 140517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 141000000,
@@ -4517,15 +4517,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 141020000,
+        "at_us": 141017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 141500000,
@@ -4533,15 +4533,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 141520000,
+        "at_us": 141517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 142000000,
@@ -4549,15 +4549,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 142020000,
+        "at_us": 142017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 142500000,
@@ -4565,15 +4565,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 142520000,
+        "at_us": 142517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 143000000,
@@ -4581,15 +4581,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 143020000,
+        "at_us": 143017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 143500000,
@@ -4597,15 +4597,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 143520000,
+        "at_us": 143517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 144000000,
@@ -4613,15 +4613,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 144020000,
+        "at_us": 144017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 144500000,
@@ -4629,15 +4629,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 144520000,
+        "at_us": 144517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 145000000,
@@ -4645,15 +4645,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 145020000,
+        "at_us": 145017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 145500000,
@@ -4661,15 +4661,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 145520000,
+        "at_us": 145517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 146000000,
@@ -4677,15 +4677,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 146020000,
+        "at_us": 146017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 146500000,
@@ -4693,15 +4693,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 146520000,
+        "at_us": 146517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 147000000,
@@ -4709,15 +4709,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 147020000,
+        "at_us": 147017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 147500000,
@@ -4725,15 +4725,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 147520000,
+        "at_us": 147517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 148000000,
@@ -4741,15 +4741,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 148020000,
+        "at_us": 148017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 148500000,
@@ -4757,15 +4757,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 148520000,
+        "at_us": 148517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 149000000,
@@ -4773,15 +4773,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 149020000,
+        "at_us": 149017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 149500000,
@@ -4789,15 +4789,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 149520000,
+        "at_us": 149517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 150000000,
@@ -4805,15 +4805,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 150020000,
+        "at_us": 150017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 150500000,
@@ -4821,15 +4821,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 150520000,
+        "at_us": 150517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 151000000,
@@ -4837,15 +4837,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 151020000,
+        "at_us": 151017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 151500000,
@@ -4853,15 +4853,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 151520000,
+        "at_us": 151517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 152000000,
@@ -4869,15 +4869,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 152020000,
+        "at_us": 152017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 152500000,
@@ -4885,15 +4885,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 152520000,
+        "at_us": 152517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 153000000,
@@ -4901,15 +4901,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 153020000,
+        "at_us": 153017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 153500000,
@@ -4917,15 +4917,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 153520000,
+        "at_us": 153517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 154000000,
@@ -4933,15 +4933,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 154020000,
+        "at_us": 154017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 154500000,
@@ -4949,15 +4949,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 154520000,
+        "at_us": 154517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 155000000,
@@ -4965,15 +4965,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 155020000,
+        "at_us": 155017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 155500000,
@@ -4981,15 +4981,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 155520000,
+        "at_us": 155517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 156000000,
@@ -4997,15 +4997,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 156020000,
+        "at_us": 156017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 156500000,
@@ -5013,15 +5013,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 156520000,
+        "at_us": 156517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 157000000,
@@ -5029,15 +5029,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 157020000,
+        "at_us": 157017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 157500000,
@@ -5045,15 +5045,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 157520000,
+        "at_us": 157517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 158000000,
@@ -5061,15 +5061,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 158020000,
+        "at_us": 158017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 158500000,
@@ -5077,15 +5077,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 158520000,
+        "at_us": 158517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 159000000,
@@ -5093,15 +5093,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 159020000,
+        "at_us": 159017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 159500000,
@@ -5109,15 +5109,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 159520000,
+        "at_us": 159517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 160000000,
@@ -5125,15 +5125,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 160020000,
+        "at_us": 160017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 160500000,
@@ -5141,15 +5141,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 160520000,
+        "at_us": 160517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 161000000,
@@ -5157,15 +5157,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 161020000,
+        "at_us": 161017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 161500000,
@@ -5173,15 +5173,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 161520000,
+        "at_us": 161517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 162000000,
@@ -5189,15 +5189,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 162020000,
+        "at_us": 162017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 162500000,
@@ -5205,15 +5205,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 162520000,
+        "at_us": 162517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 163000000,
@@ -5221,15 +5221,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 163020000,
+        "at_us": 163017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 163500000,
@@ -5237,15 +5237,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 163520000,
+        "at_us": 163517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 164000000,
@@ -5253,15 +5253,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 164020000,
+        "at_us": 164017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 164500000,
@@ -5269,15 +5269,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 164520000,
+        "at_us": 164517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 165000000,
@@ -5285,15 +5285,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 165020000,
+        "at_us": 165017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 165500000,
@@ -5301,15 +5301,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 165520000,
+        "at_us": 165517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 166000000,
@@ -5317,15 +5317,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 166020000,
+        "at_us": 166017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 166500000,
@@ -5333,15 +5333,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 166520000,
+        "at_us": 166517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 167000000,
@@ -5349,15 +5349,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 167020000,
+        "at_us": 167017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 167500000,
@@ -5365,15 +5365,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 167520000,
+        "at_us": 167517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 168000000,
@@ -5381,15 +5381,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 168020000,
+        "at_us": 168017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 168500000,
@@ -5397,15 +5397,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 168520000,
+        "at_us": 168517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 169000000,
@@ -5413,15 +5413,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 169020000,
+        "at_us": 169017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 169500000,
@@ -5429,15 +5429,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 169520000,
+        "at_us": 169517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 170000000,
@@ -5445,15 +5445,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 170020000,
+        "at_us": 170017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 170500000,
@@ -5461,15 +5461,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 170520000,
+        "at_us": 170517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 171000000,
@@ -5477,15 +5477,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 171020000,
+        "at_us": 171017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 171500000,
@@ -5493,15 +5493,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 171520000,
+        "at_us": 171517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 172000000,
@@ -5509,15 +5509,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 172020000,
+        "at_us": 172017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 172500000,
@@ -5525,15 +5525,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 172520000,
+        "at_us": 172517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 173000000,
@@ -5541,15 +5541,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 173020000,
+        "at_us": 173017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 173500000,
@@ -5557,15 +5557,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 173520000,
+        "at_us": 173517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 174000000,
@@ -5573,15 +5573,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 174020000,
+        "at_us": 174017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 174500000,
@@ -5589,15 +5589,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 174520000,
+        "at_us": 174517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 175000000,
@@ -5605,15 +5605,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 175020000,
+        "at_us": 175017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 175500000,
@@ -5621,15 +5621,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 175520000,
+        "at_us": 175517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 176000000,
@@ -5637,15 +5637,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 176020000,
+        "at_us": 176017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 176500000,
@@ -5653,15 +5653,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 176520000,
+        "at_us": 176517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 177000000,
@@ -5669,15 +5669,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 177020000,
+        "at_us": 177017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 177500000,
@@ -5685,15 +5685,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 177520000,
+        "at_us": 177517167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 178000000,
@@ -5701,15 +5701,15 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 178020000,
+        "at_us": 178017167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 178500000,
@@ -5717,15 +5717,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 178520000,
+        "at_us": 178517167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     },
     {
         "at_us": 179000000,
@@ -5733,15 +5733,15 @@
             35
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 179020000,
+        "at_us": 179017167,
         "scan_codes": [
             35
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     },
     {
         "at_us": 179500000,
@@ -5749,14 +5749,14 @@
             49
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 179520000,
+        "at_us": 179517167,
         "scan_codes": [
             49
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     }
 ]

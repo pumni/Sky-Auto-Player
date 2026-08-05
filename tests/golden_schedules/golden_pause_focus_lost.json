@@ -5,15 +5,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 20000,
+        "at_us": 17167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     },
     {
         "at_us": 100000,
@@ -21,15 +21,15 @@
             22
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 120000,
+        "at_us": 117167,
         "scan_codes": [
             22
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     },
     {
         "at_us": 200000,
@@ -37,14 +37,14 @@
             23
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 220000,
+        "at_us": 217167,
         "scan_codes": [
             23
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     }
 ]

@@ -5,15 +5,7 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
-    },
-    {
-        "at_us": 1013000,
-        "scan_codes": [
-            21
-        ],
-        "kind": "up",
-        "reason": "repeat_release"
+        "reason": "onset"
     },
     {
         "at_us": 1015000,
@@ -21,14 +13,22 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1035000,
+        "at_us": 1017167,
         "scan_codes": [
             21
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "repeat_release"
+    },
+    {
+        "at_us": 1032167,
+        "scan_codes": [
+            21
+        ],
+        "kind": "up",
+        "reason": "release"
     }
 ]

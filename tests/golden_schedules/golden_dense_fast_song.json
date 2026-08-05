@@ -5,7 +5,7 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
         "at_us": 1010000,
@@ -13,7 +13,15 @@
             22
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
+    },
+    {
+        "at_us": 1017167,
+        "scan_codes": [
+            21
+        ],
+        "kind": "up",
+        "reason": "repeat_release"
     },
     {
         "at_us": 1020000,
@@ -21,15 +29,15 @@
             23
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1023000,
+        "at_us": 1027167,
         "scan_codes": [
-            21
+            22
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 1030000,
@@ -37,15 +45,15 @@
             21
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1033000,
+        "at_us": 1037167,
         "scan_codes": [
-            22
+            23
         ],
         "kind": "up",
-        "reason": "release"
+        "reason": "repeat_release"
     },
     {
         "at_us": 1040000,
@@ -53,12 +61,12 @@
             22
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1043000,
+        "at_us": 1047167,
         "scan_codes": [
-            23
+            21
         ],
         "kind": "up",
         "reason": "release"
@@ -69,30 +77,22 @@
             23
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1053000,
-        "scan_codes": [
-            21
-        ],
-        "kind": "up",
-        "reason": "final_release"
-    },
-    {
-        "at_us": 1060000,
+        "at_us": 1057167,
         "scan_codes": [
             22
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     },
     {
-        "at_us": 1070000,
+        "at_us": 1067167,
         "scan_codes": [
             23
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     }
 ]

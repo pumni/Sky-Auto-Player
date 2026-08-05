@@ -28,11 +28,11 @@ To record game audio accurately on Windows without background noise:
 ## 1. Active Experiments
 
 ### O10.5 Measuring `spin_threshold_us`
-* **Objective:** Select a global sleeper spin threshold that balances thread lateness against CPU consumption. This is a global engine parameter and does not vary by timing profile.
+* **Objective:** Measure the fixed global sleeper spin threshold that balances thread lateness against CPU consumption. This parameter is independent of hold selection.
 * **Tooling Limits:** Current summary telemetry logs lateness but does not record CPU time or tag `spin_threshold_us`. Therefore, run conditions and CPU measurements must be tracked manually.
 * **Warning against Dry-Runs:** Do **NOT** use `--dry-run` to measure spin threshold performance. `_should_use_dispatch_thread()` returns `False` for `DryRunBackend`, which forces execution onto the main thread using `RealSleeper` instead of the production dispatch thread and `WaitableTimerSleeper`. Measuring on dry-runs runs the wrong sleeper path, exaggerating the benefits of spinning. All measurements must be performed on the real threaded path.
 * **Protocol:**
-  1. Keep power plan, game FPS, profile, and background processes constant. Use `TEST_metro_alt_120`.
+  1. Keep power plan, user-selected game FPS, hold selection, and background processes constant. Use `TEST_metro_alt_120`.
   2. Run the 4 levels in randomized/alternate order (do not run all `0` runs before moving to next levels).
   3. Perform at least 7 runs per level on the real threaded backend. Record the median and worst-run p95/p99 lateness.
      ```bash
@@ -61,7 +61,7 @@ To record game audio accurately on Windows without background noise:
   1. Verify timeline pausing and burst-prevention deterministically with a mock clock/focus guard.
   2. Run automated focus toggle scripts at 0, 25, 50, 100, and 150 ms in randomized order (minimum 20 focus cycles per level).
   3. Record audio to verify that the first post-focus note is registered by the game, and use telemetry to measure the actual wall-clock gap.
-  4. Select a single **global safety grace value** (the current fallback values of 50ms, 100ms, and 150ms stored per-profile in `config.py` are a design inconsistency and should be unified).
+  4. Select a single **global grace value**; production uses `100_000` µs and it is independent of hold selection.
 * **Decision Rule & Alternatives:**
   * *Decision Rule:* If testing shows that setting `focus_restore_grace_us = 0` yields 100% registration of the first post-focus note, the grace parameter has no value and should be removed entirely.
   * *Alternatives:* If the game drops notes due to focus-switch delays (such as `SetForegroundWindow` race conditions), we should investigate implementing a programmatic focus-confirmation loop using Windows APIs rather than relying on a blind time sleep.
@@ -88,17 +88,17 @@ To record game audio accurately on Windows without background noise:
 *This section records the detailed measurement results of Phase G on 2026-06-06 to confirm the reliability of the completion-anchor mechanism.*
 
 ### Tier-2 Gate (per-block, not per-song)
-Under `local_precise @144fps`, `min_hold = 6945 us`. A same-key block passes the "must be 12/12 sent" gate when:
+At `144fps`, one frame is `6945 us`; the current `1.0`-frame production hold is `7445 us` with the default 500 µs device margin. A same-key block passes the "must be 12/12 sent" gate when:
 $$\text{headroom} = \text{interval} - \text{min\_hold} > \text{real machine dispatch jitter}$$
-(measured ~2.5 ms spike on the dev machine). Therefore blocks **8 ms+** (headroom $\ge 1$ ms) are valid gates; block **7 ms** (~55 us headroom) sits right on the floor edge, so any drop is a physical limit of tempo/profile, not a logic error in the anchor.
+(measured ~2.5 ms spike on the dev machine). Therefore blocks **8 ms+** (headroom $\ge 1$ ms) are valid gates; block **7 ms** (~55 us headroom) sits right on the floor edge, so any drop is a physical limit of tempo/hold selection, not a logic error in the anchor.
 
 Actual measurement (run1/run2 with start-anchor fix): every 8 ms+ block achieved 12/12; only the 7 ms block dropped 4 notes — matching the theoretical prediction exactly. This proves the anchor operates correctly at the sender level for every interval whose headroom exceeds system jitter.
 
 ### Detailed Measurement Results (2026-06-06)
-Tested with song `TEST_repeat_clean_144` (same-key blocks at intervals 20/24/30/40/55/70 ms), profile `local_precise` at 144 FPS, 2 real play-throughs with game audio recording:
+Tested with song `TEST_repeat_clean_144` (same-key blocks at intervals 20/24/30/40/55/70 ms), a `1.0`-frame hold at 144 FPS, 2 real play-throughs with game audio recording:
 * **Sender gate:** Both runs achieved `intended_down = sent_down = 72`, `dropped_conflict/expired/suppressed_stale_up = 0` $\rightarrow$ sent data is completely clean, recorded audio is valid ground truth.
 * **Game onsets:** Both runs registered **72/72** notes, all 6 blocks achieved 12/12 notes $\rightarrow$ zero dropped notes, zero lost blocks.
 * **Sender IOI per block:** Varied from 0.0027 to 0.0243 ms (well below the 0.05–0.07 ms detection threshold).
 * **Game-only jitter per block:** Std from 1.88 to 5.77 ms (entirely from game/audio internal latency and the onset splitter, not from the sender side).
 
-**Conclusion:** The completion-anchor mechanism does not drop same-key notes in practice for intervals whose headroom lies above the machine's jitter amplitude. No additional fixed margin needs to be added to any profile.
+**Conclusion:** The completion-anchor mechanism does not drop same-key notes in practice for intervals whose headroom lies above the machine's jitter amplitude. No additional fixed margin needs to be added beyond the device-delivery allowance.

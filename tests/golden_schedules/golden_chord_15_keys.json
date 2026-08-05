@@ -19,10 +19,10 @@
             53
         ],
         "kind": "down",
-        "reason": "note"
+        "reason": "onset"
     },
     {
-        "at_us": 1020000,
+        "at_us": 1017167,
         "scan_codes": [
             21,
             22,
@@ -41,6 +41,6 @@
             53
         ],
         "kind": "up",
-        "reason": "final_release"
+        "reason": "release"
     }
 ]

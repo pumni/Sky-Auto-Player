@@ -13,7 +13,7 @@ and is built with Astro. The live site is at
 | `architecture.md` | 4-layer DDD architecture overview |
 | `rt-dispatch-architecture.md` | Real-time dispatch architecture |
 | `timing-principles.md` | Timing principles and contracts |
-| `timing-profile-frame-model.md` | Timing profile and frame model |
+| `hold-frame-model.md` | Explicit hold-frame selection and frame materialization |
 | `distribution-and-update.md` | Distribution, updater, and release pipeline |
 | `INDEX.md` | Documentation map and hierarchy of truth |
 | `archive/` | Historical plans and investigations (not normative) |

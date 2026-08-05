@@ -1,6 +1,6 @@
 # Timing Principles for Sky Music Player
 
-This document is the engineering source of truth for designing, reviewing, and calibrating timing profiles for Sky Music Player. It defines sender-side timing contracts and profile guidance; game registration remains subject to uninstrumented frame-sampling evidence, while online audibility has additional listener-side constraints.
+This document is the engineering source of truth for explicit hold-frame timing in Sky Music Player. It defines sender-side timing contracts; game registration remains subject to uninstrumented frame-sampling evidence.
 
 ---
 
@@ -29,7 +29,7 @@ When resolving conflicts, the following hierarchy applies:
 ---
 
 ## 1. Core Terms
-Authored schedules, profile configuration, estimator values, and human-readable reports use
+Authored schedules, hold selection, estimator values, and human-readable reports use
 microseconds ($\mu\text{s}$). In the native production worker, scheduling and state decisions
 use typed QPC-derived `QpcTicks`, `TimelineTicks`, and `DurationTicks`; conversion occurs once at
 the API/configuration boundary and again only when publishing telemetry. The worker does not use
@@ -37,12 +37,12 @@ ticks → microseconds → ticks as a control-path intermediary.
 
 | Term | Meaning |
 | :--- | :--- |
-| `hold_us` | Effective key-down duration for a normal note. Derived directly from `min_hold_us` for built-in profiles. |
+| `hold_us` | Effective key-down duration for a normal note. Equal to `min_hold_us` in every production session. |
 | `min_hold_us` | The visibility floor. The absolute minimum key-down duration allowed after compression. |
-| `min_hold_frames` | The frame ratio used to calculate `min_hold_us` when FPS is known (e.g. 1.0 for `local_precise`). |
+| `hold_frames` | The selected ratio; only `1.0`, `1.25`, and `1.5` are accepted. |
 | `same_key_interval_us` | Time between two down events on the same scan code. If below `min_hold_us`, the repeat is infeasible. |
 | `frame_us` | Duration of one game frame. Calculated as `ceil(1,000,000 / game_fps)`. |
-| `game_fps` | The target game FPS selected or calibrated by the user. If 0 or `None`, frame-aware scaling is disabled. |
+| `game_fps` | The game FPS explicitly selected by the user to match Sky. FPS is never auto-detected. |
 | `tempo_scale` | Playback speed multiplier. Values above 1.0 increase scheduling pressure. |
 
 ---
@@ -50,12 +50,12 @@ ticks → microseconds → ticks as a control-path intermediary.
 ## 2. Timing and Feasibility Model
 
 ### Hold Model
-When FPS is known and positive, built-in holds materialize from their frame ratio plus a constant device-delivery margin:
-$$\text{hold\_us} = \text{min\_hold\_us} = \lceil \text{min\_hold\_frames} \times \text{frame\_us} \rceil + \text{min\_hold\_margin\_us}$$
+Every production hold materializes from the selected frame ratio plus a constant device-delivery margin:
+$$\text{hold\_us} = \text{min\_hold\_us} = \text{round}(\text{hold\_frames} \times \text{frame\_us}) + \text{min\_hold\_margin\_us}$$
 Where:
 $$\text{frame\_us} = \lceil 1,000,000 / \text{game\_fps} \rceil$$
 
-`min_hold_margin_us` (profile key, default **500 µs**, `0` restores the pure ratio model) covers the residual kernel delivery latency after `SendInput` returns (generally <0.5 ms) and any down-vs-up delivery asymmetry — the only sender-side mechanism that can *shorten* the game-observed hold. It is applied only in the frame-model branch; explicit `hold_us`/`min_hold_us` overrides win verbatim, and the `*_unframed_us` fallback (used when FPS is unknown or disabled) gets no margin because those values already carry ample slack. The margin is a per-device allowance (planned to become measured via input-delivery calibration), not a return of the retired arbitrary `release_latency_margin_us`.
+`min_hold_margin_us` (default **500 µs**, `0` restores the pure ratio model) covers the residual kernel delivery latency after `SendInput` returns. It is an internal device-delivery allowance and is not user-selectable in the picker.
 
 The optional Windows calibration cache is evidence of kind
 `injected_raw_input_delivery_proxy`: the app-owned calibration window receives keys injected
@@ -68,7 +68,7 @@ idle gap. Down/Up and polyphony channels remain independent. Partial injection a
 cleanup invalidate a run rather than becoming zero-latency evidence.
 
 ### FPS Assumption vs Real Game FPS
-The profile's configured `game_fps` determines the length of `min_hold_us` and `hold_us`. By design, the tool strictly honors this configured FPS. If you configure a profile with a high FPS (e.g., 144) but your game is actually running at a lower FPS (e.g., 60), the generated holds will be shorter than one real frame. These "short notes" may land entirely within a single game frame and fail to register. The scheduler does not try to detect your real game FPS; it assumes the profile config is correct. If you experience dropped notes, lower the FPS in the profile or use `local_precise` at 60 FPS.
+The selected `game_fps` determines the hold duration. It must match Sky's configured FPS. The scheduler never detects or corrects the game's FPS; if the selected value is too high, a hold can be shorter than one real game frame.
 
 ### Same-Key Feasibility
 The authored feasibility floor remains:
@@ -149,22 +149,16 @@ must not be used to infer CPU or input-path warmth.
 
 ---
 
-## 4. Profile Classes
+## 4. Hold Selection Guidance
 
-The project defines three built-in profiles in [config.py](../src/sky_music/config.py)
-(`DEFAULT_TIMING_PROFILES`, mirrored here 2026-07 — see [the source](../src/sky_music/config.py)
-for the authoritative values):
-
-* **`local_precise`:** Optimized for sharp local playback. Uses `min_hold_frames = 1.0`. Like every built-in frame-model profile it also receives the constant 500 µs `min_hold_margin_us` (kernel device-delivery latency, see §2); setting that margin to 0 restores the pure frame-ratio floor for this profile. It represents the absolute physical floor of the game.
-* **`balanced`:** The general default profile. Uses `min_hold_frames = 1.02`, adding a small buffer over the host frame boundary to prevent edge-case misses.
-* **`audience_safe`:** Recommended for online audience playback. Uses `min_hold_frames = 1.5` — a half-frame cushion that survives lost / late remote frames better than the 1.0–1.05 range that drifts under load. Earlier docs claimed `1.1`; that value was retired in favour of the more conservative `1.5` after remote-room stutter evidence.
-
-### Online Audience Considerations
-At high local FPS, a 1-frame hold becomes very short in absolute time (e.g. 6.94 ms at 144 FPS). If online listeners are running at 60 FPS, their clients sample at 16.67 ms intervals and will miss these brief events. Thus, when playing in online rooms, users should use `audience_safe` or calibrate their local FPS to match the audience (typically 60 FPS) to ensure remote registration.
+The supported selections are exactly `1.0`, `1.25`, and `1.5` frames. `1.0` is the default and
+maximizes same-key repeat room; `1.25` adds a moderate visibility cushion; `1.5` is the longest
+supported hold and can help when registration reliability matters more than compact repeats.
+Select the same FPS configured inside Sky. The app does not inspect or correct Sky's FPS.
 
 ### Production vs Strict Timing Diagnostic
 
-The production profile prioritizes continuity when the sender still reports
+The native production dispatch mode prioritizes continuity when the sender still reports
 complete input operations, while recording timing degradation in telemetry.
 `strict_timing` is a diagnostic mode: it prioritizes completion-SLO enforcement
 and ends the session after the configured timing contract is exceeded. It is
@@ -177,7 +171,7 @@ not the production default and must not be treated as game-observed receipt.
 ### 2026-06-06 Investigation Summary
 1. **Sender Dispatch is Clean:** Extended test sweeps (88 real songs under varying FPS and send durations) resulted in **0 notes dropped** on the sender side (`dropped_conflict`). Note drops only occur on synthetic test cases deliberately authored below the frame duration.
 2. **Real Songs Do Not Hit the Same-Key Floor:** The minimum same-key interval across the entire song corpus is **76 ms** (in the song `blue`), with a P50 of ~996 ms. Zero transitions occur below 70 ms. Consequently, same-key floor compression is not a cause of note loss in normal gameplay.
-3. **Consistency of Profiles:** Reloading, switching, or persisting profiles results in identical round-trip calibration values (e.g., exactly 6945 $\mu\text{s}$ at 144 FPS), proving that config persistence is robust.
+3. **Consistency of Hold Selection:** Reloading, changing, or persisting hold selections results in identical round-trip calibration values (e.g., exactly 6945 $\mu\text{s}$ at 144 FPS), proving that config persistence is robust.
 4. **Game FPS Toggle is Not a Workaround:** Early reports suggested toggling the game FPS (e.g. 144 $\rightarrow$ 60 $\rightarrow$ 144) resolved missing notes. Controlled testing showed this is not a reliable fix and likely only resets a volatile game focus/timing state. Missed notes at high FPS are due to game-side sampling phase alignment or runtime thread scheduling delays, not scheduler math.
 5. **Hardened Input Path:** Robustness changes include re-acquiring the active game window handle on play, enforcing a 1 ms timer guard in the dispatch thread, and enabling diagnostic startup telemetry under `PLAYBACK_DEBUG`.
 

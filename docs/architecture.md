@@ -7,7 +7,7 @@ fallback, or low-level Python/Rust input adapter.
 ## Layers
 
 1. `sky_music/domain/` parses songs, resolves authored actions, applies user
-   timing profiles, and validates schedule input. It is Windows- and I/O-free.
+   explicit hold-frame timing, and validates schedule input. It is Windows- and I/O-free.
 2. `sky_music/orchestration/` prepares the song, admits the native extension,
    creates one `DispatchSession`, forwards commands, polls a small live
    snapshot, and writes the final native report. `PlaybackEngine` is an

@@ -36,7 +36,7 @@ Sky Auto Player doesn't replay a fixed macro. It schedules every note like a sma
 - **Contiguous chord batches** — chord notes are submitted in one `SendInput` batch to reduce sender-side skew; when the game observes them still depends on Windows and the game's sampling loop.
 - **Learns your machine's latency** — adaptive lead reduces sender-side completion error from measurements on the current machine; telemetry reports the measured result instead of promising a universal absolute threshold.
 - **Holds keep their full duration** — long notes don't get clipped short, even when the next note is close behind.
-- **Per-song timing profiles** — fast arpeggios and slow ballads get different timing, not one global setting.
+- **Explicit hold-frame timing** — choose 1.0, 1.25, or 1.5 game frames and select the FPS configured inside Sky.
 - **A dedicated Rust timing worker** — Python owns the UI and application flow while Rust alone owns compilation, timing, focus, `SendInput`, cleanup, and native telemetry.
 
 This is what "in time" actually means here.
@@ -70,7 +70,7 @@ system Python, no installer, no admin rights, no registry entries.
 
 - **Timing-first playback** — chords are submitted contiguously, holds held in full, and sender-side latency is learned and compensated; game observation still depends on Windows and the game's sampling loop
 - **Textual TUI picker** — fuzzy search by song name, fully keyboard-driven
-- **Per-song profiles** — timing, tempo, FPS, theme
+- **Per-song playback settings** — hold selection, tempo, FPS, and theme
 - **Dry-run mode** — preview without sending input
 - **Live HUD** — timing jitter and dispatch health at a glance
 - **Tuning presets** — for weak PCs, the free-threaded `python3.14t` interpreter, and more

@@ -30,10 +30,11 @@ app-owned delivery proxy and must not be described as game receipt.
 
 ## Session contract
 
-`SessionConfig` exposes only session/user inputs: resolved `game_fps` (15..=240), `min_hold_us`,
+`SessionConfig` exposes only session/user inputs: the user-selected `game_fps` (15..=240), the
+materialized `min_hold_us` from the selected hold-frame value,
 `require_focus`, `target_hwnd`, telemetry enablement, and the native profile.
 Internal wait strategy, priority, retry, estimator, telemetry capacity, lease,
-and strict-completion policy are Rust profile details.
+and strict-completion policy are Rust dispatch-mode details.
 
 The session exposes lifecycle commands (`pause`, `resume`, `skip`, `quit`,
 `panic`), `set_target_hwnd`, `snapshot_lite`, and `session_report`.
