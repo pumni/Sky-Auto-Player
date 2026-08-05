@@ -21,7 +21,7 @@ pub fn win32_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use input::PlatformSendResult;
+    use input::{PacketClockFailurePhase, PhysicalSendOutcome, PlatformSendResult};
 
     #[test]
     fn test_win32_availability() {
@@ -64,15 +64,16 @@ mod tests {
 
     #[test]
     fn mixed_physical_packet_partial_result_marks_entire_packet_uncertain() {
-        let mut state = input::TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
-            requested: codes.len() as u32,
-            inserted: 1,
-            started_ticks: clock::QpcTicks::from_raw(10),
-            completed_ticks: Some(clock::QpcTicks::from_raw(20)),
-            completed_us: 2,
-            win32_error: 5,
-            timing_error: None,
-        });
+        let mut state =
+            input::TrackedKeyState::with_packet_emitter(|packet| PhysicalSendOutcome::Partial {
+                requested: packet.event_count(),
+                inserted_count: 1,
+                attempts: 1,
+                first_error: 5,
+                last_error: 5,
+                started_ticks: clock::QpcTicks::from_raw(10),
+                completed_ticks: clock::QpcTicks::from_raw(20),
+            });
         let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b01, 0b11));
         assert!(matches!(
             outcome,
@@ -83,6 +84,89 @@ mod tests {
         ));
         assert_eq!(state.active_mask, 0);
         assert_eq!(state.possibly_active_mask, 0b11);
+    }
+
+    #[test]
+    fn packet_emitter_preserves_up_and_down_masks() {
+        let mut state = input::TrackedKeyState::with_packet_emitter(|packet| {
+            assert_eq!(packet.up_mask, 0b001);
+            assert_eq!(packet.down_mask, 0b010);
+            assert_eq!(packet.event_count(), 2);
+            PhysicalSendOutcome::Complete {
+                requested: 2,
+                inserted: 2,
+                attempts: 1,
+                started_ticks: clock::QpcTicks::from_raw(10),
+                completed_ticks: clock::QpcTicks::from_raw(20),
+            }
+        });
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b001, 0b010));
+        assert!(matches!(outcome, input::DownSendOutcome::Complete { .. }));
+        assert_eq!(state.active_mask, 0b010);
+    }
+
+    #[test]
+    fn same_key_retrigger_packet_contains_two_physical_events() {
+        let mut state = input::TrackedKeyState::with_packet_emitter(|packet| {
+            assert_eq!(packet.up_mask, 0b001);
+            assert_eq!(packet.down_mask, 0b001);
+            assert_eq!(packet.event_count(), 2);
+            PhysicalSendOutcome::Complete {
+                requested: 2,
+                inserted: 2,
+                attempts: 1,
+                started_ticks: clock::QpcTicks::from_raw(10),
+                completed_ticks: clock::QpcTicks::from_raw(20),
+            }
+        });
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b001, 0b001));
+        assert!(matches!(outcome, input::DownSendOutcome::Complete { .. }));
+    }
+
+    #[test]
+    fn zero_progress_packet_does_not_increment_partial_counter() {
+        let mut state = input::TrackedKeyState::with_packet_emitter(|packet| {
+            PhysicalSendOutcome::ZeroProgress {
+                requested: packet.event_count(),
+                attempts: 2,
+                first_error: 1460,
+                last_error: 1460,
+                started_ticks: clock::QpcTicks::from_raw(10),
+                completed_ticks: clock::QpcTicks::from_raw(20),
+            }
+        });
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0, 0b001));
+        assert!(matches!(
+            outcome,
+            input::DownSendOutcome::ZeroProgress { .. }
+        ));
+        assert_eq!(state.sendinput_partial_events, 0);
+        assert_eq!(state.sendinput_zero_progress_failures, 1);
+        assert_eq!(state.chord_split_events, 0);
+    }
+
+    #[test]
+    fn post_send_qpc_failure_does_not_commit_packet() {
+        let mut state = input::TrackedKeyState::with_packet_emitter(|_packet| {
+            PhysicalSendOutcome::ClockFailure {
+                phase: PacketClockFailurePhase::AfterSend,
+                send_was_called: true,
+                inserted_count: Some(1),
+                started_ticks: Some(clock::QpcTicks::from_raw(10)),
+                error: clock::QpcError::CounterUnavailable,
+            }
+        });
+        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0, 0b001));
+        assert!(matches!(
+            outcome,
+            input::DownSendOutcome::IntegrityLost {
+                timing_error: Some(clock::QpcError::CounterUnavailable),
+                ..
+            }
+        ));
+        assert_eq!(state.active_mask, 0);
+        assert_eq!(state.possibly_active_mask, 0b001);
+        assert_eq!(state.sendinput_partial_events, 0);
     }
 
     #[test]

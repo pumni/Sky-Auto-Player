@@ -95,14 +95,13 @@ fn send_once(packet: PhysicalPacket, clock: QpcClock) -> PhysicalSendOutcome {
     let (inputs, length) = build_inputs(packet);
     let started_ticks = match clock.now() {
         Ok(ticks) => ticks,
-        Err(_) => {
-            return PhysicalSendOutcome::ZeroProgress {
-                requested,
-                attempts: 1,
-                first_error: 0,
-                last_error: 0,
-                started_ticks: QpcTicks::ZERO,
-                completed_ticks: QpcTicks::ZERO,
+        Err(error) => {
+            return PhysicalSendOutcome::ClockFailure {
+                phase: super::outcome::PacketClockFailurePhase::BeforeSend,
+                send_was_called: false,
+                inserted_count: None,
+                started_ticks: None,
+                error,
             };
         }
     };
@@ -120,7 +119,18 @@ fn send_once(packet: PhysicalPacket, clock: QpcClock) -> PhysicalSendOutcome {
     } else {
         0
     };
-    let completed_ticks = clock.now().unwrap_or(started_ticks);
+    let completed_ticks = match clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return PhysicalSendOutcome::ClockFailure {
+                phase: super::outcome::PacketClockFailurePhase::AfterSend,
+                send_was_called: true,
+                inserted_count: Some(inserted),
+                started_ticks: Some(started_ticks),
+                error,
+            };
+        }
+    };
     outcome_from_counts(
         requested,
         inserted,
@@ -134,8 +144,30 @@ fn send_once(packet: PhysicalPacket, clock: QpcClock) -> PhysicalSendOutcome {
 #[cfg(not(windows))]
 fn send_once(packet: PhysicalPacket, clock: QpcClock) -> PhysicalSendOutcome {
     let requested = packet.event_count();
-    let started_ticks = clock.now().unwrap_or(QpcTicks::ZERO);
-    let completed_ticks = clock.now().unwrap_or(started_ticks);
+    let started_ticks = match clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return PhysicalSendOutcome::ClockFailure {
+                phase: super::outcome::PacketClockFailurePhase::BeforeSend,
+                send_was_called: false,
+                inserted_count: None,
+                started_ticks: None,
+                error,
+            };
+        }
+    };
+    let completed_ticks = match clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return PhysicalSendOutcome::ClockFailure {
+                phase: super::outcome::PacketClockFailurePhase::AfterSend,
+                send_was_called: false,
+                inserted_count: Some(requested),
+                started_ticks: Some(started_ticks),
+                error,
+            };
+        }
+    };
     PhysicalSendOutcome::Complete {
         requested,
         inserted: requested,
@@ -199,8 +231,11 @@ pub fn send_physical_packet_with_clock(
     }
 
     let first = send_once(packet, clock);
-    let should_retry = packet.is_up_only()
-        && !matches!(first, PhysicalSendOutcome::Complete { .. })
+    let should_retry = (packet.is_up_only()
+        && matches!(
+            first,
+            PhysicalSendOutcome::ZeroProgress { .. } | PhysicalSendOutcome::Partial { .. }
+        ))
         || matches!(first, PhysicalSendOutcome::ZeroProgress { .. });
     if !should_retry {
         return first;
@@ -221,6 +256,9 @@ pub fn send_physical_packet_with_clock(
                 PhysicalSendOutcome::Complete { started_ticks, .. }
                 | PhysicalSendOutcome::ZeroProgress { started_ticks, .. }
                 | PhysicalSendOutcome::Partial { started_ticks, .. } => started_ticks,
+                PhysicalSendOutcome::ClockFailure { .. } => {
+                    unreachable!("clock failures are never retried")
+                }
             },
             completed_ticks,
         },
@@ -238,12 +276,18 @@ pub fn send_physical_packet_with_clock(
                 PhysicalSendOutcome::ZeroProgress { first_error, .. }
                 | PhysicalSendOutcome::Partial { first_error, .. } => first_error,
                 PhysicalSendOutcome::Complete { .. } => first_error,
+                PhysicalSendOutcome::ClockFailure { .. } => {
+                    unreachable!("clock failures are never retried")
+                }
             },
             last_error,
             started_ticks: match first {
                 PhysicalSendOutcome::Complete { started_ticks, .. }
                 | PhysicalSendOutcome::ZeroProgress { started_ticks, .. }
                 | PhysicalSendOutcome::Partial { started_ticks, .. } => started_ticks,
+                PhysicalSendOutcome::ClockFailure { .. } => {
+                    unreachable!("clock failures are never retried")
+                }
             },
             completed_ticks,
         },
@@ -262,15 +306,22 @@ pub fn send_physical_packet_with_clock(
                 PhysicalSendOutcome::Complete { .. } => second_first_error,
                 PhysicalSendOutcome::ZeroProgress { first_error, .. }
                 | PhysicalSendOutcome::Partial { first_error, .. } => first_error,
+                PhysicalSendOutcome::ClockFailure { .. } => {
+                    unreachable!("clock failures are never retried")
+                }
             },
             last_error,
             started_ticks: match first {
                 PhysicalSendOutcome::Complete { started_ticks, .. }
                 | PhysicalSendOutcome::ZeroProgress { started_ticks, .. }
                 | PhysicalSendOutcome::Partial { started_ticks, .. } => started_ticks,
+                PhysicalSendOutcome::ClockFailure { .. } => {
+                    unreachable!("clock failures are never retried")
+                }
             },
             completed_ticks,
         },
+        PhysicalSendOutcome::ClockFailure { .. } => second,
     }
 }
 

@@ -28,42 +28,7 @@ use std::fmt;
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
-fn classify_custom_packet(
-    packet: PhysicalPacket,
-    result: PlatformSendResult,
-) -> PhysicalSendOutcome {
-    let requested = packet.event_count();
-    let inserted = result.inserted.min(u32::from(requested)) as u8;
-    let completed_ticks = result.completed_ticks.unwrap_or(result.started_ticks);
-    if inserted >= requested && result.timing_error.is_none() {
-        PhysicalSendOutcome::Complete {
-            requested,
-            inserted,
-            attempts: 1,
-            started_ticks: result.started_ticks,
-            completed_ticks,
-        }
-    } else if inserted == 0 {
-        PhysicalSendOutcome::ZeroProgress {
-            requested,
-            attempts: 1,
-            first_error: result.win32_error,
-            last_error: result.win32_error,
-            started_ticks: result.started_ticks,
-            completed_ticks,
-        }
-    } else {
-        PhysicalSendOutcome::Partial {
-            requested,
-            inserted_count: inserted,
-            attempts: 1,
-            first_error: result.win32_error,
-            last_error: result.win32_error,
-            started_ticks: result.started_ticks,
-            completed_ticks,
-        }
-    }
-}
+pub type CustomPacketEmitterFn = Box<dyn Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync>;
 
 #[derive(Default)]
 pub struct TrackedKeyState {
@@ -83,6 +48,8 @@ pub struct TrackedKeyState {
     pub timing_error: Option<crate::clock::QpcError>,
     #[cfg(any(test, feature = "test-support"))]
     pub custom_emitter: Option<CustomEmitterFn>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
     qpc_clock: Option<QpcClock>,
 }
 
@@ -128,6 +95,25 @@ impl TrackedKeyState {
             custom_emitter: Some(Box::new(emitter)),
             ..Default::default()
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_packet_emitter<F>(emitter: F) -> Self
+    where
+        F: Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync + 'static,
+    {
+        Self {
+            custom_packet_emitter: Some(Box::new(emitter)),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_packet_emitter<F>(&mut self, emitter: F)
+    where
+        F: Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync + 'static,
+    {
+        self.custom_packet_emitter = Some(Box::new(emitter));
     }
 
     pub fn with_qpc_clock(clock: QpcClock) -> Self {
@@ -361,14 +347,11 @@ impl TrackedKeyState {
     pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> DownSendOutcome {
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
-            if let Some(emitter) = self.custom_emitter.as_ref() {
+            if let Some(emitter) = self.custom_packet_emitter.as_ref() {
                 // Test-only backend seam: represent the complete packet as
                 // one emitter call. Production never enters this branch and
                 // uses the stack INPUT[30] sender below.
-                let requested_codes = scan_codes_from_mask(packet.up_mask | packet.down_mask);
-                let result = emitter(&requested_codes, false);
-                self.timing_error = result.timing_error;
-                classify_custom_packet(packet, result)
+                emitter(packet)
             } else {
                 let Some(clock) = self.qpc_clock else {
                     self.last_error = Some("packet sender has no QPC clock".to_string());
@@ -410,18 +393,7 @@ impl TrackedKeyState {
         let requested_down = scan_codes_from_mask(packet.down_mask)
             .into_iter()
             .collect::<SmallVec<[u16; 15]>>();
-        let completed_us = match outcome {
-            PhysicalSendOutcome::Complete {
-                completed_ticks, ..
-            }
-            | PhysicalSendOutcome::ZeroProgress {
-                completed_ticks, ..
-            }
-            | PhysicalSendOutcome::Partial {
-                completed_ticks, ..
-            } => super::super::clock::qpc_ticks_to_us(completed_ticks).unwrap_or(0),
-        };
-        let (started_ticks, completed_ticks, attempts, first_error, last_error) = match outcome {
+        match outcome {
             PhysicalSendOutcome::Complete {
                 started_ticks,
                 completed_ticks,
@@ -433,8 +405,9 @@ impl TrackedKeyState {
                 self.possibly_active_mask &= !union;
                 self.failed_release_mask &= !packet.up_mask;
                 self.last_error = None;
-                return DownSendOutcome::Complete {
-                    completed_us,
+                DownSendOutcome::Complete {
+                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
+                        .unwrap_or(0),
                     started_ticks: Some(started_ticks),
                     completed_ticks: Some(completed_ticks),
                     sent: requested_down,
@@ -443,7 +416,7 @@ impl TrackedKeyState {
                     zero_progress_retries: attempts.saturating_sub(1),
                     retried_after_zero_progress: attempts > 1,
                     timing_error: None,
-                };
+                }
             }
             PhysicalSendOutcome::ZeroProgress {
                 started_ticks,
@@ -452,53 +425,125 @@ impl TrackedKeyState {
                 first_error,
                 last_error,
                 ..
+            } => {
+                if attempts > 1 {
+                    self.sendinput_zero_progress_failures =
+                        self.sendinput_zero_progress_failures.saturating_add(1);
+                }
+                self.chords_rejected = self.chords_rejected.saturating_add(1);
+                self.authored_keys_rejected = self
+                    .authored_keys_rejected
+                    .saturating_add(u64::from(packet.down_mask.count_ones()));
+                self.last_error = Some(format!(
+                    "physical packet made zero progress: {} events requested",
+                    packet.event_count()
+                ));
+                DownSendOutcome::ZeroProgress {
+                    error: (last_error != 0).then_some(last_error),
+                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
+                        .unwrap_or(0),
+                    skipped_duplicates: SmallVec::new(),
+                    send_attempts: attempts,
+                    zero_progress_retries: attempts.saturating_sub(1),
+                    first_error: (first_error != 0).then_some(first_error),
+                    last_error: (last_error != 0).then_some(last_error),
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: Some(completed_ticks),
+                    timing_error: None,
+                }
             }
-            | PhysicalSendOutcome::Partial {
+            PhysicalSendOutcome::Partial {
                 started_ticks,
                 completed_ticks,
                 attempts,
+                inserted_count,
                 first_error,
                 last_error,
                 ..
-            } => (
-                Some(started_ticks),
-                Some(completed_ticks),
-                attempts,
-                Some(first_error).filter(|error| *error != 0),
-                Some(last_error).filter(|error| *error != 0),
-            ),
-        };
-        let uncertain_mask = packet.up_mask | packet.down_mask;
-        self.active_mask &= !uncertain_mask;
-        self.possibly_active_mask |= uncertain_mask;
-        self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
-        if attempts > 1 {
-            self.sendinput_zero_progress_failures =
-                self.sendinput_zero_progress_failures.saturating_add(1);
-        }
-        self.chord_split_events = self.chord_split_events.saturating_add(1);
-        self.chords_rejected = self.chords_rejected.saturating_add(1);
-        self.authored_keys_rejected = self
-            .authored_keys_rejected
-            .saturating_add(u64::from(packet.down_mask.count_ones()));
-        self.last_error = Some(format!(
-            "physical packet transaction failed: {} events requested",
-            packet.event_count()
-        ));
-        DownSendOutcome::IntegrityLost {
-            inserted_before_failure: 0,
-            rolled_back: 0,
-            rollback_residue: packet.event_count(),
-            first_error,
-            last_error,
-            completed_us,
-            started_ticks,
-            completed_ticks,
-            sent: SmallVec::new(),
-            skipped_duplicates: SmallVec::new(),
-            send_attempts: attempts,
-            zero_progress_retries: attempts.saturating_sub(1),
-            timing_error: None,
+            } => {
+                let uncertain_mask = packet.up_mask | packet.down_mask;
+                self.active_mask &= !uncertain_mask;
+                self.possibly_active_mask |= uncertain_mask;
+                self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
+                self.chord_split_events = self.chord_split_events.saturating_add(1);
+                self.chords_rejected = self.chords_rejected.saturating_add(1);
+                self.authored_keys_rejected = self
+                    .authored_keys_rejected
+                    .saturating_add(u64::from(packet.down_mask.count_ones()));
+                self.last_error = Some(format!(
+                    "physical packet partially inserted: {} of {} events",
+                    inserted_count,
+                    packet.event_count()
+                ));
+                DownSendOutcome::IntegrityLost {
+                    inserted_before_failure: inserted_count,
+                    rolled_back: 0,
+                    rollback_residue: packet.event_count().saturating_sub(inserted_count),
+                    first_error: (first_error != 0).then_some(first_error),
+                    last_error: (last_error != 0).then_some(last_error),
+                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
+                        .unwrap_or(0),
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: Some(completed_ticks),
+                    sent: SmallVec::new(),
+                    skipped_duplicates: SmallVec::new(),
+                    send_attempts: attempts,
+                    zero_progress_retries: 0,
+                    timing_error: None,
+                }
+            }
+            PhysicalSendOutcome::ClockFailure {
+                phase,
+                send_was_called,
+                inserted_count,
+                started_ticks,
+                error,
+            } => {
+                self.timing_error = Some(error);
+                if send_was_called {
+                    let uncertain_mask = packet.up_mask | packet.down_mask;
+                    self.active_mask &= !uncertain_mask;
+                    self.possibly_active_mask |= uncertain_mask;
+                }
+                self.chords_rejected = self.chords_rejected.saturating_add(1);
+                self.authored_keys_rejected = self
+                    .authored_keys_rejected
+                    .saturating_add(u64::from(packet.down_mask.count_ones()));
+                self.last_error = Some(format!(
+                    "physical packet QPC failure ({phase:?}); SendInput called={send_was_called}"
+                ));
+                if send_was_called {
+                    let inserted = inserted_count.unwrap_or(0);
+                    DownSendOutcome::IntegrityLost {
+                        inserted_before_failure: inserted,
+                        rolled_back: 0,
+                        rollback_residue: packet.event_count().saturating_sub(inserted),
+                        first_error: None,
+                        last_error: None,
+                        completed_us: 0,
+                        started_ticks,
+                        completed_ticks: None,
+                        sent: SmallVec::new(),
+                        skipped_duplicates: SmallVec::new(),
+                        send_attempts: 1,
+                        zero_progress_retries: 0,
+                        timing_error: Some(error),
+                    }
+                } else {
+                    DownSendOutcome::ZeroProgress {
+                        error: None,
+                        completed_us: 0,
+                        skipped_duplicates: SmallVec::new(),
+                        send_attempts: 0,
+                        zero_progress_retries: 0,
+                        first_error: None,
+                        last_error: None,
+                        started_ticks,
+                        completed_ticks: None,
+                        timing_error: Some(error),
+                    }
+                }
+            }
         }
     }
 

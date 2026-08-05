@@ -61,6 +61,19 @@ pub enum PhysicalSendOutcome {
         started_ticks: QpcTicks,
         completed_ticks: QpcTicks,
     },
+    ClockFailure {
+        phase: PacketClockFailurePhase,
+        send_was_called: bool,
+        inserted_count: Option<u8>,
+        started_ticks: Option<QpcTicks>,
+        error: crate::clock::QpcError,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketClockFailurePhase {
+    BeforeSend,
+    AfterSend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
