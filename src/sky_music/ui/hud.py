@@ -15,6 +15,7 @@ from sky_music.domain.scheduler_types import FrameTimingPolicy
 from sky_music.infrastructure.hotkeys import PlaybackControls
 from sky_music.orchestration.native_models import BackendHealth
 from sky_music.ui.picker_theme import ThemePreset, get_theme_preset
+from sky_music.ui.playback_notices import PlaybackNoticeLedger
 from sky_music.ui.text_render import (
     clamp_terminal_width,
     truncate_cells,
@@ -61,6 +62,7 @@ class ProgressRenderer:
         tempo_scale: float = 1.0,
         accent_hex: str | None = None,
         theme_name: str = "aurora",
+        schedule_warnings: tuple[str, ...] = (),
     ) -> None:
         self.controls = controls
         self.verbose = verbose
@@ -68,6 +70,7 @@ class ProgressRenderer:
         self.hold_frames = hold_frames
         self.tempo_scale = tempo_scale
         self.theme_name = theme_name
+        self._notice_ledger = PlaybackNoticeLedger(schedule_warnings)
         self.last_render_at: float = 0.0
 
         preset = get_theme_preset(theme_name)
@@ -257,6 +260,12 @@ class ProgressRenderer:
             keys_dropped = int(getattr(backend_health, "keys_dropped", 0) or 0)
             chord_splits = int(getattr(backend_health, "chord_split_events", 0) or 0)
 
+        notice_state = self._notice_ledger.update(
+            input_path_degraded=self.input_path_degraded,
+            keys_dropped=keys_dropped,
+            chord_split_events=chord_splits,
+        )
+
         if failed_releases > 0:
             backend_status_text = Text.assemble(
                 ("stuck keys: ", styles["danger"]),
@@ -325,24 +334,13 @@ class ProgressRenderer:
         panel_content.append(progress_table)
         panel_content.append(divider_text)
 
-        # Input path warning
-        if self.input_path_degraded:
-            panel_content.append(
-                Text(
-                    "Input dispatch latency is elevated; playback timing may be unstable.",
-                    style=styles["warning"],
-                )
+        panel_content.extend(
+            Text(
+                notice.message,
+                style=styles["danger"] if notice.severity == "danger" else styles["warning"],
             )
-
-        # Partial note-on drops (SendInput sent < n; remainder not retried — musical policy).
-        if keys_dropped > 0:
-            panel_content.append(
-                Text(
-                    f"Note-on drops: {keys_dropped} key(s) not injected "
-                    f"({chord_splits} chord split(s)) — incomplete chord, not late-retried.",
-                    style=styles["danger"],
-                )
-            )
+            for notice in notice_state.notices
+        )
 
         # Timing info (verbose)
         if self.verbose and self.active_policy is not None:

@@ -68,7 +68,23 @@ def test_hud_uses_current_input_latency_snapshot_without_latching() -> None:
 
 
 def test_hud_input_latency_warning_is_neutral_and_exact() -> None:
-    source = inspect.getsource(ProgressRenderer.render)
+    from sky_music.ui import playback_notices
+
+    source = inspect.getsource(playback_notices.PlaybackNoticeLedger)
     assert "Input dispatch latency is elevated; playback timing may be unstable." in source
     assert "hook" not in source.lower()
     assert "filter keys" not in source.lower()
+
+
+def test_hud_retains_schedule_warning_state_for_live_renderer() -> None:
+    renderer = ProgressRenderer(
+        controls=_controls(),
+        schedule_warnings=("schedule repeat warning",),
+    )
+    renderer.render(0.0, 1.0, "Test Song", force=True)
+    state = renderer._notice_ledger.update()
+    renderer.finish()
+
+    assert [notice.message for notice in state.persistent_notices] == [
+        "schedule repeat warning"
+    ]

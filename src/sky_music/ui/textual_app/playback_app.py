@@ -19,6 +19,7 @@ from sky_music.config import load_config, resolve_game_fps
 from sky_music.infrastructure.hotkeys import is_hotkey_down, parse_hotkey
 from sky_music.ui.hud import format_duration
 from sky_music.ui.picker_theme import get_theme_preset
+from sky_music.ui.playback_notices import PlaybackNoticeLedger
 from sky_music.ui.text_render import (
     ansi_box,
     ansi_gradient_box,
@@ -294,6 +295,7 @@ class PlaybackCard(Static):
         self.total_us = total_us
         self.renderer = renderer or SnapshotRenderer()
         self.violations = violations
+        self._notice_ledger = PlaybackNoticeLedger()
         self.active_policy = active_policy
         self.hold_label = hold_label
         self.tempo_scale = tempo_scale
@@ -486,6 +488,7 @@ class PlaybackCard(Static):
         debug_mode: bool,
         result_callback: Any,
         command_bridge: PlaybackCommandBridge | None = None,
+        schedule_warnings: tuple[str, ...] = (),
     ) -> None:
         self.engine = engine
         self.command_bridge = command_bridge
@@ -493,6 +496,7 @@ class PlaybackCard(Static):
         self.song_name = song_name
         self.total_us = total_us
         self.violations = violations
+        self._notice_ledger = PlaybackNoticeLedger(schedule_warnings)
         self.active_policy = active_policy
         self.hold_label = hold_label
         self.tempo_scale = tempo_scale
@@ -671,6 +675,12 @@ class PlaybackCard(Static):
         total = snap.total if snap else (self.total_us / 1_000_000)
         status = snap.status if snap else "playing"
         degraded = snap.input_path_degraded if snap else False
+        backend_health = snap.backend_health if snap else None
+        notice_state = self._notice_ledger.update(
+            input_path_degraded=degraded,
+            keys_dropped=int(getattr(backend_health, "keys_dropped", 0) or 0),
+            chord_split_events=int(getattr(backend_health, "chord_split_events", 0) or 0),
+        )
 
         header_label = _STATUS_LABELS.get(status, status.replace("_", " ").title())
 
@@ -698,10 +708,10 @@ class PlaybackCard(Static):
         if self.violations:
             messages = ", ".join(v.message for v in self.violations)
             body.append(f"{yellow}Schedule violations: {messages}{_ANSI_RESET}")
-        if degraded:
-            body.append(
-                f"{yellow}Input dispatch latency is elevated; playback timing may be unstable.{_ANSI_RESET}"
-            )
+        body.extend(
+            f"{yellow}{notice.message}{_ANSI_RESET}"
+            for notice in notice_state.persistent_notices + notice_state.runtime_notices
+        )
 
         if self.debug_mode:
             now = time.monotonic()
@@ -711,11 +721,7 @@ class PlaybackCard(Static):
             stats = self._debug_stats_cache
         else:
             stats = self.renderer.counters_snapshot()
-        if stats.keys_dropped > 0:
-            body.append(
-                f"{red}Note-on drops: {stats.keys_dropped} key(s) not injected "
-                f"({stats.chord_split_events} chord split(s)) — incomplete chord, not late-retried.{_ANSI_RESET}"
-            )
+        body.extend(f"{red}{notice.message}{_ANSI_RESET}" for notice in notice_state.backend_notices)
         backend = (
             f"{red}stuck keys: {stats.stuck_keys}{_ANSI_RESET}"
             if stats.stuck_keys > 0
@@ -816,7 +822,7 @@ class PlaybackApp(App[str]):
         self.song_name = song_name
         self.total_us = total_us
         self._schedule_warnings = warnings
-        self._warnings_shown = False
+        self._notice_ledger = PlaybackNoticeLedger(warnings)
         self._exited = False
 
     def compose(self) -> ComposeResult:
@@ -962,14 +968,20 @@ class PlaybackApp(App[str]):
         self.query_one("#status-info", Static).update(f"[{color}]{label}[/]")
 
         warn_widget = self.query_one("#warning-info", Static)
-        warnings_to_show = []
-        if self._schedule_warnings and not self._warnings_shown:
-            warnings_to_show.extend(f"[{t.warning}]{w}[/]" for w in self._schedule_warnings)
-            self._warnings_shown = True
-        if snap.input_path_degraded:
-            warnings_to_show.append(
-                f"[{t.warning}]Input dispatch latency is elevated; playback timing may be unstable.[/]"
-            )
+        keys_dropped = 0
+        chord_splits = 0
+        if snap.backend_health is not None:
+            keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
+            chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
+        notice_state = self._notice_ledger.update(
+            input_path_degraded=snap.input_path_degraded,
+            keys_dropped=keys_dropped,
+            chord_split_events=chord_splits,
+        )
+        warnings_to_show = [
+            f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
+            for notice in notice_state.notices
+        ]
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))
             warn_widget.styles.display = "block"
@@ -1009,6 +1021,7 @@ class PlaybackScreen(Screen[str]):
         song_name: str,
         total_us: int,
         violations: tuple[Any, ...] = (),
+        schedule_warnings: tuple[str, ...] = (),
         active_policy: Any = None,
         hold_label: str = "hold 1.00f",
         tempo_scale: float = 1.0,
@@ -1023,6 +1036,7 @@ class PlaybackScreen(Screen[str]):
         self.song_name = song_name
         self.total_us = total_us
         self.violations = violations
+        self._notice_ledger = PlaybackNoticeLedger(schedule_warnings)
         self.active_policy = active_policy
         self.hold_label = hold_label
         self.tempo_scale = tempo_scale
@@ -1138,23 +1152,22 @@ class PlaybackScreen(Screen[str]):
         self.query_one("#status-info", Static).update(f"[{color}]{label}[/]")
 
         warn_widget = self.query_one("#warning-info", Static)
-        warnings_to_show = []
-        if self.violations:
-            warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
-        if snap.input_path_degraded:
-            warnings_to_show.append(
-                f"[{t.warning}]Input dispatch latency is elevated; playback timing may be unstable.[/]"
-            )
         keys_dropped = 0
         chord_splits = 0
         if snap.backend_health is not None:
             keys_dropped = int(getattr(snap.backend_health, "keys_dropped", 0) or 0)
             chord_splits = int(getattr(snap.backend_health, "chord_split_events", 0) or 0)
-        if keys_dropped > 0:
-            warnings_to_show.append(
-                f"[{t.danger}]Note-on drops: {keys_dropped} key(s) not injected "
-                f"({chord_splits} chord split(s)) — incomplete chord, not late-retried.[/]"
-            )
+        notice_state = self._notice_ledger.update(
+            input_path_degraded=snap.input_path_degraded,
+            keys_dropped=keys_dropped,
+            chord_split_events=chord_splits,
+        )
+        warnings_to_show = [
+            f"[{t.warning if notice.severity == 'warning' else t.danger}]{notice.message}[/]"
+            for notice in notice_state.notices
+        ]
+        if self.violations:
+            warnings_to_show.append(f"[{t.warning}]Schedule violations: " + ", ".join(v.message for v in self.violations) + "[/]")
 
         if warnings_to_show:
             warn_widget.update("\n".join(warnings_to_show))

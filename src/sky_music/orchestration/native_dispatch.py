@@ -250,11 +250,11 @@ class RustDispatchRuntime:
                         self._renderer.update_counters_batch(
                             ProgressCounters(
                                 max_lateness_us=int(latest.get("max_completion_error_us", 0)),
-                                late_2ms=0,
-                                late_5ms=0,
-                                late_10ms=0,
-                                release_max_us=0,
-                                release_late_2ms=0,
+                                late_2ms=int(latest.get("late_2ms", 0)),
+                                late_5ms=int(latest.get("late_5ms", 0)),
+                                late_10ms=int(latest.get("late_10ms", 0)),
+                                release_max_us=int(latest.get("release_max_us", 0)),
+                                release_late_2ms=int(latest.get("release_late_2ms", 0)),
                                 recent_latencies_us=tuple(
                                     int(value) for value in latest.get("recent_latencies_us", ())
                                 ),

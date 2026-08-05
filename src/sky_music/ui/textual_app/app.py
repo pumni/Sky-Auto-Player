@@ -776,7 +776,10 @@ class SkyPickerApp(App[SongPickerResult | None]):
             if playback_error is not None:
                 self._show_playback_error("Playback Error", playback_error)
                 return
-            self.update_session_state(picker_result)
+            self.update_session_state_from_plan(
+                plan,
+                is_dry_run=picker_result.action == "dry_run",
+            )
 
         def run_playback() -> None:
             from sky_music.ui.timing_guidance import fps_play_advisory
@@ -798,6 +801,7 @@ class SkyPickerApp(App[SongPickerResult | None]):
                 debug_mode=self.verbose_hud,
                 result_callback=handle_playback_result,
                 command_bridge=command_bridge,
+                schedule_warnings=plan.sched_meta.warnings,
             )
 
         if not is_dry_run:
@@ -836,6 +840,29 @@ class SkyPickerApp(App[SongPickerResult | None]):
             hold_frames=picker_result.hold_frames,
             tempo_scale=picker_result.tempo_scale,
             fps=picker_result.fps,
+        )
+
+    def update_session_state_from_plan(
+        self,
+        plan: PlaybackPlan,
+        *,
+        is_dry_run: bool,
+    ) -> None:
+        """Persist the exact session that produced the effective playback plan."""
+        main_mod = _get_main_module()
+        if not main_mod:
+            raise RuntimeError("Could not resolve main module to update runtime state.")
+
+        from sky_music.config import persist_playback_defaults
+
+        user_cfg = load_config()
+        main_mod.RUNTIME_STATE.apply_session(plan.session, user_cfg)
+        main_mod.RUNTIME_STATE.dry_run = is_dry_run
+        persist_playback_defaults(
+            user_cfg,
+            hold_frames=plan.session.hold_frames,
+            tempo_scale=plan.session.tempo_scale,
+            fps=plan.session.fps,
         )
 
     # ── Playback Card Management (inline state machine) ──────────────

@@ -476,6 +476,7 @@ def play_selected_song(
         sched_meta,
         raw_notes=song.notes,
         current_hold_frames=session.hold_frames,
+        current_tempo_scale=session.tempo_scale,
     )
 
     # If the picker already decided the hold/tempo, skip the prompt.
@@ -579,6 +580,7 @@ def play_selected_song(
             tempo_scale=current_tempo,
             accent_hex=_theme_tokens.accent,
             theme_name=_active_theme_name,
+            schedule_warnings=sched_meta.warnings,
         )
         renderer.active_policy = active_policy
 

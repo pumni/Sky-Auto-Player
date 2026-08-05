@@ -82,7 +82,12 @@ def prepare_playback(
             msg = "; ".join(f"[{v.code}] {v.message}" for v in fatal_violations)
             return PlaybackError(code="validation_failed", message=msg)
 
-    report = analyze_schedule(sched_meta, raw_notes=song.notes, current_hold_frames=session.hold_frames)
+    report = analyze_schedule(
+        sched_meta,
+        raw_notes=song.notes,
+        current_hold_frames=session.hold_frames,
+        current_tempo_scale=session.tempo_scale,
+    )
 
     return PlaybackPlan(
         actions=actions,

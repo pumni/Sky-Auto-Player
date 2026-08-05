@@ -181,6 +181,7 @@ def analyze_schedule(
     raw_notes: tuple[Note, ...] | None = None,
     *,
     current_hold_frames: float = 1.0,
+    current_tempo_scale: float = 1.0,
 ) -> ScheduleRiskReport:
     """Analyze a ScheduleMetadata and optional raw notes to detect timing conflicts, density risks, and suggest overrides."""
     down_events = sorted([action for action in res.actions if action.kind == "down"], key=lambda a: a.at_us)
@@ -208,24 +209,24 @@ def analyze_schedule(
     severe_repeat_stress = res.risky_same_key_repeats > 5 or res.compressed_holds > 10
     if res.impossible_same_key_repeats > 0:
         suggested_hold_frames = 1.0
-        suggested_tempo_scale = min(0.92, 1.0)
+        suggested_tempo_scale = min(current_tempo_scale, 0.92)
         recommendations.append(
             "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
         )
     elif severe_repeat_stress or has_repeat_stress:
         suggested_hold_frames = 1.0
-        suggested_tempo_scale = min(0.95, 1.0)
+        suggested_tempo_scale = min(current_tempo_scale, 0.95)
     elif res.max_polyphony >= 5 or (
         dense_clusters_list and severity in ("medium", "high")
     ):
         suggested_hold_frames = 1.5
-        suggested_tempo_scale = 0.95 if severity != "low" else 1.0
+        suggested_tempo_scale = min(current_tempo_scale, 0.95) if severity != "low" else current_tempo_scale
     elif severity == "medium":
         suggested_hold_frames = 1.25
-        suggested_tempo_scale = 0.95
+        suggested_tempo_scale = min(current_tempo_scale, 0.95)
     else:
         suggested_hold_frames = current_hold_frames
-        suggested_tempo_scale = 1.0
+        suggested_tempo_scale = current_tempo_scale
         
     max_chord_size = max(len(a.scan_codes) for a in down_events) if down_events else 0
     chords_count = sum(1 for a in down_events if len(a.scan_codes) > 1)

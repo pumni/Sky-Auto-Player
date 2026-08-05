@@ -29,3 +29,12 @@ def test_any_repeat_stress_wins_over_polyphony() -> None:
 
 def test_polyphony_without_repeat_stress_can_recommend_long_hold() -> None:
     assert analyze_schedule(_metadata(polyphony=5), current_hold_frames=1.0).suggested_hold_frames == 1.5
+
+
+def test_repeat_recommendation_never_increases_current_tempo() -> None:
+    report = analyze_schedule(
+        _metadata(risky=1),
+        current_hold_frames=1.5,
+        current_tempo_scale=0.8,
+    )
+    assert report.suggested_tempo_scale == 0.8

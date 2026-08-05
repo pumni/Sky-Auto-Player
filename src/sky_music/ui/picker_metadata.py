@@ -961,6 +961,7 @@ def get_song_ui_metadata(
             sched,
             raw_notes=song.notes,
             current_hold_frames=session.hold_frames,
+            current_tempo_scale=session.tempo_scale,
         )
 
         min_note_gap = (report.min_any_note_gap_us / 1000.0) if report.min_any_note_gap_us is not None else 0.0

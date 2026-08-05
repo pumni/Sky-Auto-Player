@@ -20,11 +20,18 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run(command: list[str], *, cwd: Path, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: list[str],
+    *,
+    cwd: Path,
+    capture: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(command))
     return subprocess.run(
         command,
         cwd=cwd,
+        env=env,
         capture_output=capture,
         text=True,
         check=False,
@@ -50,12 +57,14 @@ def _assert_clean(cwd: Path, label: str) -> None:
         raise RuntimeError(f"{label} worktree is dirty:\n{result.stdout}")
 
 
-def _build_wheel(repo: Path, *, env_file: Path | None) -> Path:
+def _build_wheel(repo: Path, *, env_file: Path | None, expected_sha: str) -> Path:
     command = ["uv", "run"]
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
     command.extend(["python", "scripts/build_rust_wheel.py", "--test-support"])
-    result = _run(command, cwd=repo)
+    build_env = os.environ.copy()
+    build_env["GITHUB_SHA"] = expected_sha
+    result = _run(command, cwd=repo, env=build_env)
     if result.returncode != 0:
         raise RuntimeError(f"native wheel build failed for {repo}: {result.returncode}")
     wheel_dir_candidates = (repo / "target" / "wheels", repo / "rust" / "target" / "wheels")
@@ -184,7 +193,11 @@ def main() -> int:
             env_file = ROOT / ".env"
             if env_file.exists():
                 shutil.copy2(env_file, worktree / ".env")
-            baseline_wheel = _build_wheel(worktree, env_file=Path(".env") if env_file.exists() else None)
+            baseline_wheel = _build_wheel(
+                worktree,
+                env_file=Path(".env") if env_file.exists() else None,
+                expected_sha=baseline_sha,
+            )
             provenance["roles"]["baseline"] = {
                 "native_build_commit": baseline_sha,
                 "wheel": baseline_wheel.name,
@@ -202,7 +215,11 @@ def main() -> int:
             if result.returncode != 0:
                 raise RuntimeError("baseline benchmark failed")
 
-            candidate_wheel = _build_wheel(ROOT, env_file=Path(".env") if env_file.exists() else None)
+            candidate_wheel = _build_wheel(
+                ROOT,
+                env_file=Path(".env") if env_file.exists() else None,
+                expected_sha=candidate_sha,
+            )
             provenance["roles"]["candidate"] = {
                 "native_build_commit": candidate_sha,
                 "wheel": candidate_wheel.name,
