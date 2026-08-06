@@ -1,6 +1,7 @@
 mod admission;
 mod cleanup;
 mod control;
+pub(super) mod dispatch;
 mod estimator;
 mod health;
 mod orchestration;
@@ -9,6 +10,10 @@ mod startup;
 mod timing;
 mod wait;
 
+pub(super) use dispatch::{
+    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
+    dispatch_due_pending_releases,
+};
 pub(crate) use planning::plan_next_dispatch;
 
 pub(crate) use admission::{
@@ -84,6 +89,7 @@ pub(super) struct WorkerErrorState {
     abort_counts: HashMap<&'static str, u64>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct WorkerTimingState {
     pub(super) hard_late_abort_threshold_ticks: DurationTicks,
     pub(super) retry_late_threshold_ticks: DurationTicks,
