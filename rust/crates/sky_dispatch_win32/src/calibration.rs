@@ -1383,7 +1383,7 @@ mod platform {
 
         pub(crate) fn cleanup_keyboard(&mut self) -> CleanupOutcome {
             let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
-            let expected = attempted.len() as u32;
+            let expected = attempted.len() as u8;
             let mut cleanup_success = false;
             for _ in 0..3 {
                 let result = send_input_raw(&attempted, true);
@@ -1473,7 +1473,7 @@ mod platform {
             };
             self.last_send_completed_ticks = Some(call_completed);
             let expected = scan_codes.len() as u8;
-            let partial_send = psr.inserted < expected as u32;
+            let partial_send = psr.inserted < expected;
             if !key_up {
                 for &scan_code in scan_codes.iter().take(psr.inserted as usize) {
                     if let Some(index) = PHYSICAL_INSTRUMENT_SCAN_CODES
@@ -1497,7 +1497,7 @@ mod platform {
                     phase: "partial_send",
                     sequence_id: seq,
                     expected,
-                    received: psr.inserted.min(expected as u32) as u8,
+                    received: psr.inserted.min(expected),
                     win32_error: (psr.win32_error != 0).then_some(psr.win32_error),
                 });
             }
@@ -1557,7 +1557,7 @@ mod platform {
                 analyse_receipts(&receipts, scan_codes, seq, expected_receipts)
             };
 
-            if key_up && psr.inserted == expected as u32 {
+            if key_up && psr.inserted == expected {
                 self.possibly_active_mask = 0;
             }
 
@@ -1760,27 +1760,22 @@ mod platform {
                         inserted: 0,
                         started_ticks: QpcTicks::ZERO,
                         completed_ticks: None,
-                        completed_us: 0,
                         win32_error: 0,
                         timing_error: Some(error),
                     };
                 }
             };
-            let (completed_us, timing_error) = match clock
+            let timing_error = clock
                 .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
                     completed_ticks.as_u64(),
                 ))
                 .map_err(|_| crate::clock::QpcError::ConversionOverflow)
-            {
-                Ok(micros) => (micros, None),
-                Err(error) => (0, Some(error)),
-            };
+                .err();
             return crate::input::PlatformSendResult {
                 requested: 0,
                 inserted: 0,
                 started_ticks: completed_ticks,
                 completed_ticks: Some(completed_ticks),
-                completed_us,
                 win32_error: 0,
                 timing_error,
             };
@@ -1790,11 +1785,10 @@ mod platform {
             Ok(ticks) => ticks,
             Err(error) => {
                 return crate::input::PlatformSendResult {
-                    requested: scan_codes.len() as u32,
+                    requested: scan_codes.len() as u8,
                     inserted: 0,
                     started_ticks: QpcTicks::ZERO,
                     completed_ticks: None,
-                    completed_us: 0,
                     win32_error: 0,
                     timing_error: Some(error),
                 };
@@ -1825,8 +1819,6 @@ mod platform {
         let requested = packets.len() as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
 
-        // SAFETY: packets is contiguous, correctly aligned, and remains valid
-        // for the duration of SendInput.
         unsafe { SetLastError(0) };
         let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
         let win32_error = if inserted != requested {
@@ -1834,25 +1826,24 @@ mod platform {
         } else {
             0
         };
-        let (completed_ticks, completed_us, timing_error) = match clock.now() {
+        let (completed_ticks, timing_error) = match clock.now() {
             Ok(ticks) => match clock
                 .timeline_to_us(sky_dispatch_core::time::TimelineTicks::from_raw(
                     ticks.as_u64(),
                 ))
                 .map_err(|_| crate::clock::QpcError::ConversionOverflow)
             {
-                Ok(micros) => (Some(ticks), micros, None),
-                Err(error) => (Some(ticks), 0, Some(error)),
+                Ok(_) => (Some(ticks), None),
+                Err(error) => (Some(ticks), Some(error)),
             },
-            Err(error) => (None, 0, Some(error)),
+            Err(error) => (None, Some(error)),
         };
 
         crate::input::PlatformSendResult {
-            requested,
-            inserted,
+            requested: requested as u8,
+            inserted: inserted as u8,
             started_ticks,
             completed_ticks,
-            completed_us,
             win32_error,
             timing_error,
         }
@@ -3145,7 +3136,6 @@ mod tests {
             inserted: 1,
             started_ticks: QpcTicks::from_raw(101),
             completed_ticks: Some(QpcTicks::from_raw(211)),
-            completed_us: 0,
             win32_error: 0,
             timing_error: None,
         };
@@ -3162,7 +3152,6 @@ mod tests {
             inserted: 1,
             started_ticks: QpcTicks::from_raw(101),
             completed_ticks: None,
-            completed_us: 0,
             win32_error: 0,
             timing_error: Some(crate::clock::QpcError::CounterUnavailable),
         };

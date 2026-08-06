@@ -4,8 +4,8 @@ use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::{
-    PacketClockFailurePhase, PacketRetryReason, PhysicalPacket, PhysicalSendOutcome,
-    PlatformSendResult, TrackedKeyState,
+    PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus, TrackedKeyState,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,8 +24,6 @@ pub(crate) fn create_mock_backend(
     let mut backend = TrackedKeyState::with_emitter(move |codes, _key_up| {
         let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
 
-        // Keep the artificial sender work after the sender start boundary so
-        // test-support timing matches the real SendInput seam.
         let base_latency_us =
             latency_base_us.saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
         let sender_started_ticks = match qpc_clock.now() {
@@ -34,7 +32,7 @@ pub(crate) fn create_mock_backend(
                 return mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Err(error),
-                    codes.len() as u32,
+                    codes.len() as u8,
                     0,
                     0,
                     0,
@@ -50,8 +48,8 @@ pub(crate) fn create_mock_backend(
                 mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
-                    codes.len() as u32,
+                    codes.len() as u8,
+                    codes.len() as u8,
                     0,
                     0,
                 )
@@ -60,8 +58,8 @@ pub(crate) fn create_mock_backend(
                 mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
-                    codes.len() as u32,
+                    codes.len() as u8,
+                    codes.len() as u8,
                     0,
                     *latency_ticks,
                 )
@@ -72,7 +70,7 @@ pub(crate) fn create_mock_backend(
             }) => mock_platform_send_result_from_started_ticks(
                 qpc_clock,
                 Ok(sender_started_ticks),
-                codes.len() as u32,
+                codes.len() as u8,
                 0,
                 *win32_error,
                 *latency_ticks,
@@ -82,11 +80,11 @@ pub(crate) fn create_mock_backend(
                 latency_ticks,
                 win32_error,
             }) => {
-                let inserted = (*inserted as u32).min(codes.len() as u32);
+                let inserted = (*inserted).min(codes.len() as u8);
                 mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
+                    codes.len() as u8,
                     inserted,
                     *win32_error,
                     *latency_ticks,
@@ -96,7 +94,7 @@ pub(crate) fn create_mock_backend(
                 mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
+                    codes.len() as u8,
                     0,
                     0,
                     *duration_ticks,
@@ -106,8 +104,8 @@ pub(crate) fn create_mock_backend(
                 let _ = mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
-                    codes.len() as u32,
+                    codes.len() as u8,
+                    codes.len() as u8,
                     0,
                     0,
                 );
@@ -117,8 +115,8 @@ pub(crate) fn create_mock_backend(
                 let mut result = mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
-                    codes.len() as u32,
-                    codes.len() as u32,
+                    codes.len() as u8,
+                    codes.len() as u8,
                     0,
                     0,
                 );
@@ -150,19 +148,30 @@ fn physical_packet_outcome(
     packet: PhysicalPacket,
     latency_base_us: u64,
     latency_per_key_us: u64,
-) -> PhysicalSendOutcome {
+) -> SendTransactionOutcome {
+    let requested_mask = packet.up_mask | packet.down_mask;
     let requested = packet.event_count();
     let total_latency_us =
         latency_base_us.saturating_add(latency_per_key_us.saturating_mul(u64::from(requested)));
     let started_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
-            return PhysicalSendOutcome::ClockFailure {
-                phase: PacketClockFailurePhase::BeforeSend,
-                send_was_called: false,
-                inserted_count: None,
-                started_ticks: None,
-                error,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::ClockFailureBeforeSend,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: None,
+                    completed_ticks: None,
+                    timing_error: Some(error),
+                },
             };
         }
     };
@@ -187,12 +196,22 @@ fn physical_packet_outcome(
             panic!("fault injection: panic after send before commit")
         }
         Some(InjectedSendOutcome::QpcFailureAfterSend) => {
-            return PhysicalSendOutcome::ClockFailure {
-                phase: PacketClockFailurePhase::AfterSend,
-                send_was_called: true,
-                inserted_count: Some(requested),
-                started_ticks: Some(started_ticks),
-                error: QpcError::CounterUnavailable,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::ClockFailureAfterSend,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: requested,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: None,
+                    timing_error: Some(QpcError::CounterUnavailable),
+                },
             };
         }
     };
@@ -200,12 +219,22 @@ fn physical_packet_outcome(
     {
         Ok(deadline) => deadline,
         Err(_) => {
-            return PhysicalSendOutcome::ClockFailure {
-                phase: PacketClockFailurePhase::AfterSend,
-                send_was_called: true,
-                inserted_count: Some(inserted),
-                started_ticks: Some(started_ticks),
-                error: QpcError::DeadlineOverflow,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::ClockFailureAfterSend,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: inserted,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: None,
+                    timing_error: Some(QpcError::DeadlineOverflow),
+                },
             };
         }
     };
@@ -214,54 +243,67 @@ fn physical_packet_outcome(
             Ok(now) if now >= deadline => break now,
             Ok(_) => std::hint::spin_loop(),
             Err(error) => {
-                return PhysicalSendOutcome::ClockFailure {
-                    phase: PacketClockFailurePhase::AfterSend,
-                    send_was_called: true,
-                    inserted_count: Some(inserted),
-                    started_ticks: Some(started_ticks),
-                    error,
+                return SendTransactionOutcome {
+                    status: SendTransactionStatus::ClockFailureAfterSend,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: inserted,
+                        attempts: 1,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: Some(started_ticks),
+                        completed_ticks: None,
+                        timing_error: Some(error),
+                    },
                 };
             }
         }
     };
-    if inserted >= requested {
-        PhysicalSendOutcome::Complete {
-            requested,
-            inserted,
-            attempts: 1,
-            retry_reason: PacketRetryReason::None,
-            started_ticks,
-            completed_ticks,
-        }
+
+    let status = if inserted >= requested {
+        SendTransactionStatus::Complete
     } else if inserted == 0 {
-        PhysicalSendOutcome::ZeroProgress {
-            requested,
-            attempts: 1,
-            retry_reason: PacketRetryReason::None,
-            first_error: win32_error,
-            last_error: win32_error,
-            started_ticks,
-            completed_ticks,
-        }
+        SendTransactionStatus::ZeroProgress
+    } else if !packet.is_up_only() {
+        SendTransactionStatus::IntegrityLost
     } else {
-        PhysicalSendOutcome::Partial {
-            requested,
-            inserted_count: inserted,
+        SendTransactionStatus::PartialProgress
+    };
+
+    let err_opt = (win32_error != 0).then_some(win32_error);
+
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted,
             attempts: 1,
+            zero_progress_retries: 0,
             retry_reason: PacketRetryReason::None,
-            first_error: win32_error,
-            last_error: win32_error,
-            started_ticks,
-            completed_ticks,
-        }
+            first_win32_error: err_opt,
+            last_win32_error: err_opt,
+            started_ticks: Some(started_ticks),
+            completed_ticks: Some(completed_ticks),
+            timing_error: None,
+        },
     }
 }
 
 fn mock_platform_send_result_from_started_ticks(
     qpc_clock: QpcClock,
     started_ticks: Result<QpcTicks, QpcError>,
-    requested: u32,
-    inserted: u32,
+    requested: u8,
+    inserted: u8,
     win32_error: u32,
     latency_ticks: u64,
 ) -> PlatformSendResult {
@@ -273,7 +315,6 @@ fn mock_platform_send_result_from_started_ticks(
                 inserted: 0,
                 started_ticks: QpcTicks::ZERO,
                 completed_ticks: None,
-                completed_us: 0,
                 win32_error,
                 timing_error: Some(error),
             };
@@ -288,7 +329,6 @@ fn mock_platform_send_result_from_started_ticks(
                 inserted: 0,
                 started_ticks,
                 completed_ticks: None,
-                completed_us: 0,
                 win32_error,
                 timing_error: Some(QpcError::DeadlineOverflow),
             };
@@ -297,19 +337,13 @@ fn mock_platform_send_result_from_started_ticks(
     loop {
         match qpc_clock.now() {
             Ok(now) if now >= deadline => {
-                let (completed_us, timing_error) =
-                    match qpc_clock.duration_to_us(DurationTicks::from_raw(now.as_u64())) {
-                        Ok(micros) => (micros, None),
-                        Err(_) => (0, Some(QpcError::ConversionOverflow)),
-                    };
                 return PlatformSendResult {
                     requested,
                     inserted,
                     started_ticks,
                     completed_ticks: Some(now),
-                    completed_us,
                     win32_error,
-                    timing_error,
+                    timing_error: None,
                 };
             }
             Ok(_) => std::hint::spin_loop(),
@@ -319,7 +353,6 @@ fn mock_platform_send_result_from_started_ticks(
                     inserted: 0,
                     started_ticks,
                     completed_ticks: None,
-                    completed_us: 0,
                     win32_error,
                     timing_error: Some(error),
                 };

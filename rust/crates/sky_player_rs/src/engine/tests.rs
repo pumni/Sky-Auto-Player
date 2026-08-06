@@ -589,11 +589,10 @@ fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
 #[test]
 fn target_stamp_rearms_preflight_without_rechecking_steady_state() {
     let backend = TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
-        requested: codes.len() as u32,
-        inserted: codes.len() as u32,
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
         started_ticks: QpcTicks::ZERO,
         completed_ticks: Some(QpcTicks::ZERO),
-        completed_us: 0,
         win32_error: 0,
         timing_error: None,
     });
@@ -619,11 +618,10 @@ fn target_stamp_rearms_preflight_without_rechecking_steady_state() {
 #[test]
 fn admission_epoch_invalidation_requires_new_preflight_even_for_same_stamp() {
     let backend = TrackedKeyState::with_emitter(|codes, _key_up| PlatformSendResult {
-        requested: codes.len() as u32,
-        inserted: codes.len() as u32,
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
         started_ticks: QpcTicks::ZERO,
         completed_ticks: Some(QpcTicks::ZERO),
-        completed_us: 0,
         win32_error: 0,
         timing_error: None,
     });

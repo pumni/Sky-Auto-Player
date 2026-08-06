@@ -11,10 +11,10 @@ mod up_transaction;
 
 pub use down_transaction::{emit_down, emit_down_with};
 pub use outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PacketClockFailurePhase, PacketRetryReason,
-    PhysicalKeyPreflightError, PhysicalPacket, PhysicalSendOutcome, PlatformSendResult,
-    ReleaseAllOutcome,
+    PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult,
+    ReleaseAllOutcome, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
+
 pub use packet::{MAX_PACKET_EVENTS, send_physical_packet_with_clock};
 pub use physical::is_scan_code_physically_down;
 pub use raw::{send_input_raw, send_input_raw_with_clock};

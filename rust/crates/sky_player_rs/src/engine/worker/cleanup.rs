@@ -268,9 +268,7 @@ pub(crate) fn cancel_coordinator_or_terminal(
 }
 
 pub(crate) fn release_outcome_verified(outcome: &ReleaseAllOutcome) -> bool {
-    outcome.released_successfully
-        && outcome.stuck_keys.is_empty()
-        && !outcome.verification_inconclusive
+    outcome.released_successfully && outcome.stuck_mask == 0 && !outcome.verification_inconclusive
 }
 
 pub(crate) fn release_state_verified(
@@ -312,7 +310,9 @@ pub(crate) fn clean_completion_proven(
 pub(crate) fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
     format!(
         "released_successfully={}, stuck_keys={:?}, verification_inconclusive={}",
-        outcome.released_successfully, outcome.stuck_keys, outcome.verification_inconclusive
+        outcome.released_successfully,
+        outcome.stuck_keys(),
+        outcome.verification_inconclusive
     )
 }
 

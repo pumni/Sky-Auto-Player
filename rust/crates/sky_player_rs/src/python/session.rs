@@ -346,9 +346,9 @@ impl NativeDispatchSessionPy {
         dict.set_item("abort_counts_by_reason", snap.abort_counts_by_reason)?;
         if let Some(outcome) = snap.release_outcome {
             let release = PyDict::new(py);
-            release.set_item("attempted", outcome.attempted)?;
+            release.set_item("attempted", outcome.attempted())?;
             release.set_item("released_successfully", outcome.released_successfully)?;
-            release.set_item("stuck_keys", outcome.stuck_keys)?;
+            release.set_item("stuck_keys", outcome.stuck_keys())?;
             release.set_item(
                 "verification_inconclusive",
                 outcome.verification_inconclusive,

@@ -1,61 +1,59 @@
-use super::outcome::{EmitResult, PlatformSendResult};
+use super::outcome::{
+    PacketRetryReason, PlatformSendResult, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus,
+};
+use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
-use smallvec::SmallVec;
 
-pub fn emit_down_with<F>(scan_codes: &[u16], mut send_fn: F) -> EmitResult
+pub fn emit_down_with<F>(scan_codes: &[u16], mut send_fn: F) -> SendTransactionOutcome
 where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
-        let (started_ticks, completed_ticks, completed_us, timing_error) =
+        let (started_ticks, completed_ticks, _completed_us, timing_error) =
             no_syscall_boundary_with_clock(None);
-        return EmitResult {
-            sent: SmallVec::new(),
-            completed_us,
-            started_ticks,
-            completed_ticks,
-            success: timing_error.is_none(),
-            keys_dropped: 0,
-            first_win32_error: None,
-            last_win32_error: None,
-            send_attempts: 0,
-            zero_progress_retries: 0,
-            first_inserted: 0,
-            partial_progress: false,
-            retried_after_zero_progress: false,
-            chord_integrity_lost: false,
-            keys_inserted_before_failure: 0,
-            keys_rolled_back: 0,
-            rollback_residue_keys: 0,
-            timing_error,
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: 0,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 0,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started_ticks),
+                completed_ticks,
+                timing_error,
+            },
         };
     }
+
+    let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
     let n = scan_codes.len();
     let res1 = send_fn(scan_codes, false);
     let landed1 = (res1.inserted as usize).min(n);
     let first_win32_error = (res1.win32_error != 0).then_some(res1.win32_error);
 
     if landed1 >= n {
-        let sent: SmallVec<[u16; 15]> = scan_codes.iter().copied().collect();
-        return EmitResult {
-            sent,
-            completed_us: res1.completed_us,
-            started_ticks: Some(res1.started_ticks),
-            completed_ticks: res1.completed_ticks,
-            success: true,
-            keys_dropped: 0,
-            first_win32_error,
-            last_win32_error: first_win32_error,
-            send_attempts: 1,
-            zero_progress_retries: 0,
-            first_inserted: landed1 as u8,
-            partial_progress: false,
-            retried_after_zero_progress: false,
-            chord_integrity_lost: false,
-            keys_inserted_before_failure: 0,
-            keys_rolled_back: 0,
-            rollback_residue_keys: 0,
-            timing_error: res1.timing_error,
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: requested_mask,
+                skipped_mask: 0,
+                first_inserted: landed1 as u8,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error,
+                last_win32_error: first_win32_error,
+                started_ticks: Some(res1.started_ticks),
+                completed_ticks: res1.completed_ticks,
+                timing_error: res1.timing_error,
+            },
         };
     }
 
@@ -65,27 +63,25 @@ where
     // as uncertain and the worker's terminal cleanup handles it fail-closed.
     if landed1 > 0 {
         let rollback = send_fn(scan_codes, true);
-        let rollback_inserted = (rollback.inserted as usize).min(n);
         let rollback_error = (rollback.win32_error != 0).then_some(rollback.win32_error);
-        return EmitResult {
-            sent: SmallVec::new(),
-            completed_us: rollback.completed_us,
-            started_ticks: Some(res1.started_ticks),
-            completed_ticks: rollback.completed_ticks,
-            success: false,
-            keys_dropped: (n - landed1) as u64,
-            first_win32_error,
-            last_win32_error: rollback_error.or(first_win32_error),
-            send_attempts: 2,
-            zero_progress_retries: 0,
-            first_inserted: landed1 as u8,
-            partial_progress: true,
-            retried_after_zero_progress: false,
-            chord_integrity_lost: true,
-            keys_inserted_before_failure: landed1 as u8,
-            keys_rolled_back: rollback_inserted as u8,
-            rollback_residue_keys: n.saturating_sub(rollback_inserted) as u8,
-            timing_error: res1.timing_error.or(rollback.timing_error),
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: landed1 as u8,
+                attempts: 2,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress {
+                    inserted_count: landed1 as u8,
+                },
+                first_win32_error,
+                last_win32_error: rollback_error.or(first_win32_error),
+                started_ticks: Some(res1.started_ticks),
+                completed_ticks: rollback.completed_ticks,
+                timing_error: res1.timing_error.or(rollback.timing_error),
+            },
         };
     }
 
@@ -95,75 +91,66 @@ where
     let retry_inserted = (retry.inserted as usize).min(n);
     let retry_error = (retry.win32_error != 0).then_some(retry.win32_error);
     if retry_inserted >= n {
-        return EmitResult {
-            sent: scan_codes.iter().copied().collect(),
-            completed_us: retry.completed_us,
-            started_ticks: Some(res1.started_ticks),
-            completed_ticks: retry.completed_ticks,
-            success: true,
-            keys_dropped: 0,
-            first_win32_error,
-            last_win32_error: retry_error.or(first_win32_error),
-            send_attempts: 2,
-            zero_progress_retries: 1,
-            first_inserted: 0,
-            partial_progress: false,
-            retried_after_zero_progress: true,
-            chord_integrity_lost: false,
-            keys_inserted_before_failure: 0,
-            keys_rolled_back: 0,
-            rollback_residue_keys: 0,
-            timing_error: retry.timing_error.or(res1.timing_error),
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: requested_mask,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 2,
+                zero_progress_retries: 1,
+                retry_reason: PacketRetryReason::ZeroProgress,
+                first_win32_error,
+                last_win32_error: retry_error.or(first_win32_error),
+                started_ticks: Some(res1.started_ticks),
+                completed_ticks: retry.completed_ticks,
+                timing_error: retry.timing_error.or(res1.timing_error),
+            },
         };
     }
 
-    let mut completed_us = retry.completed_us;
-    let started_ticks = Some(res1.started_ticks);
     let mut completed_ticks = retry.completed_ticks;
-    let mut send_attempts = 2;
+    let mut attempts = 2;
     let mut last_win32_error = retry_error.or(first_win32_error);
     let mut rollback_timing_error = None;
-    let mut keys_rolled_back = 0u8;
-    let mut rollback_residue_keys = 0u8;
+    let mut status = SendTransactionStatus::ZeroProgress;
+
     if retry_inserted > 0 {
         let rollback = send_fn(scan_codes, true);
-        let rollback_inserted = (rollback.inserted as usize).min(n);
-        completed_us = rollback.completed_us;
         completed_ticks = rollback.completed_ticks;
-        send_attempts = 3;
+        attempts = 3;
         last_win32_error = (rollback.win32_error != 0)
             .then_some(rollback.win32_error)
             .or(last_win32_error);
         rollback_timing_error = rollback.timing_error;
-        keys_rolled_back = rollback_inserted as u8;
-        rollback_residue_keys = n.saturating_sub(rollback_inserted) as u8;
+        status = SendTransactionStatus::IntegrityLost;
     }
+
     let timing_error = retry
         .timing_error
         .or(res1.timing_error)
         .or(rollback_timing_error);
-    EmitResult {
-        sent: SmallVec::new(),
-        completed_us,
-        started_ticks,
-        completed_ticks,
-        success: false,
-        keys_dropped: (n - retry_inserted) as u64,
-        first_win32_error,
-        last_win32_error,
-        send_attempts,
-        zero_progress_retries: 1,
-        first_inserted: 0,
-        partial_progress: retry_inserted > 0,
-        retried_after_zero_progress: true,
-        chord_integrity_lost: retry_inserted > 0,
-        keys_inserted_before_failure: retry_inserted as u8,
-        keys_rolled_back,
-        rollback_residue_keys,
-        timing_error,
+
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts,
+            zero_progress_retries: 1,
+            retry_reason: PacketRetryReason::ZeroProgress,
+            first_win32_error,
+            last_win32_error,
+            started_ticks: Some(res1.started_ticks),
+            completed_ticks,
+            timing_error,
+        },
     }
 }
 
-pub fn emit_down(scan_codes: &[u16]) -> EmitResult {
+pub fn emit_down(scan_codes: &[u16]) -> SendTransactionOutcome {
     emit_down_with(scan_codes, send_input_raw)
 }

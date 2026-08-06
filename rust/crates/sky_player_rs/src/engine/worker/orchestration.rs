@@ -1117,7 +1117,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     runtime.terminal_error = Some(format!("QPC failure after note-off: {error:?}"));
                     break;
                 }
-                let completed_qpc_ticks = match result.send_completed_ticks {
+                let completed_qpc_ticks = match result.evidence.completed_ticks {
                     Some(ticks) => ticks,
                     None => {
                         runtime.force_full_cleanup = true;
@@ -1139,7 +1139,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
                 };
-                let sender_started_effective_ticks = match result.send_started_ticks {
+                let sender_started_effective_ticks = match result.evidence.started_ticks {
                     Some(ticks) => match clock_state.get_elapsed_allow_pre_epoch(
                         ticks,
                         runtime.allow_pre_epoch_startup_dispatch,
@@ -1156,14 +1156,16 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 };
                 let completed_effective = qpc_ticks_to_us_or_terminal!(completed_effective_ticks);
                 runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
+                let sent_codes = result.sent_scan_codes();
+                let skipped_codes = result.skipped_duplicates();
                 let recovery_required = match coordinator.requeue_failed_releases_ticks(
                     &due_pending,
-                    &result.sent,
-                    &result.skipped_duplicates,
+                    sent_codes.as_slice(),
+                    skipped_codes.as_slice(),
                     actual_ticks,
                     completed_effective_ticks,
                     &timing.retry_backoff_ticks,
-                    result.last_win32_error,
+                    result.evidence.last_win32_error,
                 ) {
                     Ok(required) => required,
                     Err(error) => {
@@ -1175,8 +1177,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 };
                 if let Err(error) = coordinator.complete_releases(
                     &due_pending,
-                    &result.sent,
-                    &result.skipped_duplicates,
+                    sent_codes.as_slice(),
+                    skipped_codes.as_slice(),
                 ) {
                     runtime.force_full_cleanup = true;
                     runtime.terminal_error =
@@ -1359,10 +1361,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             break;
                         }
                     };
-                let clean_up_sample = result.success
-                    && result.sent.len() == scan_codes.len()
-                    && result.skipped_duplicates.is_empty()
-                    && result.send_attempts == 1
+                let clean_up_sample = result.is_success()
+                    && result.sent_scan_codes().len() == scan_codes.len()
+                    && result.skipped_duplicates().is_empty()
+                    && result.evidence.attempts == 1
                     && deferred_by_us == 0
                     && !mixed_source;
                 let strict_up_completion_late = config.timing.strict_timing
@@ -1385,13 +1387,13 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 } else {
                     release_runtime_outcome(
                         deferred_by_us,
-                        result.sent.len(),
+                        result.sent_scan_codes().len(),
                         scan_codes.len(),
                         recovery_required,
                     )
                 };
                 let mut trace_flags = 0;
-                if result.sent.len() == scan_codes.len() {
+                if result.sent_scan_codes().len() == scan_codes.len() {
                     trace_flags |= TRACE_FLAG_SENT_FULL;
                 }
                 if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
@@ -1411,7 +1413,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             outcome: trace_outcome_code(release_outcome),
                             polyphony: scan_codes.len(),
                             flags: trace_flags,
-                            win32_error: result.last_win32_error.unwrap_or(0),
+                            win32_error: result.evidence.last_win32_error.unwrap_or(0),
                         },
                         TraceTiming {
                             authored_ticks: scheduled_ticks,
@@ -1420,16 +1422,16 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             send_started_ticks: sender_started_effective_ticks,
                             send_completed_ticks: Some(completed_effective_ticks),
                             bookkeeping_duration_us: bookkeeping_completed_us
-                                .saturating_sub(result.send_completed_us),
+                                .saturating_sub(result.completed_us()),
                             completion_error_ticks: up_completion_error_ticks,
                             authored_completion_error_ticks: up_authored_completion_error_ticks,
                             applied_lead_ticks: lead_up_ticks,
                         },
                         TraceDelivery {
                             requested: scan_codes.len(),
-                            sent: result.sent.len(),
-                            skipped: result.skipped_duplicates.len(),
-                            send_attempts: usize::from(result.send_attempts),
+                            sent: result.sent_scan_codes().len(),
+                            skipped: result.skipped_duplicates().len(),
+                            send_attempts: usize::from(result.evidence.attempts),
                         },
                     )
                 }) {
@@ -1456,13 +1458,13 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 local_metrics.bookkeeping_warn_threshold_us = frozen_budget.bookkeeping_warn_us;
                 local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
                 local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-                let send_duration_us = result.send_completed_us.saturating_sub(started_us);
+                let send_duration_us = result.completed_us().saturating_sub(started_us);
                 if config.estimator.enable_adaptive_lead
                     && let Err(error) = update_estimator_after_send_class(
                         estimator,
                         ActionKind::Up,
-                        result.send_completed_us.saturating_sub(started_us),
-                        result.sent.len(),
+                        result.completed_us().saturating_sub(started_us),
+                        result.sent_scan_codes().len(),
                         scan_codes.len(),
                         lead_up,
                         up_completion_error_us,
@@ -1493,7 +1495,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     DispatchHealthObservation {
                         send_duration_us,
                         post_send_duration_us: iteration_ready_us
-                            .saturating_sub(result.send_completed_us),
+                            .saturating_sub(result.completed_us()),
                         path: frozen_budget.path,
                         send_warn_us: send_warn_threshold_us,
                         bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
@@ -1511,6 +1513,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         "note-off recovery exhausted after {} retries{}",
                         sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES,
                         result
+                            .evidence
                             .last_win32_error
                             .map_or(String::new(), |error| format!(" (Win32 error {error})"))
                     ));
@@ -1979,96 +1982,21 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             None => TRACE_KIND_DOWN,
                         };
 
-                        let (
-                            result_started_ticks,
-                            result_completed_us,
-                            result_completed_ticks,
-                            result_sent,
-                            result_skipped_duplicates,
-                            result_send_attempts,
-                            _result_zero_progress_retries,
-                            result_retry_reason,
-                            result_chord_integrity_lost,
-                            _result_first_win32_error,
-                            result_last_win32_error,
-                            result_success,
-                        ) = match result {
-                            sky_dispatch_win32::input::DownSendOutcome::Complete {
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                sent,
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                ..
-                            } => (
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                sent,
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                false,
-                                None,
-                                None,
-                                true,
-                            ),
-                            sky_dispatch_win32::input::DownSendOutcome::ZeroProgress {
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                first_error,
-                                last_error,
-                                ..
-                            } => (
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                smallvec::SmallVec::<[u16; 15]>::new(),
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                false,
-                                first_error,
-                                last_error,
-                                false,
-                            ),
-                            sky_dispatch_win32::input::DownSendOutcome::IntegrityLost {
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                sent,
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                first_error,
-                                last_error,
-                                ..
-                            } => (
-                                started_ticks,
-                                completed_us,
-                                completed_ticks,
-                                sent,
-                                skipped_duplicates,
-                                send_attempts,
-                                zero_progress_retries,
-                                retry_reason,
-                                true,
-                                first_error,
-                                last_error,
-                                false,
-                            ),
-                        };
+                        let result_success = result.is_success();
+                        let result_started_ticks = result.evidence.started_ticks;
+                        let result_completed_ticks = result.evidence.completed_ticks;
+                        let result_completed_us = result.completed_us();
+                        let result_sent = result.sent_scan_codes();
+                        let result_skipped_duplicates = result.skipped_duplicates();
+                        let result_send_attempts = result.evidence.attempts;
+                        let _result_zero_progress_retries = result.evidence.zero_progress_retries;
+                        let result_retry_reason = result.evidence.retry_reason;
+                        let result_chord_integrity_lost = matches!(
+                            result.status,
+                            sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
+                        );
+                        let _result_first_win32_error = result.evidence.first_win32_error;
+                        let result_last_win32_error = result.evidence.last_win32_error;
 
                         if !result_success {
                             runtime.force_full_cleanup = true;

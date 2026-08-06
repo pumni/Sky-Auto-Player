@@ -2,34 +2,28 @@ use super::down_transaction::{emit_down, emit_down_with};
 #[cfg(any(test, feature = "test-support"))]
 use super::outcome::PlatformSendResult;
 use super::outcome::{
-    DownSendOutcome, EmitResult, InputSendResult, PacketRetryReason, PhysicalKeyPreflightError,
-    PhysicalPacket, PhysicalSendOutcome, ReleaseAllOutcome,
+    PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket, ReleaseAllOutcome, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus,
 };
 use super::packet::send_physical_packet_with_clock;
 use super::physical::{
     InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
     mask_for_scan_codes, reconcile_release_observation,
 };
-
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw_with_clock};
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
-
 use super::up_transaction::{emit_up, emit_up_with};
 use crate::clock::QpcClock;
 use smallvec::SmallVec;
 use std::fmt;
 
 /// Emit a note-off without delaying the real-time worker.
-///
-/// A partial `SendInput` result gets one immediate retry of the whole
-/// requested set. Any delayed retry belongs to the coordinator, which can then enter an
-/// interruptible recovery pause instead of blocking command handling inside
-/// the platform seam.
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
-pub type CustomPacketEmitterFn = Box<dyn Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync>;
+pub type CustomPacketEmitterFn =
+    Box<dyn Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReleaseScope {
@@ -121,7 +115,7 @@ impl TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_packet_emitter<F>(emitter: F) -> Self
     where
-        F: Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync + 'static,
+        F: Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync + 'static,
     {
         Self {
             custom_packet_emitter: Some(Box::new(emitter)),
@@ -132,7 +126,7 @@ impl TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_packet_emitter<F>(&mut self, emitter: F)
     where
-        F: Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync + 'static,
+        F: Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync + 'static,
     {
         self.custom_packet_emitter = Some(Box::new(emitter));
     }
@@ -146,7 +140,7 @@ impl TrackedKeyState {
 
     #[cfg(any(test, feature = "test-support"))]
     fn uses_custom_emitter(&self) -> bool {
-        self.custom_emitter.is_some()
+        self.custom_emitter.is_some() || self.custom_packet_emitter.is_some()
     }
 
     #[cfg(not(any(test, feature = "test-support")))]
@@ -154,9 +148,6 @@ impl TrackedKeyState {
         false
     }
 
-    /// Admit a real playback start/resume only when the user is not holding an
-    /// instrument key. Mock emitters do not represent physical keyboard state,
-    /// so they are explicitly exempt from this host preflight.
     pub fn ensure_instrument_keys_physically_up(
         &self,
         target_hwnd: isize,
@@ -178,7 +169,7 @@ impl TrackedKeyState {
         }
     }
 
-    fn do_emit_down(&mut self, scan_codes: &[u16]) -> EmitResult {
+    fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
             return emit_down_with(scan_codes, |sc, key_up| emitter(sc, key_up));
@@ -192,7 +183,7 @@ impl TrackedKeyState {
         }
     }
 
-    fn do_emit_up(&mut self, scan_codes: &[u16]) -> EmitResult {
+    fn do_emit_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
             return emit_up_with(scan_codes, |sc, key_up| emitter(sc, key_up));
@@ -206,21 +197,27 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn key_down(&mut self, scan_codes: &[u16]) -> DownSendOutcome {
-        if scan_codes.is_empty() {
-            let (started_ticks, completed_ticks, completed_us, timing_error) =
+    pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
+        let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
+        if scan_codes.is_empty() || requested_mask == 0 {
+            let (started_ticks, completed_ticks, _completed_us, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
-            return DownSendOutcome::Complete {
-                completed_us,
-                started_ticks,
-                completed_ticks,
-                sent: SmallVec::new(),
-                skipped_duplicates: SmallVec::new(),
-                send_attempts: 0,
-                zero_progress_retries: 0,
-                retried_after_zero_progress: false,
-                retry_reason: PacketRetryReason::None,
-                timing_error,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: 0,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks,
+                    timing_error,
+                },
             };
         }
 
@@ -235,20 +232,27 @@ impl TrackedKeyState {
             }
         }
 
+        let skipped_mask = mask_for_scan_codes(&duplicates).unwrap_or(0);
+
         if to_send.is_empty() {
-            let (started_ticks, completed_ticks, completed_us, timing_error) =
+            let (started_ticks, completed_ticks, _completed_us, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
-            return DownSendOutcome::Complete {
-                completed_us,
-                started_ticks,
-                completed_ticks,
-                sent: SmallVec::new(),
-                skipped_duplicates: duplicates,
-                send_attempts: 0,
-                zero_progress_retries: 0,
-                retried_after_zero_progress: false,
-                retry_reason: PacketRetryReason::None,
-                timing_error,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks,
+                    timing_error,
+                },
             };
         }
 
@@ -257,142 +261,91 @@ impl TrackedKeyState {
         }
 
         let emitted = self.do_emit_down(&to_send);
-        self.timing_error = emitted.timing_error;
-        self.keys_dropped += emitted.keys_dropped;
-        if emitted.partial_progress {
+        self.timing_error = emitted.evidence.timing_error;
+
+        if matches!(
+            emitted.status,
+            SendTransactionStatus::PartialProgress | SendTransactionStatus::IntegrityLost
+        ) {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
         }
-        if !emitted.success && emitted.retried_after_zero_progress && emitted.sent.is_empty() {
+        if matches!(emitted.status, SendTransactionStatus::ZeroProgress)
+            && emitted.evidence.zero_progress_retries > 0
+        {
             self.sendinput_zero_progress_failures =
                 self.sendinput_zero_progress_failures.saturating_add(1);
         }
-        self.keys_inserted_before_failure = self
-            .keys_inserted_before_failure
-            .saturating_add(emitted.keys_inserted_before_failure as u64);
-        self.keys_rolled_back = self
-            .keys_rolled_back
-            .saturating_add(emitted.keys_rolled_back as u64);
-        self.rollback_residue_keys = self
-            .rollback_residue_keys
-            .saturating_add(emitted.rollback_residue_keys as u64);
 
-        if emitted.chord_integrity_lost {
-            // SendInput's inserted count is not a trustworthy prefix receipt.
-            // Keep the complete chord possibly active until full cleanup has
-            // verified that every requested key is up.
+        let to_send_mask = mask_for_scan_codes(&to_send).unwrap_or(0);
+
+        if matches!(emitted.status, SendTransactionStatus::IntegrityLost) {
             for &sc in &to_send {
                 let bit = key_mask(sc).unwrap_or(0);
                 self.active_mask &= !bit;
                 self.possibly_active_mask |= bit;
             }
+            self.chord_split_events += 1;
+        } else if emitted.is_success() {
+            self.active_mask |= to_send_mask;
+            self.possibly_active_mask &= !to_send_mask;
         } else {
-            for &sc in &emitted.sent {
-                self.active_mask |= key_mask(sc).unwrap_or(0);
-            }
-
-            for &sc in &to_send {
-                self.possibly_active_mask &= !key_mask(sc).unwrap_or(0);
-            }
+            self.possibly_active_mask &= !to_send_mask;
         }
 
-        if !emitted.success {
+        if !emitted.is_success() {
             self.chords_rejected = self.chords_rejected.saturating_add(1);
             self.authored_keys_rejected = self
                 .authored_keys_rejected
                 .saturating_add(to_send.len() as u64);
         }
-        if emitted.chord_integrity_lost {
-            self.chord_split_events += 1;
-        }
-        if emitted.success {
+
+        if emitted.is_success() {
             if self.failed_release_mask == 0 {
                 self.last_error = None;
             }
         } else {
-            self.last_error = Some(format!(
-                "note-on rejected: {} of {} keys dropped; chord integrity lost={}",
-                emitted.keys_dropped,
-                to_send.len(),
-                emitted.chord_integrity_lost,
-            ));
+            self.last_error = Some(format!("note-on rejected; status={:?}", emitted.status,));
         }
 
-        if emitted.chord_integrity_lost {
-            DownSendOutcome::IntegrityLost {
-                inserted_before_failure: emitted.keys_inserted_before_failure,
-                rolled_back: emitted.keys_rolled_back,
-                rollback_residue: emitted.rollback_residue_keys,
-                first_error: emitted.first_win32_error,
-                last_error: emitted.last_win32_error,
-                completed_us: emitted.completed_us,
-                started_ticks: emitted.started_ticks,
-                completed_ticks: emitted.completed_ticks,
-                sent: emitted.sent,
-                skipped_duplicates: duplicates,
-                send_attempts: emitted.send_attempts,
-                zero_progress_retries: emitted.zero_progress_retries,
-                retry_reason: PacketRetryReason::None,
-                timing_error: emitted.timing_error,
-            }
-        } else if !emitted.success {
-            DownSendOutcome::ZeroProgress {
-                error: emitted.last_win32_error.or(emitted.first_win32_error),
-                completed_us: emitted.completed_us,
-                started_ticks: emitted.started_ticks,
-                completed_ticks: emitted.completed_ticks,
-                skipped_duplicates: duplicates,
-                send_attempts: emitted.send_attempts,
-                zero_progress_retries: emitted.zero_progress_retries,
-                retry_reason: PacketRetryReason::None,
-                first_error: emitted.first_win32_error,
-                last_error: emitted.last_win32_error,
-                timing_error: emitted.timing_error,
-            }
-        } else {
-            DownSendOutcome::Complete {
-                completed_us: emitted.completed_us,
-                started_ticks: emitted.started_ticks,
-                completed_ticks: emitted.completed_ticks,
-                sent: emitted.sent,
-                skipped_duplicates: duplicates,
-                send_attempts: emitted.send_attempts,
-                zero_progress_retries: emitted.zero_progress_retries,
-                retried_after_zero_progress: emitted.retried_after_zero_progress,
-                retry_reason: PacketRetryReason::None,
-                timing_error: emitted.timing_error,
-            }
+        SendTransactionOutcome {
+            status: emitted.status,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: if emitted.is_success() {
+                    requested_mask
+                } else {
+                    0
+                },
+                skipped_mask,
+                ..emitted.evidence
+            },
         }
     }
 
-    /// Dispatch a compiled physical packet as one SendInput transaction.
-    ///
-    /// Unlike the legacy `key_down`/`key_up` helpers this method never turns a
-    /// partial return count into a list of supposedly inserted keys. A full
-    /// outcome commits the masks as a whole; an uncertain outcome records the
-    /// entire packet as possibly active for fail-closed cleanup.
-    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> DownSendOutcome {
+    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-                // Test-only backend seam: represent the complete packet as
-                // one emitter call. Production never enters this branch and
-                // uses the stack INPUT[30] sender below.
                 emitter(packet)
             } else {
                 let Some(clock) = self.qpc_clock else {
                     self.last_error = Some("packet sender has no QPC clock".to_string());
-                    return DownSendOutcome::ZeroProgress {
-                        error: None,
-                        completed_us: 0,
-                        skipped_duplicates: SmallVec::new(),
-                        send_attempts: 0,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_error: None,
-                        last_error: None,
-                        started_ticks: None,
-                        completed_ticks: None,
-                        timing_error: None,
+                    return SendTransactionOutcome {
+                        status: SendTransactionStatus::ZeroProgress,
+                        evidence: SendEvidence {
+                            requested_mask: packet.up_mask | packet.down_mask,
+                            confirmed_mask: 0,
+                            skipped_mask: 0,
+                            first_inserted: 0,
+                            attempts: 0,
+                            zero_progress_retries: 0,
+                            retry_reason: PacketRetryReason::None,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            started_ticks: None,
+                            completed_ticks: None,
+                            timing_error: None,
+                        },
                     };
                 };
                 send_physical_packet_with_clock(packet, clock)
@@ -401,67 +354,38 @@ impl TrackedKeyState {
             {
                 let Some(clock) = self.qpc_clock else {
                     self.last_error = Some("packet sender has no QPC clock".to_string());
-                    return DownSendOutcome::ZeroProgress {
-                        error: None,
-                        completed_us: 0,
-                        skipped_duplicates: SmallVec::new(),
-                        send_attempts: 0,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_error: None,
-                        last_error: None,
-                        started_ticks: None,
-                        completed_ticks: None,
-                        timing_error: None,
+                    return SendTransactionOutcome {
+                        status: SendTransactionStatus::ZeroProgress,
+                        evidence: SendEvidence {
+                            requested_mask: packet.up_mask | packet.down_mask,
+                            confirmed_mask: 0,
+                            skipped_mask: 0,
+                            first_inserted: 0,
+                            attempts: 0,
+                            zero_progress_retries: 0,
+                            retry_reason: PacketRetryReason::None,
+                            first_win32_error: None,
+                            last_win32_error: None,
+                            started_ticks: None,
+                            completed_ticks: None,
+                            timing_error: None,
+                        },
                     };
                 };
                 send_physical_packet_with_clock(packet, clock)
             }
         };
-        let requested_down = scan_codes_from_mask(packet.down_mask)
-            .into_iter()
-            .collect::<SmallVec<[u16; 15]>>();
-        match outcome {
-            PhysicalSendOutcome::Complete {
-                started_ticks,
-                completed_ticks,
-                attempts,
-                retry_reason,
-                ..
-            } => {
+
+        match outcome.status {
+            SendTransactionStatus::Complete => {
                 let union = packet.up_mask | packet.down_mask;
                 self.active_mask = (self.active_mask & !packet.up_mask) | packet.down_mask;
                 self.possibly_active_mask &= !union;
                 self.failed_release_mask &= !packet.up_mask;
                 self.last_error = None;
-                DownSendOutcome::Complete {
-                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
-                        .unwrap_or(0),
-                    started_ticks: Some(started_ticks),
-                    completed_ticks: Some(completed_ticks),
-                    sent: requested_down,
-                    skipped_duplicates: SmallVec::new(),
-                    send_attempts: attempts,
-                    zero_progress_retries: attempts.saturating_sub(1)
-                        * u8::from(matches!(retry_reason, PacketRetryReason::ZeroProgress)),
-                    retried_after_zero_progress: matches!(
-                        retry_reason,
-                        PacketRetryReason::ZeroProgress
-                    ),
-                    retry_reason,
-                    timing_error: None,
-                }
             }
-            PhysicalSendOutcome::ZeroProgress {
-                started_ticks,
-                completed_ticks,
-                attempts,
-                retry_reason,
-                first_error,
-                last_error,
-                ..
-            } => {
-                if attempts > 1 {
+            SendTransactionStatus::ZeroProgress => {
+                if outcome.evidence.attempts > 1 {
                     self.sendinput_zero_progress_failures =
                         self.sendinput_zero_progress_failures.saturating_add(1);
                 }
@@ -473,31 +397,8 @@ impl TrackedKeyState {
                     "physical packet made zero progress: {} events requested",
                     packet.event_count()
                 ));
-                DownSendOutcome::ZeroProgress {
-                    error: (last_error != 0).then_some(last_error),
-                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
-                        .unwrap_or(0),
-                    skipped_duplicates: SmallVec::new(),
-                    send_attempts: attempts,
-                    zero_progress_retries: attempts.saturating_sub(1),
-                    retry_reason,
-                    first_error: (first_error != 0).then_some(first_error),
-                    last_error: (last_error != 0).then_some(last_error),
-                    started_ticks: Some(started_ticks),
-                    completed_ticks: Some(completed_ticks),
-                    timing_error: None,
-                }
             }
-            PhysicalSendOutcome::Partial {
-                started_ticks,
-                completed_ticks,
-                attempts,
-                retry_reason,
-                inserted_count,
-                first_error,
-                last_error,
-                ..
-            } => {
+            SendTransactionStatus::PartialProgress | SendTransactionStatus::IntegrityLost => {
                 let uncertain_mask = packet.up_mask | packet.down_mask;
                 self.active_mask &= !uncertain_mask;
                 self.possibly_active_mask |= uncertain_mask;
@@ -509,36 +410,14 @@ impl TrackedKeyState {
                     .saturating_add(u64::from(packet.down_mask.count_ones()));
                 self.last_error = Some(format!(
                     "physical packet partially inserted: {} of {} events",
-                    inserted_count,
+                    outcome.evidence.first_inserted,
                     packet.event_count()
                 ));
-                DownSendOutcome::IntegrityLost {
-                    inserted_before_failure: inserted_count,
-                    rolled_back: 0,
-                    rollback_residue: packet.event_count().saturating_sub(inserted_count),
-                    first_error: (first_error != 0).then_some(first_error),
-                    last_error: (last_error != 0).then_some(last_error),
-                    completed_us: super::super::clock::qpc_ticks_to_us(completed_ticks)
-                        .unwrap_or(0),
-                    started_ticks: Some(started_ticks),
-                    completed_ticks: Some(completed_ticks),
-                    sent: SmallVec::new(),
-                    skipped_duplicates: SmallVec::new(),
-                    send_attempts: attempts,
-                    zero_progress_retries: 0,
-                    retry_reason,
-                    timing_error: None,
-                }
             }
-            PhysicalSendOutcome::ClockFailure {
-                phase,
-                send_was_called,
-                inserted_count,
-                started_ticks,
-                error,
-            } => {
-                self.timing_error = Some(error);
-                if send_was_called {
+            SendTransactionStatus::ClockFailureBeforeSend
+            | SendTransactionStatus::ClockFailureAfterSend => {
+                self.timing_error = outcome.evidence.timing_error;
+                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend) {
                     let uncertain_mask = packet.up_mask | packet.down_mask;
                     self.active_mask &= !uncertain_mask;
                     self.possibly_active_mask |= uncertain_mask;
@@ -548,69 +427,35 @@ impl TrackedKeyState {
                     .authored_keys_rejected
                     .saturating_add(u64::from(packet.down_mask.count_ones()));
                 self.last_error = Some(format!(
-                    "physical packet QPC failure ({phase:?}); SendInput called={send_was_called}"
+                    "physical packet QPC failure ({:?})",
+                    outcome.status
                 ));
-                if send_was_called {
-                    let inserted = inserted_count.unwrap_or(0);
-                    DownSendOutcome::IntegrityLost {
-                        inserted_before_failure: inserted,
-                        rolled_back: 0,
-                        rollback_residue: packet.event_count().saturating_sub(inserted),
-                        first_error: None,
-                        last_error: None,
-                        completed_us: 0,
-                        started_ticks,
-                        completed_ticks: None,
-                        sent: SmallVec::new(),
-                        skipped_duplicates: SmallVec::new(),
-                        send_attempts: 1,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        timing_error: Some(error),
-                    }
-                } else {
-                    DownSendOutcome::ZeroProgress {
-                        error: None,
-                        completed_us: 0,
-                        skipped_duplicates: SmallVec::new(),
-                        send_attempts: 0,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_error: None,
-                        last_error: None,
-                        started_ticks,
-                        completed_ticks: None,
-                        timing_error: Some(error),
-                    }
-                }
             }
         }
+        outcome
     }
 
-    pub fn key_up(&mut self, scan_codes: &[u16]) -> InputSendResult {
-        if scan_codes.is_empty() {
-            let (send_started_ticks, send_completed_ticks, send_completed_us, timing_error) =
+    pub fn key_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
+        let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
+        if scan_codes.is_empty() || requested_mask == 0 {
+            let (started_ticks, completed_ticks, _completed_us, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
-            return InputSendResult {
-                sent: SmallVec::new(),
-                skipped_duplicates: SmallVec::new(),
-                success: timing_error.is_none(),
-                error: None,
-                send_completed_us,
-                send_started_ticks,
-                send_completed_ticks,
-                first_win32_error: None,
-                last_win32_error: None,
-                send_attempts: 0,
-                zero_progress_retries: 0,
-                first_inserted: 0,
-                partial_progress: false,
-                retried_after_zero_progress: false,
-                chord_integrity_lost: false,
-                keys_inserted_before_failure: 0,
-                keys_rolled_back: 0,
-                rollback_residue_keys: 0,
-                timing_error,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: 0,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks,
+                    timing_error,
+                },
             };
         }
 
@@ -629,94 +474,59 @@ impl TrackedKeyState {
             }
         }
 
+        let skipped_mask = mask_for_scan_codes(&already_released).unwrap_or(0);
+
         if to_release.is_empty() {
-            let (send_started_ticks, send_completed_ticks, send_completed_us, timing_error) =
+            let (started_ticks, completed_ticks, _completed_us, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
-            return InputSendResult {
-                sent: SmallVec::new(),
-                skipped_duplicates: already_released,
-                success: timing_error.is_none(),
-                error: None,
-                send_completed_us,
-                send_started_ticks,
-                send_completed_ticks,
-                first_win32_error: None,
-                last_win32_error: None,
-                send_attempts: 0,
-                zero_progress_retries: 0,
-                first_inserted: 0,
-                partial_progress: false,
-                retried_after_zero_progress: false,
-                chord_integrity_lost: false,
-                keys_inserted_before_failure: 0,
-                keys_rolled_back: 0,
-                rollback_residue_keys: 0,
-                timing_error,
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks,
+                    timing_error,
+                },
             };
         }
 
         let emitted = self.do_emit_up(&to_release);
-        self.timing_error = emitted.timing_error;
+        self.timing_error = emitted.evidence.timing_error;
 
-        if emitted.partial_progress {
+        if matches!(emitted.status, SendTransactionStatus::PartialProgress) {
             self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
         }
-        self.keys_inserted_before_failure = self
-            .keys_inserted_before_failure
-            .saturating_add(emitted.keys_inserted_before_failure as u64);
-        self.keys_rolled_back = self
-            .keys_rolled_back
-            .saturating_add(emitted.keys_rolled_back as u64);
-        self.rollback_residue_keys = self
-            .rollback_residue_keys
-            .saturating_add(emitted.rollback_residue_keys as u64);
 
-        for &sc in &emitted.sent {
-            let bit = key_mask(sc).unwrap_or(0);
-            self.active_mask &= !bit;
-            self.possibly_active_mask &= !bit;
-            self.failed_release_mask &= !bit;
-        }
+        let confirmed_mask = emitted.evidence.confirmed_mask;
+        self.active_mask &= !confirmed_mask;
+        self.possibly_active_mask &= !confirmed_mask;
+        self.failed_release_mask &= !confirmed_mask;
 
-        if !emitted.success {
-            for &sc in &to_release {
-                if !emitted.sent.contains(&sc) {
-                    self.failed_release_mask |= key_mask(sc).unwrap_or(0);
-                }
-            }
-            self.last_error = Some(format!(
-                "partial note-off: {}/{}",
-                emitted.sent.len(),
-                to_release.len()
-            ));
+        if !emitted.is_success() {
+            let unconfirmed_released =
+                mask_for_scan_codes(&to_release).unwrap_or(0) & !confirmed_mask;
+            self.failed_release_mask |= unconfirmed_released;
+            self.last_error = Some("partial note-off".to_string());
         } else if self.failed_release_mask == 0 {
             self.last_error = None;
         }
 
-        InputSendResult {
-            sent: emitted.sent,
-            skipped_duplicates: already_released,
-            success: emitted.success,
-            error: if emitted.success {
-                None
-            } else {
-                Some("partial note-off".to_string())
+        SendTransactionOutcome {
+            status: emitted.status,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask,
+                skipped_mask,
+                ..emitted.evidence
             },
-            send_completed_us: emitted.completed_us,
-            send_started_ticks: emitted.started_ticks,
-            send_completed_ticks: emitted.completed_ticks,
-            first_win32_error: emitted.first_win32_error,
-            last_win32_error: emitted.last_win32_error,
-            send_attempts: emitted.send_attempts,
-            zero_progress_retries: emitted.zero_progress_retries,
-            first_inserted: emitted.first_inserted,
-            partial_progress: emitted.partial_progress,
-            retried_after_zero_progress: emitted.retried_after_zero_progress,
-            chord_integrity_lost: emitted.chord_integrity_lost,
-            keys_inserted_before_failure: emitted.keys_inserted_before_failure,
-            keys_rolled_back: emitted.keys_rolled_back,
-            rollback_residue_keys: emitted.rollback_residue_keys,
-            timing_error: emitted.timing_error,
         }
     }
 
@@ -730,14 +540,15 @@ impl TrackedKeyState {
 
         if requested_mask == 0 {
             return ReleaseAllOutcome {
-                attempted: Vec::new(),
+                attempted_mask: 0,
+                transport_anomaly: false,
                 released_successfully: true,
-                stuck_keys: Vec::new(),
+                stuck_mask: 0,
                 verification_inconclusive: false,
+                attempts: 0,
             };
         }
 
-        let initial_attempted = scan_codes_from_mask(requested_mask);
         let mut unresolved_mask = requested_mask;
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
@@ -750,7 +561,7 @@ impl TrackedKeyState {
 
             let send_codes = scan_codes_from_mask(unresolved_mask);
             let emitted = self.do_emit_up(&send_codes);
-            let transport_confirmed_mask = mask_for_scan_codes(&emitted.sent).unwrap_or(0);
+            let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
             let physical_state = if self.uses_custom_emitter() {
                 if transport_confirmed_mask == unresolved_mask {
@@ -777,10 +588,12 @@ impl TrackedKeyState {
                         self.last_error = None;
                     }
                     return ReleaseAllOutcome {
-                        attempted: initial_attempted,
+                        attempted_mask: requested_mask,
+                        transport_anomaly: false,
                         released_successfully: true,
-                        stuck_keys: Vec::new(),
+                        stuck_mask: 0,
                         verification_inconclusive: false,
+                        attempts: (attempt_idx + 1) as u8,
                     };
                 }
                 ReconciledRelease::Held(held_mask) => {
@@ -797,7 +610,7 @@ impl TrackedKeyState {
             ReleaseScope::FullInstrument => format!(
                 "full-instrument release incomplete: {}/{} keys unresolved",
                 scan_codes_from_mask(unresolved_mask).len(),
-                initial_attempted.len()
+                scan_codes_from_mask(requested_mask).len()
             ),
         };
         self.last_error = Some(error_msg);
@@ -809,19 +622,23 @@ impl TrackedKeyState {
                 self.possibly_active_mask &= !held_mask;
                 self.failed_release_mask |= held_mask;
                 ReleaseAllOutcome {
-                    attempted: initial_attempted,
+                    attempted_mask: requested_mask,
+                    transport_anomaly: false,
                     released_successfully: false,
-                    stuck_keys: scan_codes_from_mask(held_mask),
+                    stuck_mask: held_mask,
                     verification_inconclusive: false,
+                    attempts: 4,
                 }
             }
             ReconciledRelease::Inconclusive(unconfirmed_mask) => {
                 self.failed_release_mask |= unconfirmed_mask;
                 ReleaseAllOutcome {
-                    attempted: initial_attempted,
+                    attempted_mask: requested_mask,
+                    transport_anomaly: false,
                     released_successfully: false,
-                    stuck_keys: scan_codes_from_mask(unconfirmed_mask),
+                    stuck_mask: unconfirmed_mask,
                     verification_inconclusive: true,
+                    attempts: 4,
                 }
             }
         }

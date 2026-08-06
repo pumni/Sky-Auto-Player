@@ -7,7 +7,7 @@ use crate::clock::{QpcClock, QpcTicks};
 pub(crate) fn no_syscall_boundary_with_clock(
     clock: Option<QpcClock>,
 ) -> (
-    Option<QpcTicks>,
+    QpcTicks,
     Option<QpcTicks>,
     u64,
     Option<crate::clock::QpcError>,
@@ -17,13 +17,13 @@ pub(crate) fn no_syscall_boundary_with_clock(
         None => match QpcClock::initialize() {
             Ok(clock) => clock,
             Err(error) => {
-                return (None, None, 0, Some(error));
+                return (QpcTicks::ZERO, None, 0, Some(error));
             }
         },
     };
     let Ok(_) = crate::clock::qpc_frequency_checked() else {
         return (
-            None,
+            QpcTicks::ZERO,
             None,
             0,
             Some(crate::clock::QpcError::FrequencyUnavailable),
@@ -32,16 +32,16 @@ pub(crate) fn no_syscall_boundary_with_clock(
     match clock.now() {
         Ok(ticks) => {
             match clock.timeline_to_us(crate::clock::TimelineTicks::from_raw(ticks.as_u64())) {
-                Ok(micros) => (Some(ticks), Some(ticks), micros, None),
+                Ok(micros) => (ticks, Some(ticks), micros, None),
                 Err(_) => (
-                    Some(ticks),
+                    ticks,
                     Some(ticks),
                     0,
                     Some(crate::clock::QpcError::ConversionOverflow),
                 ),
             }
         }
-        Err(error) => (None, None, 0, Some(error)),
+        Err(error) => (QpcTicks::ZERO, None, 0, Some(error)),
     }
 }
 
@@ -99,11 +99,10 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
         Ok(clock) => clock,
         Err(error) => {
             return PlatformSendResult {
-                requested: u32::try_from(scan_codes.len()).unwrap_or(u32::MAX),
+                requested: u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
                 inserted: 0,
                 started_ticks: QpcTicks::ZERO,
                 completed_ticks: None,
-                completed_us: 0,
                 win32_error: 0,
                 timing_error: Some(error),
             };
@@ -123,11 +122,10 @@ pub fn send_input_raw_with_clock(
             .any(|&scan_code| !valid_instrument_scan_code(scan_code))
     {
         return PlatformSendResult {
-            requested: u32::try_from(scan_codes.len()).unwrap_or(u32::MAX),
+            requested: u8::try_from(scan_codes.len()).unwrap_or(u8::MAX),
             inserted: 0,
             started_ticks: QpcTicks::ZERO,
             completed_ticks: None,
-            completed_us: 0,
             win32_error: 87,
             timing_error: None,
         };
@@ -138,14 +136,13 @@ pub fn send_input_raw_with_clock(
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
-            let (started_ticks, completed_ticks, completed_us, timing_error) =
+            let (started_ticks, completed_ticks, _completed_us, timing_error) =
                 no_syscall_boundary_with_clock(Some(clock));
             return PlatformSendResult {
                 requested: 0,
                 inserted: 0,
-                started_ticks: started_ticks.unwrap_or(QpcTicks::ZERO),
+                started_ticks,
                 completed_ticks,
-                completed_us,
                 win32_error: 0,
                 timing_error,
             };
@@ -168,64 +165,47 @@ pub fn send_input_raw_with_clock(
             Ok(ticks) => ticks,
             Err(timing_error) => {
                 return PlatformSendResult {
-                    requested,
+                    requested: len as u8,
                     inserted: 0,
                     started_ticks: QpcTicks::ZERO,
                     completed_ticks: None,
-                    completed_us: 0,
                     win32_error: 0,
                     timing_error: Some(timing_error),
                 };
             }
         };
 
-        // SAFETY: `packets` array holds `requested` contiguous, correctly aligned INPUT
-        // values and remains alive and immobile for the duration of SendInput.
-        // `requested` is bounded to 15 by the validated caller.
-        // SendInput does not promise to clear last-error on every path. Reset
-        // it immediately before the syscall so a partial/zero result never
-        // inherits an unrelated error from earlier worker activity.
         unsafe { SetLastError(0) };
-        let inserted = unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested);
-        let win32_error = if inserted != requested {
+        let inserted =
+            unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested) as u8;
+        let win32_error = if u32::from(inserted) != requested {
             unsafe { windows_sys::Win32::Foundation::GetLastError() }
         } else {
             0
         };
-        let (completed_ticks, completed_us, timing_error) = match clock.now() {
-            Ok(ticks) => {
-                match clock.timeline_to_us(crate::clock::TimelineTicks::from_raw(ticks.as_u64())) {
-                    Ok(micros) => (Some(ticks), micros, None),
-                    Err(_) => (
-                        Some(ticks),
-                        0,
-                        Some(crate::clock::QpcError::ConversionOverflow),
-                    ),
-                }
-            }
-            Err(error) => (None, 0, Some(error)),
+        let (completed_ticks, timing_error) = match clock.now() {
+            Ok(ticks) => (Some(ticks), None),
+            Err(error) => (None, Some(error)),
         };
 
         PlatformSendResult {
-            requested,
+            requested: len as u8,
             inserted,
             started_ticks,
             completed_ticks,
-            completed_us,
             win32_error,
             timing_error,
         }
     }
     #[cfg(not(windows))]
     {
-        let (started_ticks, completed_ticks, completed_us, timing_error) =
+        let (started_ticks, completed_ticks, _completed_us, timing_error) =
             no_syscall_boundary_with_clock(Some(clock));
         PlatformSendResult {
-            requested: scan_codes.len() as u32,
-            inserted: scan_codes.len() as u32,
-            started_ticks: started_ticks.unwrap_or(QpcTicks::ZERO),
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks,
             completed_ticks,
-            completed_us,
             win32_error: 0,
             timing_error,
         }
