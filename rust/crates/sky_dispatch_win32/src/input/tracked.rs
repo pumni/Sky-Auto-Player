@@ -386,6 +386,7 @@ impl TrackedKeyState {
                         skipped_duplicates: SmallVec::new(),
                         send_attempts: 0,
                         zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
                         first_error: None,
                         last_error: None,
                         started_ticks: None,
