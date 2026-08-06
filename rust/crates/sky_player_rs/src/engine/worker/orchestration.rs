@@ -1811,8 +1811,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 let has_conflicts = conflict_mask != 0;
                 // --- End of borrow scope: all data is now in stack-local copies ---
 
-                let mut force_dispatch_publish = false;
                 if packet_masks.is_some() || batch_kind == ActionKind::Down {
+                    let mut force_dispatch_publish;
                     // Repeat the foreground comparison at the final boundary
                     // immediately before SendInput. If focus changed after
                     // the outer-loop sample, terminalize this authored batch;
@@ -2312,25 +2312,49 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             && completion_lateness_ticks
                                 .is_some_and(|late| late > timing.retry_late_threshold_ticks);
                         let retry_late_abort = config.timing.strict_timing && recovered_retry_late;
-                        let strict_down_completion_late = config.timing.strict_timing
+                        let strict_completion_late = config.timing.strict_timing
                             && clean_directional_sample
                             && completion_lateness_ticks.is_some_and(|late| {
-                                late > timing.strict_down_completion_late_ticks
+                                late > match dispatch_path {
+                                    DispatchPath::UpOnly { .. } => {
+                                        timing.strict_up_completion_late_ticks
+                                    }
+                                    DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+                                        timing.strict_down_completion_late_ticks
+                                    }
+                                }
                             });
                         if recovered_retry_late {
                             local_metrics.recovered_zero_progress_but_late = local_metrics
                                 .recovered_zero_progress_but_late
                                 .saturating_add(1);
                         }
-                        health.down_saturation_positive_streak =
-                            if lead_down_saturated && completion_lateness_ticks.is_some() {
-                                health.down_saturation_positive_streak.saturating_add(1)
-                            } else {
-                                0
-                            };
-                        let saturation_abort = config.timing.strict_timing
-                            && health.down_saturation_positive_streak
-                                >= STRICT_SATURATION_ABORT_STREAK;
+                        let saturation_abort = match dispatch_path {
+                            DispatchPath::UpOnly { .. } => {
+                                health.down_saturation_positive_streak = 0;
+                                health.up_saturation_positive_streak =
+                                    if lead_down_saturated && completion_lateness_ticks.is_some() {
+                                        health.up_saturation_positive_streak.saturating_add(1)
+                                    } else {
+                                        0
+                                    };
+                                config.timing.strict_timing
+                                    && health.up_saturation_positive_streak
+                                        >= STRICT_SATURATION_ABORT_STREAK
+                            }
+                            DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+                                health.up_saturation_positive_streak = 0;
+                                health.down_saturation_positive_streak =
+                                    if lead_down_saturated && completion_lateness_ticks.is_some() {
+                                        health.down_saturation_positive_streak.saturating_add(1)
+                                    } else {
+                                        0
+                                    };
+                                config.timing.strict_timing
+                                    && health.down_saturation_positive_streak
+                                        >= STRICT_SATURATION_ABORT_STREAK
+                            }
+                        };
                         let bookkeeping_completed_us = qpc_us_or_terminal!();
                         if recovered_zero_progress && result_success {
                             local_metrics.recovered_zero_progress_retries = local_metrics
@@ -2345,7 +2369,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             "recovered_zero_progress_but_late"
                         } else if recovered_partial_up {
                             "recovered_partial_up_retry"
-                        } else if strict_down_completion_late {
+                        } else if strict_completion_late {
                             "strict_completion_slo_exceeded"
                         } else if result_chord_integrity_lost {
                             "chord_integrity_lost"
@@ -2415,12 +2439,22 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             break;
                         }
                         if config.estimator.enable_adaptive_lead && lead_down_saturated {
-                            record_lead_saturation(
-                                &mut local_metrics.lead_saturation_count_down,
-                                &mut local_metrics.positive_residual_at_cap,
-                                batch_intent_count,
-                                signed_delta(completed_effective, batch_scheduled_us),
-                            );
+                            match dispatch_path {
+                                DispatchPath::UpOnly { .. } => record_lead_saturation(
+                                    &mut local_metrics.lead_saturation_count_up,
+                                    &mut local_metrics.positive_residual_at_cap,
+                                    batch_intent_count,
+                                    signed_delta(completed_effective, batch_scheduled_us),
+                                ),
+                                DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => {
+                                    record_lead_saturation(
+                                        &mut local_metrics.lead_saturation_count_down,
+                                        &mut local_metrics.positive_residual_at_cap,
+                                        batch_intent_count,
+                                        signed_delta(completed_effective, batch_scheduled_us),
+                                    )
+                                }
+                            }
                         }
                         runtime.pending_pre_send_spin_us = 0;
                         let send_warn_threshold_us = frozen_budget.send_warn_us;
@@ -2467,6 +2501,25 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             false,
                             local_metrics,
                         );
+                        let terminal_dispatch = result_chord_integrity_lost
+                            || retry_late_abort
+                            || strict_completion_late
+                            || saturation_abort;
+                        if terminal_dispatch {
+                            force_dispatch_publish = true;
+                        }
+                        publish_backend_metrics(
+                            backend,
+                            local_metrics,
+                            metrics,
+                            last_published_error,
+                        );
+                        try_publish_metrics(
+                            local_metrics,
+                            metrics,
+                            qpc_us_or_terminal!(),
+                            force_dispatch_publish,
+                        );
                         let iteration_ready_us = qpc_us_or_terminal!();
                         observe_dispatch_health(
                             DispatchHealthObservation {
@@ -2490,18 +2543,6 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 "SendInput split authored chord at action {}",
                                 batch_source_action_index
                             ));
-                            publish_backend_metrics(
-                                backend,
-                                local_metrics,
-                                metrics,
-                                last_published_error,
-                            );
-                            try_publish_metrics(
-                                local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
                             break;
                         }
                         if retry_late_abort {
@@ -2510,58 +2551,34 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                 "strict timing rejected zero-progress retry at action {}: completion was {}us late",
                                 batch_source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(
-                                backend,
-                                local_metrics,
-                                metrics,
-                                last_published_error,
-                            );
-                            try_publish_metrics(
-                                local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
                             break;
                         }
-                        if strict_down_completion_late {
+                        if strict_completion_late {
                             runtime.force_full_cleanup = true;
+                            let timing_label =
+                                if matches!(dispatch_path, DispatchPath::UpOnly { .. }) {
+                                    "note-off"
+                                } else {
+                                    "note-on"
+                                };
                             runtime.terminal_error = Some(format!(
-                                "strict timing completion SLO exceeded for note-on at action {}: completion was {}us late",
+                                "strict timing completion SLO exceeded for {timing_label} at action {}: completion was {}us late",
                                 batch_source_action_index, completion_error_us
                             ));
-                            publish_backend_metrics(
-                                backend,
-                                local_metrics,
-                                metrics,
-                                last_published_error,
-                            );
-                            try_publish_metrics(
-                                local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
                             break;
                         }
                         if saturation_abort {
                             runtime.force_full_cleanup = true;
+                            let timing_label =
+                                if matches!(dispatch_path, DispatchPath::UpOnly { .. }) {
+                                    "note-off"
+                                } else {
+                                    "note-on"
+                                };
                             runtime.terminal_error = Some(format!(
-                                "strict timing SLO exceeded: note-on lead saturated with positive residual for {} consecutive dispatches",
+                                "strict timing SLO exceeded: {timing_label} lead saturated with positive residual for {} consecutive dispatches",
                                 STRICT_SATURATION_ABORT_STREAK
                             ));
-                            publish_backend_metrics(
-                                backend,
-                                local_metrics,
-                                metrics,
-                                last_published_error,
-                            );
-                            try_publish_metrics(
-                                local_metrics,
-                                metrics,
-                                qpc_us_or_terminal!(),
-                                true,
-                            );
                             break;
                         }
                     }
@@ -2575,9 +2592,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                             break;
                         }
                     };
-                    if !suppressed.is_empty() {
-                        force_dispatch_publish = true;
-                        if let Err(error) = telemetry.try_push(|| {
+                    if !suppressed.is_empty()
+                        && let Err(error) = telemetry.try_push(|| {
                             RtTraceRecord::dispatched(
                                 TraceContext {
                                     event_index: batch_source_action_index,
@@ -2605,21 +2621,21 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                                     send_attempts: 0,
                                 },
                             )
-                        }) {
-                            runtime.force_full_cleanup = true;
-                            runtime.terminal_error =
-                                Some(format!("native telemetry record overflow: {error}"));
-                            break;
-                        }
+                        })
+                    {
+                        runtime.force_full_cleanup = true;
+                        runtime.terminal_error =
+                            Some(format!("native telemetry record overflow: {error}"));
+                        break;
                     }
+                    publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
+                    try_publish_metrics(
+                        local_metrics,
+                        metrics,
+                        qpc_us_or_terminal!(),
+                        !suppressed.is_empty(),
+                    );
                 }
-                publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-                try_publish_metrics(
-                    local_metrics,
-                    metrics,
-                    qpc_us_or_terminal!(),
-                    force_dispatch_publish,
-                );
                 continue;
             }
 

@@ -420,14 +420,8 @@ impl TrackedKeyState {
                     sent: requested_down,
                     skipped_duplicates: SmallVec::new(),
                     send_attempts: attempts,
-                    zero_progress_retries: if matches!(
-                        retry_reason,
-                        PacketRetryReason::ZeroProgress
-                    ) {
-                        attempts.saturating_sub(1)
-                    } else {
-                        0
-                    },
+                    zero_progress_retries: attempts.saturating_sub(1)
+                        * u8::from(matches!(retry_reason, PacketRetryReason::ZeroProgress)),
                     retried_after_zero_progress: matches!(
                         retry_reason,
                         PacketRetryReason::ZeroProgress
