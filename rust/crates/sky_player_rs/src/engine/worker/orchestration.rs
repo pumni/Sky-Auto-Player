@@ -21,14 +21,13 @@ use super::{
     WorkerHealthState, WorkerResources, WorkerTimingState, anchored_dispatch_target_ticks_typed,
     build_dispatch_budget, cancel_coordinator_or_terminal, classify_latency_class,
     cpu_metrics_sample_due, derive_spin_threshold_us, describe_release_outcome,
-    ensure_preflight_for_target, estimate_dispatch_path_lead, estimator_kind_for_path,
-    final_down_admission, finalize_worker, focus_matches, focus_matches_hwnd, initialize_startup,
-    lease_bounded_ticks, load_target_stamp, observe_dispatch_health, process_command_control,
-    publish_backend_metrics, publish_wake_error_stats, record_lateness, record_lead_saturation,
-    record_termination_error, release_runtime_outcome, release_state_verified, signed_delta,
-    signed_ticks_to_us, signed_timeline_delta_ticks, suspend_live_input,
-    target_stamp_still_current, update_estimator_after_send_class, wait_failure_message,
-    wait_for_next_boundary,
+    ensure_preflight_for_target, estimator_kind_for_path, final_down_admission, finalize_worker,
+    focus_matches, focus_matches_hwnd, initialize_startup, lease_bounded_ticks, load_target_stamp,
+    observe_dispatch_health, plan_next_dispatch, process_command_control, publish_backend_metrics,
+    publish_wake_error_stats, record_lateness, record_lead_saturation, record_termination_error,
+    release_runtime_outcome, release_state_verified, signed_delta, signed_ticks_to_us,
+    signed_timeline_delta_ticks, suspend_live_input, target_stamp_still_current,
+    update_estimator_after_send_class, wait_failure_message, wait_for_next_boundary,
 };
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use smallvec::SmallVec;
@@ -1037,32 +1036,23 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 }
             };
 
-            let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
-                let (lead_us, saturated) = if config.timing.dispatch_lead_us > 0 {
-                    (config.timing.dispatch_lead_us, false)
-                } else if config.estimator.enable_adaptive_lead {
-                    let estimate = estimator.estimate_lead_with_class_and_policy(
-                        ActionKind::Up,
-                        polyphony,
-                        latency_class,
-                        config.timing.strict_timing,
-                    );
-                    (estimate.applied_us, estimate.saturated)
-                } else {
-                    (0, false)
-                };
-                qpc_clock
-                    .duration_from_us(lead_us)
-                    .map(|ticks| (ticks, saturated))
-                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
-            }) {
+            let dispatch_plan = match plan_next_dispatch(
+                coordinator,
+                estimator,
+                qpc_clock,
+                latency_class,
+                &config.timing,
+                config.estimator.enable_adaptive_lead,
+            ) {
                 Ok(plan) => plan,
                 Err(error) => {
                     runtime.force_full_cleanup = true;
-                    runtime.terminal_error = Some(format!("coordinator planning failure: {error}"));
+                    runtime.terminal_error = Some(format!("planning failure: {error}"));
                     break;
                 }
             };
+            let pending_plan = dispatch_plan.pending;
+
             let lead_up_ticks = match pending_plan.as_ref() {
                 Some(plan) => plan.lead_ticks,
                 None => DurationTicks::ZERO,
@@ -1563,73 +1553,16 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 continue;
             }
 
-            let next_down_polyphony = coordinator.next_authored_polyphony();
-            let next_packet =
-                coordinator
-                    .next_authored_packet_masks()
-                    .and_then(|(up_mask, down_mask)| {
-                        sky_dispatch_core::coordinator::physical_packet_kind(up_mask, down_mask)
-                            .ok()
-                            .map(|kind| {
-                                (
-                                    kind,
-                                    up_mask.count_ones() as usize,
-                                    down_mask.count_ones() as usize,
-                                )
-                            })
-                    });
-            let (lead_down, lead_down_saturated) = if config.timing.dispatch_lead_us > 0 {
-                (config.timing.dispatch_lead_us, false)
-            } else if config.estimator.enable_adaptive_lead {
-                match next_packet {
-                    Some((sky_dispatch_core::model::PhysicalPacketKind::UpOnly, up_count, _)) => {
-                        let estimate = estimator.estimate_lead_with_class_and_policy(
-                            ActionKind::Up,
-                            up_count,
-                            latency_class,
-                            config.timing.strict_timing,
-                        );
-                        (estimate.applied_us, estimate.saturated)
-                    }
-                    Some((
-                        sky_dispatch_core::model::PhysicalPacketKind::Mixed,
-                        up_count,
-                        down_count,
-                    )) => {
-                        let estimate = estimate_dispatch_path_lead(
-                            estimator,
-                            DispatchPath::Mixed {
-                                up_count,
-                                down_count,
-                            },
-                            latency_class,
-                            config.timing.strict_timing,
-                            config.timing.max_lead_us,
-                        );
-                        (estimate.applied_us, estimate.saturated)
-                    }
-                    _ => {
-                        let estimate = estimator.estimate_lead_with_class_and_policy(
-                            ActionKind::Down,
-                            next_down_polyphony,
-                            latency_class,
-                            config.timing.strict_timing,
-                        );
-                        (estimate.applied_us, estimate.saturated)
-                    }
-                }
-            } else {
-                (0, false)
-            };
-            let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    runtime.force_full_cleanup = true;
-                    runtime.terminal_error =
-                        Some(format!("down lead conversion failure: {error:?}"));
-                    break;
-                }
-            };
+            let (lead_down, lead_down_saturated, lead_down_ticks) =
+                match dispatch_plan.authored.as_ref() {
+                    Some(authored) => (
+                        authored.lead_us,
+                        authored.lead_saturated,
+                        authored.lead_ticks,
+                    ),
+                    None => (0, false, DurationTicks::ZERO),
+                };
+
             let prepared_batch =
                 match coordinator.prepare_next_due_authored(effective_now_ticks, lead_down_ticks) {
                     Ok(value) => value,
@@ -2639,66 +2572,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 continue;
             }
 
-            let next_down_polyphony = coordinator.next_authored_polyphony();
-            let lead_down = if config.timing.dispatch_lead_us > 0 {
-                config.timing.dispatch_lead_us
-            } else if config.estimator.enable_adaptive_lead {
-                estimator
-                    .estimate_lead_with_class_and_policy(
-                        ActionKind::Down,
-                        next_down_polyphony,
-                        latency_class,
-                        config.timing.strict_timing,
-                    )
-                    .applied_us
-            } else {
-                0
-            };
-            let lead_down_ticks = match qpc_clock.duration_from_us(lead_down) {
-                Ok(ticks) => ticks,
-                Err(error) => {
-                    runtime.force_full_cleanup = true;
-                    runtime.terminal_error =
-                        Some(format!("down lead conversion failure: {error:?}"));
-                    break;
-                }
-            };
-            let pending_plan = match coordinator.plan_pending_dispatch_ticks(|polyphony| {
-                let (lead_us, saturated) = if config.timing.dispatch_lead_us > 0 {
-                    (config.timing.dispatch_lead_us, false)
-                } else if config.estimator.enable_adaptive_lead {
-                    let estimate = estimator.estimate_lead_with_class_and_policy(
-                        ActionKind::Up,
-                        polyphony,
-                        latency_class,
-                        config.timing.strict_timing,
-                    );
-                    (estimate.applied_us, estimate.saturated)
-                } else {
-                    (0, false)
-                };
-                qpc_clock
-                    .duration_from_us(lead_us)
-                    .map(|ticks| (ticks, saturated))
-                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
-            }) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    runtime.force_full_cleanup = true;
-                    runtime.terminal_error = Some(format!("coordinator planning failure: {error}"));
-                    break;
-                }
-            };
-            let deadline_ticks = match coordinator
-                .next_deadline_ticks(lead_down_ticks, pending_plan.as_ref())
-            {
-                Ok(deadline) => deadline,
-                Err(error) => {
-                    runtime.force_full_cleanup = true;
-                    runtime.terminal_error = Some(format!("coordinator deadline failure: {error}"));
-                    break;
-                }
-            };
+            let deadline_ticks = dispatch_plan.deadline_ticks;
+
             match wait_for_next_boundary(WaitBoundaryInput {
                 deadline: WaitDeadline {
                     deadline_ticks,

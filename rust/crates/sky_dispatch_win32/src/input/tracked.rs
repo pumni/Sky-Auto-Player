@@ -7,12 +7,13 @@ use super::outcome::{
 };
 use super::packet::send_physical_packet_with_clock;
 use super::physical::{
-    InstrumentPhysicalState, instrument_physical_state_for_mask, mask_for_scan_codes,
+    InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
+    mask_for_scan_codes, reconcile_release_observation,
 };
+
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw_with_clock};
-use super::scan_code::{
-    FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, scan_codes_from_mask,
-};
+use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
+
 use super::up_transaction::{emit_up, emit_up_with};
 use crate::clock::QpcClock;
 use smallvec::SmallVec;
@@ -29,6 +30,26 @@ pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send
 
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomPacketEmitterFn = Box<dyn Fn(PhysicalPacket) -> PhysicalSendOutcome + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseScope {
+    Tracked,
+    FullInstrument,
+}
+
+#[cfg(test)]
+pub(crate) static TEST_RELEASE_SLEEP_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(not(test))]
+fn release_retry_sleep(ms: u64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+}
+
+#[cfg(test)]
+fn release_retry_sleep(_ms: u64) {
+    TEST_RELEASE_SLEEP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
 
 #[derive(Default)]
 pub struct TrackedKeyState {
@@ -699,9 +720,15 @@ impl TrackedKeyState {
         }
     }
 
-    pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
-        let tracked_mask = self.active_mask | self.possibly_active_mask | self.failed_release_mask;
-        if tracked_mask == 0 {
+    pub fn release_scope(&mut self, scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
+        let requested_mask = match scope {
+            ReleaseScope::Tracked => {
+                self.active_mask | self.possibly_active_mask | self.failed_release_mask
+            }
+            ReleaseScope::FullInstrument => FULL_INSTRUMENT_MASK,
+        };
+
+        if requested_mask == 0 {
             return ReleaseAllOutcome {
                 attempted: Vec::new(),
                 released_successfully: true,
@@ -710,187 +737,101 @@ impl TrackedKeyState {
             };
         }
 
-        let attempted = scan_codes_from_mask(tracked_mask);
+        let initial_attempted = scan_codes_from_mask(requested_mask);
+        let mut unresolved_mask = requested_mask;
+        const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
-        let mut released_successfully = false;
+        let mut last_reconciled = ReconciledRelease::Inconclusive(requested_mask);
 
-        for pass_idx in 0..3 {
-            let emitted = self.do_emit_up(&attempted);
-            if emitted.success && emitted.sent.len() == attempted.len() {
-                released_successfully = true;
-                break;
+        for attempt_idx in 0..4 {
+            if attempt_idx > 0 {
+                release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
             }
-            if pass_idx < 2 {
-                std::thread::sleep(std::time::Duration::from_millis(15));
-            }
-        }
 
-        let mut verification_inconclusive = false;
-        let mut stuck = Vec::new();
-        if !self.uses_custom_emitter() {
-            match instrument_physical_state_for_mask(target_hwnd, tracked_mask) {
-                InstrumentPhysicalState::AllUp => {}
-                InstrumentPhysicalState::Held(held) => {
-                    for scan_code in held {
-                        if attempted.contains(&scan_code) {
-                            stuck.push(scan_code);
-                        }
-                    }
+            let send_codes = scan_codes_from_mask(unresolved_mask);
+            let emitted = self.do_emit_up(&send_codes);
+            let transport_confirmed_mask = mask_for_scan_codes(&emitted.sent).unwrap_or(0);
+
+            let physical_state = if self.uses_custom_emitter() {
+                if transport_confirmed_mask == unresolved_mask {
+                    InstrumentPhysicalState::AllUp
+                } else {
+                    InstrumentPhysicalState::Inconclusive
                 }
-                InstrumentPhysicalState::Inconclusive => verification_inconclusive = true,
-            }
-        }
-
-        if !stuck.is_empty() {
-            for delay_ms in [50, 100] {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                let _ = self.do_emit_up(&stuck);
-                let retry_mask = match mask_for_scan_codes(&stuck) {
-                    Some(mask) => mask,
-                    None => {
-                        verification_inconclusive = true;
-                        break;
-                    }
-                };
-                match instrument_physical_state_for_mask(target_hwnd, retry_mask) {
-                    InstrumentPhysicalState::AllUp => stuck.clear(),
-                    InstrumentPhysicalState::Held(held) => {
-                        stuck.retain(|scan_code| held.contains(scan_code));
-                    }
-                    InstrumentPhysicalState::Inconclusive => {
-                        verification_inconclusive = true;
-                    }
-                }
-                if stuck.is_empty() {
-                    released_successfully = true;
-                    break;
-                }
-            }
-        }
-
-        if released_successfully && stuck.is_empty() && !verification_inconclusive {
-            self.active_mask = 0;
-            self.possibly_active_mask = 0;
-            self.failed_release_mask = 0;
-            self.last_error = None;
-            return ReleaseAllOutcome {
-                attempted,
-                released_successfully: true,
-                stuck_keys: Vec::new(),
-                verification_inconclusive,
+            } else {
+                instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
             };
+
+            last_reconciled = reconcile_release_observation(
+                unresolved_mask,
+                transport_confirmed_mask,
+                physical_state,
+            );
+
+            match last_reconciled {
+                ReconciledRelease::VerifiedAllUp => {
+                    self.active_mask &= !unresolved_mask;
+                    self.possibly_active_mask &= !unresolved_mask;
+                    self.failed_release_mask &= !unresolved_mask;
+                    if self.failed_release_mask == 0 {
+                        self.last_error = None;
+                    }
+                    return ReleaseAllOutcome {
+                        attempted: initial_attempted,
+                        released_successfully: true,
+                        stuck_keys: Vec::new(),
+                        verification_inconclusive: false,
+                    };
+                }
+                ReconciledRelease::Held(held_mask) => {
+                    unresolved_mask = held_mask;
+                }
+                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
+                    unresolved_mask = unconfirmed_mask;
+                }
+            }
         }
 
-        if stuck.is_empty() {
-            self.failed_release_mask |= attempted
-                .iter()
-                .filter_map(|&scan_code| key_mask(scan_code))
-                .fold(0, |mask, bit| mask | bit);
-        } else {
-            self.failed_release_mask |= stuck
-                .iter()
-                .filter_map(|&scan_code| key_mask(scan_code))
-                .fold(0, |mask, bit| mask | bit);
-        }
-        self.last_error = Some("tracked release incomplete".to_string());
-        let reported_stuck = scan_codes_from_mask(self.failed_release_mask);
-        ReleaseAllOutcome {
-            attempted,
-            released_successfully: false,
-            stuck_keys: reported_stuck,
-            verification_inconclusive: verification_inconclusive || stuck.is_empty(),
+        let error_msg = match scope {
+            ReleaseScope::Tracked => "tracked release incomplete".to_string(),
+            ReleaseScope::FullInstrument => format!(
+                "full-instrument release incomplete: {}/{} keys unresolved",
+                scan_codes_from_mask(unresolved_mask).len(),
+                initial_attempted.len()
+            ),
+        };
+        self.last_error = Some(error_msg);
+
+        match last_reconciled {
+            ReconciledRelease::VerifiedAllUp => unreachable!(),
+            ReconciledRelease::Held(held_mask) => {
+                self.active_mask &= !held_mask;
+                self.possibly_active_mask &= !held_mask;
+                self.failed_release_mask |= held_mask;
+                ReleaseAllOutcome {
+                    attempted: initial_attempted,
+                    released_successfully: false,
+                    stuck_keys: scan_codes_from_mask(held_mask),
+                    verification_inconclusive: false,
+                }
+            }
+            ReconciledRelease::Inconclusive(unconfirmed_mask) => {
+                self.failed_release_mask |= unconfirmed_mask;
+                ReleaseAllOutcome {
+                    attempted: initial_attempted,
+                    released_successfully: false,
+                    stuck_keys: scan_codes_from_mask(unconfirmed_mask),
+                    verification_inconclusive: true,
+                }
+            }
         }
     }
 
+    pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
+        self.release_scope(ReleaseScope::Tracked, target_hwnd)
+    }
+
     pub fn release_all_full_instrument(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
-        let _tracked_outcome = self.release_all(target_hwnd);
-        let attempted = PHYSICAL_INSTRUMENT_SCAN_CODES.to_vec();
-        let emitted = self.do_emit_up(&attempted);
-        let sent = emitted.sent;
-        let send_success = emitted.success;
-        let mut release_successful = send_success;
-        let mut verification_inconclusive = false;
-        let mut stuck: Vec<u16> = attempted
-            .iter()
-            .copied()
-            .filter(|scan_code| !sent.contains(scan_code))
-            .collect();
-
-        if !self.uses_custom_emitter() {
-            match instrument_physical_state_for_mask(target_hwnd, FULL_INSTRUMENT_MASK) {
-                InstrumentPhysicalState::AllUp => {}
-                InstrumentPhysicalState::Held(held) => {
-                    for scan_code in held {
-                        if !stuck.contains(&scan_code) {
-                            stuck.push(scan_code);
-                        }
-                    }
-                }
-                InstrumentPhysicalState::Inconclusive => verification_inconclusive = true,
-            }
-        }
-
-        if !stuck.is_empty() {
-            for delay_ms in [50, 100] {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                let retry_sent = self.do_emit_up(&stuck).sent;
-                if self.uses_custom_emitter() {
-                    stuck.retain(|scan_code| !retry_sent.contains(scan_code));
-                } else {
-                    let retry_mask = match mask_for_scan_codes(&stuck) {
-                        Some(mask) => mask,
-                        None => {
-                            verification_inconclusive = true;
-                            break;
-                        }
-                    };
-                    match instrument_physical_state_for_mask(target_hwnd, retry_mask) {
-                        InstrumentPhysicalState::AllUp => {
-                            stuck.retain(|scan_code| !retry_sent.contains(scan_code))
-                        }
-                        InstrumentPhysicalState::Held(held) => stuck.retain(|scan_code| {
-                            !retry_sent.contains(scan_code) || held.contains(scan_code)
-                        }),
-                        InstrumentPhysicalState::Inconclusive => {
-                            verification_inconclusive = true;
-                        }
-                    }
-                }
-                if stuck.is_empty() {
-                    release_successful = true;
-                    break;
-                }
-            }
-        }
-
-        if release_successful && stuck.is_empty() && !verification_inconclusive {
-            self.active_mask = 0;
-            self.possibly_active_mask = 0;
-            self.failed_release_mask = 0;
-            self.last_error = None;
-            return ReleaseAllOutcome {
-                attempted,
-                released_successfully: true,
-                stuck_keys: Vec::new(),
-                verification_inconclusive,
-            };
-        }
-
-        self.failed_release_mask |= stuck
-            .iter()
-            .filter_map(|&scan_code| key_mask(scan_code))
-            .fold(0, |mask, bit| mask | bit);
-        self.last_error = Some(format!(
-            "full-instrument release incomplete: {}/{} keys unresolved",
-            stuck.len(),
-            attempted.len()
-        ));
-        let reported_stuck = scan_codes_from_mask(self.failed_release_mask);
-        ReleaseAllOutcome {
-            attempted,
-            released_successfully: false,
-            stuck_keys: reported_stuck,
-            verification_inconclusive,
-        }
+        self.release_scope(ReleaseScope::FullInstrument, target_hwnd)
     }
 }

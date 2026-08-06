@@ -1,9 +1,14 @@
 use super::*;
 
 use super::physical::{
-    InstrumentPhysicalState, instrument_physical_state_for_mask, keyboard_context_for_target,
-    map_instrument_virtual_keys, mask_for_scan_codes,
+    InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
+    keyboard_context_for_target, map_instrument_virtual_keys, mask_for_scan_codes,
+    reconcile_release_observation,
 };
+use super::tracked::TEST_RELEASE_SLEEP_COUNT;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, valid_instrument_scan_code,
 };
@@ -350,4 +355,318 @@ fn full_instrument_release_reports_unreleased_keys() {
     assert_eq!(outcome.attempted, PHYSICAL_INSTRUMENT_SCAN_CODES);
     assert_eq!(outcome.stuck_keys, PHYSICAL_INSTRUMENT_SCAN_CODES);
     assert_eq!(state.failed_release_mask.count_ones(), 15);
+}
+
+#[test]
+fn partial_transport_plus_physical_all_up_is_verified_success() {
+    let reconciled = reconcile_release_observation(0x0003, 0x0001, InstrumentPhysicalState::AllUp);
+    assert_eq!(reconciled, ReconciledRelease::VerifiedAllUp);
+}
+
+#[test]
+fn zero_progress_plus_physical_all_up_is_verified_success() {
+    let reconciled = reconcile_release_observation(0x0003, 0x0000, InstrumentPhysicalState::AllUp);
+    assert_eq!(reconciled, ReconciledRelease::VerifiedAllUp);
+}
+
+#[test]
+fn physical_held_reports_only_held_subset() {
+    let reconciled = reconcile_release_observation(
+        0x0007,
+        0x0001,
+        InstrumentPhysicalState::Held(smallvec::smallvec![0x16]),
+    );
+    assert_eq!(reconciled, ReconciledRelease::Held(0x0002));
+}
+
+#[test]
+fn physical_inconclusive_preserves_only_unconfirmed_subset() {
+    let reconciled =
+        reconcile_release_observation(0x0007, 0x0001, InstrumentPhysicalState::Inconclusive);
+    assert_eq!(reconciled, ReconciledRelease::Inconclusive(0x0006));
+}
+
+#[test]
+fn verified_all_up_clears_all_tracking_masks() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: codes.len() as u32,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.active_mask = 0x0001;
+    state.possibly_active_mask = 0x0002;
+    state.failed_release_mask = 0x0004;
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    assert!(outcome.stuck_keys.is_empty());
+    assert!(!outcome.verification_inconclusive);
+    assert_eq!(state.active_mask, 0);
+    assert_eq!(state.possibly_active_mask, 0);
+    assert_eq!(state.failed_release_mask, 0);
+    assert!(state.last_error.is_none());
+}
+
+#[test]
+fn full_instrument_all_up_clears_transport_derived_stuck_keys() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: codes.len() as u32,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.failed_release_mask = FULL_INSTRUMENT_MASK;
+
+    let outcome = state.release_all_full_instrument(0);
+    assert!(outcome.released_successfully);
+    assert!(outcome.stuck_keys.is_empty());
+    assert!(!outcome.verification_inconclusive);
+    assert_eq!(state.failed_release_mask, 0);
+}
+
+#[test]
+fn custom_emitter_still_uses_transport_evidence() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 5,
+        timing_error: None,
+    });
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_keys, vec![0x15]);
+    assert_eq!(state.failed_release_mask, 0x0001);
+}
+
+#[test]
+fn tracked_cleanup_does_not_call_full_cleanup() {
+    let emitted_batches = Arc::new(Mutex::new(Vec::new()));
+    let batches_clone = emitted_batches.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        batches_clone.lock().unwrap().push(codes.to_vec());
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: codes.len() as u32,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0001; // Key 0x15
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    let batches = emitted_batches.lock().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0], vec![0x15]);
+}
+
+#[test]
+fn full_cleanup_does_not_run_tracked_cleanup_first() {
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let count_clone = call_count.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        count_clone.fetch_add(1, Ordering::Relaxed);
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: codes.len() as u32,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all_full_instrument(0);
+    assert!(outcome.released_successfully);
+    assert_eq!(call_count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn clean_first_attempt_has_no_sleep() {
+    TEST_RELEASE_SLEEP_COUNT.store(0, Ordering::Relaxed);
+
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: codes.len() as u32,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    assert_eq!(TEST_RELEASE_SLEEP_COUNT.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn retry_sends_only_unresolved_mask() {
+    let emitted_batches = Arc::new(Mutex::new(Vec::new()));
+    let batches_clone = emitted_batches.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        let mut guard = batches_clone.lock().unwrap();
+        guard.push(codes.to_vec());
+        let inserted = if guard.len() == 1 {
+            0 // First attempt fails for whole chord
+        } else {
+            codes.len() as u32 // Subsequent attempt succeeds
+        };
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0003; // Keys 0x15 and 0x16
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    let batches = emitted_batches.lock().unwrap();
+    assert!(batches.len() >= 2);
+    assert_eq!(batches[0], vec![0x15, 0x16]);
+}
+
+#[test]
+fn verified_keys_are_not_retried() {
+    let emitted_batches = Arc::new(Mutex::new(Vec::new()));
+    let batches_clone = emitted_batches.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        let mut guard = batches_clone.lock().unwrap();
+        guard.push(codes.to_vec());
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: codes.len() as u32,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0003; // Keys 0x15 and 0x16
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    let batches = emitted_batches.lock().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0], vec![0x15, 0x16]);
+}
+
+#[test]
+fn cleanup_send_count_is_bounded() {
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let count_clone = call_count.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        count_clone.fetch_add(1, Ordering::Relaxed);
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: 0,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0001;
+
+    let _outcome = state.release_all(0);
+    // 4 release_scope attempts * 2 internal emit_up_with retries per failed attempt = 8 calls
+    assert_eq!(call_count.load(Ordering::Relaxed), 8);
+}
+
+#[test]
+fn cleanup_probe_count_is_bounded() {
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let count_clone = call_count.clone();
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        count_clone.fetch_add(1, Ordering::Relaxed);
+        PlatformSendResult {
+            requested: codes.len() as u32,
+            inserted: 0,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            completed_us: 10,
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    state.active_mask = 0x0001;
+
+    let _outcome = state.release_all(0);
+    assert!(call_count.load(Ordering::Relaxed) <= 8);
+}
+
+#[test]
+fn cleanup_sleep_count_is_bounded() {
+    TEST_RELEASE_SLEEP_COUNT.store(0, Ordering::Relaxed);
+
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 5,
+        timing_error: None,
+    });
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert_eq!(TEST_RELEASE_SLEEP_COUNT.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn final_inconclusive_result_fails_closed() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u32,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        completed_us: 10,
+        win32_error: 5,
+        timing_error: None,
+    });
+    state.active_mask = 0x0003;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_keys, vec![0x15, 0x16]);
+    assert_eq!(state.failed_release_mask, 0x0003);
+}
+
+#[test]
+fn final_held_result_reports_exact_subset() {
+    let reconciled = reconcile_release_observation(
+        0x0007,
+        0x0001,
+        InstrumentPhysicalState::Held(smallvec::smallvec![0x16]),
+    );
+    assert_eq!(reconciled, ReconciledRelease::Held(0x0002));
 }

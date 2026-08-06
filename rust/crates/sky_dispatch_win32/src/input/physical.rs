@@ -68,6 +68,31 @@ pub(crate) enum InstrumentPhysicalState {
     Inconclusive,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReconciledRelease {
+    VerifiedAllUp,
+    Held(u16),
+    Inconclusive(u16),
+}
+
+pub(crate) fn reconcile_release_observation(
+    requested_mask: u16,
+    transport_confirmed_mask: u16,
+    physical_state: InstrumentPhysicalState,
+) -> ReconciledRelease {
+    match physical_state {
+        InstrumentPhysicalState::AllUp => ReconciledRelease::VerifiedAllUp,
+        InstrumentPhysicalState::Held(held_keys) => {
+            let held_mask = mask_for_scan_codes(&held_keys).unwrap_or(0);
+            ReconciledRelease::Held(held_mask & requested_mask)
+        }
+        InstrumentPhysicalState::Inconclusive => {
+            let unresolved = requested_mask & !transport_confirmed_mask;
+            ReconciledRelease::Inconclusive(unresolved)
+        }
+    }
+}
+
 pub(crate) fn instrument_physical_state_for_mask(
     target_hwnd: isize,
     requested_mask: u16,

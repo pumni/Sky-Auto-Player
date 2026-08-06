@@ -10,14 +10,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+RunCommand = Callable[..., subprocess.CompletedProcess[str]]
 
 
 def _run(
@@ -57,14 +60,21 @@ def _assert_clean(cwd: Path, label: str) -> None:
         raise RuntimeError(f"{label} worktree is dirty:\n{result.stdout}")
 
 
-def _build_wheel(repo: Path, *, env_file: Path | None, expected_sha: str) -> Path:
+def _build_wheel(
+    repo: Path,
+    *,
+    env_file: Path | None,
+    expected_sha: str,
+    runner: RunCommand | None = None,
+) -> Path:
     command = ["uv", "run"]
     if env_file is not None:
         command.extend(["--env-file", str(env_file)])
     command.extend(["python", "scripts/build_rust_wheel.py", "--test-support"])
     build_env = os.environ.copy()
     build_env["GITHUB_SHA"] = expected_sha
-    result = _run(command, cwd=repo, env=build_env)
+    run = _run if runner is None else runner
+    result = run(command, cwd=repo, env=build_env, capture=True)
     if result.returncode != 0:
         raise RuntimeError(f"native wheel build failed for {repo}: {result.returncode}")
     wheel_dir_candidates = (repo / "target" / "wheels", repo / "rust" / "target" / "wheels")
@@ -74,8 +84,9 @@ def _build_wheel(repo: Path, *, env_file: Path | None, expected_sha: str) -> Pat
     return max(wheels, key=lambda path: path.stat().st_mtime_ns)
 
 
-def _install_wheel(wheel: Path) -> None:
-    result = _run(
+def _install_wheel(wheel: Path, *, runner: RunCommand | None = None) -> None:
+    run = _run if runner is None else runner
+    result = run(
         ["uv", "pip", "install", "--python", sys.executable, "--reinstall", "--no-deps", str(wheel)],
         cwd=ROOT,
     )
@@ -154,6 +165,94 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _append_log(path: Path, value: str | None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(value or "")
+
+
+def _run_logged(
+    command: list[str],
+    *,
+    cwd: Path,
+    role: str,
+    output_dir: Path,
+    env: dict[str, str] | None = None,
+    runner: RunCommand | None = None,
+) -> subprocess.CompletedProcess[str]:
+    run = _run if runner is None else runner
+    result = run(command, cwd=cwd, env=env, capture=True)
+    _append_log(output_dir / f"{role}-stdout.log", getattr(result, "stdout", ""))
+    _append_log(output_dir / f"{role}-stderr.log", getattr(result, "stderr", ""))
+    return result
+
+
+def _host_fingerprint() -> dict[str, str]:
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "windows_build": platform.version(),
+    }
+
+
+def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "actions": args.actions,
+        "dispatch_repeats": args.dispatch_repeats,
+        "command_samples": args.command_samples,
+        "polyphony": args.polyphony,
+        "game_fps": args.game_fps,
+        "lead_mode": args.lead_mode,
+        "fixed_lead_us": args.fixed_lead_us,
+        "gap_profile": args.gap_profile,
+        "warmup_cycles": args.warmup_cycles,
+        "rt_priority_mode": args.rt_priority_mode,
+        "budget_seconds": args.budget_seconds,
+    }
+
+
+def _ab_provenance(
+    *,
+    baseline_sha: str,
+    candidate_sha: str,
+    args: argparse.Namespace,
+    dirty_worktree: bool = False,
+) -> dict[str, Any]:
+    return {
+        "harness_git_sha": candidate_sha,
+        "native_build_sha": candidate_sha,
+        "baseline_sha": baseline_sha,
+        "candidate_sha": candidate_sha,
+        "dirty_worktree": dirty_worktree,
+        "host_fingerprint": _host_fingerprint(),
+        "command_line": list(sys.argv),
+        "benchmark_matrix": _benchmark_matrix(args),
+    }
+
+
+def _add_report_provenance(path: Path, provenance: dict[str, Any]) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    payload["ab_provenance"] = provenance
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _failure_report_path(output_dir: Path, role: str) -> Path:
+    return output_dir / f"{role}-failure.json"
+
+
 def main() -> int:
     args = _parse_args()
     if os.name != "nt":
@@ -173,100 +272,223 @@ def main() -> int:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    for role in ("baseline", "candidate"):
+        (output_dir / f"{role}-stdout.log").write_text("", encoding="utf-8")
+        (output_dir / f"{role}-stderr.log").write_text("", encoding="utf-8")
+
+    baseline_report = output_dir / "baseline.json"
+    candidate_report = output_dir / "candidate.json"
     commands: dict[str, list[str]] = {}
+    executed_commands: dict[str, list[list[str]]] = {"baseline": [], "candidate": []}
     provenance: dict[str, Any] = {
         "harness_git_sha": candidate_sha,
         "baseline_ref": args.baseline_ref,
         "baseline_sha": baseline_sha,
         "candidate_ref": args.candidate_ref,
         "candidate_sha": candidate_sha,
+        "dirty_worktree": False,
+        "host_fingerprint": _host_fingerprint(),
+        "command_line": list(sys.argv),
+        "benchmark_matrix": _benchmark_matrix(args),
         "roles": {},
     }
+    provenance["ab_provenance"] = _ab_provenance(
+        baseline_sha=baseline_sha,
+        candidate_sha=candidate_sha,
+        args=args,
+    )
 
-    with tempfile.TemporaryDirectory(prefix="sky-native-ab-") as temp_dir:
-        worktree = Path(temp_dir) / "baseline"
-        try:
-            add = _run(["git", "worktree", "add", "--detach", str(worktree), baseline_sha], cwd=ROOT)
+    def role_runner(role: str) -> RunCommand:
+        def run(
+            command: list[str],
+            *,
+            cwd: Path,
+            capture: bool = False,
+            env: dict[str, str] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal observed_exit_code
+            executed_commands[role].append(list(command))
+            result = _run_logged(
+                command,
+                cwd=cwd,
+                role=role,
+                output_dir=output_dir,
+                env=env,
+            )
+            if result.returncode != 0:
+                observed_exit_code = result.returncode
+            return result
+
+        return run
+
+    stage = "candidate_build"
+    failure_role = "candidate"
+    failure_summary: dict[str, Any] | None = None
+    observed_exit_code = 1
+    exit_code = 1
+    worktree: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="sky-native-ab-") as temp_dir:
+            worktree = Path(temp_dir) / "baseline"
+            add = _run(
+                ["git", "worktree", "add", "--detach", str(worktree), baseline_sha],
+                cwd=ROOT,
+            )
             if add.returncode != 0:
+                observed_exit_code = add.returncode
                 raise RuntimeError("could not create baseline temporary worktree")
             _assert_clean(worktree, "baseline")
             env_file = ROOT / ".env"
             if env_file.exists():
                 shutil.copy2(env_file, worktree / ".env")
+
+            stage = "baseline_build"
+            failure_role = "baseline"
             baseline_wheel = _build_wheel(
                 worktree,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=baseline_sha,
+                runner=role_runner("baseline"),
             )
             provenance["roles"]["baseline"] = {
                 "native_build_commit": baseline_sha,
                 "wheel": baseline_wheel.name,
             }
 
-            baseline_report = output_dir / "baseline.json"
-            baseline_args = argparse.Namespace(**vars(args), label="baseline")
+            stage = "baseline_benchmark"
             commands["baseline"] = _benchmark_command(
                 output=baseline_report,
                 expected_native_commit=baseline_sha,
-                args=baseline_args,
+                args=argparse.Namespace(**vars(args), label="baseline"),
             )
-            _install_wheel(baseline_wheel)
-            result = _run(commands["baseline"], cwd=ROOT)
+            _install_wheel(baseline_wheel, runner=role_runner("baseline"))
+            executed_commands["baseline"].append(list(commands["baseline"]))
+            result = _run_logged(
+                commands["baseline"],
+                cwd=ROOT,
+                role="baseline",
+                output_dir=output_dir,
+            )
+            if result.returncode != 0:
+                observed_exit_code = result.returncode
+            _add_report_provenance(
+                baseline_report,
+                {**provenance["ab_provenance"], "native_build_sha": baseline_sha},
+            )
             if result.returncode != 0:
                 raise RuntimeError("baseline benchmark failed")
 
+            stage = "candidate_build"
+            failure_role = "candidate"
             candidate_wheel = _build_wheel(
                 ROOT,
                 env_file=Path(".env") if env_file.exists() else None,
                 expected_sha=candidate_sha,
+                runner=role_runner("candidate"),
             )
             provenance["roles"]["candidate"] = {
                 "native_build_commit": candidate_sha,
                 "wheel": candidate_wheel.name,
             }
-            candidate_report = output_dir / "candidate.json"
+
+            stage = "candidate_benchmark"
             commands["candidate"] = _benchmark_command(
                 output=candidate_report,
                 expected_native_commit=candidate_sha,
                 args=argparse.Namespace(**vars(args), label="candidate"),
                 baseline=baseline_report,
             )
-            _install_wheel(candidate_wheel)
-            result = _run(commands["candidate"], cwd=ROOT)
-            if result.returncode != 0:
-                raise RuntimeError("candidate benchmark or A/B regression gate failed")
-
-            summary = {
-                "baseline_sha": baseline_sha,
-                "candidate_sha": candidate_sha,
-                "baseline_report": str(baseline_report),
-                "candidate_report": str(candidate_report),
-                "benchmark_config": {
-                    "actions": args.actions,
-                    "dispatch_repeats": args.dispatch_repeats,
-                    "command_samples": args.command_samples,
-                    "polyphony": args.polyphony,
-                    "game_fps": args.game_fps,
-                    "lead_mode": args.lead_mode,
-                    "fixed_lead_us": args.fixed_lead_us,
-                    "gap_profile": args.gap_profile,
-                    "warmup_cycles": args.warmup_cycles,
-                    "rt_priority_mode": args.rt_priority_mode,
-                },
-                "commands": commands,
-                "statistics_eligible": True,
-            }
-            (output_dir / "ab-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-            (output_dir / "build-provenance.json").write_text(
-                json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
+            _install_wheel(candidate_wheel, runner=role_runner("candidate"))
+            executed_commands["candidate"].append(list(commands["candidate"]))
+            result = _run_logged(
+                commands["candidate"],
+                cwd=ROOT,
+                role="candidate",
+                output_dir=output_dir,
             )
-            print(json.dumps(summary, indent=2))
-            return 0
-        finally:
-            if worktree.exists():
-                remove = _run(["git", "worktree", "remove", "--force", str(worktree)], cwd=ROOT)
-                if remove.returncode != 0:
-                    print("WARNING: failed to remove temporary baseline worktree", file=sys.stderr)
+            if result.returncode != 0:
+                observed_exit_code = result.returncode
+            _add_report_provenance(candidate_report, provenance["ab_provenance"])
+            if result.returncode != 0:
+                try:
+                    candidate_payload = json.loads(candidate_report.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    candidate_payload = {}
+                if isinstance(candidate_payload, dict) and candidate_payload.get(
+                    "statistics_eligible"
+                ) is True:
+                    stage = "regression_gate"
+                raise RuntimeError("candidate benchmark or A/B regression gate failed")
+            exit_code = 0
+    except Exception as exc:
+        exit_code = observed_exit_code
+        failure_summary = {
+            "stage": stage,
+            "exit_code": exit_code,
+            "baseline_sha": baseline_sha,
+            "candidate_sha": candidate_sha,
+            "candidate_report_exists": candidate_report.exists(),
+            "command": (
+                executed_commands.get(failure_role, [])[-1]
+                if executed_commands.get(failure_role)
+                else commands.get(failure_role, [])
+            ),
+            "statistics_eligible": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        report_path = baseline_report if failure_role == "baseline" else candidate_report
+        if not report_path.exists():
+            _write_json(
+                _failure_report_path(output_dir, failure_role),
+                {
+                    **failure_summary,
+                    "report_role": failure_role,
+                    "provenance": provenance,
+                },
+            )
+    finally:
+        if worktree is not None and worktree.exists():
+            remove = _run(["git", "worktree", "remove", "--force", str(worktree)], cwd=ROOT)
+            if remove.returncode != 0:
+                print("WARNING: failed to remove temporary baseline worktree", file=sys.stderr)
+
+        summary = {
+            "baseline_sha": baseline_sha,
+            "candidate_sha": candidate_sha,
+            "baseline_report": str(baseline_report),
+            "candidate_report": str(candidate_report),
+            "candidate_failure_report": str(_failure_report_path(output_dir, "candidate")),
+            "benchmark_config": _benchmark_matrix(args),
+            "commands": commands,
+            "executed_commands": executed_commands,
+            "statistics_eligible": exit_code == 0,
+            "failure_stage": None if failure_summary is None else failure_summary["stage"],
+        }
+        provenance["commands"] = commands
+        provenance["executed_commands"] = executed_commands
+        candidate_failure_path = _failure_report_path(output_dir, "candidate")
+        if not candidate_report.exists() and not candidate_failure_path.exists():
+            _write_json(
+                candidate_failure_path,
+                {
+                    "stage": None if failure_summary is None else failure_summary["stage"],
+                    "exit_code": exit_code,
+                    "baseline_sha": baseline_sha,
+                    "candidate_sha": candidate_sha,
+                    "candidate_report_exists": False,
+                    "command": [],
+                    "statistics_eligible": False,
+                    "report_role": "candidate",
+                    "provenance": provenance,
+                },
+            )
+        _write_json(output_dir / "build-provenance.json", provenance)
+        _write_json(output_dir / "ab-summary.json", summary)
+        if failure_summary is not None:
+            _write_json(output_dir / "failure-summary.json", failure_summary)
+
+    print(json.dumps(summary, indent=2))
+    return exit_code
 
 
 if __name__ == "__main__":

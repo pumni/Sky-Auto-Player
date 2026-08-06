@@ -4,9 +4,12 @@ mod control;
 mod estimator;
 mod health;
 mod orchestration;
+mod planning;
 mod startup;
 mod timing;
 mod wait;
+
+pub(crate) use planning::plan_next_dispatch;
 
 pub(crate) use admission::{
     DownAdmission, TargetStamp, ensure_preflight_for_target, final_down_admission, focus_matches,
@@ -32,9 +35,8 @@ pub(crate) use health::HealthWindowPolicy;
 pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
-    HealthWindow, build_dispatch_budget, estimate_dispatch_path_lead, estimator_kind_for_path,
-    focus_gate_matches, observe_dispatch_health, observe_wait_health, publish_backend_metrics,
-    record_lateness,
+    HealthWindow, build_dispatch_budget, estimator_kind_for_path, focus_gate_matches,
+    observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
