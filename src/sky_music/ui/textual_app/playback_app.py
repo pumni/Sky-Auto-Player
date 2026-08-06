@@ -76,6 +76,10 @@ class PlaybackSnapshot:
     sendinput_path_degraded: bool = False
     bookkeeping_degraded: bool = False
     wait_path_degraded: bool = False
+    wait_backend_failures: int = 0
+    wait_clock_failures: int = 0
+    recovered_zero_progress_but_late: int = 0
+    recovered_partial_up_retries: int = 0
     backend_health: BackendHealth | None = None
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +134,10 @@ class SnapshotRenderer:
         sendinput_path_degraded: bool = False,
         bookkeeping_degraded: bool = False,
         wait_path_degraded: bool = False,
+        wait_backend_failures: int = 0,
+        wait_clock_failures: int = 0,
+        recovered_zero_progress_but_late: int = 0,
+        recovered_partial_up_retries: int = 0,
         backend_health: BackendHealth | None = None,
     ) -> None:
         with self._lock:
@@ -142,6 +150,10 @@ class SnapshotRenderer:
                 sendinput_path_degraded=sendinput_path_degraded,
                 bookkeeping_degraded=bookkeeping_degraded,
                 wait_path_degraded=wait_path_degraded,
+                wait_backend_failures=wait_backend_failures,
+                wait_clock_failures=wait_clock_failures,
+                recovered_zero_progress_but_late=recovered_zero_progress_but_late,
+                recovered_partial_up_retries=recovered_partial_up_retries,
                 backend_health=backend_health,
             )
 

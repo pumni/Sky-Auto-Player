@@ -56,6 +56,10 @@ def test_snapshot_renderer_unit() -> None:
         song_name="My Song",
         status="paused",
         input_path_degraded=True,
+        wait_backend_failures=2,
+        wait_clock_failures=1,
+        recovered_zero_progress_but_late=3,
+        recovered_partial_up_retries=4,
     )
     snap = renderer.get_snapshot()
     assert snap is not None
@@ -64,6 +68,10 @@ def test_snapshot_renderer_unit() -> None:
     assert snap.song_name == "My Song"
     assert snap.status == "paused"
     assert snap.input_path_degraded is True
+    assert snap.wait_backend_failures == 2
+    assert snap.wait_clock_failures == 1
+    assert snap.recovered_zero_progress_but_late == 3
+    assert snap.recovered_partial_up_retries == 4
     
     renderer.update_counters_batch(ProgressCounters(5000, 1 if 5000>2000 else 0, 1 if 5000>5000 else 0, 1 if 5000>10000 else 0, 0, 0, (5000,)))
     assert renderer.max_lateness_us == 5000
