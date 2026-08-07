@@ -38,10 +38,13 @@ struct ReleaseSend {
     skipped_count: usize,
     attempts: u8,
     is_success: bool,
+    #[allow(dead_code)]
     requested_mask: u16,
     confirmed_mask: u16,
     skipped_mask: u16,
+    #[allow(dead_code)]
     unresolved_mask: u16,
+    #[allow(dead_code)]
     status: sky_dispatch_win32::input::SendTransactionStatus,
 }
 

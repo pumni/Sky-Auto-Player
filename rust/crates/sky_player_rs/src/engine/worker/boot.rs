@@ -233,7 +233,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         };
     }
     let delivery_margin_ticks = DurationTicks::ZERO;
-    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+    let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
         min_hold_ticks,
@@ -254,17 +254,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let frame_period_ticks = match qpc_clock.duration_from_us(frame_period_us) {
-        Ok(value) => value,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("frame period conversion failed: {error:?}"),
-            );
-        }
-    };
-    coordinator.set_frame_period_ticks(frame_period_ticks);
     core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
         match coordinator.effective_total_ticks() {
             Ok(ticks) => ticks.as_u64(),

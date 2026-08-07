@@ -197,7 +197,7 @@ pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
-    use super::{GenerationStatus, RuntimeDispatchCoordinator, TimelineRebaseReason};
+    use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
     use crate::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
     use crate::time::{DurationTicks, TimelineTicks};
@@ -610,56 +610,17 @@ mod tests {
                 TimelineTicks::from_raw(130),
             )
             .unwrap();
-        assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 20);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
-        assert_eq!(
-            coordinator.last_timeline_rebase_reason(),
-            Some(TimelineRebaseReason::ReleaseFloor)
-        );
+        assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 0);
+        assert_eq!(coordinator.timeline_rebase_count(), 0);
         let following = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(219), DurationTicks::ZERO)
+            .prepare_next_due_authored(TimelineTicks::from_raw(199), DurationTicks::ZERO)
             .unwrap();
         assert!(following.is_none());
         let following = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(220), DurationTicks::ZERO)
+            .prepare_next_due_authored(TimelineTicks::from_raw(200), DurationTicks::ZERO)
             .unwrap()
             .unwrap();
-        assert_eq!(following.effective_scheduled_ticks.as_u64(), 220);
-    }
-
-    #[test]
-    fn repeated_prepare_does_not_double_count_worker_late_rebase() {
-        let schedule = compile_runtime_intents(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100,
-                scan_codes: vec![0x15].into(),
-                reason: "late packet".into(),
-            }],
-            &[0x15],
-        )
-        .unwrap();
-        let mut coordinator =
-            RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
-        coordinator.set_frame_period_ticks(DurationTicks::from_raw(10));
-
-        let first = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
-            .unwrap()
-            .unwrap();
-        assert_eq!(first.effective_scheduled_ticks.as_u64(), 120);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
-
-        let second = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
-            .unwrap()
-            .unwrap();
-        assert_eq!(second.effective_scheduled_ticks.as_u64(), 120);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
+        assert_eq!(following.effective_scheduled_ticks.as_u64(), 200);
     }
 
     #[test]
@@ -1753,16 +1714,12 @@ pub struct PreparedBatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRebaseReason {
-    WorkerLate,
-    ReleaseFloor,
     ReleaseRecovery,
 }
 
 impl TimelineRebaseReason {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::WorkerLate => "worker_late",
-            Self::ReleaseFloor => "release_floor",
             Self::ReleaseRecovery => "release_recovery",
         }
     }
@@ -1798,7 +1755,6 @@ pub struct RuntimeDispatchCoordinator {
     timeline_rebase_total_ticks: u64,
     timeline_rebase_max_ticks: u64,
     last_timeline_rebase_reason: Option<TimelineRebaseReason>,
-    frame_period_ticks: DurationTicks,
     release_recovery_started_ticks: Option<TimelineTicks>,
 }
 
@@ -1873,7 +1829,6 @@ impl RuntimeDispatchCoordinator {
             timeline_rebase_total_ticks: 0,
             timeline_rebase_max_ticks: 0,
             last_timeline_rebase_reason: None,
-            frame_period_ticks: DurationTicks::ZERO,
             release_recovery_started_ticks: None,
         })
     }
@@ -1943,10 +1898,6 @@ impl RuntimeDispatchCoordinator {
         self.timeline_rebase_max_ticks = next_max;
         self.last_timeline_rebase_reason = Some(reason);
         Ok(())
-    }
-
-    pub fn set_frame_period_ticks(&mut self, frame_period_ticks: DurationTicks) {
-        self.frame_period_ticks = frame_period_ticks;
     }
 
     pub fn effective_total_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
@@ -2682,16 +2633,6 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let authored = self.effective_batch_scheduled_ticks(index)?;
-        if self.frame_period_ticks != DurationTicks::ZERO
-            && now > authored
-            && now
-                .checked_duration_since(authored)
-                .is_ok_and(|late| late >= self.frame_period_ticks)
-        {
-            let late = now.checked_duration_since(authored)?;
-            self.apply_timeline_rebase(late, TimelineRebaseReason::WorkerLate)?;
-        }
         let effective_scheduled_ticks =
             self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
         let deadline = self.packet_effective_deadline_ticks(packet_index, dispatch_lead)?;
@@ -2785,16 +2726,6 @@ impl RuntimeDispatchCoordinator {
                     "compiled packet must contain at least one authored batch".to_string(),
                 ),
             ));
-        }
-        let authored_before_packet_gate = self.effective_batch_scheduled_ticks(prepared.index)?;
-        if prepared.effective_scheduled_ticks > authored_before_packet_gate {
-            let deferral = prepared
-                .effective_scheduled_ticks
-                .checked_duration_since(authored_before_packet_gate)?;
-            // A release-floor deferral is a timeline event, not permission to
-            // burst overdue authored actions.  Rebase all future actions only
-            // after this packet has completed successfully.
-            self.apply_timeline_rebase(deferral, TimelineRebaseReason::ReleaseFloor)?;
         }
         let release_not_before_ticks = completed
             .checked_add_duration(self.min_hold_ticks)
@@ -3508,10 +3439,16 @@ impl RuntimeDispatchCoordinator {
             if in_confirmed || in_skipped {
                 continue;
             }
-            if !matches!(
-                self.active_for_slot(pending.key_slot),
-                Some(active) if active.generation_id == pending.generation_id
-            ) {
+            let is_matching_gen = self.pending_by_slot[pending.key_slot as usize]
+                .as_ref()
+                .map_or_else(
+                    || {
+                        self.active_for_slot(pending.key_slot)
+                            .is_some_and(|active| active.generation_id == pending.generation_id)
+                    },
+                    |p| p.generation_id == pending.generation_id,
+                );
+            if !is_matching_gen {
                 continue;
             }
             let Some(retry_count) = pending.retry_count.checked_add(1) else {

@@ -612,10 +612,8 @@ impl TrackedKeyState {
         // release path saw any non-clean transport outcome, while
         // `verification_uncertain` records a physical probe that could not
         // confirm all-up (fail-closed). `released_successfully` is only true
-        // when the physical state was actually verified as all-up.
         let mut transport_anomaly = false;
         let mut verification_inconclusive = false;
-        let mut last_confirmed_held_mask = 0u16;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
@@ -676,7 +674,6 @@ impl TrackedKeyState {
                     };
                 }
                 ReconciledRelease::Held(held_mask) => {
-                    last_confirmed_held_mask = held_mask;
                     unresolved_mask = held_mask;
                 }
                 ReconciledRelease::Inconclusive(unconfirmed_mask) => {
