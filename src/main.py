@@ -482,7 +482,7 @@ def _run_textual_selftest() -> int:
         try:
             app = SkyPickerApp(theme_name="aurora")
             async with app.run_test(size=(100, 30)) as pilot:
-                await pilot.pause()
+                await pilot.pause(0.1)
                 table = app.query_one("#songs")
                 if getattr(table, "row_count", 0) != 2:
                     raise RuntimeError("Textual picker table did not render selftest rows")

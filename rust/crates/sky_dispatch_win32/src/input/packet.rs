@@ -1,6 +1,6 @@
 use super::outcome::{
     PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus,
+    SendTransactionStatus, classify_send_status,
 };
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
@@ -229,13 +229,24 @@ fn send_physical_packet_impl(
         }
     };
     let first_win32 = (first.win32_error != 0).then_some(first.win32_error);
+    let status1 = classify_send_status(
+        first.inserted as usize,
+        first.requested as usize,
+        first.win32_error,
+        Some(first.started_ticks),
+        first.completed_ticks,
+    );
 
     if first.inserted == first.requested {
         return SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
+            status: status1,
             evidence: SendEvidence {
                 requested_mask,
-                confirmed_mask: requested_mask,
+                confirmed_mask: if matches!(status1, SendTransactionStatus::Complete) {
+                    requested_mask
+                } else {
+                    0
+                },
                 skipped_mask: 0,
                 first_inserted: first.inserted,
                 attempts: 1,
@@ -263,8 +274,13 @@ fn send_physical_packet_impl(
     // Never issue a second whole-packet send: the Down that landed would be
     // duplicated and the physical stream would violate chord integrity.
     if !up_only && first.inserted > 0 {
+        let status = if first.completed_ticks.is_none() {
+            SendTransactionStatus::ClockFailureAfterSend
+        } else {
+            SendTransactionStatus::IntegrityLost
+        };
         return SendTransactionOutcome {
-            status: SendTransactionStatus::IntegrityLost,
+            status,
             evidence: SendEvidence {
                 requested_mask,
                 confirmed_mask: 0,
@@ -308,26 +324,19 @@ fn send_physical_packet_impl(
     };
     let second_win32 = (second.win32_error != 0).then_some(second.win32_error);
     let last_win32 = second_win32.or(first_win32);
-
-    let status = if second.inserted == second.requested {
-        SendTransactionStatus::Complete
-    } else if up_only {
-        if first.inserted == 0 && second.inserted == 0 {
-            SendTransactionStatus::ZeroProgress
-        } else {
-            SendTransactionStatus::PartialProgress
-        }
-    } else if second.inserted == 0 {
-        SendTransactionStatus::ZeroProgress
-    } else {
-        SendTransactionStatus::IntegrityLost
-    };
+    let status2 = classify_send_status(
+        second.inserted as usize,
+        second.requested as usize,
+        second.win32_error,
+        Some(first.started_ticks),
+        second.completed_ticks,
+    );
 
     SendTransactionOutcome {
-        status,
+        status: status2,
         evidence: SendEvidence {
             requested_mask,
-            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+            confirmed_mask: if matches!(status2, SendTransactionStatus::Complete) {
                 requested_mask
             } else {
                 0

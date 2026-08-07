@@ -77,6 +77,33 @@ impl SendEvidence {
     }
 }
 
+pub fn classify_send_status(
+    inserted: usize,
+    requested: usize,
+    win32_error: u32,
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: Option<QpcTicks>,
+) -> SendTransactionStatus {
+    let clock_missing = started_ticks.is_none() || completed_ticks.is_none();
+    if clock_missing {
+        if inserted > 0 {
+            SendTransactionStatus::ClockFailureAfterSend
+        } else {
+            SendTransactionStatus::ClockFailureBeforeSend
+        }
+    } else if inserted < requested {
+        if inserted == 0 {
+            SendTransactionStatus::ZeroProgress
+        } else {
+            SendTransactionStatus::IntegrityLost
+        }
+    } else if win32_error != 0 {
+        SendTransactionStatus::IntegrityLost
+    } else {
+        SendTransactionStatus::Complete
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SendTransactionOutcome {
     pub status: SendTransactionStatus,

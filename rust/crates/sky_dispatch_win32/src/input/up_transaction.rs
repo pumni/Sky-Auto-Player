@@ -1,6 +1,6 @@
 use super::outcome::{
     PacketRetryReason, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus,
+    SendTransactionStatus, classify_send_status,
 };
 use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
@@ -37,12 +37,24 @@ where
     let first = send_fn(scan_codes, true);
     let first_inserted = (first.inserted as usize).min(n);
     let first_win32_error = (first.win32_error != 0).then_some(first.win32_error);
+    let status1 = classify_send_status(
+        first_inserted,
+        n,
+        first.win32_error,
+        Some(first.started_ticks),
+        first.completed_ticks,
+    );
+
     if first_inserted >= n {
         return SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
+            status: status1,
             evidence: SendEvidence {
                 requested_mask,
-                confirmed_mask: requested_mask,
+                confirmed_mask: if matches!(status1, SendTransactionStatus::Complete) {
+                    requested_mask
+                } else {
+                    0
+                },
                 skipped_mask: 0,
                 first_inserted: first_inserted as u8,
                 attempts: 1,
@@ -57,14 +69,21 @@ where
         };
     }
 
-    // A partial Up is also uncertain: retry the entire requested set instead
-    // of assuming SendInput's inserted count identifies a prefix.
+    // Note-off (Up) is idempotent: if first_inserted < n (whether zero or partial),
+    // retry the full requested set.
     let second = send_fn(scan_codes, true);
     let second_inserted = (second.inserted as usize).min(n);
-    let success = second_inserted >= n;
     let second_win32_error = (second.win32_error != 0).then_some(second.win32_error);
     let last_win32_error = second_win32_error.or(first_win32_error);
-    let status = if success {
+    let status2 = classify_send_status(
+        second_inserted,
+        n,
+        second.win32_error,
+        Some(first.started_ticks),
+        second.completed_ticks,
+    );
+
+    let status = if matches!(status2, SendTransactionStatus::Complete) {
         SendTransactionStatus::Complete
     } else if first_inserted == 0 && second_inserted == 0 {
         SendTransactionStatus::ZeroProgress
@@ -76,7 +95,11 @@ where
         status,
         evidence: SendEvidence {
             requested_mask,
-            confirmed_mask: if success { requested_mask } else { 0 },
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
             skipped_mask: 0,
             first_inserted: first_inserted as u8,
             attempts: 2,
@@ -141,13 +164,13 @@ where
     let n = scan_codes.len();
     let result = send_fn(scan_codes, true);
     let inserted = (result.inserted as usize).min(n);
-    let status = if inserted >= n {
-        SendTransactionStatus::Complete
-    } else if inserted == 0 {
-        SendTransactionStatus::ZeroProgress
-    } else {
-        SendTransactionStatus::PartialProgress
-    };
+    let status = classify_send_status(
+        inserted,
+        n,
+        result.win32_error,
+        Some(result.started_ticks),
+        result.completed_ticks,
+    );
     let win32_error = (result.win32_error != 0).then_some(result.win32_error);
     SendTransactionOutcome {
         status,

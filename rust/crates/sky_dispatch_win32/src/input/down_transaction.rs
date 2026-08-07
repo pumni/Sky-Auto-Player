@@ -1,6 +1,6 @@
 use super::outcome::{
     PacketRetryReason, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus,
+    SendTransactionStatus, classify_send_status,
 };
 use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
@@ -35,13 +35,24 @@ where
     let res1 = send_fn(scan_codes, false);
     let landed1 = (res1.inserted as usize).min(n);
     let first_win32_error = (res1.win32_error != 0).then_some(res1.win32_error);
+    let status1 = classify_send_status(
+        landed1,
+        n,
+        res1.win32_error,
+        Some(res1.started_ticks),
+        res1.completed_ticks,
+    );
 
     if landed1 >= n {
         return SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
+            status: status1,
             evidence: SendEvidence {
                 requested_mask,
-                confirmed_mask: requested_mask,
+                confirmed_mask: if matches!(status1, SendTransactionStatus::Complete) {
+                    requested_mask
+                } else {
+                    0
+                },
                 skipped_mask: 0,
                 first_inserted: landed1 as u8,
                 attempts: 1,
@@ -63,8 +74,13 @@ where
     if landed1 > 0 {
         let rollback = send_fn(scan_codes, true);
         let rollback_error = (rollback.win32_error != 0).then_some(rollback.win32_error);
+        let status = if rollback.completed_ticks.is_none() {
+            SendTransactionStatus::ClockFailureAfterSend
+        } else {
+            SendTransactionStatus::IntegrityLost
+        };
         return SendTransactionOutcome {
-            status: SendTransactionStatus::IntegrityLost,
+            status,
             evidence: SendEvidence {
                 requested_mask,
                 confirmed_mask: 0,
@@ -89,12 +105,24 @@ where
     let retry = send_fn(scan_codes, false);
     let retry_inserted = (retry.inserted as usize).min(n);
     let retry_error = (retry.win32_error != 0).then_some(retry.win32_error);
+    let status2 = classify_send_status(
+        retry_inserted,
+        n,
+        retry.win32_error,
+        Some(res1.started_ticks),
+        retry.completed_ticks,
+    );
+
     if retry_inserted >= n {
         return SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
+            status: status2,
             evidence: SendEvidence {
                 requested_mask,
-                confirmed_mask: requested_mask,
+                confirmed_mask: if matches!(status2, SendTransactionStatus::Complete) {
+                    requested_mask
+                } else {
+                    0
+                },
                 skipped_mask: 0,
                 first_inserted: 0,
                 attempts: 2,
@@ -113,7 +141,7 @@ where
     let mut attempts = 2;
     let mut last_win32_error = retry_error.or(first_win32_error);
     let mut rollback_timing_error = None;
-    let mut status = SendTransactionStatus::ZeroProgress;
+    let mut status = status2;
 
     if retry_inserted > 0 {
         let rollback = send_fn(scan_codes, true);
@@ -123,7 +151,11 @@ where
             .then_some(rollback.win32_error)
             .or(last_win32_error);
         rollback_timing_error = rollback.timing_error;
-        status = SendTransactionStatus::IntegrityLost;
+        if rollback.completed_ticks.is_none() {
+            status = SendTransactionStatus::ClockFailureAfterSend;
+        } else {
+            status = SendTransactionStatus::IntegrityLost;
+        }
     }
 
     let timing_error = retry

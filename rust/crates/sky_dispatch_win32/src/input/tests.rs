@@ -769,3 +769,83 @@ fn test_send_transaction_status_exhaustive_match() {
         }
     }
 }
+
+#[test]
+fn partial_inserted_without_rollback_is_integrity_lost() {
+    let outcome = emit_down_with(&[0x15, 0x16], |codes, key_up| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: if key_up { 2 } else { 1 },
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+    assert!(!outcome.is_success());
+    assert_eq!(outcome.evidence.first_inserted, 1);
+    assert_eq!(outcome.evidence.confirmed_mask, 0);
+}
+
+#[test]
+fn full_inserted_with_win32_error_is_integrity_lost() {
+    let outcome = emit_down_with(&[0x15, 0x16], |codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+    assert!(!outcome.is_success());
+    assert_eq!(outcome.evidence.first_win32_error, Some(5));
+    assert_eq!(outcome.evidence.confirmed_mask, 0);
+}
+
+#[test]
+fn missing_completion_qpc_after_send_is_clock_failure_after_send() {
+    let outcome = emit_down_with(&[0x15, 0x16], |codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: None,
+        win32_error: 0,
+        timing_error: None,
+    });
+    assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+    assert!(!outcome.is_success());
+    assert_eq!(outcome.evidence.confirmed_mask, 0);
+}
+
+#[test]
+fn zero_progress_retry_only_runs_when_first_inserted_is_zero() {
+    let mut call_count = 0;
+    let outcome = emit_down_with(&[0x15, 0x16], |codes, _key_up| {
+        call_count += 1;
+        if call_count == 1 {
+            // First call has partial progress (1 inserted out of 2)
+            PlatformSendResult {
+                requested: codes.len() as u8,
+                inserted: 1,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
+                win32_error: 0,
+                timing_error: None,
+            }
+        } else {
+            // Second call is rollback
+            PlatformSendResult {
+                requested: codes.len() as u8,
+                inserted: 2,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: Some(QpcTicks::ZERO),
+                win32_error: 0,
+                timing_error: None,
+            }
+        }
+    });
+    // Partial progress must trigger rollback (call_count == 2) but MUST NOT retry nấc 2 as down send
+    assert_eq!(call_count, 2);
+    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+    assert_eq!(outcome.evidence.zero_progress_retries, 0);
+}
