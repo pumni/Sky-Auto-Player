@@ -88,11 +88,11 @@ impl SendTransactionOutcome {
     }
 
     pub fn sent_scan_codes(&self) -> SmallVec<[u16; 15]> {
-        scan_codes_from_mask(self.evidence.confirmed_mask).into()
+        scan_codes_from_mask(self.evidence.confirmed_mask)
     }
 
     pub fn skipped_duplicates(&self) -> SmallVec<[u16; 15]> {
-        scan_codes_from_mask(self.evidence.skipped_mask).into()
+        scan_codes_from_mask(self.evidence.skipped_mask)
     }
 }
 
@@ -108,11 +108,11 @@ pub struct ReleaseAllOutcome {
 
 impl ReleaseAllOutcome {
     pub fn attempted(&self) -> Vec<u16> {
-        scan_codes_from_mask(self.attempted_mask)
+        scan_codes_from_mask(self.attempted_mask).into_iter().collect()
     }
 
     pub fn stuck_keys(&self) -> Vec<u16> {
-        scan_codes_from_mask(self.stuck_mask)
+        scan_codes_from_mask(self.stuck_mask).into_iter().collect()
     }
 }
 

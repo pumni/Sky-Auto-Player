@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use sky_dispatch_core::estimator::SendLatencyEstimator;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
-use sky_dispatch_win32::input::ReleaseAllOutcome;
+use sky_dispatch_win32::input::{ReleaseAllOutcome, ReleaseScope};
 use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -120,20 +120,18 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 
     // This cleanup sits outside the contained loop so it also runs when an
-    // unexpected panic crosses the orchestration/backend seam.
+    // unexpected panic crosses the orchestration/backend seam. The release
+    // scope is decided once, up front: a terminal/full state releases the
+    // whole instrument, a normal completion releases only the tracked set.
+    // A second cleanup FSM is never chained, so cleanup latency is bounded to
+    // a single FSM invocation.
+    let release_scope = if worker_result.is_err() || force_full_cleanup {
+        ReleaseScope::FullInstrument
+    } else {
+        ReleaseScope::Tracked
+    };
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        let outcome = if worker_result.is_err() || force_full_cleanup {
-            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
-        } else {
-            backend.release_all(target_hwnd.load(Ordering::Acquire))
-        };
-        if release_state_verified(&backend, &outcome) {
-            outcome
-        } else {
-            // A normal-path release that cannot be verified gets one bounded
-            // full-instrument recovery attempt before the result is published.
-            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire))
-        }
+        backend.release_scope(release_scope, target_hwnd.load(Ordering::Acquire))
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
@@ -339,20 +337,17 @@ pub(crate) fn suspend_live_input(
     coordinator: &mut RuntimeDispatchCoordinator,
     target_hwnd: isize,
 ) -> Result<Vec<u64>, String> {
-    let initial = backend.release_all(target_hwnd);
-    let release = if release_state_verified(backend, &initial) {
-        initial
-    } else {
-        let full = backend.release_all_full_instrument(target_hwnd);
-        if !release_state_verified(backend, &full) {
-            return Err(format!(
-                "release verification failed (initial: {}; full: {})",
-                describe_release_outcome(&initial),
-                describe_release_outcome(&full),
-            ));
-        }
-        full
-    };
+    // A suspension is fail-closed: release the whole instrument in a single
+    // FSM invocation. The scope is decided before the call so two release
+    // FSMs are never chained (which held the total cleanup latency at
+    // ~330 ms plus duplicated retries).
+    let release = backend.release_all_full_instrument(target_hwnd);
+    if !release_state_verified(backend, &release) {
+        return Err(format!(
+            "release verification failed: {}",
+            describe_release_outcome(&release)
+        ));
+    }
 
     debug_assert!(release_state_verified(backend, &release));
     let cancelled = coordinator

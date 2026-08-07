@@ -208,10 +208,31 @@ pub(crate) fn plan_next_dispatch(
     })
 }
 
+/// Resolve the path-aware lead used to anchor the startup wait before the
+/// first main-loop `NextDispatchPlan` is built.
+///
+/// The normal loop derives lead from the next authored packet's path; startup
+/// must use the same policy instead of a hard-coded Down lead, otherwise a
+/// first authored `UpOnly`/`Mixed` packet anchors its physical boundary with
+/// the wrong directional lead.
+pub(crate) fn startup_lead_for_first_packet(
+    coordinator: &RuntimeDispatchCoordinator,
+    estimator: &SendLatencyEstimator,
+    latency_class: LatencyClass,
+    timing: &TimingOptions,
+    enable_adaptive_lead: bool,
+) -> u64 {
+    let path = next_authored_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
+        down_count: coordinator.next_authored_polyphony().max(1),
+    });
+    resolve_authored_lead(estimator, path, latency_class, timing, enable_adaptive_lead).applied_us
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AuthoredDispatchPlan, NextDispatchPlan, plan_next_dispatch, resolve_authored_lead,
+        startup_lead_for_first_packet,
     };
     use crate::engine::config::TimingOptions;
     use crate::engine::worker::health::{DispatchPath, estimate_dispatch_path_lead};
@@ -630,6 +651,132 @@ mod tests {
             plan.deadline_ticks.map(|t| t.as_u64()),
             Some(authored_deadline)
         );
+    }
+
+    #[test]
+    fn startup_lead_matches_policy_of_first_up_only_packet() {
+        let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
+        seed_directional_leads(&mut estimator, 50, 650);
+
+        // After the seed Down is committed, the next authored packet is UpOnly.
+        let coordinator = coordinator_from_actions(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "first-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up-only".into(),
+            },
+        ]);
+        let mut coordinator = coordinator;
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(0), DurationTicks::ZERO)
+            .expect("prepare")
+            .expect("seed down");
+        coordinator
+            .commit_down_success(
+                prepared,
+                &[0x15],
+                TimelineTicks::from_raw(0),
+                TimelineTicks::from_raw(1),
+            )
+            .expect("commit");
+
+        // The startup anchor must use the same path-aware lead policy as the
+        // normal loop's first NextDispatchPlan, never a hard-coded Down lead.
+        let startup_lead = startup_lead_for_first_packet(
+            &coordinator,
+            &estimator,
+            LatencyClass::Cold,
+            &timing(0, 2_000),
+            true,
+        );
+        let plan = plan_next_dispatch(
+            &coordinator,
+            &estimator,
+            us_clock(),
+            LatencyClass::Cold,
+            &timing(0, 2_000),
+            true,
+        )
+        .expect("plan");
+        let authored = plan.authored.expect("up-only authored");
+        assert!(matches!(
+            authored.path,
+            DispatchPath::UpOnly { up_count: 1 }
+        ));
+        assert_eq!(
+            startup_lead, authored.lead_us,
+            "startup lead must match the path-aware lead of the first authored packet"
+        );
+    }
+
+    #[test]
+    fn startup_lead_uses_path_of_first_mixed_packet() {
+        let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
+        seed_directional_leads(&mut estimator, 50, 650);
+        let coordinator = coordinator_from_actions(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "first-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 5_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "retrigger-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 5_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "retrigger-down".into(),
+            },
+        ]);
+        let mut coordinator = coordinator;
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(0), DurationTicks::ZERO)
+            .expect("prepare")
+            .expect("first down");
+        coordinator
+            .commit_down_success(
+                prepared,
+                &[0x15],
+                TimelineTicks::from_raw(0),
+                TimelineTicks::from_raw(1),
+            )
+            .expect("commit");
+
+        let expected = estimate_dispatch_path_lead(
+            &estimator,
+            DispatchPath::Mixed {
+                up_count: 1,
+                down_count: 1,
+            },
+            LatencyClass::Cold,
+            false,
+            2_000,
+        );
+        let lead = startup_lead_for_first_packet(
+            &coordinator,
+            &estimator,
+            LatencyClass::Cold,
+            &timing(0, 2_000),
+            true,
+        );
+        assert_eq!(lead, expected.applied_us);
     }
 
     #[test]

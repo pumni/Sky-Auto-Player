@@ -1,20 +1,23 @@
 mod admission;
+mod boot;
 mod cleanup;
 mod control;
-pub(super) mod dispatch;
+mod dispatch_loop;
+mod down_outcome;
+mod downs;
 mod estimator;
 mod health;
 mod orchestration;
 mod planning;
+mod releases;
 mod startup;
 mod timing;
 mod wait;
 
-pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases,
-};
+pub(super) use downs::{AuthoredPacketContext, DispatchStep, dispatch_authored_packet};
 pub(crate) use planning::plan_next_dispatch;
+pub(crate) use planning::startup_lead_for_first_packet;
+pub(super) use releases::{PendingReleaseContext, dispatch_due_pending_releases};
 
 pub(crate) use admission::{
     DownAdmission, TargetStamp, ensure_preflight_for_target, final_down_admission, focus_matches,

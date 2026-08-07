@@ -599,7 +599,7 @@ fn cleanup_send_count_is_bounded() {
     state.active_mask = 0x0001;
 
     let _outcome = state.release_all(0);
-    assert_eq!(call_count.load(Ordering::Relaxed), 8);
+    assert_eq!(call_count.load(Ordering::Relaxed), 4);
 }
 
 #[test]
@@ -620,7 +620,7 @@ fn cleanup_probe_count_is_bounded() {
     state.active_mask = 0x0001;
 
     let _outcome = state.release_all(0);
-    assert!(call_count.load(Ordering::Relaxed) <= 8);
+    assert!(call_count.load(Ordering::Relaxed) <= 4);
 }
 
 #[test]
@@ -669,6 +669,83 @@ fn final_held_result_reports_exact_subset() {
         InstrumentPhysicalState::Held(smallvec::smallvec![0x16]),
     );
     assert_eq!(reconciled, ReconciledRelease::Held(0x0002));
+}
+
+#[test]
+fn cleanup_inconclusive_with_transport_complete_fails_closed() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    // Physical probing is inconclusive even though transport confirmed every
+    // key. It must never become a VerifiedAllUp by probing an empty set.
+    state.custom_probe = Some(InstrumentPhysicalState::Inconclusive);
+    state.active_mask = 0x0003;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert!(outcome.stuck_keys().is_empty());
+    assert_eq!(outcome.attempts, 1);
+    // Transport-confirmed keys are still cleared from tracking state; only the
+    // physical-verification dimension is allowed to remain inconclusive.
+    assert_eq!(state.active_mask, 0);
+    assert_eq!(state.possibly_active_mask, 0);
+    assert_eq!(state.failed_release_mask, 0);
+    assert!(!outcome.transport_anomaly);
+}
+
+#[test]
+fn cleanup_clears_resolved_keys_before_final_outcome() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    // Physical probe reports only 0x16 (B) held each attempt, so key 0x15 (A)
+    // is resolved away on the first transition even though the release as a
+    // whole cannot be proven complete.
+    state.custom_probe = Some(InstrumentPhysicalState::Held(smallvec::smallvec![0x16]));
+    state.active_mask = 0x0003;
+    state.possibly_active_mask = 0x0003;
+
+    let _outcome = state.release_all(0);
+    // Key A (0x15) is resolved away on the first transition; key B (0x16)
+    // remains physically held and is tracked as stuck fail-closed.
+    assert_eq!(state.active_mask & 0x0001, 0);
+    assert_eq!(state.possibly_active_mask & 0x0001, 0);
+    assert_eq!(state.failed_release_mask, 0x0002);
+}
+
+#[test]
+fn cleanup_transport_anomaly_is_aggregated_independently_of_physical_all_up() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    // Physical probe sees all keys up despite the transport failure. The two
+    // dimensions are independent: released_successfully=true and
+    // verification_inconclusive=false, but transport_anomaly=true.
+    state.custom_probe = Some(InstrumentPhysicalState::AllUp);
+    state.active_mask = 0x0003;
+
+    let outcome = state.release_all(0);
+    assert!(outcome.released_successfully);
+    assert!(!outcome.verification_inconclusive);
+    assert!(outcome.stuck_keys().is_empty());
+    assert_eq!(outcome.attempts, 1);
+    assert!(outcome.transport_anomaly);
 }
 
 #[test]

@@ -108,3 +108,72 @@ where
 pub fn emit_up(scan_codes: &[u16]) -> SendTransactionOutcome {
     emit_up_with(scan_codes, send_input_raw)
 }
+
+/// Single-send note-off used by the cleanup FSM, which owns retry itself.
+///
+/// The cleanup state machine retries across attempts and must never call an
+/// API with an internal retry (that would multiply the raw `SendInput` calls
+/// by the FSM's attempt budget). This primitive performs exactly one send.
+pub fn emit_up_once_with<F>(scan_codes: &[u16], mut send_fn: F) -> SendTransactionOutcome
+where
+    F: FnMut(&[u16], bool) -> PlatformSendResult,
+{
+    if scan_codes.is_empty() {
+        let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            no_syscall_boundary_with_clock(None);
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: 0,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 0,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started_ticks),
+                completed_ticks,
+                timing_error,
+            },
+        };
+    }
+    let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
+    let n = scan_codes.len();
+    let result = send_fn(scan_codes, true);
+    let inserted = (result.inserted as usize).min(n);
+    let status = if inserted >= n {
+        SendTransactionStatus::Complete
+    } else if inserted == 0 {
+        SendTransactionStatus::ZeroProgress
+    } else {
+        SendTransactionStatus::PartialProgress
+    };
+    let win32_error = (result.win32_error != 0).then_some(result.win32_error);
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask,
+            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
+                requested_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted as u8,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: if inserted == 0 {
+                PacketRetryReason::ZeroProgress
+            } else {
+                PacketRetryReason::None
+            },
+            first_win32_error: win32_error,
+            last_win32_error: win32_error,
+            started_ticks: Some(result.started_ticks),
+            completed_ticks: result.completed_ticks,
+            timing_error: result.timing_error,
+        },
+    }
+}

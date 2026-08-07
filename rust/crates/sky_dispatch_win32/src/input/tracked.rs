@@ -10,9 +10,9 @@ use super::physical::{
     InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
     mask_for_scan_codes, reconcile_release_observation,
 };
-use super::raw::{no_syscall_boundary_with_clock, send_input_raw_with_clock};
+use super::raw::{no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock};
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
-use super::up_transaction::{emit_up, emit_up_with};
+use super::up_transaction::{emit_up, emit_up_once_with, emit_up_with};
 use crate::clock::QpcClock;
 use smallvec::SmallVec;
 use std::fmt;
@@ -65,6 +65,8 @@ pub struct TrackedKeyState {
     pub custom_emitter: Option<CustomEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) custom_probe: Option<InstrumentPhysicalState>,
     qpc_clock: Option<QpcClock>,
 }
 
@@ -195,6 +197,58 @@ impl TrackedKeyState {
         } else {
             emit_up(scan_codes)
         }
+    }
+
+    /// Single-send note-off for operator-owned cleanup retries. The cleanup FSM
+    /// bounds the raw `SendInput` count itself; this must never perform an
+    /// internal retry.
+    fn do_emit_up_once(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(ref emitter) = self.custom_emitter {
+            return emit_up_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+        }
+        if let Some(clock) = self.qpc_clock {
+            emit_up_once_with(scan_codes, |sc, key_up| {
+                send_input_raw_with_clock(sc, key_up, clock)
+            })
+        } else {
+            emit_up_once_with(scan_codes, send_input_raw)
+        }
+    }
+
+    /// Resolve the physical probe for the cleanup FSM. A test-only
+    /// `custom_probe` override provides deterministic evidence; otherwise the
+    /// custom-emitter simulation maps full transport confirmation to AllUp.
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline]
+    fn resolve_release_probe(
+        &self,
+        target_hwnd: isize,
+        unresolved_mask: u16,
+        transport_confirmed_mask: u16,
+    ) -> InstrumentPhysicalState {
+        if let Some(probe) = &self.custom_probe {
+            probe.clone()
+        } else if self.uses_custom_emitter() {
+            if transport_confirmed_mask == unresolved_mask {
+                InstrumentPhysicalState::AllUp
+            } else {
+                InstrumentPhysicalState::Inconclusive
+            }
+        } else {
+            instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
+        }
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    #[inline]
+    fn resolve_release_probe(
+        &self,
+        target_hwnd: isize,
+        unresolved_mask: u16,
+        _transport_confirmed_mask: u16,
+    ) -> InstrumentPhysicalState {
+        instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
@@ -552,44 +606,68 @@ impl TrackedKeyState {
         let mut unresolved_mask = requested_mask;
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
-        let mut last_reconciled = ReconciledRelease::Inconclusive(requested_mask);
+        // Independent evidence dimensions: `transport_anomaly` records that the
+        // release path saw any non-clean transport outcome, while
+        // `verification_uncertain` records a physical probe that could not
+        // confirm all-up (fail-closed). `released_successfully` is only true
+        // when the physical state was actually verified as all-up.
+        let mut transport_anomaly = false;
+        let mut verification_uncertain = false;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
                 release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
             }
+            if unresolved_mask == 0 {
+                break;
+            }
 
+            let previous_unresolved = unresolved_mask;
             let send_codes = scan_codes_from_mask(unresolved_mask);
-            let emitted = self.do_emit_up(&send_codes);
+            let emitted = self.do_emit_up_once(&send_codes);
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
-            let physical_state = if self.uses_custom_emitter() {
-                if transport_confirmed_mask == unresolved_mask {
-                    InstrumentPhysicalState::AllUp
-                } else {
-                    InstrumentPhysicalState::Inconclusive
-                }
-            } else {
-                instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
-            };
+            // Aggregate transport-anomaly evidence from this single-send note.
+            transport_anomaly |= !matches!(
+                emitted.status,
+                SendTransactionStatus::Complete
+            ) || emitted.evidence.attempts > 1
+                || emitted.evidence.retry_reason != PacketRetryReason::None
+                || emitted.evidence.first_win32_error.is_some()
+                || emitted.evidence.last_win32_error.is_some();
 
-            last_reconciled = reconcile_release_observation(
+            let physical_state = self.resolve_release_probe(
+                target_hwnd,
                 unresolved_mask,
                 transport_confirmed_mask,
-                physical_state,
             );
 
-            match last_reconciled {
+            let reconciled =
+                reconcile_release_observation(unresolved_mask, transport_confirmed_mask, physical_state);
+
+            // Transport-confirmed keys are released at the physical layer
+            // regardless of what physical probing later determines. Clear them
+            // from tracking state immediately rather than waiting for a final
+            // VerifiedAllUp, so a narrowed unresolved set never orphans a key.
+            let resolved_this_transition = match reconciled {
+                ReconciledRelease::VerifiedAllUp => previous_unresolved,
+                ReconciledRelease::Held(held_mask) => previous_unresolved & !held_mask,
+                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
+                    previous_unresolved & !unconfirmed_mask
+                }
+            };
+            self.active_mask &= !resolved_this_transition;
+            self.possibly_active_mask &= !resolved_this_transition;
+            self.failed_release_mask &= !resolved_this_transition;
+
+            match reconciled {
                 ReconciledRelease::VerifiedAllUp => {
-                    self.active_mask &= !unresolved_mask;
-                    self.possibly_active_mask &= !unresolved_mask;
-                    self.failed_release_mask &= !unresolved_mask;
                     if self.failed_release_mask == 0 {
                         self.last_error = None;
                     }
                     return ReleaseAllOutcome {
                         attempted_mask: requested_mask,
-                        transport_anomaly: false,
+                        transport_anomaly,
                         released_successfully: true,
                         stuck_mask: 0,
                         verification_inconclusive: false,
@@ -600,7 +678,30 @@ impl TrackedKeyState {
                     unresolved_mask = held_mask;
                 }
                 ReconciledRelease::Inconclusive(unconfirmed_mask) => {
+                    // A physical probe that cannot confirm all-up must always
+                    // fail closed. It may never become a VerifiedAllUp by
+                    // probing an empty set, so leave verification uncertain and
+                    // terminate the FSM here: transport-confirmed keys were
+                    // already cleared above and the remaining mask is reported
+                    // as stuck/uncertain.
+                    verification_uncertain = true;
                     unresolved_mask = unconfirmed_mask;
+                    if unconfirmed_mask == 0 {
+                        self.last_error = Some(match scope {
+                            ReleaseScope::Tracked => "tracked release unverified".to_string(),
+                            ReleaseScope::FullInstrument => {
+                                "full-instrument release unverified".to_string()
+                            }
+                        });
+                        return ReleaseAllOutcome {
+                            attempted_mask: requested_mask,
+                            transport_anomaly,
+                            released_successfully: false,
+                            stuck_mask: 0,
+                            verification_inconclusive: true,
+                            attempts: (attempt_idx + 1) as u8,
+                        };
+                    }
                 }
             }
         }
@@ -614,33 +715,15 @@ impl TrackedKeyState {
             ),
         };
         self.last_error = Some(error_msg);
+        self.failed_release_mask |= unresolved_mask;
 
-        match last_reconciled {
-            ReconciledRelease::VerifiedAllUp => unreachable!(),
-            ReconciledRelease::Held(held_mask) => {
-                self.active_mask &= !held_mask;
-                self.possibly_active_mask &= !held_mask;
-                self.failed_release_mask |= held_mask;
-                ReleaseAllOutcome {
-                    attempted_mask: requested_mask,
-                    transport_anomaly: false,
-                    released_successfully: false,
-                    stuck_mask: held_mask,
-                    verification_inconclusive: false,
-                    attempts: 4,
-                }
-            }
-            ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                self.failed_release_mask |= unconfirmed_mask;
-                ReleaseAllOutcome {
-                    attempted_mask: requested_mask,
-                    transport_anomaly: false,
-                    released_successfully: false,
-                    stuck_mask: unconfirmed_mask,
-                    verification_inconclusive: true,
-                    attempts: 4,
-                }
-            }
+        ReleaseAllOutcome {
+            attempted_mask: requested_mask,
+            transport_anomaly,
+            released_successfully: false,
+            stuck_mask: unresolved_mask,
+            verification_inconclusive: verification_uncertain || unresolved_mask != 0,
+            attempts: 4,
         }
     }
 

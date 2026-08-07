@@ -154,9 +154,32 @@ fn send_once(
     }
 }
 
-pub fn send_physical_packet_with_clock(
+/// One low-level `SendInput`/QPC attempt for a physical packet. Kept as a
+/// first-class value so the retry policy is testable through an injectable
+/// seam without invoking the Win32 syscall.
+#[allow(dead_code)]
+enum PacketSendAttempt {
+    Outcome(PlatformSendResult),
+    ClockFailure(Option<QpcTicks>, crate::clock::QpcError, bool),
+}
+
+#[cfg(windows)]
+fn run_send_attempt(packet: PhysicalPacket, clock: QpcClock) -> PacketSendAttempt {
+    match send_once(packet, clock) {
+        Ok(res) => PacketSendAttempt::Outcome(res),
+        Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
+    }
+}
+
+/// Core packet send with an injectable send seam. Retry is only ever safe when
+/// the chord has not been split (zero progress) or when the packet carries no
+/// Down events (UpOnly, where a repeated Up is idempotent at the physical
+/// layer). A partial insertion of a Down-bearing packet is terminal
+/// `IntegrityLost`: re-sending the whole packet would duplicate the Down that
+/// already landed, so a second send must never occur.
+fn send_physical_packet_impl(
     packet: PhysicalPacket,
-    clock: QpcClock,
+    mut send_one: impl FnMut(PhysicalPacket) -> PacketSendAttempt,
 ) -> SendTransactionOutcome {
     let requested_mask = packet.up_mask | packet.down_mask;
     if !valid_packet(packet) || packet.event_count() == 0 {
@@ -179,11 +202,11 @@ pub fn send_physical_packet_with_clock(
         };
     }
 
-    let first = match send_once(packet, clock) {
-        Ok(res) => res,
-        Err((start, err, send_called)) => {
+    let first = match send_one(packet) {
+        PacketSendAttempt::Outcome(res) => res,
+        PacketSendAttempt::ClockFailure(start, err, called) => {
             return SendTransactionOutcome {
-                status: if send_called {
+                status: if called {
                     SendTransactionStatus::ClockFailureAfterSend
                 } else {
                     SendTransactionStatus::ClockFailureBeforeSend
@@ -193,7 +216,7 @@ pub fn send_physical_packet_with_clock(
                     confirmed_mask: 0,
                     skipped_mask: 0,
                     first_inserted: 0,
-                    attempts: if send_called { 1 } else { 0 },
+                    attempts: u8::from(called),
                     zero_progress_retries: 0,
                     retry_reason: PacketRetryReason::None,
                     first_win32_error: None,
@@ -205,7 +228,6 @@ pub fn send_physical_packet_with_clock(
             };
         }
     };
-
     let first_win32 = (first.win32_error != 0).then_some(first.win32_error);
 
     if first.inserted == first.requested {
@@ -235,10 +257,36 @@ pub fn send_physical_packet_with_clock(
             inserted_count: first.inserted,
         }
     };
+    let up_only = packet.is_up_only();
 
-    let second = match send_once(packet, clock) {
-        Ok(res) => res,
-        Err((_start, err, _send_called)) => {
+    // A partial insertion of a Down/Mixed packet has already split the chord.
+    // Never issue a second whole-packet send: the Down that landed would be
+    // duplicated and the physical stream would violate chord integrity.
+    if !up_only && first.inserted > 0 {
+        return SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: first.inserted,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason,
+                first_win32_error: first_win32,
+                last_win32_error: first_win32,
+                started_ticks: Some(first.started_ticks),
+                completed_ticks: first.completed_ticks,
+                timing_error: None,
+            },
+        };
+    }
+
+    // Safe retry: UpOnly (partial or zero) is idempotent; a Down/Mixed packet
+    // is only retried after guaranteed zero progress (no chord was split).
+    let second = match send_one(packet) {
+        PacketSendAttempt::Outcome(res) => res,
+        PacketSendAttempt::ClockFailure(start, err, called) => {
             return SendTransactionOutcome {
                 status: SendTransactionStatus::ClockFailureAfterSend,
                 evidence: SendEvidence {
@@ -246,30 +294,33 @@ pub fn send_physical_packet_with_clock(
                     confirmed_mask: 0,
                     skipped_mask: 0,
                     first_inserted: first.inserted,
-                    attempts: 1,
+                    attempts: u8::from(called).saturating_add(1),
                     zero_progress_retries: u8::from(first.inserted == 0),
                     retry_reason,
                     first_win32_error: first_win32,
                     last_win32_error: first_win32,
-                    started_ticks: Some(first.started_ticks),
-                    completed_ticks: first.completed_ticks,
+                    started_ticks: start,
+                    completed_ticks: None,
                     timing_error: Some(err),
                 },
             };
         }
     };
-
     let second_win32 = (second.win32_error != 0).then_some(second.win32_error);
     let last_win32 = second_win32.or(first_win32);
 
     let status = if second.inserted == second.requested {
         SendTransactionStatus::Complete
-    } else if first.inserted == 0 && second.inserted == 0 {
+    } else if up_only {
+        if first.inserted == 0 && second.inserted == 0 {
+            SendTransactionStatus::ZeroProgress
+        } else {
+            SendTransactionStatus::PartialProgress
+        }
+    } else if second.inserted == 0 {
         SendTransactionStatus::ZeroProgress
-    } else if !packet.is_up_only() && (first.inserted > 0 || second.inserted > 0) {
-        SendTransactionStatus::IntegrityLost
     } else {
-        SendTransactionStatus::PartialProgress
+        SendTransactionStatus::IntegrityLost
     };
 
     SendTransactionOutcome {
@@ -293,6 +344,23 @@ pub fn send_physical_packet_with_clock(
             timing_error: None,
         },
     }
+}
+
+pub fn send_physical_packet_with_clock(
+    packet: PhysicalPacket,
+    clock: QpcClock,
+) -> SendTransactionOutcome {
+    send_physical_packet_impl(packet, |packet| run_send_attempt(packet, clock))
+}
+
+#[cfg(test)]
+pub fn send_physical_packet_scripted(
+    packet: PhysicalPacket,
+    mut send_one: impl FnMut(PhysicalPacket) -> PlatformSendResult,
+) -> SendTransactionOutcome {
+    send_physical_packet_impl(packet, |packet| {
+        PacketSendAttempt::Outcome(send_one(packet))
+    })
 }
 
 #[cfg(test)]
@@ -330,5 +398,101 @@ mod tests {
             assert_eq!(inputs[1].Anonymous.ki.wScan, 0x16);
             assert_eq!(inputs[1].Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
         }
+    }
+
+    fn scripted_attempt(requested: u8, inserted: u8) -> PlatformSendResult {
+        PlatformSendResult {
+            requested,
+            inserted,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    }
+
+    #[test]
+    fn partial_down_packet_never_issues_a_second_send() {
+        let mut calls = 0;
+        let outcome = send_physical_packet_scripted(
+            PhysicalPacket::new(0, 0b111),
+            |_| {
+                calls += 1;
+                // A hypothetical second call would be a full success; it must
+                // never happen for a Down-bearing partial insertion.
+                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+        assert_eq!(outcome.evidence.first_inserted, 1);
+        assert_eq!(outcome.evidence.attempts, 1);
+        assert_eq!(outcome.evidence.confirmed_mask, 0);
+        assert!(!outcome.is_success());
+    }
+
+    #[test]
+    fn partial_mixed_packet_never_issues_a_second_packet_call() {
+        let mut calls = 0;
+        let outcome = send_physical_packet_scripted(
+            PhysicalPacket::new(0b001, 0b110),
+            |_| {
+                calls += 1;
+                scripted_attempt(3, 2)
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+        assert_eq!(outcome.evidence.first_inserted, 2);
+        assert_eq!(outcome.evidence.attempts, 1);
+        assert_eq!(outcome.evidence.confirmed_mask, 0);
+    }
+
+    #[test]
+    fn up_only_partial_packet_retries_and_can_complete() {
+        let mut calls = 0;
+        let outcome = send_physical_packet_scripted(
+            PhysicalPacket::new(0b111, 0),
+            |_| {
+                calls += 1;
+                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
+            },
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(outcome.status, SendTransactionStatus::Complete);
+        assert_eq!(outcome.evidence.attempts, 2);
+        assert_eq!(outcome.evidence.first_inserted, 1);
+    }
+
+    #[test]
+    fn down_zero_progress_retries_whole_packet_without_splitting() {
+        let mut calls = 0;
+        let outcome = send_physical_packet_scripted(
+            PhysicalPacket::new(0, 0b111),
+            |_| {
+                calls += 1;
+                scripted_attempt(3, if calls == 1 { 0 } else { 3 })
+            },
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(outcome.status, SendTransactionStatus::Complete);
+        assert_eq!(outcome.evidence.zero_progress_retries, 1);
+        assert_eq!(outcome.evidence.attempts, 2);
+    }
+
+    #[test]
+    fn down_zero_progress_then_partial_second_is_integrity_lost() {
+        let mut calls = 0;
+        let outcome = send_physical_packet_scripted(
+            PhysicalPacket::new(0, 0b111),
+            |_| {
+                calls += 1;
+                scripted_attempt(3, if calls == 1 { 0 } else { 1 })
+            },
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+        assert_eq!(outcome.evidence.first_inserted, 0);
+        assert_eq!(outcome.evidence.zero_progress_retries, 1);
     }
 }
