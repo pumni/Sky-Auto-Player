@@ -163,7 +163,6 @@ enum PacketSendAttempt {
     ClockFailure(Option<QpcTicks>, crate::clock::QpcError, bool),
 }
 
-#[cfg(windows)]
 fn run_send_attempt(packet: PhysicalPacket, clock: QpcClock) -> PacketSendAttempt {
     match send_once(packet, clock) {
         Ok(res) => PacketSendAttempt::Outcome(res),
@@ -488,5 +487,14 @@ mod tests {
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(outcome.evidence.first_inserted, 0);
         assert_eq!(outcome.evidence.zero_progress_retries, 1);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn physical_packet_send_seam_compiles_and_returns_complete_for_valid_packet() {
+        let clock = QpcClock::initialize().expect("clock");
+        let packet = PhysicalPacket::new(1, 0).expect("packet");
+        let res = send_physical_packet_with_clock(packet, clock);
+        assert_eq!(res.outcome.status, SendTransactionStatus::Complete);
     }
 }
