@@ -108,7 +108,9 @@ pub struct ReleaseAllOutcome {
 
 impl ReleaseAllOutcome {
     pub fn attempted(&self) -> Vec<u16> {
-        scan_codes_from_mask(self.attempted_mask).into_iter().collect()
+        scan_codes_from_mask(self.attempted_mask)
+            .into_iter()
+            .collect()
     }
 
     pub fn stuck_keys(&self) -> Vec<u16> {

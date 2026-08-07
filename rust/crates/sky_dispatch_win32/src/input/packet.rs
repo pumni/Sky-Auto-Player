@@ -414,15 +414,12 @@ mod tests {
     #[test]
     fn partial_down_packet_never_issues_a_second_send() {
         let mut calls = 0;
-        let outcome = send_physical_packet_scripted(
-            PhysicalPacket::new(0, 0b111),
-            |_| {
-                calls += 1;
-                // A hypothetical second call would be a full success; it must
-                // never happen for a Down-bearing partial insertion.
-                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
-            },
-        );
+        let outcome = send_physical_packet_scripted(PhysicalPacket::new(0, 0b111), |_| {
+            calls += 1;
+            // A hypothetical second call would be a full success; it must
+            // never happen for a Down-bearing partial insertion.
+            scripted_attempt(3, if calls == 1 { 1 } else { 3 })
+        });
         assert_eq!(calls, 1);
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(outcome.evidence.first_inserted, 1);
@@ -434,13 +431,10 @@ mod tests {
     #[test]
     fn partial_mixed_packet_never_issues_a_second_packet_call() {
         let mut calls = 0;
-        let outcome = send_physical_packet_scripted(
-            PhysicalPacket::new(0b001, 0b110),
-            |_| {
-                calls += 1;
-                scripted_attempt(3, 2)
-            },
-        );
+        let outcome = send_physical_packet_scripted(PhysicalPacket::new(0b001, 0b110), |_| {
+            calls += 1;
+            scripted_attempt(3, 2)
+        });
         assert_eq!(calls, 1);
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(outcome.evidence.first_inserted, 2);
@@ -451,13 +445,10 @@ mod tests {
     #[test]
     fn up_only_partial_packet_retries_and_can_complete() {
         let mut calls = 0;
-        let outcome = send_physical_packet_scripted(
-            PhysicalPacket::new(0b111, 0),
-            |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
-            },
-        );
+        let outcome = send_physical_packet_scripted(PhysicalPacket::new(0b111, 0), |_| {
+            calls += 1;
+            scripted_attempt(3, if calls == 1 { 1 } else { 3 })
+        });
         assert_eq!(calls, 2);
         assert_eq!(outcome.status, SendTransactionStatus::Complete);
         assert_eq!(outcome.evidence.attempts, 2);
@@ -467,13 +458,10 @@ mod tests {
     #[test]
     fn down_zero_progress_retries_whole_packet_without_splitting() {
         let mut calls = 0;
-        let outcome = send_physical_packet_scripted(
-            PhysicalPacket::new(0, 0b111),
-            |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 0 } else { 3 })
-            },
-        );
+        let outcome = send_physical_packet_scripted(PhysicalPacket::new(0, 0b111), |_| {
+            calls += 1;
+            scripted_attempt(3, if calls == 1 { 0 } else { 3 })
+        });
         assert_eq!(calls, 2);
         assert_eq!(outcome.status, SendTransactionStatus::Complete);
         assert_eq!(outcome.evidence.zero_progress_retries, 1);
@@ -483,13 +471,10 @@ mod tests {
     #[test]
     fn down_zero_progress_then_partial_second_is_integrity_lost() {
         let mut calls = 0;
-        let outcome = send_physical_packet_scripted(
-            PhysicalPacket::new(0, 0b111),
-            |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 0 } else { 1 })
-            },
-        );
+        let outcome = send_physical_packet_scripted(PhysicalPacket::new(0, 0b111), |_| {
+            calls += 1;
+            scripted_attempt(3, if calls == 1 { 0 } else { 1 })
+        });
         assert_eq!(calls, 2);
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(outcome.evidence.first_inserted, 0);

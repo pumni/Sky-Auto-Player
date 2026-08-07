@@ -628,22 +628,20 @@ impl TrackedKeyState {
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
             // Aggregate transport-anomaly evidence from this single-send note.
-            transport_anomaly |= !matches!(
-                emitted.status,
-                SendTransactionStatus::Complete
-            ) || emitted.evidence.attempts > 1
+            transport_anomaly |= !matches!(emitted.status, SendTransactionStatus::Complete)
+                || emitted.evidence.attempts > 1
                 || emitted.evidence.retry_reason != PacketRetryReason::None
                 || emitted.evidence.first_win32_error.is_some()
                 || emitted.evidence.last_win32_error.is_some();
 
-            let physical_state = self.resolve_release_probe(
-                target_hwnd,
+            let physical_state =
+                self.resolve_release_probe(target_hwnd, unresolved_mask, transport_confirmed_mask);
+
+            let reconciled = reconcile_release_observation(
                 unresolved_mask,
                 transport_confirmed_mask,
+                physical_state,
             );
-
-            let reconciled =
-                reconcile_release_observation(unresolved_mask, transport_confirmed_mask, physical_state);
 
             // Transport-confirmed keys are released at the physical layer
             // regardless of what physical probing later determines. Clear them
