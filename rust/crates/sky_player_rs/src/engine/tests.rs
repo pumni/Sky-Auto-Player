@@ -1770,3 +1770,121 @@ fn up_estimator_receives_exact_syscall_duration_sample() {
     assert_eq!(state.hist_up[1].hot_pairs, vec![[17, 1]]);
     assert_eq!(state.hist_down[1].hot_pairs, Vec::<[u64; 2]>::new());
 }
+
+#[test]
+fn note_on_lateness_shifts_note_off_floor_one_to_one() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+
+    let min_hold_us = 10_000u64;
+    let min_hold_ticks = DurationTicks::from_raw(min_hold_us);
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        min_hold_us,
+        min_hold_ticks,
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+
+    let prepared = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+
+    let down_started = TimelineTicks::from_raw(10_000);
+    let down_completed = TimelineTicks::from_raw(15_000);
+    coordinator
+        .commit_packet_success(prepared, down_started, down_completed)
+        .unwrap();
+
+    let active = coordinator.active_for_slot(0).unwrap();
+    // Min-hold floor is down_completed (15,000) + min_hold (10,000) = 25,000us
+    assert_eq!(
+        active.release_not_before_ticks,
+        TimelineTicks::from_raw(25_000)
+    );
+}
+
+#[test]
+fn fast_note_on_preserves_authored_note_off() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 50_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+
+    let min_hold_us = 10_000u64;
+    let min_hold_ticks = DurationTicks::from_raw(min_hold_us);
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        min_hold_us,
+        min_hold_ticks,
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+
+    let prepared = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+
+    let down_started = TimelineTicks::from_raw(1_000);
+    let down_completed = TimelineTicks::from_raw(1_050);
+    coordinator
+        .commit_packet_success(prepared, down_started, down_completed)
+        .unwrap();
+
+    let active = coordinator.active_for_slot(0).unwrap();
+    // Min-hold floor is down_completed (1,050) + min_hold (10,000) = 11,050us
+    assert_eq!(
+        active.release_not_before_ticks,
+        TimelineTicks::from_raw(11_050)
+    );
+}

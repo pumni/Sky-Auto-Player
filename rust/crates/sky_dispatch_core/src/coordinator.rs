@@ -1885,10 +1885,8 @@ impl RuntimeDispatchCoordinator {
         Self::bit_for_slot(slot)
     }
 
-    fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
-        self.active_by_slot
-            .get(slot as usize)
-            .and_then(Option::as_ref)
+    pub fn active_for_slot(&self, slot: KeySlot) -> Option<&ActiveGeneration> {
+        self.active_by_slot[usize::from(slot)].as_ref()
     }
 
     pub fn recovery_offset_ticks(&self) -> DurationTicks {
