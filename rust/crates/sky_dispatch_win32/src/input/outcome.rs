@@ -66,6 +66,17 @@ pub struct SendEvidence {
     pub timing_error: Option<crate::clock::QpcError>,
 }
 
+impl SendEvidence {
+    pub fn duration_ticks(
+        &self,
+    ) -> Result<crate::clock::DurationTicks, sky_dispatch_core::time::TimeArithmeticError> {
+        match (self.started_ticks, self.completed_ticks) {
+            (Some(start), Some(end)) => end.checked_duration_since(start),
+            _ => Err(sky_dispatch_core::time::TimeArithmeticError::NegativeOrder),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SendTransactionOutcome {
     pub status: SendTransactionStatus,
@@ -75,16 +86,6 @@ pub struct SendTransactionOutcome {
 impl SendTransactionOutcome {
     pub fn is_success(&self) -> bool {
         matches!(self.status, SendTransactionStatus::Complete)
-    }
-
-    pub fn completed_us(&self) -> u64 {
-        match (self.evidence.started_ticks, self.evidence.completed_ticks) {
-            (Some(start), Some(end)) => crate::clock::qpc_ticks_to_us(QpcTicks::from_raw(
-                end.as_u64().saturating_sub(start.as_u64()),
-            ))
-            .unwrap_or(0),
-            _ => 0,
-        }
     }
 
     pub fn sent_scan_codes(&self) -> SmallVec<[u16; 15]> {

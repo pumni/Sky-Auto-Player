@@ -13,8 +13,7 @@ where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
-        let (started_ticks, completed_ticks, _completed_us, timing_error) =
-            no_syscall_boundary_with_clock(None);
+        let (started_ticks, completed_ticks, timing_error) = no_syscall_boundary_with_clock(None);
         return SendTransactionOutcome {
             status: SendTransactionStatus::Complete,
             evidence: SendEvidence {
@@ -119,8 +118,7 @@ where
     F: FnMut(&[u16], bool) -> PlatformSendResult,
 {
     if scan_codes.is_empty() {
-        let (started_ticks, completed_ticks, _completed_us, timing_error) =
-            no_syscall_boundary_with_clock(None);
+        let (started_ticks, completed_ticks, timing_error) = no_syscall_boundary_with_clock(None);
         return SendTransactionOutcome {
             status: SendTransactionStatus::Complete,
             evidence: SendEvidence {

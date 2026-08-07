@@ -254,7 +254,7 @@ impl TrackedKeyState {
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
         if scan_codes.is_empty() || requested_mask == 0 {
-            let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            let (started_ticks, completed_ticks, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
             return SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -289,7 +289,7 @@ impl TrackedKeyState {
         let skipped_mask = mask_for_scan_codes(&duplicates).unwrap_or(0);
 
         if to_send.is_empty() {
-            let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            let (started_ticks, completed_ticks, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
             return SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -492,7 +492,7 @@ impl TrackedKeyState {
     pub fn key_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
         if scan_codes.is_empty() || requested_mask == 0 {
-            let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            let (started_ticks, completed_ticks, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
             return SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -531,7 +531,7 @@ impl TrackedKeyState {
         let skipped_mask = mask_for_scan_codes(&already_released).unwrap_or(0);
 
         if to_release.is_empty() {
-            let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            let (started_ticks, completed_ticks, timing_error) =
                 no_syscall_boundary_with_clock(self.qpc_clock);
             return SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,

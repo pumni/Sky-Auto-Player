@@ -43,7 +43,6 @@ pub(super) fn publisher_down_send_outcome(
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
     trace_kind: u8,
     result_success: bool,
-    result_completed_us: u64,
     result_sent: &SmallVec<[u16; 15]>,
     result_skipped_duplicates: &SmallVec<[u16; 15]>,
     result_send_attempts: u8,
@@ -79,7 +78,7 @@ pub(super) fn publisher_down_send_outcome(
         effective_now_ticks,
         lead_down_ticks,
         result_success,
-        result_completed_us,
+        completed_effective,
         result_sent,
         result_skipped_duplicates,
         result_send_attempts,
@@ -175,7 +174,7 @@ pub(super) fn publisher_down_send_outcome(
     observe_dispatch_health(
         DispatchHealthObservation {
             send_duration_us: sender_duration_us,
-            post_send_duration_us: iteration_ready_us.saturating_sub(result_completed_us),
+            post_send_duration_us: iteration_ready_us.saturating_sub(completed_effective),
             path: frozen_budget.path,
             send_warn_us: send_warn_threshold_us,
             bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
@@ -236,7 +235,7 @@ pub(super) fn record_down_send_telemetry(
     effective_now_ticks: TimelineTicks,
     lead_down_ticks: DurationTicks,
     result_success: bool,
-    result_completed_us: u64,
+    completed_effective: u64,
     result_sent: &SmallVec<[u16; 15]>,
     result_skipped_duplicates: &SmallVec<[u16; 15]>,
     result_send_attempts: u8,
@@ -300,7 +299,7 @@ pub(super) fn record_down_send_telemetry(
                 send_started_ticks: Some(sender_started_effective_ticks),
                 send_completed_ticks: Some(completed_effective_ticks),
                 bookkeeping_duration_us: bookkeeping_completed_us
-                    .saturating_sub(result_completed_us),
+                    .saturating_sub(completed_effective),
                 completion_error_ticks: completion_error_ticks_value,
                 authored_completion_error_ticks: authored_completion_error_ticks_value,
                 applied_lead_ticks: lead_down_ticks,

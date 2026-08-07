@@ -1707,3 +1707,66 @@ fn production_session_rejects_non_windows() {
         Err(error) if error == "production native dispatch is supported only on Windows"
     ));
 }
+
+#[test]
+fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
+    use super::WorkerMetricsLocal;
+    use super::worker::{
+        DispatchHealthObservation, DispatchHealthOptions, observe_dispatch_health,
+    };
+
+    let send_duration_us = 400u64;
+    let send_completed_elapsed_us = 10_000_500u64;
+    let iteration_ready_us = 10_000_620u64;
+
+    let post_send_duration_us = iteration_ready_us.saturating_sub(send_completed_elapsed_us);
+    assert_eq!(post_send_duration_us, 120);
+
+    let obs = DispatchHealthObservation {
+        send_duration_us,
+        post_send_duration_us,
+        path: crate::engine::worker::DispatchPath::UpOnly { up_count: 1 },
+        send_warn_us: 2000,
+        bookkeeping_warn_us: 1000,
+        elapsed_us: send_completed_elapsed_us,
+    };
+
+    let mut send_window = Default::default();
+    let mut bk_window = Default::default();
+    let mut local_metrics = WorkerMetricsLocal::default();
+    let options = DispatchHealthOptions::default();
+
+    observe_dispatch_health(
+        obs,
+        options.window_policy(),
+        &mut send_window,
+        &mut bk_window,
+        &mut local_metrics,
+    );
+
+    assert_eq!(local_metrics.bookkeeping_degraded_samples, 0);
+}
+
+#[test]
+fn up_estimator_receives_exact_syscall_duration_sample() {
+    use super::worker::update_estimator_after_send_class;
+    let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
+
+    // Up sample of 425us should register in estimator for Up (index 0)
+    update_estimator_after_send_class(
+        &mut estimator,
+        ActionKind::Up,
+        425,
+        1,
+        1,
+        500,
+        100,
+        true,
+        LatencyClass::Hot,
+    )
+    .unwrap();
+
+    let state = estimator.export_state();
+    assert_eq!(state.hist_up[1].hot_pairs, vec![[17, 1]]);
+    assert_eq!(state.hist_down[1].hot_pairs, Vec::<[u64; 2]>::new());
+}

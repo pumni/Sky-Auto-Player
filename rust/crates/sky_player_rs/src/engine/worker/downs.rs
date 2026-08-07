@@ -683,7 +683,6 @@ fn record_down_send_outcome(
     let result_success = result.is_success();
     let result_started_ticks = result.evidence.started_ticks;
     let result_completed_ticks = result.evidence.completed_ticks;
-    let result_completed_us = result.completed_us();
     let result_sent = result.sent_scan_codes();
     let result_skipped_duplicates = result.skipped_duplicates();
     let result_send_attempts = result.evidence.attempts;
@@ -724,7 +723,6 @@ fn record_down_send_outcome(
         result_success,
         result_started_ticks,
         result_completed_ticks,
-        result_completed_us,
         &result_sent,
         &result_skipped_duplicates,
         result_send_attempts,
@@ -760,7 +758,6 @@ fn finalize_down_send_outcome(
     result_success: bool,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
-    result_completed_us: u64,
     result_sent: &SmallVec<[u16; 15]>,
     result_skipped_duplicates: &SmallVec<[u16; 15]>,
     result_send_attempts: u8,
@@ -812,7 +809,6 @@ fn finalize_down_send_outcome(
         frozen_budget,
         trace_kind,
         result_success,
-        result_completed_us,
         result_sent,
         result_skipped_duplicates,
         result_send_attempts,

@@ -6,18 +6,13 @@ use crate::clock::{QpcClock, QpcTicks};
 
 pub(crate) fn no_syscall_boundary_with_clock(
     clock: Option<QpcClock>,
-) -> (
-    QpcTicks,
-    Option<QpcTicks>,
-    u64,
-    Option<crate::clock::QpcError>,
-) {
+) -> (QpcTicks, Option<QpcTicks>, Option<crate::clock::QpcError>) {
     let clock = match clock {
         Some(clock) => clock,
         None => match QpcClock::initialize() {
             Ok(clock) => clock,
             Err(error) => {
-                return (QpcTicks::ZERO, None, 0, Some(error));
+                return (QpcTicks::ZERO, None, Some(error));
             }
         },
     };
@@ -25,23 +20,12 @@ pub(crate) fn no_syscall_boundary_with_clock(
         return (
             QpcTicks::ZERO,
             None,
-            0,
             Some(crate::clock::QpcError::FrequencyUnavailable),
         );
     };
     match clock.now() {
-        Ok(ticks) => {
-            match clock.timeline_to_us(crate::clock::TimelineTicks::from_raw(ticks.as_u64())) {
-                Ok(micros) => (ticks, Some(ticks), micros, None),
-                Err(_) => (
-                    ticks,
-                    Some(ticks),
-                    0,
-                    Some(crate::clock::QpcError::ConversionOverflow),
-                ),
-            }
-        }
-        Err(error) => (QpcTicks::ZERO, None, 0, Some(error)),
+        Ok(ticks) => (ticks, Some(ticks), None),
+        Err(error) => (QpcTicks::ZERO, None, Some(error)),
     }
 }
 
@@ -136,7 +120,7 @@ pub fn send_input_raw_with_clock(
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
-            let (started_ticks, completed_ticks, _completed_us, timing_error) =
+            let (started_ticks, completed_ticks, timing_error) =
                 no_syscall_boundary_with_clock(Some(clock));
             return PlatformSendResult {
                 requested: 0,
@@ -199,7 +183,7 @@ pub fn send_input_raw_with_clock(
     }
     #[cfg(not(windows))]
     {
-        let (started_ticks, completed_ticks, _completed_us, timing_error) =
+        let (started_ticks, completed_ticks, timing_error) =
             no_syscall_boundary_with_clock(Some(clock));
         PlatformSendResult {
             requested: scan_codes.len() as u8,

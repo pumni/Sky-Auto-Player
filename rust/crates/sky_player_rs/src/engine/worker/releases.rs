@@ -28,13 +28,12 @@ pub(crate) struct PendingReleaseContext<'a> {
 /// Evidence captured from the note-off SendInput call plus the timeline
 /// projections used by downstream reconciliation.
 struct ReleaseSend {
-    started_us: u64,
     actual_ticks: TimelineTicks,
     completed_effective_ticks: TimelineTicks,
     completed_effective_us: u64,
     sender_started_effective_ticks: Option<TimelineTicks>,
     last_win32_error: Option<u32>,
-    completed_us: u64,
+    sender_duration_us: u64,
     sent_count: usize,
     skipped_count: usize,
     attempts: u8,
@@ -206,19 +205,6 @@ fn prepare_release_send(
             )));
         }
     };
-    let started_us = match qpc_clock.duration_to_us(
-        match started_ticks.checked_duration_since(clock_state.epoch) {
-            Ok(dur) => dur,
-            Err(_) => DurationTicks::ZERO,
-        },
-    ) {
-        Ok(us) => us,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "QPC us conversion failure before note-off: {error:?}"
-            )));
-        }
-    };
     let actual_ticks = match clock_state
         .get_elapsed_allow_pre_epoch(started_ticks, runtime.allow_pre_epoch_startup_dispatch)
     {
@@ -280,21 +266,38 @@ fn prepare_release_send(
             )));
         }
     };
+    let sender_duration_ticks = match result.evidence.duration_ticks() {
+        Ok(dur) => dur,
+        Err(_) => match completed_qpc_ticks.checked_duration_since(started_ticks) {
+            Ok(dur) => dur,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "note-off QPC duration failure: {error:?}"
+                )));
+            }
+        },
+    };
+    let sender_duration_us = match qpc_clock.duration_to_us(sender_duration_ticks) {
+        Ok(us) => us,
+        Err(error) => {
+            return Err(DispatchStep::Terminate(format!(
+                "note-off duration conversion failure: {error:?}"
+            )));
+        }
+    };
     runtime.last_send_qpc_ticks = Some(completed_qpc_ticks);
     let sent_count = result.sent_scan_codes().len();
     let skipped_count = result.skipped_duplicates().len();
     let last_win32_error = result.evidence.last_win32_error;
-    let completed_us = result.completed_us();
     let attempts = result.evidence.attempts;
     let is_success = result.is_success();
     Ok(ReleaseSend {
-        started_us,
         actual_ticks,
         completed_effective_ticks,
         completed_effective_us,
         sender_started_effective_ticks,
         last_win32_error,
-        completed_us,
+        sender_duration_us,
         sent_count,
         skipped_count,
         attempts,
@@ -595,7 +598,7 @@ fn record_release_telemetry(
                 send_completed_ticks: Some(send.completed_effective_ticks),
                 bookkeeping_duration_us: reconciliation
                     .bookkeeping_completed_us
-                    .saturating_sub(send.completed_us),
+                    .saturating_sub(send.completed_effective_us),
                 completion_error_ticks: reconciliation.up_completion_error_ticks,
                 authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
                 applied_lead_ticks: lead_up_ticks,
@@ -668,7 +671,7 @@ fn observe_release_send_health(
         && let Err(error) = update_estimator_after_send_class(
             estimator,
             ActionKind::Up,
-            send.completed_us.saturating_sub(send.started_us),
+            send.sender_duration_us,
             send.sent_count,
             scan_count,
             lead_up,
@@ -729,8 +732,8 @@ fn observe_release_send_health(
     runtime.pending_pre_send_spin_us = 0;
     observe_dispatch_health(
         DispatchHealthObservation {
-            send_duration_us: send.completed_us.saturating_sub(send.started_us),
-            post_send_duration_us: iteration_ready_us.saturating_sub(send.completed_us),
+            send_duration_us: send.sender_duration_us,
+            post_send_duration_us: iteration_ready_us.saturating_sub(send.completed_effective_us),
             path: frozen_budget.path,
             send_warn_us: send_warn_threshold_us,
             bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
