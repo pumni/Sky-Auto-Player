@@ -849,3 +849,48 @@ fn zero_progress_retry_only_runs_when_first_inserted_is_zero() {
     assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
     assert_eq!(outcome.evidence.zero_progress_retries, 0);
 }
+
+fn test_send_result(requested: u8, inserted: u8, err: u32) -> PlatformSendResult {
+    PlatformSendResult {
+        requested,
+        inserted,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: err,
+        timing_error: None,
+    }
+}
+
+#[test]
+fn up_send_failure_leaves_pending_release_unacknowledged() {
+    let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
+        let len = codes.len() as u8;
+        if key_up {
+            test_send_result(len, 0, 5)
+        } else {
+            test_send_result(len, len, 0)
+        }
+    });
+
+    let down_outcome = state.key_down(&[0x15]);
+    assert_eq!(down_outcome.status, SendTransactionStatus::Complete);
+    assert_ne!(state.active_mask & (1 << 0), 0);
+
+    let up_outcome = state.key_up(&[0x15]);
+    assert_ne!(up_outcome.status, SendTransactionStatus::Complete);
+    assert_ne!((state.active_mask | state.failed_release_mask) & (1 << 0), 0);
+}
+
+#[test]
+fn up_send_success_clears_pending_release() {
+    let mut state = TrackedKeyState::with_emitter(|codes, _| {
+        let len = codes.len() as u8;
+        test_send_result(len, len, 0)
+    });
+    let down_outcome = state.key_down(&[0x15]);
+    assert_eq!(down_outcome.status, SendTransactionStatus::Complete);
+    let up_outcome = state.key_up(&[0x15]);
+    assert_eq!(up_outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(state.active_mask, 0);
+    assert_eq!(state.failed_release_mask, 0);
+}
