@@ -894,26 +894,28 @@ mod tests {
             crate::time::TimelineTicks::from_raw(100),
         );
 
-        let (up, _) = coordinator
-            .pop_next_due_authored(100, 0)
-            .expect("up is due");
-
-        // Pop it and request release.
-        let _ = coordinator.request_releases(&up.intents);
-
-        // Since up was authored at 100, but min_hold is 20,000 and delivery_margin is 5,000,
-        // the effective release time must be at least 100 (completion) + 20,000 + 5,000 = 25,100.
-        let due = coordinator.pop_due_pending(25_099, 0);
+        // Effective release floor is completion (100) + min_hold (20,000) + delivery_margin (5,000) = 25,100.
         assert!(
-            due.is_empty(),
-            "release must not be due before min_hold + delivery_margin"
+            coordinator
+                .prepare_next_due_authored(
+                    crate::time::TimelineTicks::from_raw(25_099),
+                    crate::time::DurationTicks::ZERO,
+                )
+                .unwrap()
+                .is_none(),
+            "up packet must not be due before min_hold + delivery_margin"
         );
 
+        let (up, _) = coordinator
+            .pop_next_due_authored(25_100, 0)
+            .expect("up is due at release floor");
+
+        let _ = coordinator.request_releases(&up.intents);
         let due_now = coordinator.pop_due_pending(25_100, 0);
         assert_eq!(
             due_now.len(),
             1,
-            "release must be due exactly at completion + min_hold + delivery_margin"
+            "release must be due at completion + min_hold + delivery_margin"
         );
     }
 
@@ -2136,11 +2138,8 @@ impl RuntimeDispatchCoordinator {
                         index: packet_index,
                     },
                 ))?;
-        // Single-batch Up remains on the legacy release-request path for
-        // compatibility; its pending-release scheduler already applies the
-        // hold floor.  Physical packets (mixed or multi-batch) must gate the
-        // transaction before it reaches SendInput.
-        let needs_release_gate = packet.down_mask != 0 || packet.batch_count > 1;
+        // Gating applies whenever the physical packet contains Up intents.
+        let needs_release_gate = packet.up_mask != 0;
         let mut release_not_before = TimelineTicks::ZERO;
         if needs_release_gate {
             for compact in up_intents {
@@ -2149,21 +2148,12 @@ impl RuntimeDispatchCoordinator {
                     continue;
                 }
                 let slot = compact.key_slot();
-                let Some(active) = self.active_for_slot(slot) else {
-                    return Err(CoordinatorError::Invariant(
-                        CoordinatorInvariantError::Accounting(
-                            "packet release has no active generation".to_string(),
-                        ),
-                    ));
-                };
-                if active.generation_id != generation_id {
-                    return Err(CoordinatorError::Invariant(
-                        CoordinatorInvariantError::Accounting(
-                            "packet release generation does not own its key slot".to_string(),
-                        ),
-                    ));
+                if let Some(active) = self.active_for_slot(slot) {
+                    if active.generation_id == generation_id {
+                        release_not_before =
+                            release_not_before.max(active.release_not_before_ticks);
+                    }
                 }
-                release_not_before = release_not_before.max(active.release_not_before_ticks);
             }
         }
         let lead_deadline =
