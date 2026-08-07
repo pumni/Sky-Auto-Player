@@ -241,6 +241,45 @@ fn startup_failure_does_not_publish_ready_boundary() {
 }
 
 #[test]
+fn startup_failure_prevents_dispatch_ready_publication() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript {
+                wait_failure: true,
+                ..FaultInjectionScript::none()
+            },
+        },
+    ))
+    .expect("test session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert!(!session.snapshot().startup_ready);
+    assert_eq!(session.snapshot().startup_latency_us, None);
+}
+
+#[test]
+fn dispatch_ready_boundary_publishes_only_after_full_bootstrap() {
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+    session.start().expect("worker start");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert!(session.snapshot().startup_ready);
+    assert!(session.snapshot().startup_latency_us.is_some());
+}
+
+#[test]
 fn worker_takes_runtime_schedule_only_once() {
     let session = NativeDispatchSession::new(test_session_options(
         startup_boundary_schedule(),
@@ -1939,7 +1978,10 @@ fn lateness_rebases_future_timeline_without_compressing_authored_deltas() {
         .prepare_next_due_authored(TimelineTicks::from_raw(11_000), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
-    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(11_000));
+    assert_eq!(
+        p1.effective_scheduled_ticks,
+        TimelineTicks::from_raw(11_000)
+    );
     coordinator
         .commit_packet_success(
             p1,
