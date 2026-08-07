@@ -2,22 +2,15 @@ mod admission;
 mod boot;
 mod cleanup;
 mod control;
+mod dispatch;
 mod dispatch_loop;
-mod down_outcome;
-mod downs;
 mod estimator;
 mod health;
 mod orchestration;
 mod planning;
-mod releases;
 mod startup;
 mod timing;
 mod wait;
-
-pub(super) use downs::{AuthoredPacketContext, DispatchStep, dispatch_authored_packet};
-pub(crate) use planning::plan_next_dispatch;
-pub(crate) use planning::startup_lead_for_first_packet;
-pub(super) use releases::{PendingReleaseContext, dispatch_due_pending_releases};
 
 pub(crate) use admission::{
     DownAdmission, TargetStamp, ensure_preflight_for_target, final_down_admission, focus_matches,
@@ -35,6 +28,10 @@ use control::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
     CommandControlRuntime, CommandControlSignals, process_command_control,
 };
+pub(super) use dispatch::{
+    AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
+    dispatch_due_pending_releases,
+};
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
 pub(crate) use estimator::{record_lead_saturation, update_estimator_after_send_class};
@@ -46,6 +43,8 @@ pub(crate) use health::{
     HealthWindow, build_dispatch_budget, estimator_kind_for_path, focus_gate_matches,
     observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
+pub(crate) use planning::plan_next_dispatch;
+pub(crate) use planning::startup_lead_for_first_packet;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]

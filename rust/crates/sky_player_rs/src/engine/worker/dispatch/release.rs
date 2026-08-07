@@ -1,18 +1,15 @@
+use super::super::super::{
+    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RuntimeDispatchCoordinator,
+    STRICT_SATURATION_ABORT_STREAK, SharedMetrics, TimelineTicks, TrackedKeyState,
+};
 use super::super::{
-    ActionKind, DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator,
-    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_UP, TelemetryCollector, TimelineTicks, TraceContext,
-    TraceDelivery, TraceTiming, TrackedKeyState, trace_outcome_code, try_publish_metrics,
+    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
+    WorkerRuntime, WorkerTimingState, build_dispatch_budget, cancel_coordinator_or_terminal,
+    describe_release_outcome, record_termination_error, release_state_verified, signed_ticks_to_us,
+    signed_timeline_delta_ticks,
 };
-use super::{
-    DispatchHealthObservation, DispatchPath, DispatchStep, WorkerConfig, WorkerHealthState,
-    WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState, build_dispatch_budget,
-    cancel_coordinator_or_terminal, describe_release_outcome, observe_dispatch_health,
-    record_lateness, record_lead_saturation, record_termination_error, release_runtime_outcome,
-    release_state_verified, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
-    update_estimator_after_send_class,
-};
+use super::DispatchStep;
+use super::observer::{observe_release_send_health, record_release_telemetry};
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -27,18 +24,18 @@ pub(crate) struct PendingReleaseContext<'a> {
 
 /// Evidence captured from the note-off SendInput call plus the timeline
 /// projections used by downstream reconciliation.
-struct ReleaseSend {
-    actual_ticks: TimelineTicks,
-    completed_effective_ticks: TimelineTicks,
-    completed_effective_us: u64,
-    sender_started_effective_ticks: Option<TimelineTicks>,
-    last_win32_error: Option<u32>,
-    sender_duration_us: u64,
-    sent_count: usize,
-    skipped_count: usize,
-    attempts: u8,
-    is_success: bool,
-    transport: ReleaseTransportEvidence,
+pub(super) struct ReleaseSend {
+    pub(super) actual_ticks: TimelineTicks,
+    pub(super) completed_effective_ticks: TimelineTicks,
+    pub(super) completed_effective_us: u64,
+    pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
+    pub(super) last_win32_error: Option<u32>,
+    pub(super) sender_duration_us: u64,
+    pub(super) sent_count: usize,
+    pub(super) skipped_count: usize,
+    pub(super) attempts: u8,
+    pub(super) is_success: bool,
+    pub(super) transport: ReleaseTransportEvidence,
 }
 
 /// Independent transport-evidence dimension for a pending release batch.
@@ -48,7 +45,7 @@ struct ReleaseSend {
 /// subtract `skipped`. The coordinator owns every bit until it is confirmed
 /// (or recovery is forced), so a skipped bit is state disagreement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ReleaseTransportEvidence {
+pub(super) struct ReleaseTransportEvidence {
     requested_mask: u16,
     confirmed_mask: u16,
     skipped_mask: u16,
@@ -114,26 +111,26 @@ impl ReleaseTransportEvidence {
 
 /// Per-event timing reconciliation derived from the pending release batch
 /// and the SendInput note-off evidence.
-struct ReleaseReconciliation {
-    recovery_required: bool,
-    bookkeeping_completed_us: u64,
-    first_index: usize,
-    effective_deadline_ticks: TimelineTicks,
-    scheduled_ticks: TimelineTicks,
-    scheduled_us: u64,
-    deferred_by_us: u64,
-    up_completion_lateness_ticks: Option<DurationTicks>,
-    up_completion_error_ticks: i64,
-    up_authored_completion_error_ticks: i64,
-    up_completion_error_us: i64,
-    clean_up_sample: bool,
+pub(super) struct ReleaseReconciliation {
+    pub(super) recovery_required: bool,
+    pub(super) bookkeeping_completed_us: u64,
+    pub(super) first_index: usize,
+    pub(super) effective_deadline_ticks: TimelineTicks,
+    pub(super) scheduled_ticks: TimelineTicks,
+    pub(super) scheduled_us: u64,
+    pub(super) deferred_by_us: u64,
+    pub(super) up_completion_lateness_ticks: Option<DurationTicks>,
+    pub(super) up_completion_error_ticks: i64,
+    pub(super) up_authored_completion_error_ticks: i64,
+    pub(super) up_completion_error_us: i64,
+    pub(super) clean_up_sample: bool,
 }
 
-/// Strict/SLO flags computed after estimator and health state have observed
-/// the send; the orchestrator uses them for terminal decisions.
-struct ReleaseOutcomeFlags {
-    strict_up_completion_late: bool,
-    saturation_abort: bool,
+/// Strict/SLO flags computed after the health observation stage; the release
+/// orchestrator uses them for terminal decisions.
+pub(super) struct ReleaseOutcomeFlags {
+    pub(super) strict_up_completion_late: bool,
+    pub(super) saturation_abort: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -635,205 +632,6 @@ fn reconcile_release_outcome(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_release_telemetry(
-    telemetry: &mut TelemetryCollector,
-    due_pending: &SmallVec<[PendingRelease; 15]>,
-    send: &ReleaseSend,
-    reconciliation: &ReleaseReconciliation,
-    lead_up_ticks: DurationTicks,
-) -> Result<(), DispatchStep> {
-    let first = &due_pending[reconciliation.first_index];
-    let scan_count = due_pending.len();
-    let release_outcome = release_runtime_outcome(
-        reconciliation.deferred_by_us,
-        send.sent_count,
-        scan_count,
-        reconciliation.recovery_required,
-    );
-    let mut trace_flags = 0u8;
-    if send.sent_count == scan_count {
-        trace_flags |= TRACE_FLAG_SENT_FULL;
-    }
-    if release_outcome == "deferred_release" || release_outcome == "failed_note_off" {
-        trace_flags |= TRACE_FLAG_RECOVERY;
-    }
-    if reconciliation.deferred_by_us > 0 {
-        trace_flags |= TRACE_FLAG_DEFERRED;
-    }
-    if release_outcome != "sent" {
-        trace_flags |= TRACE_FLAG_ANOMALY;
-    }
-    if let Err(error) = telemetry.try_push(|| {
-        RtTraceRecord::dispatched(
-            TraceContext {
-                event_index: first.source_action_index,
-                kind: TRACE_KIND_UP,
-                outcome: trace_outcome_code(release_outcome),
-                polyphony: scan_count,
-                flags: trace_flags,
-                win32_error: send.last_win32_error.unwrap_or(0),
-            },
-            TraceTiming {
-                authored_ticks: reconciliation.scheduled_ticks,
-                effective_deadline_ticks: reconciliation.effective_deadline_ticks,
-                wake_ticks: send.actual_ticks,
-                send_started_ticks: send.sender_started_effective_ticks,
-                send_completed_ticks: Some(send.completed_effective_ticks),
-                bookkeeping_duration_us: reconciliation
-                    .bookkeeping_completed_us
-                    .saturating_sub(send.completed_effective_us),
-                completion_error_ticks: reconciliation.up_completion_error_ticks,
-                authored_completion_error_ticks: reconciliation.up_authored_completion_error_ticks,
-                applied_lead_ticks: lead_up_ticks,
-            },
-            TraceDelivery {
-                requested: scan_count,
-                sent: send.sent_count,
-                skipped: send.skipped_count,
-                send_attempts: usize::from(send.attempts),
-            },
-        )
-    }) {
-        return Err(DispatchStep::Terminate(format!(
-            "native telemetry record overflow: {error}"
-        )));
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn observe_release_send_health(
-    qpc_clock: QpcClock,
-    clock_state: &mut PlaybackClockState,
-    config: &WorkerConfig,
-    timing: &WorkerTimingState,
-    estimator: &mut SendLatencyEstimator,
-    health: &mut WorkerHealthState,
-    backend: &TrackedKeyState,
-    runtime: &mut WorkerRuntime,
-    local_metrics: &mut WorkerMetricsLocal,
-    metrics: &SharedMetrics,
-    last_published_error: &mut Option<String>,
-    send: &ReleaseSend,
-    reconciliation: &ReleaseReconciliation,
-    frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
-    lead_up: u64,
-    latency_class: LatencyClass,
-    pending_plan: Option<&PendingDispatchPlan>,
-    scan_count: usize,
-) -> Result<ReleaseOutcomeFlags, DispatchStep> {
-    let up_saturated_positive = pending_plan.is_some_and(|plan| plan.lead_saturated)
-        && reconciliation.up_completion_lateness_ticks.is_some();
-    health.up_saturation_positive_streak = if up_saturated_positive {
-        health.up_saturation_positive_streak.saturating_add(1)
-    } else {
-        0
-    };
-    let saturation_abort = config.timing.strict_timing
-        && health.up_saturation_positive_streak >= STRICT_SATURATION_ABORT_STREAK;
-    let strict_up_completion_late = config.timing.strict_timing
-        && reconciliation.clean_up_sample
-        && reconciliation
-            .up_completion_lateness_ticks
-            .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
-    if config.estimator.enable_adaptive_lead && pending_plan.is_some_and(|plan| plan.lead_saturated)
-    {
-        record_lead_saturation(
-            &mut local_metrics.lead_saturation_count_up,
-            &mut local_metrics.positive_residual_at_cap,
-            scan_count,
-            signed_delta(send.completed_effective_us, reconciliation.scheduled_us),
-        );
-    }
-    let send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.bookkeeping_warn_threshold_us = frozen_budget.bookkeeping_warn_us;
-    local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    if config.estimator.enable_adaptive_lead
-        && let Err(error) = update_estimator_after_send_class(
-            estimator,
-            ActionKind::Up,
-            send.sender_duration_us,
-            send.sent_count,
-            scan_count,
-            lead_up,
-            reconciliation.up_completion_error_us,
-            reconciliation.clean_up_sample,
-            latency_class,
-        )
-    {
-        return Err(DispatchStep::Terminate(format!(
-            "estimator update failure: {error}"
-        )));
-    }
-    record_lateness(
-        signed_delta(send.completed_effective_us, reconciliation.scheduled_us),
-        true,
-        reconciliation.deferred_by_us > 0,
-        local_metrics,
-    );
-    super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    let current_us = match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "QPC us conversion failure: {error:?}"
-                    )));
-                }
-            }
-        }
-        Err(error) => return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    };
-    try_publish_metrics(
-        local_metrics,
-        metrics,
-        current_us,
-        !reconciliation.clean_up_sample || reconciliation.recovery_required,
-    );
-    let iteration_ready_us = match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "QPC us conversion failure: {error:?}"
-                    )));
-                }
-            }
-        }
-        Err(error) => return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    };
-    runtime.pending_pre_send_spin_us = 0;
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: send.sender_duration_us,
-            post_send_duration_us: iteration_ready_us.saturating_sub(send.completed_effective_us),
-            path: frozen_budget.path,
-            send_warn_us: send_warn_threshold_us,
-            bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
-            elapsed_us: send.completed_effective_us,
-        },
-        health.options.window_policy(),
-        &mut health.send_pure_window,
-        &mut health.bookkeeping_window,
-        local_metrics,
-    );
-    Ok(ReleaseOutcomeFlags {
-        strict_up_completion_late,
-        saturation_abort,
-    })
-}
-
 fn finalize_release_recovery(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -843,7 +641,6 @@ fn finalize_release_recovery(
     send: &ReleaseSend,
 ) -> DispatchStep {
     runtime.verified_target = None;
-    runtime.force_full_cleanup = true;
     let mut term_err = Some(format!(
         "note-off recovery exhausted after {} retries{}",
         sky_dispatch_core::coordinator::MAX_RELEASE_RETRIES,

@@ -28,6 +28,12 @@ WORKER_SCHEDULE_CLONE_MESSAGE = (
     "cloning the schedule is forbidden"
 )
 FACADES = {"engine.rs", "input.rs", "wait.rs", "lib.rs"}
+DISPATCH_FUNCTION_HARD_LIMIT = 180
+LEGACY_DISPATCH_PATHS = {
+    "rust/crates/sky_player_rs/src/engine/worker/downs.rs",
+    "rust/crates/sky_player_rs/src/engine/worker/down_outcome.rs",
+    "rust/crates/sky_player_rs/src/engine/worker/releases.rs",
+}
 ALLOWLIST_PATH = Path(".config/rust_architecture_allowlist.json")
 
 ALLOWED_UNSAFE_MODULES = {
@@ -140,8 +146,10 @@ def _context_violations(lines: list[str], path: str) -> list[Violation]:
     return violations
 
 
-def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
-    if not path.endswith("crates/sky_player_rs/src/engine/worker/orchestration.rs"):
+def _function_line_violations(
+    lines: list[str], path: str, hard_limit: int, rule: str, include: str, prefix: bool = False
+) -> list[Violation]:
+    if not (path.startswith(include) if prefix else path.endswith(include)):
         return []
     clean = _without_comments(lines)
     source = "".join(clean)
@@ -170,15 +178,36 @@ def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
             continue
         end_line = max((index for index, value in enumerate(offsets) if value <= end_offset), default=start_line)
         line_count = end_line - start_line + 1
-        if line_count > WORKER_FUNCTION_HARD_LIMIT:
+        if line_count > hard_limit:
             violations.append(
                 Violation(
-                    "worker_function_lines",
+                    rule,
                     path,
-                    f"{match.group(1)} has {line_count} lines (> {WORKER_FUNCTION_HARD_LIMIT})",
+                    f"{match.group(1)} has {line_count} lines (> {hard_limit})",
                 )
             )
     return violations
+
+
+def _worker_function_violations(lines: list[str], path: str) -> list[Violation]:
+    return _function_line_violations(
+        lines,
+        path,
+        WORKER_FUNCTION_HARD_LIMIT,
+        "worker_function_lines",
+        "crates/sky_player_rs/src/engine/worker/orchestration.rs",
+    )
+
+
+def _dispatch_function_violations(lines: list[str], path: str) -> list[Violation]:
+    return _function_line_violations(
+        lines,
+        path,
+        DISPATCH_FUNCTION_HARD_LIMIT,
+        "dispatch_function_lines",
+        "rust/crates/sky_player_rs/src/engine/worker/dispatch/",
+        prefix=True,
+    )
 
 
 def _worker_schedule_clone_violation(joined: str, path: str) -> Violation | None:
@@ -260,6 +289,18 @@ def check_repository(repository_root: Path) -> CheckReport:
             joined = "".join(clean)
             report.infos.append(f"{relative:80} | {len(lines):4} lines")
 
+            if relative in LEGACY_DISPATCH_PATHS:
+                _record(
+                    report,
+                    Violation(
+                        "legacy_dispatch_path",
+                        relative,
+                        "legacy dispatch path must be removed; dispatch code now lives under worker/dispatch/",
+                    ),
+                    allowlist,
+                )
+                continue
+
             limit = FACADE_HARD_LIMIT if filepath.name in FACADES else REGULAR_HARD_LIMIT
             if len(lines) > limit:
                 rule = "facade_lines" if filepath.name in FACADES else "regular_module_lines"
@@ -291,6 +332,8 @@ def check_repository(repository_root: Path) -> CheckReport:
             for violation in _context_violations(lines, relative):
                 _record(report, violation, allowlist)
             for violation in _worker_function_violations(lines, relative):
+                _record(report, violation, allowlist)
+            for violation in _dispatch_function_violations(lines, relative):
                 _record(report, violation, allowlist)
             schedule_clone_violation = _worker_schedule_clone_violation(joined, relative)
             if schedule_clone_violation is not None:

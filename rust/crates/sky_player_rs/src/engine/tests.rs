@@ -1359,10 +1359,25 @@ fn architecture_layers_strict_boundary_enforced() {
 
 #[test]
 fn module_line_limits_strictly_respected() {
-    let coordinator_lines = include_str!("../../../sky_dispatch_core/src/coordinator.rs")
-        .lines()
-        .count();
-    assert!(coordinator_lines > 0);
+    let dispatch = [
+        ("worker/dispatch/mod.rs", 250),
+        ("worker/dispatch/authored.rs", 700),
+        ("worker/dispatch/observer.rs", 700),
+        ("worker/dispatch/release.rs", 700),
+        ("worker/dispatch/timing.rs", 700),
+    ];
+    for (relative, hard_limit) in dispatch {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/engine")
+            .join(relative);
+        let text = std::fs::read_to_string(&path).expect("dispatch source is present");
+        let line_count = text.lines().count();
+        assert!(line_count > 0, "{relative} is empty");
+        assert!(
+            line_count <= hard_limit,
+            "{relative} has {line_count} lines (dispatch hard limit {hard_limit})"
+        );
+    }
 }
 
 #[test]
