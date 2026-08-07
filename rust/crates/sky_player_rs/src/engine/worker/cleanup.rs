@@ -1,7 +1,7 @@
 use super::{
     OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
-    TrackedKeyState, WorkerMetricsLocal, current_process_cpu_time_us, current_thread_cpu_time_us,
-    publish_backend_metrics, try_publish_metrics,
+    TrackedKeyState, WorkerMetricsLocal, WorkerSchedulingGuards, current_process_cpu_time_us,
+    current_thread_cpu_time_us, publish_backend_metrics, try_publish_metrics,
 };
 use crate::engine::telemetry::{NativeTelemetryOutput, SharedMetrics, TelemetryCollector};
 use parking_lot::Mutex;
@@ -20,6 +20,7 @@ pub(super) struct FinalizeResources {
     pub(super) telemetry: TelemetryCollector,
     pub(super) estimator: SendLatencyEstimator,
     pub(super) qpc_clock: QpcClock,
+    pub(super) scheduling: WorkerSchedulingGuards,
 }
 
 pub(super) struct FinalizeState {
@@ -42,6 +43,7 @@ pub(super) struct FinalizePublication<'a> {
     pub(super) metrics: &'a SharedMetrics,
     pub(super) telemetry_output: &'a Mutex<Option<NativeTelemetryOutput>>,
     pub(super) estimator_output: &'a Mutex<Option<String>>,
+    pub(super) priority_acquired: &'a Mutex<String>,
 }
 
 pub(super) struct FinalizeTiming {
@@ -72,6 +74,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut telemetry,
         estimator,
         qpc_clock,
+        scheduling,
     } = resources;
     let FinalizeState {
         worker_result,
@@ -91,6 +94,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         metrics,
         telemetry_output,
         estimator_output,
+        priority_acquired,
     } = publication;
     let FinalizeTiming {
         start_wall_time_us,
@@ -234,6 +238,10 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
     *telemetry_output.lock() = Some(telemetry.output);
     *estimator_output.lock() = serde_json::to_string(&estimator.export_state()).ok();
+    drop(scheduling);
+    *priority_acquired.lock() = "off".to_string();
+    local_metrics.power_throttling_disabled = false;
+    try_publish_metrics(&local_metrics, metrics, end_us, true);
     match (worker_result, cleanup_result) {
         (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}

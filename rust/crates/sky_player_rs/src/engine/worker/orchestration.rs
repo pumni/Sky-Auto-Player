@@ -50,6 +50,7 @@ impl Worker<'_> {
                 telemetry: resources.telemetry,
                 estimator: resources.estimator,
                 qpc_clock: resources.clock,
+                scheduling: resources.scheduling,
             },
             state: FinalizeState {
                 worker_result,
@@ -69,6 +70,7 @@ impl Worker<'_> {
                 metrics: &shared.publication.metrics,
                 telemetry_output: &shared.publication.telemetry_output,
                 estimator_output: &shared.publication.estimator_output,
+                priority_acquired: &shared.publication.priority_acquired,
             },
             timing: FinalizeTiming {
                 start_wall_time_us: timing.start_wall_time_us,

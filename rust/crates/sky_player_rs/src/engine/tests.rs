@@ -1573,6 +1573,112 @@ fn join_timeout_does_not_poison_running_session() {
     assert_eq!(session.terminal_outcome(), Some("quit"));
 }
 
+#[test]
+fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
+    use crate::engine::worker::{WorkerResources, WorkerSchedulingGuards};
+    use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
+    use sky_dispatch_win32::power::PowerThrottlingGuard;
+    use std::sync::atomic::AtomicUsize;
+
+    let drop_counter = Arc::new(AtomicUsize::new(0));
+
+    let guards = WorkerSchedulingGuards {
+        priority: MmcssGuard::acquire(PriorityMode::Off),
+        power: PowerThrottlingGuard::disable_current_thread(),
+        drop_probe: Some(Arc::clone(&drop_counter)),
+    };
+
+    assert_eq!(drop_counter.load(Ordering::SeqCst), 0);
+    assert_eq!(guards.is_priority_active(), guards.priority.is_active());
+    assert_eq!(guards.is_power_active(), guards.power.is_active());
+    assert_eq!(guards.priority_label(), guards.priority.acquired());
+
+    let qpc_clock = QpcClock::initialize().expect("qpc clock");
+    let backend = TrackedKeyState::with_qpc_clock(qpc_clock);
+    let schedule = startup_boundary_schedule();
+    let min_hold_ticks = qpc_clock.duration_from_us(10_000).expect("min hold ticks");
+    let coordinator = sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        10_000,
+        min_hold_ticks,
+        0,
+        DurationTicks::ZERO,
+        |us| {
+            qpc_clock
+                .timeline_from_us(us)
+                .map_err(|e| super::CoordinatorError::TimeConversion(format!("{e:?}")))
+        },
+    )
+    .expect("coordinator");
+    let playback =
+        super::PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
+            .expect("playback");
+    let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 1).expect("estimator");
+    let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
+    let waiter = sky_dispatch_win32::wait::HybridWaiter::with_options(true, true);
+
+    let resources = WorkerResources {
+        clock: qpc_clock,
+        waiter,
+        backend,
+        coordinator,
+        playback,
+        estimator,
+        telemetry,
+        scheduling: guards,
+    };
+
+    // Before resources drop, guards are still active and drop counter is 0
+    assert_eq!(drop_counter.load(Ordering::SeqCst), 0);
+
+    // Drop WorkerResources explicitly (mimicking terminal worker finalization drop)
+    drop(resources);
+
+    // Guard drop must happen exactly once on resources drop
+    assert_eq!(drop_counter.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn session_live_snapshot_reflects_scheduling_guard_lifetime() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid schedule");
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 100,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("test session admission");
+
+    session.start().expect("worker start");
+    session
+        .join(Duration::from_secs(5))
+        .expect("session finish");
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.rt_priority_acquired, "off");
+    assert!(!snapshot.power_throttling_disabled);
+}
+
 #[cfg(not(windows))]
 #[test]
 fn production_session_rejects_non_windows() {

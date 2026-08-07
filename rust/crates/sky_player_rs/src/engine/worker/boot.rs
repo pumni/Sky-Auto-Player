@@ -77,8 +77,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             1
         };
     let StartupResources {
-        power_guard: _power_guard,
-        priority_guard: _priority_guard,
+        scheduling,
         waiter,
         power_throttling_disabled,
     } = initialize_startup(
@@ -468,6 +467,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         playback: clock_state,
         estimator,
         telemetry,
+        scheduling,
     });
 
     if core.runtime.terminal_error.is_none() {

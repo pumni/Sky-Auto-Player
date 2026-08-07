@@ -46,6 +46,7 @@ pub(crate) use health::{
     HealthWindow, build_dispatch_budget, estimator_kind_for_path, focus_gate_matches,
     observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
+pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(test)]
 pub(crate) use timing::{
@@ -128,6 +129,7 @@ pub(super) struct WorkerResources {
     pub(super) playback: PlaybackClockState,
     pub(super) estimator: SendLatencyEstimator,
     pub(super) telemetry: TelemetryCollector,
+    pub(super) scheduling: WorkerSchedulingGuards,
 }
 
 #[derive(Default)]
