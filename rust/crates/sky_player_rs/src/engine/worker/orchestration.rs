@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "test-support"))]
 use super::super::BackendConfig;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::CommandTimingCleanup;
@@ -8,9 +9,9 @@ use super::{
 use std::any::Any;
 
 pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
-    let shared = worker.shared;
+    let _shared = worker.shared;
     #[cfg(any(test, feature = "test-support"))]
-    let _command_timing_cleanup = CommandTimingCleanup(&shared.commands.command_timing);
+    let _command_timing_cleanup = CommandTimingCleanup(&_shared.commands.command_timing);
     #[cfg(any(test, feature = "test-support"))]
     let (focus_loss_fault, wait_fault) = match &worker.config.backend {
         BackendConfig::Production => (false, false),

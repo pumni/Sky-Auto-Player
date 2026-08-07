@@ -17,6 +17,7 @@ pub(crate) struct WorkerSchedulingGuards {
 }
 
 impl WorkerSchedulingGuards {
+    #[allow(dead_code)]
     pub(crate) fn is_priority_active(&self) -> bool {
         self.priority.is_active()
     }

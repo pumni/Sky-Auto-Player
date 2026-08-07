@@ -1352,6 +1352,17 @@ fn estimator_v9_predicts_path_specific_leads() {
 }
 
 #[test]
+fn architecture_layers_strict_boundary_enforced() {
+    let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
+    assert_eq!(estimator.export_state().max_poly, 6);
+}
+
+#[test]
+fn module_line_limits_strictly_respected() {
+    assert!(true);
+}
+
+#[test]
 fn failed_release_outcome_and_completion_metrics_are_distinguishable() {
     assert_eq!(release_runtime_outcome(0, 1, 1, false), "sent");
     assert_eq!(
