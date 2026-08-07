@@ -233,7 +233,9 @@ impl TrackedKeyState {
             if transport_confirmed_mask == unresolved_mask {
                 InstrumentPhysicalState::AllUp
             } else {
-                InstrumentPhysicalState::Inconclusive
+                InstrumentPhysicalState::Held(scan_codes_from_mask(
+                    unresolved_mask & !transport_confirmed_mask,
+                ))
             }
         } else {
             instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
@@ -612,7 +614,8 @@ impl TrackedKeyState {
         // confirm all-up (fail-closed). `released_successfully` is only true
         // when the physical state was actually verified as all-up.
         let mut transport_anomaly = false;
-        let mut verification_uncertain = false;
+        let mut verification_inconclusive = false;
+        let mut last_confirmed_held_mask = 0u16;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
@@ -673,16 +676,11 @@ impl TrackedKeyState {
                     };
                 }
                 ReconciledRelease::Held(held_mask) => {
+                    last_confirmed_held_mask = held_mask;
                     unresolved_mask = held_mask;
                 }
                 ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                    // A physical probe that cannot confirm all-up must always
-                    // fail closed. It may never become a VerifiedAllUp by
-                    // probing an empty set, so leave verification uncertain and
-                    // terminate the FSM here: transport-confirmed keys were
-                    // already cleared above and the remaining mask is reported
-                    // as stuck/uncertain.
-                    verification_uncertain = true;
+                    verification_inconclusive = true;
                     unresolved_mask = unconfirmed_mask;
                     if unconfirmed_mask == 0 {
                         self.last_error = Some(match scope {
@@ -720,7 +718,7 @@ impl TrackedKeyState {
             transport_anomaly,
             released_successfully: false,
             stuck_mask: unresolved_mask,
-            verification_inconclusive: verification_uncertain || unresolved_mask != 0,
+            verification_inconclusive: transport_anomaly || verification_inconclusive,
             attempts: 4,
         }
     }
