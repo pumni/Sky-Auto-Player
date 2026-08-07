@@ -6,7 +6,8 @@ use super::physical::{
     reconcile_release_observation,
 };
 use super::scan_code::{
-    FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, valid_instrument_scan_code,
+    FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask, scan_codes_from_mask,
+    valid_instrument_scan_code,
 };
 use super::tracked::TEST_RELEASE_SLEEP_COUNT;
 use crate::clock::QpcTicks;
@@ -409,6 +410,7 @@ fn verified_all_up_clears_all_tracking_masks() {
         win32_error: 0,
         timing_error: None,
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
     state.possibly_active_mask = 0x0002;
     state.failed_release_mask = 0x0004;
@@ -433,6 +435,7 @@ fn full_instrument_all_up_clears_transport_derived_stuck_keys() {
         win32_error: 0,
         timing_error: None,
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.failed_release_mask = FULL_INSTRUMENT_MASK;
 
     let outcome = state.release_all_full_instrument(0);
@@ -476,6 +479,7 @@ fn tracked_cleanup_does_not_call_full_cleanup() {
             timing_error: None,
         }
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
 
     let outcome = state.release_all(0);
@@ -500,6 +504,7 @@ fn full_cleanup_does_not_run_tracked_cleanup_first() {
             timing_error: None,
         }
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
 
     let outcome = state.release_all_full_instrument(0);
@@ -519,6 +524,7 @@ fn clean_first_attempt_has_no_sleep() {
         win32_error: 0,
         timing_error: None,
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
 
     let outcome = state.release_all(0);
@@ -547,6 +553,15 @@ fn retry_sends_only_unresolved_mask() {
             timing_error: None,
         }
     });
+    // The probe mirrors transport progress: held until fully confirmed. First
+    // attempt confirms nothing, so the FSM retries the full set.
+    state.custom_probe = Some(Box::new(|mask, confirmed| {
+        if confirmed == mask {
+            InstrumentPhysicalState::AllUp
+        } else {
+            InstrumentPhysicalState::Held(scan_codes_from_mask(mask & !confirmed))
+        }
+    }));
     state.active_mask = 0x0003;
 
     let outcome = state.release_all(0);
@@ -572,6 +587,7 @@ fn verified_keys_are_not_retried() {
             timing_error: None,
         }
     });
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0003;
 
     let outcome = state.release_all(0);
@@ -683,7 +699,7 @@ fn cleanup_inconclusive_with_transport_complete_fails_closed() {
     });
     // Physical probing is inconclusive even though transport confirmed every
     // key. It must never become a VerifiedAllUp by probing an empty set.
-    state.custom_probe = Some(InstrumentPhysicalState::Inconclusive);
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::Inconclusive));
     state.active_mask = 0x0003;
 
     let outcome = state.release_all(0);
@@ -712,7 +728,10 @@ fn cleanup_clears_resolved_keys_before_final_outcome() {
     // Physical probe reports only 0x16 (B) held each attempt, so key 0x15 (A)
     // is resolved away on the first transition even though the release as a
     // whole cannot be proven complete.
-    state.custom_probe = Some(InstrumentPhysicalState::Held(smallvec::smallvec![0x16]));
+    state.custom_probe = Some(Box::new(|_, mask| {
+        let _ = mask;
+        InstrumentPhysicalState::Held(smallvec::smallvec![0x16])
+    }));
     state.active_mask = 0x0003;
     state.possibly_active_mask = 0x0003;
 
@@ -722,6 +741,81 @@ fn cleanup_clears_resolved_keys_before_final_outcome() {
     assert_eq!(state.active_mask & 0x0001, 0);
     assert_eq!(state.possibly_active_mask & 0x0001, 0);
     assert_eq!(state.failed_release_mask, 0x0002);
+}
+
+#[test]
+fn custom_emitter_without_probe_never_synthesizes_all_up() {
+    // A simulated transport emitter that fully confirms every key must NOT be
+    // allowed to invent physical all-up evidence. Without an explicit probe the
+    // cleanup FSM resolves Inconclusive and fails closed.
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: codes.len() as u8,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.active_mask = 0x0003;
+
+    let outcome = state.release_all(0);
+    assert!(
+        !outcome.released_successfully,
+        "emitter alone must not confirm all-up"
+    );
+    assert!(outcome.verification_inconclusive);
+    // Transport confirmed every key, but without a probe the physical verdict
+    // is Inconclusive: no key is left stuck, yet all-up is not provable.
+    assert!(outcome.stuck_keys().is_empty());
+}
+
+#[test]
+fn custom_emitter_without_probe_never_synthesizes_held() {
+    // A transport emitter reporting failure must not synthesize a Held verdict
+    // either; without a probe the result is Inconclusive (fail-closed).
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(0);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_keys(), vec![0x15]);
+    assert_eq!(state.failed_release_mask, 0x0001);
+}
+
+#[test]
+fn cleanup_transport_anomaly_never_forces_verification_inconclusive() {
+    // Even when the transport path saw an anomaly, a conclusive Held verdict
+    // from the probe must NOT be reported as inconclusive: the two dimensions
+    // are independent and must never be OR-ed together.
+    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
+        requested: codes.len() as u8,
+        inserted: 0,
+        started_ticks: QpcTicks::ZERO,
+        completed_ticks: Some(QpcTicks::ZERO),
+        win32_error: 5,
+        timing_error: None,
+    });
+    state.custom_probe = Some(Box::new(|_, _| {
+        InstrumentPhysicalState::Held(smallvec::smallvec![0x15])
+    }));
+    state.active_mask = 0x0001;
+
+    let outcome = state.release_all(0);
+    assert!(outcome.transport_anomaly);
+    assert!(!outcome.released_successfully);
+    assert!(
+        !outcome.verification_inconclusive,
+        "Held is conclusive, not inconclusive"
+    );
+    assert_eq!(outcome.stuck_keys(), vec![0x15]);
 }
 
 #[test]
@@ -737,7 +831,7 @@ fn cleanup_transport_anomaly_is_aggregated_independently_of_physical_all_up() {
     // Physical probe sees all keys up despite the transport failure. The two
     // dimensions are independent: released_successfully=true and
     // verification_inconclusive=false, but transport_anomaly=true.
-    state.custom_probe = Some(InstrumentPhysicalState::AllUp);
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0003;
 
     let outcome = state.release_all(0);
@@ -877,7 +971,7 @@ fn up_send_success_clears_pending_release() {
 fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
     let mut state =
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
-    state.custom_probe = Some(InstrumentPhysicalState::AllUp);
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
     let outcome = state.release_scope(ReleaseScope::Tracked, 0);
     assert!(outcome.released_successfully);
@@ -889,7 +983,7 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
 fn cleanup_fsm_idempotent_on_repeated_calls() {
     let mut state =
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
-    state.custom_probe = Some(InstrumentPhysicalState::AllUp);
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
     let outcome1 = state.release_scope(ReleaseScope::Tracked, 0);
     let outcome2 = state.release_scope(ReleaseScope::Tracked, 0);

@@ -45,6 +45,7 @@ mod tests {
     #[test]
     fn test_tracked_key_state_lifecycle() {
         let mut state = input::TrackedKeyState::with_emitter(fake_success_emitter);
+        state.custom_probe = Some(Box::new(|_, _| input::InstrumentPhysicalState::AllUp));
         assert_eq!(state.active_mask, 0);
 
         let res_down = state.key_down(&[0x15, 0x16]);

@@ -38,14 +38,78 @@ struct ReleaseSend {
     skipped_count: usize,
     attempts: u8,
     is_success: bool,
-    #[allow(dead_code)]
+    transport: ReleaseTransportEvidence,
+}
+
+/// Independent transport-evidence dimension for a pending release batch.
+///
+/// `confirmed` is the only acknowledged physical release; `skipped` is *not*
+/// physical release confirmation, and `unresolved` deliberately does not
+/// subtract `skipped`. The coordinator owns every bit until it is confirmed
+/// (or recovery is forced), so a skipped bit is state disagreement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReleaseTransportEvidence {
     requested_mask: u16,
     confirmed_mask: u16,
     skipped_mask: u16,
-    #[allow(dead_code)]
     unresolved_mask: u16,
-    #[allow(dead_code)]
     status: sky_dispatch_win32::input::SendTransactionStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseEvidenceError {
+    ConfirmedNotSubsetOfRequested,
+    SkippedNotSubsetOfRequested,
+    ConfirmedAndSkippedOverlap,
+}
+
+impl std::fmt::Display for ReleaseEvidenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConfirmedNotSubsetOfRequested => {
+                write!(
+                    f,
+                    "confirmed transport mask is not a subset of the requested mask"
+                )
+            }
+            Self::SkippedNotSubsetOfRequested => {
+                write!(
+                    f,
+                    "skipped transport mask is not a subset of the requested mask"
+                )
+            }
+            Self::ConfirmedAndSkippedOverlap => {
+                write!(f, "confirmed and skipped transport masks overlap")
+            }
+        }
+    }
+}
+
+impl ReleaseTransportEvidence {
+    fn from_outcome(
+        outcome: &sky_dispatch_win32::input::SendTransactionOutcome,
+    ) -> Result<Self, ReleaseEvidenceError> {
+        let requested_mask = outcome.evidence.requested_mask;
+        let confirmed_mask = outcome.evidence.confirmed_mask;
+        let skipped_mask = outcome.evidence.skipped_mask;
+        if confirmed_mask & !requested_mask != 0 {
+            return Err(ReleaseEvidenceError::ConfirmedNotSubsetOfRequested);
+        }
+        if skipped_mask & !requested_mask != 0 {
+            return Err(ReleaseEvidenceError::SkippedNotSubsetOfRequested);
+        }
+        if confirmed_mask & skipped_mask != 0 {
+            return Err(ReleaseEvidenceError::ConfirmedAndSkippedOverlap);
+        }
+        let unresolved_mask = requested_mask & !confirmed_mask;
+        Ok(Self {
+            requested_mask,
+            confirmed_mask,
+            skipped_mask,
+            unresolved_mask,
+            status: outcome.status,
+        })
+    }
 }
 
 /// Per-event timing reconciliation derived from the pending release batch
@@ -121,6 +185,16 @@ pub(crate) fn dispatch_due_pending_releases(
         Ok(value) => value,
         Err(step) => return step,
     };
+
+    // Fail-closed: backend skipping a key the coordinator still owns is state
+    // disagreement. It is not acknowledged release and never unblocks a
+    // same-key Down; force full-instrument cleanup and terminate.
+    if send.transport.skipped_mask != 0 {
+        runtime.force_full_cleanup = true;
+        return DispatchStep::Terminate(
+            "release transport/coordinator state disagreement".to_string(),
+        );
+    }
 
     let reconciliation = match reconcile_release_recovery(
         coordinator,
@@ -299,12 +373,11 @@ fn prepare_release_send(
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
     let is_success = result.is_success();
-    let requested_mask = result.evidence.requested_mask;
-    let confirmed_mask = result.evidence.confirmed_mask;
-    let skipped_mask = result.evidence.skipped_mask;
-    let acknowledged_mask = confirmed_mask | skipped_mask;
-    let unresolved_mask = requested_mask & !acknowledged_mask;
-    let status = result.status;
+    let transport = ReleaseTransportEvidence::from_outcome(&result).map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "release transport evidence validation failure: {error}"
+        ))
+    })?;
     Ok(ReleaseSend {
         actual_ticks,
         completed_effective_ticks,
@@ -316,11 +389,7 @@ fn prepare_release_send(
         skipped_count,
         attempts,
         is_success,
-        requested_mask,
-        confirmed_mask,
-        skipped_mask,
-        unresolved_mask,
-        status,
+        transport,
     })
 }
 
@@ -335,10 +404,14 @@ fn reconcile_release_recovery(
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
-    let recovery_required = match coordinator.requeue_failed_releases_mask_ticks(
+    // The caller has already fail-closed on any backend-skipped disagreement
+    // (`force_full_cleanup` + terminate). Confirmed-only reconciliation below
+    // completes exactly the confirmed keys; unconfirmed keys stay owned by the
+    // coordinator and are requeued.
+    let confirmed_mask = send.transport.confirmed_mask;
+    let recovery_required = match coordinator.requeue_unconfirmed_releases_ticks(
         due_pending,
-        send.confirmed_mask,
-        send.skipped_mask,
+        confirmed_mask,
         send.actual_ticks,
         send.completed_effective_ticks,
         &timing.retry_backoff_ticks,
@@ -351,9 +424,7 @@ fn reconcile_release_recovery(
             )));
         }
     };
-    if let Err(error) =
-        coordinator.complete_releases_mask(due_pending, send.confirmed_mask, send.skipped_mask)
-    {
+    if let Err(error) = coordinator.complete_releases_mask(due_pending, confirmed_mask) {
         return Err(DispatchStep::Terminate(format!(
             "coordinator release completion failure: {error}"
         )));

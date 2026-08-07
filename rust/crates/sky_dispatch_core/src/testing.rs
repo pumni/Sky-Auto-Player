@@ -131,7 +131,7 @@ pub fn simulate_schedule(
             })?;
 
             coordinator
-                .complete_releases(&due_pending, &scan_codes, &[])
+                .complete_releases(&due_pending, &scan_codes)
                 .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
             events.push(TraceEvent {

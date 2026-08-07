@@ -2214,9 +2214,8 @@ fn explicit_release_recovery_may_shift_timeline() {
     assert_eq!(due.len(), 1);
 
     let _ = coordinator
-        .requeue_failed_releases_mask_ticks(
+        .requeue_unconfirmed_releases_ticks(
             &due,
-            0,
             0,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(25_000),
@@ -2225,7 +2224,7 @@ fn explicit_release_recovery_may_shift_timeline() {
         )
         .unwrap();
 
-    coordinator.complete_releases_mask(&due, 1 << 0, 0).unwrap();
+    coordinator.complete_releases_mask(&due, 1 << 0).unwrap();
     let pause = coordinator
         .finish_release_recovery_ticks(TimelineTicks::from_raw(25_000))
         .unwrap();

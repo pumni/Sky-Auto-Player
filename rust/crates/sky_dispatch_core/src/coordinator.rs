@@ -197,7 +197,10 @@ pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
-    use super::{GenerationStatus, RuntimeDispatchCoordinator};
+    use super::{
+        ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
+        RuntimeDispatchCoordinator,
+    };
     use crate::compile::compile_runtime_intents;
     use crate::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
     use crate::time::{DurationTicks, TimelineTicks};
@@ -334,7 +337,7 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert!(
             !coordinator
-                .requeue_failed_releases(&due, &[], &[], 1_000, 1_000, Some(5))
+                .requeue_failed_releases(&due, &[], 1_000, 1_000, Some(5))
                 .expect("valid recovery")
         );
         assert_eq!(coordinator.next_pending_release_us(0), Some(3_000));
@@ -342,7 +345,7 @@ mod tests {
 
         let retry = coordinator.pop_due_pending(3_000, 0);
         assert_eq!(retry.len(), 1);
-        coordinator.complete_releases(&retry, &[0x15], &[]);
+        coordinator.complete_releases(&retry, &[0x15]);
         assert_eq!(coordinator.finish_release_recovery(3_000), Ok(Some(2_000)));
         assert_eq!(coordinator.schedule.batches[2].scheduled_us, 4_000);
 
@@ -786,7 +789,7 @@ mod tests {
         let due = coordinator.pop_due_pending(1_000, 0);
         assert!(
             !coordinator
-                .requeue_failed_releases(&due, &[], &[], 1_000, 1_000, Some(5))
+                .requeue_failed_releases(&due, &[], 1_000, 1_000, Some(5))
                 .expect("valid recovery")
         );
 
@@ -794,7 +797,7 @@ mod tests {
         assert_eq!(coordinator.next_deadline_us(0, 0), Some(3_000));
 
         let retry = coordinator.pop_due_pending(3_000, 0);
-        coordinator.complete_releases(&retry, &[0x15], &[]);
+        coordinator.complete_releases(&retry, &[0x15]);
         assert_eq!(coordinator.finish_release_recovery(3_000), Ok(Some(2_000)));
         assert_eq!(coordinator.schedule.batches[2].scheduled_us, 2_000);
         assert!(coordinator.pop_next_due_authored(3_000, 0).is_none());
@@ -930,13 +933,13 @@ mod tests {
         let due = coordinator.pop_due_pending(1_000, 0);
         assert!(
             !coordinator
-                .requeue_failed_releases(&due, &[], &[], 1_000, 1_500, Some(5))
+                .requeue_failed_releases(&due, &[], 1_000, 1_500, Some(5))
                 .expect("valid recovery")
         );
         assert_eq!(coordinator.next_pending_release_us(0), Some(3_500));
 
         let retry = coordinator.pop_due_pending(3_500, 0);
-        coordinator.complete_releases(&retry, &[0x15], &[]);
+        coordinator.complete_releases(&retry, &[0x15]);
         assert_eq!(coordinator.finish_release_recovery(3_500), Ok(Some(2_500)));
 
         // Key 0x16 remains active, so the next chord cannot be early-popped.
@@ -1057,7 +1060,7 @@ mod tests {
         let (up, _) = coordinator.pop_next_due_authored(1_000, 0).unwrap();
         let _ = coordinator.request_releases(&up.intents);
         let due = coordinator.pop_due_pending(1_000, 0);
-        coordinator.complete_releases(&due, &[0x15, 0x16], &[]);
+        coordinator.complete_releases(&due, &[0x15, 0x16]);
 
         let counts = coordinator.generation_status_counts();
         let total: u64 = counts.values().sum();
@@ -1345,7 +1348,7 @@ mod tests {
         let (up_a, _) = coordinator.pop_next_due_authored(1_000, 0).unwrap();
         let _ = coordinator.request_releases(&up_a.intents);
         let due = coordinator.pop_due_pending(1_000, 0);
-        coordinator.complete_releases(&due, &[0x15], &[]);
+        coordinator.complete_releases(&due, &[0x15]);
 
         let counts = coordinator.generation_status_counts();
         assert_eq!(counts.get("released"), Some(&1));
@@ -1356,7 +1359,7 @@ mod tests {
         let (up_b, _) = coordinator.pop_next_due_authored(2_000, 0).unwrap();
         let _ = coordinator.request_releases(&up_b.intents);
         let due2 = coordinator.pop_due_pending(2_000, 0);
-        coordinator.complete_releases(&due2, &[0x16], &[]);
+        coordinator.complete_releases(&due2, &[0x16]);
 
         let counts2 = coordinator.generation_status_counts();
         assert_eq!(counts2.get("released"), Some(&2));
@@ -1490,7 +1493,7 @@ mod tests {
         // Pop and complete all pending
         let due = coordinator.pop_due_pending(u64::MAX, 0);
         for release in &due {
-            coordinator.complete_releases(std::slice::from_ref(release), &[release.scan_code], &[]);
+            coordinator.complete_releases(std::slice::from_ref(release), &[release.scan_code]);
         }
 
         let counts = coordinator.generation_status_counts();
@@ -1561,11 +1564,7 @@ mod tests {
             }
             let due = coordinator.pop_due_pending(u64::MAX, 0);
             for release in &due {
-                coordinator.complete_releases(
-                    std::slice::from_ref(release),
-                    &[release.scan_code],
-                    &[],
-                );
+                coordinator.complete_releases(std::slice::from_ref(release), &[release.scan_code]);
             }
         }
 
@@ -1613,13 +1612,263 @@ mod tests {
         coordinator.request_releases(&up.intents);
         let due = coordinator.pop_due_pending(u64::MAX, 0);
         coordinator
-            .complete_releases(&due, &[0x15], &[])
+            .complete_releases(&due, &[0x15])
             .expect("first completion");
 
         let counts = coordinator.generation_status_counts();
         assert_eq!(counts.get("released"), Some(&1));
         assert_eq!(counts.values().sum::<u64>(), 1);
-        assert!(coordinator.complete_releases(&due, &[0x15], &[]).is_err());
+        assert!(coordinator.complete_releases(&due, &[0x15]).is_err());
+    }
+
+    #[test]
+    fn single_up_real_generation_gates_release_floor() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 30,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        // Activate the Down so the slot owns a real generation with a floor.
+        // The Up is authored early (30) but the completion-anchored hold floor
+        // later (80) must gate it, proving the floor is not ignored for a real
+        // generation.
+        let down = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(80))
+            .unwrap();
+        assert!(
+            coordinator
+                .active_for_slot(0)
+                .map(|active| active.release_not_before_ticks == TimelineTicks::from_raw(80))
+                .unwrap_or(false),
+            "completion-anchored floor must attach to the real generation"
+        );
+        // The Up cannot be dispatched before the slot's floor.
+        assert!(
+            coordinator
+                .prepare_next_due_authored(TimelineTicks::from_raw(79), DurationTicks::ZERO)
+                .unwrap()
+                .is_none()
+        );
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(80), DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.packet_kind, Some(PhysicalPacketKind::UpOnly));
+    }
+
+    #[test]
+    fn mixed_real_up_gates_release_floor() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down-a".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 70,
+                    scan_codes: vec![0x16].into(),
+                    reason: "down-b".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 70,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up-a".into(),
+                },
+            ],
+            &[0x15, 0x16],
+        )
+        .expect("valid mixed schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let down_a = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down_a, TimelineTicks::ZERO, TimelineTicks::from_raw(90))
+            .unwrap();
+        // The Mixed packet (Up 0x15 + Down 0x16) cannot precede A's floor.
+        let deadline = coordinator
+            .next_authored_ticks(DurationTicks::from_raw(30))
+            .unwrap()
+            .unwrap();
+        assert_eq!(deadline, TimelineTicks::from_raw(90));
+    }
+
+    #[test]
+    fn no_generation_id_stale_up_does_not_require_active_generation() {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "stale".into(),
+            }],
+            &[0x15],
+        )
+        .expect("valid stale up schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        // A stale Up has NO_GENERATION_ID and must not require an active
+        // generation; it prepares without an invariant error.
+        let prepared = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap();
+        assert!(prepared.is_none() || prepared.unwrap().packet_kind.is_none());
+    }
+
+    #[test]
+    fn missing_active_generation_prepare_returns_invariant_error() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x16].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x16].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x16],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        // Advance the cursor past the Down so the Up packet is the next prepared
+        // authored batch. The Down becomes an active real generation (0x16).
+        let down = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(0))
+            .unwrap();
+        // Drop the real generation by clearing the active slot behind the
+        // coordinator's back: the Up packet then references a real generation
+        // that owns no active slot.
+        coordinator.active_by_slot[0] = None;
+        let err = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+        ));
+    }
+
+    #[test]
+    fn generation_mismatch_prepare_returns_invariant_error() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        // Advance the cursor past the Down so the Up packet is the next prepared
+        // authored batch.
+        let down = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(0))
+            .unwrap();
+        // Fabricate a mismatched owner generation for the slot: the Up
+        // references generation 0, but the slot claims generation 7.
+        coordinator.active_by_slot[0] = Some(ActiveGeneration {
+            generation_id: 7,
+            scan_code: 0x15,
+            key_slot: 0,
+            source_action_index: 0,
+            scheduled_down_ticks: TimelineTicks::ZERO,
+            down_dispatch_started_ticks: TimelineTicks::ZERO,
+            down_dispatch_completed_ticks: TimelineTicks::ZERO,
+            release_not_before_ticks: TimelineTicks::ZERO,
+        });
+        let err = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+        ));
+    }
+
+    #[test]
+    fn authored_lead_underflow_uses_explicit_zero_clamp() {
+        let schedule = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 30,
+                scan_codes: vec![0x15].into(),
+                reason: "down".into(),
+            }],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        // A dispatch lead larger than the authored timestamp underflows the
+        // authored deadline; this must clamp to the timeline epoch, not wrap.
+        assert_eq!(
+            coordinator
+                .packet_effective_deadline_ticks(0, DurationTicks::from_raw(1_000))
+                .unwrap(),
+            TimelineTicks::ZERO
+        );
     }
 }
 
@@ -2051,6 +2300,73 @@ impl RuntimeDispatchCoordinator {
     /// A packet containing releases cannot be dispatched before the latest
     /// sender-side minimum-hold floor owned by its physical Up mask.  Waiting
     /// and preparation both use this single calculation.
+    /// Compute the sender-side minimum-hold floor owned by every physical Up
+    /// intent with a real generation in the given packet.
+    ///
+    /// Fail-closed: a physical Up with a real generation must be backed by an
+    /// active generation that owns its key slot, and that generation must match
+    /// the authored generation. `NO_GENERATION_ID` (stale Up) does not require
+    /// an active generation, nor does an Up whose referenced generation is
+    /// already terminal (cancelled, released, or dropped) — the deliberate
+    /// teardown path leaves authored Ups behind and they must remain stale, not
+    /// raise an invariant. Any other case is a coordinator accounting invariant
+    /// and rejects the deadline computation before `SendInput`.
+    fn packet_release_floor_ticks(
+        &self,
+        packet_index: usize,
+    ) -> Result<TimelineTicks, CoordinatorError> {
+        let packet = *self
+            .schedule
+            .packets
+            .get(packet_index)
+            .ok_or(CoordinatorError::Schedule(
+                RuntimeScheduleError::InvalidPacketIndex {
+                    index: packet_index,
+                },
+            ))?;
+        let up_start = packet.up_intent_start as usize;
+        let up_end = up_start.checked_add(packet.up_intent_len as usize).ok_or(
+            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
+                index: packet_index,
+            }),
+        )?;
+        let up_intents =
+            self.schedule
+                .intents
+                .get(up_start..up_end)
+                .ok_or(CoordinatorError::Schedule(
+                    RuntimeScheduleError::InvalidPacketIntentRange {
+                        index: packet_index,
+                    },
+                ))?;
+        let mut release_not_before = TimelineTicks::ZERO;
+        for compact in up_intents {
+            let generation_id = compact.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let generation_state = self.generation_states.get(generation_id as usize);
+            if generation_state.is_some_and(|state| state.is_terminal()) {
+                continue;
+            }
+            let slot = compact.key_slot();
+            let active = self.active_for_slot(slot).ok_or_else(|| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                    "physical up has no active generation".into(),
+                ))
+            })?;
+            if active.generation_id != generation_id {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "physical up generation does not own its key slot".into(),
+                    ),
+                ));
+            }
+            release_not_before = release_not_before.max(active.release_not_before_ticks);
+        }
+        Ok(release_not_before)
+    }
+
     pub fn packet_effective_deadline_ticks(
         &self,
         packet_index: usize,
@@ -2074,40 +2390,17 @@ impl RuntimeDispatchCoordinator {
                 index: first_batch_index,
             })?
             .checked_add_duration(self.recovery_offset_ticks)?;
-        let up_start = packet.up_intent_start as usize;
-        let up_end = up_start.checked_add(packet.up_intent_len as usize).ok_or(
-            CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
-                index: packet_index,
-            }),
-        )?;
-        let up_intents =
-            self.schedule
-                .intents
-                .get(up_start..up_end)
-                .ok_or(CoordinatorError::Schedule(
-                    RuntimeScheduleError::InvalidPacketIntentRange {
-                        index: packet_index,
-                    },
-                ))?;
-        // Gating applies whenever the physical packet contains Up intents.
-        let needs_release_gate = packet.up_mask != 0;
-        let mut release_not_before = TimelineTicks::ZERO;
-        if needs_release_gate {
-            for compact in up_intents {
-                let generation_id = compact.generation_id();
-                if generation_id == NO_GENERATION_ID {
-                    continue;
-                }
-                let slot = compact.key_slot();
-                if let Some(active) = self.active_for_slot(slot)
-                    && active.generation_id == generation_id
-                {
-                    release_not_before = release_not_before.max(active.release_not_before_ticks);
-                }
-            }
-        }
-        let lead_deadline =
-            TimelineTicks::from_raw(authored.as_u64().saturating_sub(dispatch_lead.as_u64()));
+        // Singular release-floor source of truth for the packet's physical Up.
+        let release_not_before = self.packet_release_floor_ticks(packet_index)?;
+        // Explicit pre-epoch/startup clamp: an authored timestamp before the
+        // timeline epoch lowers the effective deadline to ZERO. The clamp is
+        // intentionally explicit rather than a saturating subtraction, so a
+        // real arithmetic order violation surfaces instead of being masked.
+        let lead_deadline = match authored.checked_sub_duration(dispatch_lead) {
+            Ok(deadline) => deadline,
+            Err(crate::time::TimeArithmeticError::Underflow) => TimelineTicks::ZERO,
+            Err(error) => return Err(error.into()),
+        };
         Ok(lead_deadline.max(release_not_before))
     }
 
@@ -3291,28 +3584,27 @@ impl RuntimeDispatchCoordinator {
         Ok((requested, suppressed))
     }
 
+    /// Complete exactly the pending releases whose key was confirmed by
+    /// confirmed physical transport evidence (`confirmed_mask`).
+    ///
+    /// Only a confirmed bit transitions `ReleasePending -> Released`, clears
+    /// the active/pending/blocked state. Any unconfirmed bit stays
+    /// `ReleasePending` and remains pending/blocked; it is never coalesced to
+    /// `DroppedBackend` merely to unblock the key.
     pub fn complete_releases_mask(
         &mut self,
         releases: &[PendingRelease],
         confirmed_mask: u16,
-        skipped_mask: u16,
     ) -> Result<(), CoordinatorError> {
         for pending in releases {
             let bit = Self::bit_for_slot(pending.key_slot);
-            let in_confirmed = (confirmed_mask & bit) != 0;
-            let in_skipped = (skipped_mask & bit) != 0;
-            if !in_confirmed && !in_skipped {
+            if (confirmed_mask & bit) == 0 {
                 continue;
             }
-            let status = if in_confirmed {
-                GenerationStatus::Released
-            } else {
-                GenerationStatus::DroppedBackend
-            };
             self.transition_generation(
                 pending.generation_id,
                 GenerationStatus::ReleasePending,
-                status,
+                GenerationStatus::Released,
             )?;
             if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
             {
@@ -3330,20 +3622,15 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         releases: &[PendingRelease],
         sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
     ) -> Result<(), CoordinatorError> {
         let mut confirmed_mask = 0u16;
-        let mut skipped_mask = 0u16;
         for pending in releases {
             let bit = Self::bit_for_slot(pending.key_slot);
             if sent_scan_codes.contains(&pending.scan_code) {
                 confirmed_mask |= bit;
             }
-            if skipped_scan_codes.contains(&pending.scan_code) {
-                skipped_mask |= bit;
-            }
         }
-        self.complete_releases_mask(releases, confirmed_mask, skipped_mask)
+        self.complete_releases_mask(releases, confirmed_mask)
     }
 
     pub fn release_recovery_active(&self) -> bool {
@@ -3394,7 +3681,6 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         releases: &[PendingRelease],
         sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
         recovery_started_us: u64,
         retry_base_us: u64,
         last_win32_error: Option<u32>,
@@ -3403,7 +3689,6 @@ impl RuntimeDispatchCoordinator {
         let recovery_required = self.requeue_failed_releases_ticks(
             releases,
             sent_scan_codes,
-            skipped_scan_codes,
             TimelineTicks::from_raw(recovery_started_us),
             TimelineTicks::from_raw(retry_base_us),
             &backoff,
@@ -3412,12 +3697,19 @@ impl RuntimeDispatchCoordinator {
         Ok(recovery_required)
     }
 
+    /// Requeue exactly the pending releases that were not confirmed by
+    /// confirmed physical transport evidence.
+    ///
+    /// A confirmed bit is never retried. Every unconfirmed bit is retried
+    /// (or triggers controlled full-instrument recovery once the retry budget
+    /// is exhausted). Skipped transport is *not* treated as acknowledged
+    /// success; an unconfirmed key stays owned by the coordinator until it is
+    /// physically confirmed or recovery is forced.
     #[allow(clippy::too_many_arguments)]
-    pub fn requeue_failed_releases_mask_ticks(
+    pub fn requeue_unconfirmed_releases_ticks(
         &mut self,
         releases: &[PendingRelease],
         confirmed_mask: u16,
-        skipped_mask: u16,
         recovery_started: TimelineTicks,
         retry_base: TimelineTicks,
         retry_backoff: &[DurationTicks],
@@ -3433,9 +3725,7 @@ impl RuntimeDispatchCoordinator {
         let mut recovery_required = false;
         for pending in releases {
             let bit = Self::bit_for_slot(pending.key_slot);
-            let in_confirmed = (confirmed_mask & bit) != 0;
-            let in_skipped = (skipped_mask & bit) != 0;
-            if in_confirmed || in_skipped {
+            if (confirmed_mask & bit) != 0 {
                 continue;
             }
             let is_matching_gen = self.pending_by_slot[pending.key_slot as usize]
@@ -3486,27 +3776,21 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         releases: &[PendingRelease],
         sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
         recovery_started: TimelineTicks,
         retry_base: TimelineTicks,
         retry_backoff: &[DurationTicks],
         last_win32_error: Option<u32>,
     ) -> Result<bool, CoordinatorError> {
         let mut confirmed_mask = 0u16;
-        let mut skipped_mask = 0u16;
         for pending in releases {
             let bit = Self::bit_for_slot(pending.key_slot);
             if sent_scan_codes.contains(&pending.scan_code) {
                 confirmed_mask |= bit;
             }
-            if skipped_scan_codes.contains(&pending.scan_code) {
-                skipped_mask |= bit;
-            }
         }
-        self.requeue_failed_releases_mask_ticks(
+        self.requeue_unconfirmed_releases_ticks(
             releases,
             confirmed_mask,
-            skipped_mask,
             recovery_started,
             retry_base,
             retry_backoff,

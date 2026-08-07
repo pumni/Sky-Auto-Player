@@ -134,7 +134,10 @@ health; wait-path degradation remains a separate signal.
   all 15 allowlisted keys; tracked cleanup and stuck-key retries use only their
   bounded masks. A zero/invalid target window, unavailable layout, or failed
   scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
-  emitters remain exempt from host physical-state verification.
+  emitters remain exempt from host physical-state verification but never invent
+  a physical verdict on their own: without an explicit test-only probe the
+  cleanup FSM resolves Inconclusive and fails closed rather than synthesizing
+  `AllUp`/`Held` from transport confirmation.
 - Cleanup is a single bounded state machine (`TrackedKeyState::release_scope`),
   never nested cleanup: `release_all_full_instrument` does not call
   `release_all`. One invocation resolves an unresolved mask, sends key-up,
@@ -145,7 +148,9 @@ health; wait-path degradation remains a separate signal.
   preceding `SendInput` reported partial or zero progress; transport anomalies
   stay visible in counters but do not fabricate a stuck-key set.
   `ReconciledRelease::Held` reports only the held subset and `Inconclusive`
-  fails closed to the transport-unconfirmed subset. Normal clean-up never
+  fails closed to the transport-unconfirmed subset. Transport and physical
+  verification stay independent: `verification_inconclusive` is probe-derived
+  only and is never OR-ed with the transport-anomaly flag. Normal clean-up never
   sleeps.
 - No Python callback runs in the native real-time worker.
 - A successful terminal result requires no active, pending, possibly-active, or

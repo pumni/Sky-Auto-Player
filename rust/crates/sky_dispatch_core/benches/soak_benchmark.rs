@@ -329,7 +329,7 @@ fn run_soak_scenario(
                 let (to_fail, to_complete) = due.split_at(1);
                 let completed_codes: Vec<u16> = to_complete.iter().map(|p| p.scan_code).collect();
                 coordinator
-                    .complete_releases(to_complete, &completed_codes, &[])
+                    .complete_releases(to_complete, &completed_codes)
                     .map_err(|error| format!("coordinator completion failed: {error}"))?;
                 let retry_backoff = [
                     DurationTicks::from_raw(2_000),
@@ -340,7 +340,6 @@ fn run_soak_scenario(
                 let _requeued = coordinator
                     .requeue_failed_releases_ticks(
                         to_fail,
-                        &[],
                         &[],
                         TimelineTicks::from_raw(now_us),
                         TimelineTicks::from_raw(now_us),
@@ -358,7 +357,7 @@ fn run_soak_scenario(
             }
             let codes: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             coordinator
-                .complete_releases(&due, &codes, &[])
+                .complete_releases(&due, &codes)
                 .map_err(|error| format!("coordinator completion failed: {error}"))?;
             counters.releases_completed += due.len();
             coordinator

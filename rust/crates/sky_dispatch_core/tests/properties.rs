@@ -322,7 +322,7 @@ proptest! {
                         let due = coordinator.pop_due_pending(u64::MAX, 0);
                         prop_assert_eq!(due.len(), requested.len());
                         let sent: Vec<u16> = due.iter().map(|pending| pending.scan_code).collect();
-                        coordinator.complete_releases(&due, &sent, &[]);
+                        coordinator.complete_releases(&due, &sent);
                     }
                 }
             } else {
@@ -407,7 +407,7 @@ proptest! {
         }
         let due = coordinator.pop_due_pending(expected_due, release_lead_us);
         prop_assert_eq!(due.len(), requested.len());
-        coordinator.complete_releases(&due, &scan_codes, &[]);
+        coordinator.complete_releases(&due, &scan_codes);
 
         let counts = coordinator.generation_status_counts();
         let count_total: u64 = counts.values().sum();
@@ -508,7 +508,7 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
         .pop_due_pending_ticks(actual_due, &plan)
         .unwrap();
     assert_eq!(due.len(), requested.len());
-    coordinator.complete_releases(&due, &scan_codes, &[]);
+    coordinator.complete_releases(&due, &scan_codes);
 
     let counts = coordinator.generation_status_counts();
     assert_eq!(counts.values().sum::<u64>(), generation_count);
@@ -578,7 +578,7 @@ proptest! {
             .expect("valid transition");
         let due_us = coord.next_pending_release_us(0).unwrap_or(10_000);
         let due = coord.pop_due_pending(due_us, 0);
-        coord.complete_releases(&due, &scan_codes, &[]);
+        coord.complete_releases(&due, &scan_codes);
 
         // Invariant 1: is_finished implies all terminal.
         prop_assert!(coord.is_finished());

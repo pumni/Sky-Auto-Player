@@ -237,7 +237,7 @@ fn run_iteration(
                 .map_err(|error| format!("coordinator pending pop failed: {error}"))?;
             let due_sc: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             coordinator
-                .complete_releases(&due, &due_sc, &[])
+                .complete_releases(&due, &due_sc)
                 .map_err(|error| format!("coordinator completion failed: {error}"))?;
 
             let send_us = t_after_req + t_pop.elapsed().as_micros() as u64;
