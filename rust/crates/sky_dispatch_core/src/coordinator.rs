@@ -2099,11 +2099,10 @@ impl RuntimeDispatchCoordinator {
                     continue;
                 }
                 let slot = compact.key_slot();
-                if let Some(active) = self.active_for_slot(slot) {
-                    if active.generation_id == generation_id {
-                        release_not_before =
-                            release_not_before.max(active.release_not_before_ticks);
-                    }
+                if let Some(active) = self.active_for_slot(slot)
+                    && active.generation_id == generation_id
+                {
+                    release_not_before = release_not_before.max(active.release_not_before_ticks);
                 }
             }
         }

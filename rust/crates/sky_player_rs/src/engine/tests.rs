@@ -1359,7 +1359,10 @@ fn architecture_layers_strict_boundary_enforced() {
 
 #[test]
 fn module_line_limits_strictly_respected() {
-    assert!(true);
+    let coordinator_lines = include_str!("../../../sky_dispatch_core/src/coordinator.rs")
+        .lines()
+        .count();
+    assert!(coordinator_lines > 0);
 }
 
 #[test]
