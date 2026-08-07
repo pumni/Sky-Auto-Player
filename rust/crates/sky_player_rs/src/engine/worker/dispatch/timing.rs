@@ -172,6 +172,7 @@ pub(crate) fn prepare_authored_batch_view(
 /// projections used across telemetry, estimator update, and the terminal
 /// SLO decision.
 pub(crate) struct DownSendTiming {
+    pub(crate) sender_completed_qpc: QpcTicks,
     pub(crate) sender_started_effective_ticks: TimelineTicks,
     pub(crate) completed_effective_ticks: TimelineTicks,
     pub(crate) completed_effective: u64,
@@ -183,7 +184,6 @@ pub(crate) struct DownSendTiming {
     pub(crate) completion_error_us: i64,
     pub(crate) estimator_kind: Option<ActionKind>,
     pub(crate) clean_directional_sample: bool,
-    pub(crate) recovered_zero_progress: bool,
     pub(crate) recovered_partial_up: bool,
     pub(crate) recovered_retry_late: bool,
     pub(crate) strict_completion_late: bool,
@@ -356,6 +356,10 @@ pub(crate) fn interpret_down_send_timing(
         result_completed_ticks,
         result_sent,
     )?;
+    // Expose the raw QPC sender-completion boundary for the deferred observer.
+    // Guaranteed `Some` here: a missing boundary already terminated inside
+    // `resolve_send_boundaries`.
+    let sender_completed_qpc = result_completed_ticks.unwrap_or(QpcTicks::ZERO);
     let completion_error_ticks_value =
         match signed_timeline_delta_ticks(completed_effective_ticks, view.batch_scheduled_ticks) {
             Ok(value) => value,
@@ -460,6 +464,7 @@ pub(crate) fn interpret_down_send_timing(
             local_metrics.recovered_partial_up_retries.saturating_add(1);
     }
     Ok(DownSendTiming {
+        sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,
         completed_effective,
@@ -471,7 +476,6 @@ pub(crate) fn interpret_down_send_timing(
         completion_error_us,
         estimator_kind,
         clean_directional_sample,
-        recovered_zero_progress,
         recovered_partial_up,
         recovered_retry_late,
         strict_completion_late,

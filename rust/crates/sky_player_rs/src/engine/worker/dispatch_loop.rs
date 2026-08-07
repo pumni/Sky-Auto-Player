@@ -571,6 +571,7 @@ pub(super) fn dispatch(
                         lead_up_ticks,
                         lead_up,
                         latency_class,
+                        observer: &mut core.observer.pending,
                     },
                     config,
                     resources,
@@ -579,9 +580,7 @@ pub(super) fn dispatch(
                     &mut core.runtime,
                     &mut core.metrics,
                     &mut core.errors.secondary,
-                    &mut core.errors.last_published,
                     target_hwnd,
-                    metrics,
                 );
                 match step {
                     super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
@@ -617,10 +616,40 @@ pub(super) fn dispatch(
                 panic_requested,
                 desired_pause,
                 metrics,
+                &mut core.observer.pending,
             );
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
-                super::DispatchStep::NoWork => {}
+                super::DispatchStep::NoWork => {
+                    // Deferred dispatch-observer slack: drain at most one
+                    // enqueued note-on observation per idle iteration when
+                    // enough budget/margin remains.
+                    let drain_us = if core.observer.budget_us > super::OBSERVER_MARGIN_US {
+                        super::drain_one_observer(
+                            &mut core.observer.pending,
+                            config,
+                            core.health.as_mut().unwrap(),
+                            &mut core.metrics,
+                            &mut core.errors.last_published,
+                            metrics,
+                            &mut resources.backend,
+                            &mut resources.estimator,
+                            qpc_clock,
+                            loop_start_us,
+                        )
+                    } else {
+                        0
+                    };
+                    if drain_us > 0 {
+                        core.metrics.observer_duration_max_us =
+                            core.metrics.observer_duration_max_us.max(drain_us);
+                        // §8.9 adaptive budget: clamp(2 * observed, FLOOR..CAP).
+                        core.observer.budget_us = drain_us.saturating_mul(2).clamp(
+                            super::OBSERVER_BUDGET_FLOOR_US,
+                            super::OBSERVER_BUDGET_CAP_US,
+                        );
+                    }
+                }
                 super::DispatchStep::Terminate(err) => {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(err);

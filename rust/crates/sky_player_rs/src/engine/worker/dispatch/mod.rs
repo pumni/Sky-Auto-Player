@@ -18,6 +18,7 @@
 
 mod authored;
 mod observer;
+mod observer_drain;
 mod release;
 mod timing;
 
@@ -65,6 +66,7 @@ pub(super) struct AuthoredBatchView {
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
 pub(crate) use authored::dispatch_authored_packet;
+pub(crate) use observer_drain::{PendingObservationQueue, drain_one_observer};
 pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 
 use super::super::{ActionKind, LatencyClass, QpcTicks, TimelineTicks};

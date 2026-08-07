@@ -39,10 +39,18 @@ choice, and the terminal transition.
   The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
   the wait deadline, so prepare and wait cannot disagree on lead selection.
 - `dispatch.rs` owns the pending-release and authored-packet backend
-  transactions, transaction-outcome interpretation, coordinator commit,
-  estimator update, dispatch telemetry record, and dispatch health observation.
-  It returns a closed four-variant `DispatchStep` (`NoWork`, `Dispatched`,
-  `Continue`, `Terminate`) instead of scalar tuples.
+  transactions, transaction-outcome interpretation, coordinator commit, and the
+  dispatch telemetry record.  Both the note-on and note-off observers are
+  two-phase: the mandatory telemetry trace, the coordinator commit, the
+  mandatory terminal SLO decision (note-off path), and the `dispatch_ready`
+  QPC sample stay on the hard scheduler path; the estimator update,
+  health-window observation, lateness accounting, and diagnostic metric
+  publication are enqueued as an allocation-free `DispatchObservation`
+  (tagged `Down`/`Up`) and consumed later by
+  `observer_drain::drain_one_observer` during the dispatch loop's idle slack.
+  The observer work is droppable and never terminal.  It returns a closed
+  four-variant `DispatchStep` (`NoWork`, `Dispatched`, `Continue`, `Terminate`)
+  instead of scalar tuples.
 - `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
   terminal-error aggregation.
 - `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
@@ -93,7 +101,11 @@ uncertain key state remain immediate session-latched correctness failures.
 
 The native final snapshot also reports `post_send_max_us`,
 `dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
-wait failure counters, and timeline-rebase count/duration/reason. Authored
+wait failure counters, and timeline-rebase count/duration/reason.  The
+deferred dispatch observer additionally reports
+`core_post_send_max_us` (a typed `dispatch_ready - sender_completed` QPC
+sample), `observer_duration_max_us`, `observer_dropped_samples`, and
+`observer_queue_high_watermark`.  Authored
 lateness is measured before any recovery rebase. These fields are diagnostic
 evidence owned by the sender; none establishes that the game observed or
 played a note.

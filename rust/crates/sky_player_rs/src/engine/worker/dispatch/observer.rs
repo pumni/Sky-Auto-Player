@@ -1,16 +1,16 @@
 use super::super::super::{
-    ActionKind, DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
-    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SendLatencyEstimator,
-    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
-    TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, trace_outcome_code,
-    try_publish_metrics,
+    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RtTraceRecord,
+    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, SharedMetrics, TRACE_FLAG_ANOMALY,
+    TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP,
+    TelemetryCollector, TimelineTicks, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState,
+    trace_outcome_code, try_publish_metrics,
 };
 use super::super::{
-    DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerRuntime, WorkerTimingState, observe_dispatch_health, record_lateness,
-    record_lead_saturation, release_runtime_outcome, signed_delta,
-    update_estimator_after_send_class,
+    DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerRuntime,
+    WorkerTimingState, release_runtime_outcome,
+};
+use super::observer_drain::{
+    DispatchObservation, DownObservation, PendingObservationQueue, UpObservation,
 };
 use super::release::{ReleaseOutcomeFlags, ReleaseReconciliation, ReleaseSend};
 use super::timing::{DownSendTiming, read_qpc_us};
@@ -19,25 +19,19 @@ use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use sky_dispatch_win32::input::PacketRetryReason;
 use smallvec::SmallVec;
 
-/// Owner of: telemetry record, estimator update, lateness derivation, metric
-/// publish, dispatch health observation, and SLO terminal decisions for the
-/// note-on send.  All values derived from `interpret_down_send_timing` are
-/// already snapshotted — this function performs no further QPC resolution
-/// beyond the two wall-clock samples needed for metric publication and the
-/// iteration-ready boundary.
+/// Hard-path suffix of the note-on dispatch.  Everything from the coordinator
+/// commit onward must leave the worker thread as fast as possible.  The only
+/// work that stays here is: (1) the mandatory telemetry trace append, (2) the
+/// `dispatch_ready` boundary sample, and (3) enqueueing an allocation-free
+/// `DispatchObservation`.  The estimator update, health windows, lateness
+/// accounting, and metric publication are consumed later by
+/// `drain_down_send_outcome` from the dispatch loop's deferred observer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
-    config: &WorkerConfig,
-    health: &mut WorkerHealthState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
-    metrics: &SharedMetrics,
     qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
-    clock_state: &PlaybackClockState,
-    estimator: &mut SendLatencyEstimator,
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
@@ -53,9 +47,11 @@ pub(super) fn publisher_down_send_outcome(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    observer: &mut PendingObservationQueue,
     timing_proof: &DownSendTiming,
 ) -> DispatchStep {
     let DownSendTiming {
+        sender_completed_qpc,
         sender_started_effective_ticks,
         completed_effective_ticks,
         completed_effective,
@@ -67,15 +63,16 @@ pub(super) fn publisher_down_send_outcome(
         completion_error_us,
         estimator_kind,
         clean_directional_sample,
-        recovered_zero_progress,
         recovered_partial_up,
         recovered_retry_late,
-        strict_completion_late,
         retry_late_abort,
+        strict_completion_late,
         saturation_abort,
         bookkeeping_completed_us,
+        ..
     } = *timing_proof;
-    let (_down_outcome, force_dispatch_publish) = match record_down_send_telemetry(
+    // (1) Mandatory trace append — hard path, O(1), no allocation.
+    let mut force_dispatch_publish = match record_down_send_telemetry(
         view,
         telemetry,
         trace_kind,
@@ -99,95 +96,58 @@ pub(super) fn publisher_down_send_outcome(
         recovered_partial_up,
         strict_completion_late,
     ) {
-        Ok(value) => value,
+        Ok(value) => value.1,
         Err(step) => return step,
     };
-    let mut force_dispatch_publish = force_dispatch_publish;
-    if config.estimator.enable_adaptive_lead && lead_down_saturated {
-        match view.dispatch_path {
-            DispatchPath::UpOnly { .. } => record_lead_saturation(
-                &mut local_metrics.lead_saturation_count_up,
-                &mut local_metrics.positive_residual_at_cap,
-                view.batch_intent_count,
-                signed_delta(completed_effective, view.batch_scheduled_us),
-            ),
-            DispatchPath::DownOnly { .. } | DispatchPath::Mixed { .. } => record_lead_saturation(
-                &mut local_metrics.lead_saturation_count_down,
-                &mut local_metrics.positive_residual_at_cap,
-                view.batch_intent_count,
-                signed_delta(completed_effective, view.batch_scheduled_us),
-            ),
-        }
-    }
-    runtime.pending_pre_send_spin_us = 0;
-    let send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.bookkeeping_warn_threshold_us = frozen_budget.bookkeeping_warn_us;
-    match view.dispatch_path {
-        DispatchPath::DownOnly { .. } => {
-            local_metrics.send_down_warn_threshold_us = frozen_budget.send_warn_us;
-        }
-        DispatchPath::UpOnly { .. } => {
-            local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
-        }
-        DispatchPath::Mixed { .. } => {
-            local_metrics.send_mixed_warn_threshold_us = frozen_budget.send_warn_us;
-        }
-    }
-    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    if config.estimator.enable_adaptive_lead
-        && let Some(kind) = estimator_kind
-        && let Err(error) = update_estimator_after_send_class(
-            estimator,
-            kind,
-            sender_duration_us,
-            delivered_count,
-            view.batch_intent_count,
-            lead_down,
-            completion_error_us,
-            clean_directional_sample,
-            latency_class,
-        )
+    if result_chord_integrity_lost || retry_late_abort || strict_completion_late || saturation_abort
     {
-        return DispatchStep::Terminate(format!("estimator update failure: {error}"));
-    }
-    record_lateness(
-        signed_delta(completed_effective, view.authored_batch_scheduled_us),
-        false,
-        false,
-        local_metrics,
-    );
-    let _ = recovered_zero_progress;
-    let terminal_dispatch = result_chord_integrity_lost
-        || retry_late_abort
-        || strict_completion_late
-        || saturation_abort;
-    if terminal_dispatch {
         force_dispatch_publish = true;
     }
-    super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    let current_us = match read_qpc_us(qpc_clock, clock_state) {
-        Ok(us) => us,
-        Err(step) => return step,
+    runtime.pending_pre_send_spin_us = 0;
+    // (2) dispatch_ready boundary: typed QPC sample taken immediately after the
+    // coordinator commit and trace append, and strictly before the observer
+    // work (estimator / health / publish) which now lives in the drain.
+    let dispatch_ready_qpc = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
+        }
     };
-    try_publish_metrics(local_metrics, metrics, current_us, force_dispatch_publish);
-    let iteration_ready_us = match read_qpc_us(qpc_clock, clock_state) {
-        Ok(us) => us,
-        Err(step) => return step,
-    };
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: sender_duration_us,
-            post_send_duration_us: iteration_ready_us.saturating_sub(completed_effective),
-            path: frozen_budget.path,
-            send_warn_us: send_warn_threshold_us,
-            bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
-            elapsed_us: completed_effective,
+    let core_post_send_us = match dispatch_ready_qpc.checked_duration_since(sender_completed_qpc) {
+        Ok(duration) => match qpc_clock.duration_to_us(duration) {
+            Ok(us) => us,
+            Err(error) => {
+                return DispatchStep::Terminate(format!(
+                    "note-on post-send conversion failure: {error:?}"
+                ));
+            }
         },
-        health.options.window_policy(),
-        &mut health.send_pure_window,
-        &mut health.bookkeeping_window,
-        local_metrics,
+        Err(_) => 0,
+    };
+    // (3) Enqueue an allocation-free snapshot for the deferred drain.  Drops
+    // the oldest entry when the fixed queue is full (see queue docs).
+    observer.push(
+        DispatchObservation::Down(DownObservation {
+            path: frozen_budget.path,
+            latency_class,
+            estimator_kind,
+            lead_down_saturated,
+            lead_down,
+            sender_duration_us,
+            delivered_count,
+            batch_intent_count: view.batch_intent_count,
+            completion_error_us,
+            clean_directional_sample,
+            completed_effective,
+            authored_batch_scheduled_us: view.authored_batch_scheduled_us,
+            batch_scheduled_us: view.batch_scheduled_us,
+            core_post_send_us,
+            send_warn_us: frozen_budget.send_warn_us,
+            bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
+            force_publish: force_dispatch_publish,
+        }),
+        &mut local_metrics.observer_dropped_samples,
+        &mut local_metrics.observer_queue_high_watermark,
     );
     resolve_slo_terminal_step(
         result_chord_integrity_lost,
@@ -525,23 +485,22 @@ pub(super) fn record_release_telemetry(
     Ok(())
 }
 
-/// Note-off health/estimator/SLO observation stage: saturation streak,
-/// strict-late flag, estimator update, lateness metric, and dispatch health
-/// windows.  Returns the strict/SLO flags for the orchestrator's terminal
-/// decision.
+/// Note-off hard-path observer: computes the mandatory terminal SLO flags
+/// (`saturation_abort`, `strict_up_completion_late`) and captures the
+/// `dispatch_ready` boundary immediately after the coordinator commit and the
+/// mandatory telemetry trace (`record_release_telemetry`).  The estimator
+/// update, lead-saturation accounting, lateness metric, health-window
+/// observation, and diagnostic metric publication are deferred to the observer
+/// drain (`drain_up_send_outcome`) via the queued `UpObservation`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn observe_release_send_health(
     qpc_clock: QpcClock,
-    clock_state: &mut PlaybackClockState,
     config: &WorkerConfig,
     timing: &WorkerTimingState,
-    estimator: &mut SendLatencyEstimator,
     health: &mut WorkerHealthState,
-    backend: &TrackedKeyState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    metrics: &SharedMetrics,
-    last_published_error: &mut Option<String>,
+    observer: &mut PendingObservationQueue,
     send: &ReleaseSend,
     reconciliation: &ReleaseReconciliation,
     frozen_budget: &crate::engine::worker::health::FrozenDispatchBudget,
@@ -564,96 +523,50 @@ pub(super) fn observe_release_send_health(
         && reconciliation
             .up_completion_lateness_ticks
             .is_some_and(|late| late > timing.strict_up_completion_late_ticks);
-    if config.estimator.enable_adaptive_lead && pending_plan.is_some_and(|plan| plan.lead_saturated)
-    {
-        record_lead_saturation(
-            &mut local_metrics.lead_saturation_count_up,
-            &mut local_metrics.positive_residual_at_cap,
-            scan_count,
-            signed_delta(send.completed_effective_us, reconciliation.scheduled_us),
-        );
-    }
-    let send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.send_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.bookkeeping_warn_threshold_us = frozen_budget.bookkeeping_warn_us;
-    local_metrics.send_up_warn_threshold_us = frozen_budget.send_warn_us;
-    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    if config.estimator.enable_adaptive_lead
-        && let Err(error) = update_estimator_after_send_class(
-            estimator,
-            ActionKind::Up,
-            send.sender_duration_us,
-            send.sent_count,
+    runtime.pending_pre_send_spin_us = 0;
+    // §8.5 DISPATCH_READY boundary: typed QPC sample taken immediately after
+    // the coordinator commit (reconcile_release_recovery) and trace append, and
+    // strictly before the estimator/health/publish observer work (now deferred).
+    let dispatch_ready_qpc = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return Err(DispatchStep::Terminate(format!(
+                "note-off dispatch_ready QPC failure: {error:?}"
+            )));
+        }
+    };
+    let core_post_send_us =
+        match dispatch_ready_qpc.checked_duration_since(send.sender_completed_qpc) {
+            Ok(duration) => match qpc_clock.duration_to_us(duration) {
+                Ok(us) => us,
+                Err(error) => {
+                    return Err(DispatchStep::Terminate(format!(
+                        "note-off post-send conversion failure: {error:?}"
+                    )));
+                }
+            },
+            Err(_) => 0,
+        };
+    observer.push(
+        DispatchObservation::Up(UpObservation {
+            latency_class,
+            sender_duration_us: send.sender_duration_us,
+            sent_count: send.sent_count,
             scan_count,
             lead_up,
-            reconciliation.up_completion_error_us,
-            reconciliation.clean_up_sample,
-            latency_class,
-        )
-    {
-        return Err(DispatchStep::Terminate(format!(
-            "estimator update failure: {error}"
-        )));
-    }
-    record_lateness(
-        signed_delta(send.completed_effective_us, reconciliation.scheduled_us),
-        true,
-        reconciliation.deferred_by_us > 0,
-        local_metrics,
-    );
-    super::publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
-    let current_us = match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "QPC us conversion failure: {error:?}"
-                    )));
-                }
-            }
-        }
-        Err(error) => return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    };
-    try_publish_metrics(
-        local_metrics,
-        metrics,
-        current_us,
-        !reconciliation.clean_up_sample || reconciliation.recovery_required,
-    );
-    let iteration_ready_us = match qpc_clock.now() {
-        Ok(now) => {
-            match qpc_clock.duration_to_us(match now.checked_duration_since(clock_state.epoch) {
-                Ok(dur) => dur,
-                Err(_) => DurationTicks::ZERO,
-            }) {
-                Ok(us) => us,
-                Err(error) => {
-                    return Err(DispatchStep::Terminate(format!(
-                        "QPC us conversion failure: {error:?}"
-                    )));
-                }
-            }
-        }
-        Err(error) => return Err(DispatchStep::Terminate(format!("QPC failure: {error:?}"))),
-    };
-    runtime.pending_pre_send_spin_us = 0;
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: send.sender_duration_us,
-            post_send_duration_us: iteration_ready_us.saturating_sub(send.completed_effective_us),
-            path: frozen_budget.path,
-            send_warn_us: send_warn_threshold_us,
+            lead_up_saturated: up_saturated_positive,
+            completed_effective: send.completed_effective_us,
+            scheduled_us: reconciliation.scheduled_us,
+            deferred_by_us: reconciliation.deferred_by_us,
+            up_completion_error_us: reconciliation.up_completion_error_us,
+            clean_up_sample: reconciliation.clean_up_sample,
+            core_post_send_us,
+            send_warn_us: frozen_budget.send_warn_us,
             bookkeeping_warn_us: frozen_budget.bookkeeping_warn_us,
-            elapsed_us: send.completed_effective_us,
-        },
-        health.options.window_policy(),
-        &mut health.send_pure_window,
-        &mut health.bookkeeping_window,
-        local_metrics,
+            force_publish: !reconciliation.clean_up_sample || reconciliation.recovery_required,
+        }),
+        &mut local_metrics.observer_dropped_samples,
+        &mut local_metrics.observer_queue_high_watermark,
     );
     Ok(ReleaseOutcomeFlags {
         strict_up_completion_late,

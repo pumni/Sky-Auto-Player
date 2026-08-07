@@ -1,6 +1,6 @@
 use super::super::super::{
-    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, RuntimeDispatchCoordinator,
-    STRICT_SATURATION_ABORT_STREAK, SharedMetrics, TimelineTicks, TrackedKeyState,
+    DurationTicks, LatencyClass, PlaybackClockState, QpcClock, QpcTicks,
+    RuntimeDispatchCoordinator, STRICT_SATURATION_ABORT_STREAK, TimelineTicks, TrackedKeyState,
 };
 use super::super::{
     DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
@@ -10,6 +10,7 @@ use super::super::{
 };
 use super::DispatchStep;
 use super::observer::{observe_release_send_health, record_release_telemetry};
+use super::observer_drain::PendingObservationQueue;
 use sky_dispatch_core::coordinator::{PendingDispatchPlan, PendingRelease};
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -20,6 +21,7 @@ pub(crate) struct PendingReleaseContext<'a> {
     pub(crate) lead_up_ticks: DurationTicks,
     pub(crate) lead_up: u64,
     pub(crate) latency_class: LatencyClass,
+    pub(crate) observer: &'a mut PendingObservationQueue,
 }
 
 /// Evidence captured from the note-off SendInput call plus the timeline
@@ -28,6 +30,9 @@ pub(super) struct ReleaseSend {
     pub(super) actual_ticks: TimelineTicks,
     pub(super) completed_effective_ticks: TimelineTicks,
     pub(super) completed_effective_us: u64,
+    /// §8.6 typed QPC completion boundary used by the deferred observer to
+    /// derive `core_post_send_us`.  Replaces the old mixed us/QPC subtraction.
+    pub(super) sender_completed_qpc: QpcTicks,
     pub(super) sender_started_effective_ticks: Option<TimelineTicks>,
     pub(super) last_win32_error: Option<u32>,
     pub(super) sender_duration_us: u64,
@@ -143,9 +148,7 @@ pub(crate) fn dispatch_due_pending_releases(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     secondary_errors: &mut Vec<String>,
-    last_published_error: &mut Option<String>,
     target_hwnd: &AtomicIsize,
-    metrics: &SharedMetrics,
 ) -> DispatchStep {
     let PendingReleaseContext {
         due_pending,
@@ -153,6 +156,7 @@ pub(crate) fn dispatch_due_pending_releases(
         lead_up_ticks,
         lead_up,
         latency_class,
+        observer,
     } = ctx;
 
     let WorkerResources {
@@ -219,16 +223,12 @@ pub(crate) fn dispatch_due_pending_releases(
 
     let flags = match observe_release_send_health(
         qpc_clock,
-        clock_state,
         config,
         timing,
-        estimator,
         health,
-        backend,
         runtime,
         local_metrics,
-        metrics,
-        last_published_error,
+        observer,
         &send,
         &reconciliation,
         &frozen_budget,
@@ -379,6 +379,7 @@ fn prepare_release_send(
         actual_ticks,
         completed_effective_ticks,
         completed_effective_us,
+        sender_completed_qpc: completed_qpc_ticks,
         sender_started_effective_ticks,
         last_win32_error,
         sender_duration_us,

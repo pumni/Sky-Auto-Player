@@ -30,7 +30,7 @@ use control::{
 };
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, PendingReleaseContext, dispatch_authored_packet,
-    dispatch_due_pending_releases,
+    dispatch_due_pending_releases, drain_one_observer,
 };
 #[cfg(test)]
 pub(crate) use estimator::update_estimator_after_send;
@@ -139,7 +139,36 @@ pub(super) struct WorkerCore {
     pub(super) timing: Option<WorkerTimingState>,
     pub(super) runtime: WorkerRuntime,
     pub(super) errors: WorkerErrorState,
+    pub(super) observer: WorkerObserverState,
 }
+
+/// Deferred dispatch-observer state owned exclusively by the worker thread.
+/// `pending` holds the fixed observation queue; `budget_us` is the adaptive
+/// execution budget a drain step is allowed to consume before a dispatch
+/// deadline arrives.  Never placed into shared state.
+pub(super) struct WorkerObserverState {
+    pub(super) pending: dispatch::PendingObservationQueue,
+    pub(super) budget_us: u64,
+}
+
+impl Default for WorkerObserverState {
+    fn default() -> Self {
+        Self {
+            pending: dispatch::PendingObservationQueue::default(),
+            budget_us: OBSERVER_INITIAL_BUDGET_US,
+        }
+    }
+}
+
+/// Initial deferred-observer execution budget, in microseconds.
+const OBSERVER_INITIAL_BUDGET_US: u64 = 5_000;
+/// Margin kept in addition to the observer budget before a drain is allowed,
+/// in microseconds.
+const OBSERVER_MARGIN_US: u64 = 500;
+/// Lower bound for adaptive observer budget adaptation.
+const OBSERVER_BUDGET_FLOOR_US: u64 = 5_000;
+/// Upper bound for adaptive observer budget adaptation.
+const OBSERVER_BUDGET_CAP_US: u64 = 20_000;
 
 pub(super) struct Worker<'a> {
     schedule: Option<RuntimeSchedule>,

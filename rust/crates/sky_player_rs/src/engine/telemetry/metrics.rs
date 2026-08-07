@@ -109,6 +109,16 @@ pub struct WorkerMetricsLocal {
     pub send_mixed_warn_threshold_us: u64,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    /// Time between `sender_completed` and `dispatch_ready` on the hard
+    /// critical path (typed QPC derivation), in microseconds.
+    pub core_post_send_max_us: u64,
+    /// Peak wall-clock duration of a single deferred observer drain step.
+    pub observer_duration_max_us: u64,
+    /// How many `DispatchObservation` samples were dropped because the fixed
+    /// observer queue was full (drop-oldest policy).
+    pub observer_dropped_samples: u64,
+    /// Largest number of entries ever held by the fixed observer queue.
+    pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,
 }
 

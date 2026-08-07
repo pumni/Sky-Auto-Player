@@ -14,7 +14,7 @@ use super::observer::{
     commit_suppressed_up_request, publisher_down_send_outcome, record_blocked_unfocused_telemetry,
 };
 use super::timing::{interpret_down_send_timing, prepare_authored_batch_view, read_qpc_us};
-use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep};
+use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::telemetry::TRACE_KIND_MIXED;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
@@ -37,6 +37,7 @@ pub(crate) fn dispatch_authored_packet(
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
     metrics: &SharedMetrics,
+    observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let AuthoredPacketContext {
         dispatch_plan,
@@ -140,6 +141,7 @@ pub(crate) fn dispatch_authored_packet(
             lead_down_ticks,
             latency_class,
             focus_loss_fault,
+            observer,
         );
     }
     commit_suppressed_up_request(
@@ -190,6 +192,7 @@ fn commit_down_send_outcome(
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
     focus_loss_fault: bool,
+    observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let has_conflicts = view.conflict_mask != 0;
     let admission = match admit_authored_down(
@@ -231,13 +234,10 @@ fn commit_down_send_outcome(
         timing,
         runtime,
         local_metrics,
-        last_published_error,
-        metrics,
         qpc_clock,
         backend,
         coordinator,
         clock_state,
-        estimator,
         telemetry,
         effective_now_ticks,
         lead_down,
@@ -245,6 +245,7 @@ fn commit_down_send_outcome(
         lead_down_ticks,
         latency_class,
         &admission,
+        observer,
     )
 }
 
@@ -475,13 +476,10 @@ fn record_down_send_outcome(
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
-    metrics: &SharedMetrics,
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    estimator: &mut SendLatencyEstimator,
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
@@ -489,6 +487,7 @@ fn record_down_send_outcome(
     lead_down_ticks: DurationTicks,
     latency_class: LatencyClass,
     admission: &AdmissionOutcome,
+    observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let AdmissionOutcome::Allowed {
         frozen_budget,
@@ -531,13 +530,9 @@ fn record_down_send_outcome(
         timing,
         runtime,
         local_metrics,
-        last_published_error,
-        metrics,
         qpc_clock,
-        backend,
         coordinator,
         clock_state,
-        estimator,
         telemetry,
         effective_now_ticks,
         lead_down,
@@ -555,6 +550,7 @@ fn record_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
+        observer,
     )
 }
 
@@ -566,13 +562,9 @@ fn finalize_down_send_outcome(
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    last_published_error: &mut Option<String>,
-    metrics: &SharedMetrics,
     qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
-    estimator: &mut SendLatencyEstimator,
     telemetry: &mut TelemetryCollector,
     effective_now_ticks: TimelineTicks,
     lead_down: u64,
@@ -590,6 +582,7 @@ fn finalize_down_send_outcome(
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    observer: &mut PendingObservationQueue,
 ) -> DispatchStep {
     let timing_proof = match interpret_down_send_timing(
         view,
@@ -616,16 +609,9 @@ fn finalize_down_send_outcome(
     };
     publisher_down_send_outcome(
         view,
-        config,
-        health,
         runtime,
         local_metrics,
-        last_published_error,
-        metrics,
         qpc_clock,
-        backend,
-        clock_state,
-        estimator,
         telemetry,
         effective_now_ticks,
         lead_down,
@@ -641,6 +627,7 @@ fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
+        observer,
         &timing_proof,
     )
 }
