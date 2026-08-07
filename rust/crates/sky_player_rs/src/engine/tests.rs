@@ -1888,3 +1888,136 @@ fn fast_note_on_preserves_authored_note_off() {
         TimelineTicks::from_raw(11_050)
     );
 }
+
+#[test]
+fn lateness_rebases_future_timeline_without_compressing_authored_deltas() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "chord1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "chord2".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 50_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "chord3".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    )
+    .expect("schedule");
+
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        10_000,
+        DurationTicks::from_raw(10_000),
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+    coordinator.set_frame_period_ticks(DurationTicks::from_raw(10_000));
+
+    let p1 = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(11_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(11_000));
+    coordinator
+        .commit_packet_success(
+            p1,
+            TimelineTicks::from_raw(11_000),
+            TimelineTicks::from_raw(11_050),
+        )
+        .unwrap();
+
+    let p2 = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(30_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p2.effective_scheduled_ticks,
+        TimelineTicks::from_raw(30_000)
+    );
+    coordinator
+        .commit_packet_success(
+            p2,
+            TimelineTicks::from_raw(30_000),
+            TimelineTicks::from_raw(30_050),
+        )
+        .unwrap();
+
+    let p3 = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(60_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p3.effective_scheduled_ticks,
+        TimelineTicks::from_raw(60_000)
+    );
+
+    let delta = p3.effective_scheduled_ticks.as_u64() - p2.effective_scheduled_ticks.as_u64();
+    assert_eq!(delta, 30_000);
+}
+
+#[test]
+fn zero_lateness_preserves_exact_authored_timestamps() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "chord1".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "chord2".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("schedule");
+
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        10_000,
+        DurationTicks::from_raw(10_000),
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+
+    let p1 = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
+}

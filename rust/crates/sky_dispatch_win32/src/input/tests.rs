@@ -853,7 +853,10 @@ fn up_send_failure_leaves_pending_release_unacknowledged() {
 
     let up_outcome = state.key_up(&[0x15]);
     assert_ne!(up_outcome.status, SendTransactionStatus::Complete);
-    assert_ne!((state.active_mask | state.failed_release_mask) & (1 << 0), 0);
+    assert_ne!(
+        (state.active_mask | state.failed_release_mask) & (1 << 0),
+        0
+    );
 }
 
 #[test]
@@ -872,10 +875,7 @@ fn up_send_success_clears_pending_release() {
 
 #[test]
 fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
-    let mut state = TrackedKeyState::with_emitter(|codes, _| {
-        let len = codes.len() as u8;
-        test_send_result(len, len, 0)
-    });
+    let mut state = TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(InstrumentPhysicalState::AllUp);
     state.active_mask = 0x0001;
     let outcome = state.release_scope(ReleaseScope::Tracked, 0);
@@ -886,10 +886,7 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
 
 #[test]
 fn cleanup_fsm_idempotent_on_repeated_calls() {
-    let mut state = TrackedKeyState::with_emitter(|codes, _| {
-        let len = codes.len() as u8;
-        test_send_result(len, len, 0)
-    });
+    let mut state = TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(InstrumentPhysicalState::AllUp);
     state.active_mask = 0x0001;
     let outcome1 = state.release_scope(ReleaseScope::Tracked, 0);
