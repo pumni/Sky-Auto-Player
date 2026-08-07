@@ -139,8 +139,6 @@ pub(crate) fn dispatch_authored_packet(
         };
     local_metrics.timeline_rebase_last_reason = match coordinator.last_timeline_rebase_reason() {
         None => 0,
-        Some(sky_dispatch_core::coordinator::TimelineRebaseReason::WorkerLate) => 1,
-        Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseFloor) => 2,
         Some(sky_dispatch_core::coordinator::TimelineRebaseReason::ReleaseRecovery) => 3,
     };
 

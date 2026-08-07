@@ -10,8 +10,6 @@ use std::time::Duration;
 
 fn timeline_rebase_reason(code: u8) -> Option<String> {
     match code {
-        1 => Some("worker_late".to_string()),
-        2 => Some("release_floor".to_string()),
         3 => Some("release_recovery".to_string()),
         _ => None,
     }

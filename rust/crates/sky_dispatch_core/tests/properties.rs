@@ -383,8 +383,9 @@ proptest! {
             sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
         );
 
+        let up_due_us = up_scheduled_us.max(completed_us + min_hold_us);
         let (up, _) = coordinator
-            .pop_next_due_authored(up_scheduled_us, 0)
+            .pop_next_due_authored(up_due_us, 0)
             .expect("up must be due");
         let (requested, suppressed) = coordinator
             .request_releases(&up.intents)
@@ -468,8 +469,9 @@ fn release_lead_larger_than_short_hold_preserves_generation_order() {
         sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
     );
 
+    let up_due_us = up_scheduled_us.max(completed_us + min_hold_us);
     let (up, _) = coordinator
-        .pop_next_due_authored(up_scheduled_us, 0)
+        .pop_next_due_authored(up_due_us, 0)
         .expect("up must be due");
     let (requested, suppressed) = coordinator
         .request_releases(&up.intents)
@@ -722,7 +724,8 @@ proptest! {
             sky_dispatch_core::time::TimelineTicks::from_raw(completed_us),
         );
 
-        let (up, _) = coord.pop_next_due_authored(1_000 + hold_us, 0).unwrap();
+        let up_now = (1_000 + hold_us).max(completed_us + min_hold_us);
+        let (up, _) = coord.pop_next_due_authored(up_now, 0).unwrap();
         let _ = coord.request_releases(&up.intents);
 
         let min_allowed = completed_us + min_hold_us;
@@ -840,7 +843,8 @@ proptest! {
             completed,
             sky_dispatch_core::time::TimelineTicks::from_raw(completed),
         );
-        let (up, _) = coord.pop_next_due_authored(5_000, 0).unwrap();
+        let up_now = 5_000_u64.max(completed + min_hold_us);
+        let (up, _) = coord.pop_next_due_authored(up_now, 0).unwrap();
         let _ = coord.request_releases(&up.intents);
 
         let due_us = coord.next_pending_release_us(0).unwrap_or(u64::MAX);

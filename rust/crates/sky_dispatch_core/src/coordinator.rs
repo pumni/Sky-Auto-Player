@@ -197,7 +197,7 @@ pub const ALL_GENERATION_STATUSES: [GenerationStatus; 8] = [
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
-    use super::{GenerationStatus, RuntimeDispatchCoordinator, TimelineRebaseReason};
+    use super::{GenerationStatus, RuntimeDispatchCoordinator};
     use crate::compile::compile_runtime_intents;
     use crate::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
     use crate::time::{DurationTicks, TimelineTicks};
@@ -610,56 +610,17 @@ mod tests {
                 TimelineTicks::from_raw(130),
             )
             .unwrap();
-        assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 20);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
-        assert_eq!(
-            coordinator.last_timeline_rebase_reason(),
-            Some(TimelineRebaseReason::ReleaseFloor)
-        );
+        assert_eq!(coordinator.recovery_offset_ticks().as_u64(), 0);
+        assert_eq!(coordinator.timeline_rebase_count(), 0);
         let following = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(219), DurationTicks::ZERO)
+            .prepare_next_due_authored(TimelineTicks::from_raw(199), DurationTicks::ZERO)
             .unwrap();
         assert!(following.is_none());
         let following = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(220), DurationTicks::ZERO)
+            .prepare_next_due_authored(TimelineTicks::from_raw(200), DurationTicks::ZERO)
             .unwrap()
             .unwrap();
-        assert_eq!(following.effective_scheduled_ticks.as_u64(), 220);
-    }
-
-    #[test]
-    fn repeated_prepare_does_not_double_count_worker_late_rebase() {
-        let schedule = compile_runtime_intents(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100,
-                scan_codes: vec![0x15].into(),
-                reason: "late packet".into(),
-            }],
-            &[0x15],
-        )
-        .unwrap();
-        let mut coordinator =
-            RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
-        coordinator.set_frame_period_ticks(DurationTicks::from_raw(10));
-
-        let first = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
-            .unwrap()
-            .unwrap();
-        assert_eq!(first.effective_scheduled_ticks.as_u64(), 120);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
-
-        let second = coordinator
-            .prepare_next_due_authored(TimelineTicks::from_raw(120), DurationTicks::ZERO)
-            .unwrap()
-            .unwrap();
-        assert_eq!(second.effective_scheduled_ticks.as_u64(), 120);
-        assert_eq!(coordinator.timeline_rebase_count(), 1);
-        assert_eq!(coordinator.timeline_rebase_total_ticks().as_u64(), 20);
+        assert_eq!(following.effective_scheduled_ticks.as_u64(), 200);
     }
 
     #[test]
@@ -894,26 +855,28 @@ mod tests {
             crate::time::TimelineTicks::from_raw(100),
         );
 
-        let (up, _) = coordinator
-            .pop_next_due_authored(100, 0)
-            .expect("up is due");
-
-        // Pop it and request release.
-        let _ = coordinator.request_releases(&up.intents);
-
-        // Since up was authored at 100, but min_hold is 20,000 and delivery_margin is 5,000,
-        // the effective release time must be at least 100 (completion) + 20,000 + 5,000 = 25,100.
-        let due = coordinator.pop_due_pending(25_099, 0);
+        // Effective release floor is completion (100) + min_hold (20,000) + delivery_margin (5,000) = 25,100.
         assert!(
-            due.is_empty(),
-            "release must not be due before min_hold + delivery_margin"
+            coordinator
+                .prepare_next_due_authored(
+                    crate::time::TimelineTicks::from_raw(25_099),
+                    crate::time::DurationTicks::ZERO,
+                )
+                .unwrap()
+                .is_none(),
+            "up packet must not be due before min_hold + delivery_margin"
         );
 
+        let (up, _) = coordinator
+            .pop_next_due_authored(25_100, 0)
+            .expect("up is due at release floor");
+
+        let _ = coordinator.request_releases(&up.intents);
         let due_now = coordinator.pop_due_pending(25_100, 0);
         assert_eq!(
             due_now.len(),
             1,
-            "release must be due exactly at completion + min_hold + delivery_margin"
+            "release must be due at completion + min_hold + delivery_margin"
         );
     }
 
@@ -1751,16 +1714,12 @@ pub struct PreparedBatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRebaseReason {
-    WorkerLate,
-    ReleaseFloor,
     ReleaseRecovery,
 }
 
 impl TimelineRebaseReason {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::WorkerLate => "worker_late",
-            Self::ReleaseFloor => "release_floor",
             Self::ReleaseRecovery => "release_recovery",
         }
     }
@@ -1796,7 +1755,6 @@ pub struct RuntimeDispatchCoordinator {
     timeline_rebase_total_ticks: u64,
     timeline_rebase_max_ticks: u64,
     last_timeline_rebase_reason: Option<TimelineRebaseReason>,
-    frame_period_ticks: DurationTicks,
     release_recovery_started_ticks: Option<TimelineTicks>,
 }
 
@@ -1871,7 +1829,6 @@ impl RuntimeDispatchCoordinator {
             timeline_rebase_total_ticks: 0,
             timeline_rebase_max_ticks: 0,
             last_timeline_rebase_reason: None,
-            frame_period_ticks: DurationTicks::ZERO,
             release_recovery_started_ticks: None,
         })
     }
@@ -1941,10 +1898,6 @@ impl RuntimeDispatchCoordinator {
         self.timeline_rebase_max_ticks = next_max;
         self.last_timeline_rebase_reason = Some(reason);
         Ok(())
-    }
-
-    pub fn set_frame_period_ticks(&mut self, frame_period_ticks: DurationTicks) {
-        self.frame_period_ticks = frame_period_ticks;
     }
 
     pub fn effective_total_ticks(&self) -> Result<TimelineTicks, CoordinatorError> {
@@ -2136,11 +2089,8 @@ impl RuntimeDispatchCoordinator {
                         index: packet_index,
                     },
                 ))?;
-        // Single-batch Up remains on the legacy release-request path for
-        // compatibility; its pending-release scheduler already applies the
-        // hold floor.  Physical packets (mixed or multi-batch) must gate the
-        // transaction before it reaches SendInput.
-        let needs_release_gate = packet.down_mask != 0 || packet.batch_count > 1;
+        // Gating applies whenever the physical packet contains Up intents.
+        let needs_release_gate = packet.up_mask != 0;
         let mut release_not_before = TimelineTicks::ZERO;
         if needs_release_gate {
             for compact in up_intents {
@@ -2149,21 +2099,11 @@ impl RuntimeDispatchCoordinator {
                     continue;
                 }
                 let slot = compact.key_slot();
-                let Some(active) = self.active_for_slot(slot) else {
-                    return Err(CoordinatorError::Invariant(
-                        CoordinatorInvariantError::Accounting(
-                            "packet release has no active generation".to_string(),
-                        ),
-                    ));
-                };
-                if active.generation_id != generation_id {
-                    return Err(CoordinatorError::Invariant(
-                        CoordinatorInvariantError::Accounting(
-                            "packet release generation does not own its key slot".to_string(),
-                        ),
-                    ));
+                if let Some(active) = self.active_for_slot(slot)
+                    && active.generation_id == generation_id
+                {
+                    release_not_before = release_not_before.max(active.release_not_before_ticks);
                 }
-                release_not_before = release_not_before.max(active.release_not_before_ticks);
             }
         }
         let lead_deadline =
@@ -2692,16 +2632,6 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        let authored = self.effective_batch_scheduled_ticks(index)?;
-        if self.frame_period_ticks != DurationTicks::ZERO
-            && now > authored
-            && now
-                .checked_duration_since(authored)
-                .is_ok_and(|late| late >= self.frame_period_ticks)
-        {
-            let late = now.checked_duration_since(authored)?;
-            self.apply_timeline_rebase(late, TimelineRebaseReason::WorkerLate)?;
-        }
         let effective_scheduled_ticks =
             self.packet_effective_deadline_ticks(packet_index, DurationTicks::ZERO)?;
         let deadline = self.packet_effective_deadline_ticks(packet_index, dispatch_lead)?;
@@ -2795,16 +2725,6 @@ impl RuntimeDispatchCoordinator {
                     "compiled packet must contain at least one authored batch".to_string(),
                 ),
             ));
-        }
-        let authored_before_packet_gate = self.effective_batch_scheduled_ticks(prepared.index)?;
-        if prepared.effective_scheduled_ticks > authored_before_packet_gate {
-            let deferral = prepared
-                .effective_scheduled_ticks
-                .checked_duration_since(authored_before_packet_gate)?;
-            // A release-floor deferral is a timeline event, not permission to
-            // burst overdue authored actions.  Rebase all future actions only
-            // after this packet has completed successfully.
-            self.apply_timeline_rebase(deferral, TimelineRebaseReason::ReleaseFloor)?;
         }
         let release_not_before_ticks = completed
             .checked_add_duration(self.min_hold_ticks)
@@ -3371,19 +3291,20 @@ impl RuntimeDispatchCoordinator {
         Ok((requested, suppressed))
     }
 
-    pub fn complete_releases(
+    pub fn complete_releases_mask(
         &mut self,
         releases: &[PendingRelease],
-        sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
+        confirmed_mask: u16,
+        skipped_mask: u16,
     ) -> Result<(), CoordinatorError> {
         for pending in releases {
-            let in_sent = sent_scan_codes.contains(&pending.scan_code);
-            let in_skipped = skipped_scan_codes.contains(&pending.scan_code);
-            if !in_sent && !in_skipped {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            let in_confirmed = (confirmed_mask & bit) != 0;
+            let in_skipped = (skipped_mask & bit) != 0;
+            if !in_confirmed && !in_skipped {
                 continue;
             }
-            let status = if in_sent {
+            let status = if in_confirmed {
                 GenerationStatus::Released
             } else {
                 GenerationStatus::DroppedBackend
@@ -3396,13 +3317,33 @@ impl RuntimeDispatchCoordinator {
             if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
             {
                 self.active_by_slot[pending.key_slot as usize] = None;
-                self.active_mask &= !Self::bit_for_slot(pending.key_slot);
-                self.blocked_mask &= !Self::bit_for_slot(pending.key_slot);
+                self.active_mask &= !bit;
+                self.blocked_mask &= !bit;
             }
-            self.pending_mask &= !Self::bit_for_slot(pending.key_slot);
+            self.pending_mask &= !bit;
             self.pending_by_slot[pending.key_slot as usize] = None;
         }
         Ok(())
+    }
+
+    pub fn complete_releases(
+        &mut self,
+        releases: &[PendingRelease],
+        sent_scan_codes: &[u16],
+        skipped_scan_codes: &[u16],
+    ) -> Result<(), CoordinatorError> {
+        let mut confirmed_mask = 0u16;
+        let mut skipped_mask = 0u16;
+        for pending in releases {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            if sent_scan_codes.contains(&pending.scan_code) {
+                confirmed_mask |= bit;
+            }
+            if skipped_scan_codes.contains(&pending.scan_code) {
+                skipped_mask |= bit;
+            }
+        }
+        self.complete_releases_mask(releases, confirmed_mask, skipped_mask)
     }
 
     pub fn release_recovery_active(&self) -> bool {
@@ -3472,11 +3413,11 @@ impl RuntimeDispatchCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn requeue_failed_releases_ticks(
+    pub fn requeue_failed_releases_mask_ticks(
         &mut self,
         releases: &[PendingRelease],
-        sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
+        confirmed_mask: u16,
+        skipped_mask: u16,
         recovery_started: TimelineTicks,
         retry_base: TimelineTicks,
         retry_backoff: &[DurationTicks],
@@ -3491,15 +3432,22 @@ impl RuntimeDispatchCoordinator {
         }
         let mut recovery_required = false;
         for pending in releases {
-            if sent_scan_codes.contains(&pending.scan_code)
-                || skipped_scan_codes.contains(&pending.scan_code)
-            {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            let in_confirmed = (confirmed_mask & bit) != 0;
+            let in_skipped = (skipped_mask & bit) != 0;
+            if in_confirmed || in_skipped {
                 continue;
             }
-            if !matches!(
-                self.active_for_slot(pending.key_slot),
-                Some(active) if active.generation_id == pending.generation_id
-            ) {
+            let is_matching_gen = self.pending_by_slot[pending.key_slot as usize]
+                .as_ref()
+                .map_or_else(
+                    || {
+                        self.active_for_slot(pending.key_slot)
+                            .is_some_and(|active| active.generation_id == pending.generation_id)
+                    },
+                    |p| p.generation_id == pending.generation_id,
+                );
+            if !is_matching_gen {
                 continue;
             }
             let Some(retry_count) = pending.retry_count.checked_add(1) else {
@@ -3526,10 +3474,44 @@ impl RuntimeDispatchCoordinator {
                     slot: retry.key_slot,
                 });
             }
-            self.pending_mask |= Self::bit_for_slot(retry.key_slot);
+            self.pending_mask |= bit;
             self.pending_by_slot[retry_slot] = Some(retry);
         }
+        self.check_invariants()?;
         Ok(recovery_required)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn requeue_failed_releases_ticks(
+        &mut self,
+        releases: &[PendingRelease],
+        sent_scan_codes: &[u16],
+        skipped_scan_codes: &[u16],
+        recovery_started: TimelineTicks,
+        retry_base: TimelineTicks,
+        retry_backoff: &[DurationTicks],
+        last_win32_error: Option<u32>,
+    ) -> Result<bool, CoordinatorError> {
+        let mut confirmed_mask = 0u16;
+        let mut skipped_mask = 0u16;
+        for pending in releases {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            if sent_scan_codes.contains(&pending.scan_code) {
+                confirmed_mask |= bit;
+            }
+            if skipped_scan_codes.contains(&pending.scan_code) {
+                skipped_mask |= bit;
+            }
+        }
+        self.requeue_failed_releases_mask_ticks(
+            releases,
+            confirmed_mask,
+            skipped_mask,
+            recovery_started,
+            retry_base,
+            retry_backoff,
+            last_win32_error,
+        )
     }
 
     pub fn cancel_all(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {

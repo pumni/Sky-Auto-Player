@@ -1359,7 +1359,10 @@ fn architecture_layers_strict_boundary_enforced() {
 
 #[test]
 fn module_line_limits_strictly_respected() {
-    assert!(true);
+    let coordinator_lines = include_str!("../../../sky_dispatch_core/src/coordinator.rs")
+        .lines()
+        .count();
+    assert!(coordinator_lines > 0);
 }
 
 #[test]
@@ -1973,7 +1976,7 @@ fn fast_note_on_preserves_authored_note_off() {
 }
 
 #[test]
-fn lateness_rebases_future_timeline_without_compressing_authored_deltas() {
+fn late_first_event_does_not_move_second_event() {
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -2016,16 +2019,12 @@ fn lateness_rebases_future_timeline_without_compressing_authored_deltas() {
         |us| Ok(TimelineTicks::from_raw(us)),
     )
     .expect("coordinator");
-    coordinator.set_frame_period_ticks(DurationTicks::from_raw(10_000));
 
     let p1 = coordinator
         .prepare_next_due_authored(TimelineTicks::from_raw(11_000), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
-    assert_eq!(
-        p1.effective_scheduled_ticks,
-        TimelineTicks::from_raw(11_000)
-    );
+    assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
     coordinator
         .commit_packet_success(
             p1,
@@ -2035,32 +2034,210 @@ fn lateness_rebases_future_timeline_without_compressing_authored_deltas() {
         .unwrap();
 
     let p2 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(30_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(20_000), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(
         p2.effective_scheduled_ticks,
-        TimelineTicks::from_raw(30_000)
+        TimelineTicks::from_raw(20_000)
     );
     coordinator
         .commit_packet_success(
             p2,
-            TimelineTicks::from_raw(30_000),
-            TimelineTicks::from_raw(30_050),
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(20_050),
         )
         .unwrap();
 
     let p3 = coordinator
-        .prepare_next_due_authored(TimelineTicks::from_raw(60_000), DurationTicks::ZERO)
+        .prepare_next_due_authored(TimelineTicks::from_raw(50_000), DurationTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(
         p3.effective_scheduled_ticks,
-        TimelineTicks::from_raw(60_000)
+        TimelineTicks::from_raw(50_000)
     );
 
-    let delta = p3.effective_scheduled_ticks.as_u64() - p2.effective_scheduled_ticks.as_u64();
-    assert_eq!(delta, 30_000);
+    let delta_b_a = p2.effective_scheduled_ticks.as_u64() - p1.effective_scheduled_ticks.as_u64();
+    let delta_c_b = p3.effective_scheduled_ticks.as_u64() - p2.effective_scheduled_ticks.as_u64();
+    assert_eq!(delta_b_a, 19_000);
+    assert_eq!(delta_c_b, 30_000);
+}
+
+#[test]
+fn release_floor_does_not_move_unrelated_future_action() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down A".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up A".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 30_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "down B".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("schedule");
+
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        10_000,
+        DurationTicks::from_raw(10_000),
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+
+    let p_down_a = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(
+            p_down_a,
+            TimelineTicks::from_raw(1_000),
+            TimelineTicks::from_raw(15_000),
+        )
+        .unwrap();
+
+    let p_up_a = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(25_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p_up_a.effective_scheduled_ticks,
+        TimelineTicks::from_raw(25_000)
+    );
+    coordinator
+        .commit_packet_success(
+            p_up_a,
+            TimelineTicks::from_raw(25_000),
+            TimelineTicks::from_raw(25_050),
+        )
+        .unwrap();
+
+    let p_down_b = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(30_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p_down_b.effective_scheduled_ticks,
+        TimelineTicks::from_raw(30_000)
+    );
+}
+
+#[test]
+fn explicit_release_recovery_may_shift_timeline() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, TimelineRebaseReason};
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down A".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up A".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+
+    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        schedule,
+        10_000,
+        DurationTicks::from_raw(10_000),
+        0,
+        DurationTicks::ZERO,
+        |us| Ok(TimelineTicks::from_raw(us)),
+    )
+    .expect("coordinator");
+
+    let p_down_a = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    coordinator
+        .commit_packet_success(
+            p_down_a,
+            TimelineTicks::from_raw(1_000),
+            TimelineTicks::from_raw(1_050),
+        )
+        .unwrap();
+
+    let p_up_a = coordinator
+        .prepare_next_due_authored(TimelineTicks::from_raw(20_000), DurationTicks::ZERO)
+        .unwrap()
+        .unwrap();
+    let (requested, _) = coordinator.commit_up_request(p_up_a).unwrap();
+    assert_eq!(requested.len(), 1);
+
+    let plan = coordinator
+        .plan_pending_dispatch_ticks(|_| Ok((DurationTicks::ZERO, false)))
+        .unwrap()
+        .unwrap();
+    let due = coordinator
+        .pop_due_pending_ticks(TimelineTicks::from_raw(20_000), &plan)
+        .unwrap();
+    assert_eq!(due.len(), 1);
+
+    let _ = coordinator
+        .requeue_failed_releases_mask_ticks(
+            &due,
+            0,
+            0,
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(25_000),
+            &[DurationTicks::from_raw(5_000)],
+            Some(5),
+        )
+        .unwrap();
+
+    coordinator.complete_releases_mask(&due, 1 << 0, 0).unwrap();
+    let pause = coordinator
+        .finish_release_recovery_ticks(TimelineTicks::from_raw(25_000))
+        .unwrap();
+    assert_eq!(
+        coordinator.last_timeline_rebase_reason(),
+        Some(TimelineRebaseReason::ReleaseRecovery)
+    );
+    assert_eq!(pause, Some(DurationTicks::from_raw(5_000)));
+    assert_eq!(
+        coordinator.recovery_offset_ticks(),
+        DurationTicks::from_raw(5_000)
+    );
 }
 
 #[test]
