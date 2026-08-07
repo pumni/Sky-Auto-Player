@@ -1319,6 +1319,39 @@ fn directional_estimator_training_is_not_cross_contaminated() {
 }
 
 #[test]
+fn mixed_path_estimator_trains_on_mixed_observations_only() {
+    let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
+    let before = estimator.export_state();
+
+    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    let after_up = estimator.export_state();
+    assert_ne!(
+        serde_json::to_string(&after_up.hist_up).unwrap(),
+        serde_json::to_string(&before.hist_up).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_string(&after_up.hist_down).unwrap(),
+        serde_json::to_string(&before.hist_down).unwrap()
+    );
+
+    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 2, 2, 500, 120, true);
+    let after_down = estimator.export_state();
+    assert_ne!(
+        serde_json::to_string(&after_down.hist_down).unwrap(),
+        serde_json::to_string(&after_up.hist_down).unwrap()
+    );
+}
+
+#[test]
+fn estimator_v9_predicts_path_specific_leads() {
+    let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
+    let down_lead = estimator.estimate_lead(ActionKind::Down, 2).applied_us;
+    let up_lead = estimator.estimate_lead(ActionKind::Up, 2).applied_us;
+    assert!(down_lead > 0);
+    assert!(up_lead > 0);
+}
+
+#[test]
 fn failed_release_outcome_and_completion_metrics_are_distinguishable() {
     assert_eq!(release_runtime_outcome(0, 1, 1, false), "sent");
     assert_eq!(
