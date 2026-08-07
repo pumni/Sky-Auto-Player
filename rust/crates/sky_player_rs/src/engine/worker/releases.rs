@@ -38,6 +38,11 @@ struct ReleaseSend {
     skipped_count: usize,
     attempts: u8,
     is_success: bool,
+    requested_mask: u16,
+    confirmed_mask: u16,
+    skipped_mask: u16,
+    unresolved_mask: u16,
+    status: sky_dispatch_win32::input::SendTransactionStatus,
 }
 
 /// Per-event timing reconciliation derived from the pending release batch
@@ -291,6 +296,12 @@ fn prepare_release_send(
     let last_win32_error = result.evidence.last_win32_error;
     let attempts = result.evidence.attempts;
     let is_success = result.is_success();
+    let requested_mask = result.evidence.requested_mask;
+    let confirmed_mask = result.evidence.confirmed_mask;
+    let skipped_mask = result.evidence.skipped_mask;
+    let acknowledged_mask = confirmed_mask | skipped_mask;
+    let unresolved_mask = requested_mask & !acknowledged_mask;
+    let status = result.status;
     Ok(ReleaseSend {
         actual_ticks,
         completed_effective_ticks,
@@ -302,6 +313,11 @@ fn prepare_release_send(
         skipped_count,
         attempts,
         is_success,
+        requested_mask,
+        confirmed_mask,
+        skipped_mask,
+        unresolved_mask,
+        status,
     })
 }
 
@@ -316,12 +332,10 @@ fn reconcile_release_recovery(
     send: &ReleaseSend,
     lead_up_ticks: DurationTicks,
 ) -> Result<ReleaseReconciliation, DispatchStep> {
-    let sent_codes: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
-    let skipped_codes: SmallVec<[u16; 15]> = SmallVec::new();
-    let recovery_required = match coordinator.requeue_failed_releases_ticks(
+    let recovery_required = match coordinator.requeue_failed_releases_mask_ticks(
         due_pending,
-        sent_codes.as_slice(),
-        skipped_codes.as_slice(),
+        send.confirmed_mask,
+        send.skipped_mask,
         send.actual_ticks,
         send.completed_effective_ticks,
         &timing.retry_backoff_ticks,
@@ -334,13 +348,9 @@ fn reconcile_release_recovery(
             )));
         }
     };
-    let sent_codes2: SmallVec<[u16; 15]> = due_pending.iter().map(|p| p.scan_code).collect();
-    let skipped_codes2: SmallVec<[u16; 15]> = SmallVec::new();
-    if let Err(error) = coordinator.complete_releases(
-        due_pending,
-        sent_codes2.as_slice(),
-        skipped_codes2.as_slice(),
-    ) {
+    if let Err(error) =
+        coordinator.complete_releases_mask(due_pending, send.confirmed_mask, send.skipped_mask)
+    {
         return Err(DispatchStep::Terminate(format!(
             "coordinator release completion failure: {error}"
         )));

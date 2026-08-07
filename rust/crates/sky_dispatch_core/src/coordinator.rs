@@ -3361,19 +3361,20 @@ impl RuntimeDispatchCoordinator {
         Ok((requested, suppressed))
     }
 
-    pub fn complete_releases(
+    pub fn complete_releases_mask(
         &mut self,
         releases: &[PendingRelease],
-        sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
+        confirmed_mask: u16,
+        skipped_mask: u16,
     ) -> Result<(), CoordinatorError> {
         for pending in releases {
-            let in_sent = sent_scan_codes.contains(&pending.scan_code);
-            let in_skipped = skipped_scan_codes.contains(&pending.scan_code);
-            if !in_sent && !in_skipped {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            let in_confirmed = (confirmed_mask & bit) != 0;
+            let in_skipped = (skipped_mask & bit) != 0;
+            if !in_confirmed && !in_skipped {
                 continue;
             }
-            let status = if in_sent {
+            let status = if in_confirmed {
                 GenerationStatus::Released
             } else {
                 GenerationStatus::DroppedBackend
@@ -3386,13 +3387,33 @@ impl RuntimeDispatchCoordinator {
             if matches!(self.active_for_slot(pending.key_slot), Some(active) if active.generation_id == pending.generation_id)
             {
                 self.active_by_slot[pending.key_slot as usize] = None;
-                self.active_mask &= !Self::bit_for_slot(pending.key_slot);
-                self.blocked_mask &= !Self::bit_for_slot(pending.key_slot);
+                self.active_mask &= !bit;
+                self.blocked_mask &= !bit;
             }
-            self.pending_mask &= !Self::bit_for_slot(pending.key_slot);
+            self.pending_mask &= !bit;
             self.pending_by_slot[pending.key_slot as usize] = None;
         }
         Ok(())
+    }
+
+    pub fn complete_releases(
+        &mut self,
+        releases: &[PendingRelease],
+        sent_scan_codes: &[u16],
+        skipped_scan_codes: &[u16],
+    ) -> Result<(), CoordinatorError> {
+        let mut confirmed_mask = 0u16;
+        let mut skipped_mask = 0u16;
+        for pending in releases {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            if sent_scan_codes.contains(&pending.scan_code) {
+                confirmed_mask |= bit;
+            }
+            if skipped_scan_codes.contains(&pending.scan_code) {
+                skipped_mask |= bit;
+            }
+        }
+        self.complete_releases_mask(releases, confirmed_mask, skipped_mask)
     }
 
     pub fn release_recovery_active(&self) -> bool {
@@ -3462,11 +3483,11 @@ impl RuntimeDispatchCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn requeue_failed_releases_ticks(
+    pub fn requeue_failed_releases_mask_ticks(
         &mut self,
         releases: &[PendingRelease],
-        sent_scan_codes: &[u16],
-        skipped_scan_codes: &[u16],
+        confirmed_mask: u16,
+        skipped_mask: u16,
         recovery_started: TimelineTicks,
         retry_base: TimelineTicks,
         retry_backoff: &[DurationTicks],
@@ -3481,9 +3502,10 @@ impl RuntimeDispatchCoordinator {
         }
         let mut recovery_required = false;
         for pending in releases {
-            if sent_scan_codes.contains(&pending.scan_code)
-                || skipped_scan_codes.contains(&pending.scan_code)
-            {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            let in_confirmed = (confirmed_mask & bit) != 0;
+            let in_skipped = (skipped_mask & bit) != 0;
+            if in_confirmed || in_skipped {
                 continue;
             }
             if !matches!(
@@ -3516,10 +3538,44 @@ impl RuntimeDispatchCoordinator {
                     slot: retry.key_slot,
                 });
             }
-            self.pending_mask |= Self::bit_for_slot(retry.key_slot);
+            self.pending_mask |= bit;
             self.pending_by_slot[retry_slot] = Some(retry);
         }
+        self.check_invariants()?;
         Ok(recovery_required)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn requeue_failed_releases_ticks(
+        &mut self,
+        releases: &[PendingRelease],
+        sent_scan_codes: &[u16],
+        skipped_scan_codes: &[u16],
+        recovery_started: TimelineTicks,
+        retry_base: TimelineTicks,
+        retry_backoff: &[DurationTicks],
+        last_win32_error: Option<u32>,
+    ) -> Result<bool, CoordinatorError> {
+        let mut confirmed_mask = 0u16;
+        let mut skipped_mask = 0u16;
+        for pending in releases {
+            let bit = Self::bit_for_slot(pending.key_slot);
+            if sent_scan_codes.contains(&pending.scan_code) {
+                confirmed_mask |= bit;
+            }
+            if skipped_scan_codes.contains(&pending.scan_code) {
+                skipped_mask |= bit;
+            }
+        }
+        self.requeue_failed_releases_mask_ticks(
+            releases,
+            confirmed_mask,
+            skipped_mask,
+            recovery_started,
+            retry_base,
+            retry_backoff,
+            last_win32_error,
+        )
     }
 
     pub fn cancel_all(&mut self) -> Result<Vec<GenerationId>, CoordinatorError> {
