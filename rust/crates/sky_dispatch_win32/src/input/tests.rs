@@ -89,7 +89,10 @@ fn partial_note_on_rolls_back_the_uncertain_whole_chord() {
     ));
     assert_eq!(
         calls,
-        vec![(vec![0x15, 0x16, 0x17], false), (vec![0x15, 0x16, 0x17], true)]
+        vec![
+            (vec![0x15, 0x16, 0x17], false),
+            (vec![0x15, 0x16, 0x17], true)
+        ]
     );
 }
 

@@ -24,6 +24,34 @@ QPC tick domains for control-path arithmetic and only converts at API or
 telemetry boundaries. Completion timing is measured at the `SendInput` return
 boundary; it is not a claim about game polling, rendering, or audio onset.
 
+## Worker module ownership
+
+The worker is decomposed by invariant owner, not by call depth. `worker.rs`
+wires the modules; `orchestration.rs` is the loop sequencer and owns
+command/focus/pause transitions, plan creation, the pending/authored/wait
+choice, and the terminal transition.
+
+- `planning.rs` owns path classification, lead selection, the pending-release
+  plan, and the next wait deadline. `plan_next_dispatch()` builds exactly one
+  immutable `NextDispatchPlan` per loop epoch from a `RuntimeDispatchCoordinator`
+  snapshot, a `SendLatencyEstimator`, and the `QpcClock`; it never reads QPC,
+  mutates the coordinator, allocates, or formats strings on the success path.
+  The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
+  the wait deadline, so prepare and wait cannot disagree on lead selection.
+- `dispatch.rs` owns the pending-release and authored-packet backend
+  transactions, transaction-outcome interpretation, coordinator commit,
+  estimator update, dispatch telemetry record, and dispatch health observation.
+  It returns a closed four-variant `DispatchStep` (`NoWork`, `Dispatched`,
+  `Continue`, `Terminate`) instead of scalar tuples.
+- `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
+  terminal-error aggregation.
+- `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
+  own their single named concern.
+
+A plan is valid only for its current loop iteration. After an interrupt,
+command, focus/pause transition, backend call, release-recovery change, or wait
+wake, the worker discards the plan and rebuilds it from fresh QPC samples.
+
 `SendInput` completion is sender-side evidence. It is not proof that the game
 consumed the event. Any receiver/probe window used for acceptance is an
 app-owned delivery proxy and must not be described as game receipt.
@@ -107,6 +135,18 @@ health; wait-path degradation remains a separate signal.
   bounded masks. A zero/invalid target window, unavailable layout, or failed
   scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
   emitters remain exempt from host physical-state verification.
+- Cleanup is a single bounded state machine (`TrackedKeyState::release_scope`),
+  never nested cleanup: `release_all_full_instrument` does not call
+  `release_all`. One invocation resolves an unresolved mask, sends key-up,
+  reconciles transport and physical evidence, and retries only the unresolved
+  mask (delays 15/50/100 ms, at most four attempts) with a single coherent
+  `ReleaseAllOutcome`. A physical `AllUp` is the final evidence of success and
+  clears the active/possibly-active/failed-release tracking masks even if the
+  preceding `SendInput` reported partial or zero progress; transport anomalies
+  stay visible in counters but do not fabricate a stuck-key set.
+  `ReconciledRelease::Held` reports only the held subset and `Inconclusive`
+  fails closed to the transport-unconfirmed subset. Normal clean-up never
+  sleeps.
 - No Python callback runs in the native real-time worker.
 - A successful terminal result requires no active, pending, possibly-active, or
   residue key.

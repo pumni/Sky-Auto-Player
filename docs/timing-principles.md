@@ -117,6 +117,14 @@ Since the RT-pipeline optimization, dispatch targets **onset = SendInput complet
 $$\max(\text{scheduled\_release\_us} - \text{lead}, \text{release\_not\_before\_us})$$
 and a down batch is never popped before its authored time while its key is still active or pending release (no-early-conflict guard — an early pop would otherwise become a dropped note). The native worker maps a logical deadline and absolute QPC target from the same clock sample, preventing loop bookkeeping from becoming systematic lateness. The native lead cache accepts only the current version-8 histogram schema; an older or newer cache is discarded and playback starts from the conservative prior. See [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
 
+One worker loop epoch resolves exactly one immutable `NextDispatchPlan`
+(`worker/planning.rs`): it classifies the next authored packet path, computes the
+path-aware authored lead once, forms the pending-release cohort lead once, and
+derives a single wait deadline from those same two plans — so prepare-due and
+wait-until can never disagree on lead selection. The plan is valid only for its
+own epoch and is rebuilt after every interrupt, command, focus/pause transition,
+backend call, release-recovery change, or wait wake. It does not mutate the
+coordinator, read QPC, allocate, or format strings on the success path.
 Pending releases use a bounded cohort fixed point: the Up lead is selected from the releases that
 share the next effective deadline, rather than from all currently pending keys. The resulting
 deadline/lead/polyphony plan is reused for waiting and popping. The native accuracy-first path

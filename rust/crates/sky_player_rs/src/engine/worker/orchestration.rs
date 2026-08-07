@@ -591,7 +591,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 Ok(value) => value,
                 Err(error) => {
                     core.runtime.force_full_cleanup = true;
-                    core.runtime.terminal_error = Some(format!("QPC conversion failure: {error:?}"));
+                    core.runtime.terminal_error =
+                        Some(format!("QPC conversion failure: {error:?}"));
                     break;
                 }
             }
@@ -687,20 +688,30 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         target_hwnd.load(Ordering::Acquire),
                     ) {
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("focus suspension failed: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("focus suspension failed: {error}"));
                         break;
                     }
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
                     if let Err(error) = resources.playback.enter_pause("focus", now_ticks) {
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                    publish_backend_metrics(&resources.backend, &mut core.metrics, metrics, &mut core.errors.last_published);
+                    publish_backend_metrics(
+                        &resources.backend,
+                        &mut core.metrics,
+                        metrics,
+                        &mut core.errors.last_published,
+                    );
                     try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             } else if resources.playback.has_pause_reason("focus") {
-                let restored_at = *core.runtime.focus_restore_started_ticks.get_or_insert(now_ticks);
+                let restored_at = *core
+                    .runtime
+                    .focus_restore_started_ticks
+                    .get_or_insert(now_ticks);
                 let focus_grace_elapsed = match now_ticks.checked_duration_since(restored_at) {
                     Ok(elapsed) => elapsed,
                     Err(error) => {
@@ -713,12 +724,15 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     core.runtime.verified_target = None;
-                    if let Err(error) =
-                        suspend_live_input(&mut resources.backend, &mut resources.coordinator, preflight_target.hwnd)
-                    {
+                    if let Err(error) = suspend_live_input(
+                        &mut resources.backend,
+                        &mut resources.coordinator,
+                        preflight_target.hwnd,
+                    ) {
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("focus restoration failed: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("focus restoration failed: {error}"));
                         break;
                     }
                     if let Err(error) = ensure_preflight_for_target(
@@ -750,14 +764,20 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     if let Err(error) = resources.playback.exit_pause("focus", resumed_ticks) {
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("playback clock failure: {error}"));
                         break;
                     }
                     if desired_pause.load(Ordering::Acquire) {
                         core.runtime.verified_target = None;
                     }
                     core.runtime.focus_restore_started_ticks = None;
-                    publish_backend_metrics(&resources.backend, &mut core.metrics, metrics, &mut core.errors.last_published);
+                    publish_backend_metrics(
+                        &resources.backend,
+                        &mut core.metrics,
+                        metrics,
+                        &mut core.errors.last_published,
+                    );
                     try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
                 }
             }
@@ -776,7 +796,12 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
                     *core.errors.abort_counts.entry("manual_pause").or_insert(0) += 1;
-                    publish_backend_metrics(&resources.backend, &mut core.metrics, metrics, &mut core.errors.last_published);
+                    publish_backend_metrics(
+                        &resources.backend,
+                        &mut core.metrics,
+                        metrics,
+                        &mut core.errors.last_published,
+                    );
                     try_publish_metrics(&core.metrics, metrics, qpc_us_or_terminal!(), true);
                 }
                 if let Err(error) = resources.playback.enter_pause("manual", now_ticks) {
@@ -815,7 +840,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     if let Err(error) = resources.playback.exit_pause("manual", resumed_ticks) {
                         core.runtime.verified_target = None;
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("playback clock failure: {error}"));
                         break;
                     }
                 } else {
@@ -824,7 +850,9 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
             }
 
             #[cfg(any(test, feature = "test-support"))]
-            if resources.playback.has_pause_reason("manual") && command_timing.needs_acknowledgment() {
+            if resources.playback.has_pause_reason("manual")
+                && command_timing.needs_acknowledgment()
+            {
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
@@ -862,7 +890,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         break;
                     }
                 };
-                if let WaitOutcome::Failed(failure) = resources.waiter
+                if let WaitOutcome::Failed(failure) = resources
+                    .waiter
                     .wait_until_ticks_with_metrics_typed(
                         qpc_clock,
                         pause_target,
@@ -933,7 +962,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                         interrupt,
                     );
                     core.metrics.idle_wake_count = core.metrics.idle_wake_count.saturating_add(1);
-                    core.metrics.spin_time_us = core.metrics
+                    core.metrics.spin_time_us = core
+                        .metrics
                         .spin_time_us
                         .saturating_add(wait_result.spin_us);
                     match wait_result.outcome {
@@ -976,7 +1006,8 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                     Ok(ticks) => ticks,
                     Err(error) => {
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+                        core.runtime.terminal_error =
+                            Some(format!("playback clock failure: {error}"));
                         break;
                     }
                 }
@@ -1027,7 +1058,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
                 }
             };
             let due_pending = match pending_plan.as_ref() {
-                Some(plan) => match resources.coordinator.pop_due_pending_ticks(effective_now_ticks, plan) {
+                Some(plan) => match resources
+                    .coordinator
+                    .pop_due_pending_ticks(effective_now_ticks, plan)
+                {
                     Ok(due) => due,
                     Err(error) => {
                         core.runtime.force_full_cleanup = true;
