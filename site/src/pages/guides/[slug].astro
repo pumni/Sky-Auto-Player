@@ -1,0 +1,45 @@
+---
+import { getCollection, render } from 'astro:content';
+import GuideLayout from '../../layouts/GuideLayout.astro';
+
+export async function getStaticPaths() {
+  const guides = await getCollection('guides', (g) => g.data.locale === 'en' && !g.data.draft);
+  return guides.map((guide) => ({
+    params: { slug: guide.data.slug },
+    props: { guide },
+  }));
+}
+
+const { guide } = Astro.props;
+const { Content } = await render(guide);
+
+// Build related guides: same category, different slug, same locale, non-draft
+const allGuides = await getCollection('guides', (g) => g.data.locale === 'en' && !g.data.draft);
+const relatedGuides = allGuides
+  .filter((g) => g.data.category === guide.data.category && g.data.slug !== guide.data.slug)
+  .sort((a, b) => a.data.order - b.data.order)
+  .slice(0, 3)
+  .map((g) => ({ title: g.data.title, slug: g.data.slug, locale: g.data.locale as 'en' | 'vi' }));
+---
+
+<GuideLayout
+  locale="en"
+  seo={{
+    title: `${guide.data.title} — Sky Auto Player`,
+    description: guide.data.description,
+    ...(guide.data.image ? { image: guide.data.image, imageAlt: guide.data.imageAlt } : {}),
+  }}
+  guide={{
+    title: guide.data.title,
+    summary: guide.data.summary,
+    category: guide.data.category,
+    published: guide.data.published,
+    updated: guide.data.updated,
+    lastReviewedVersion: guide.data.lastReviewedVersion,
+    evidence: guide.data.evidence,
+    slug: guide.data.slug,
+  }}
+  relatedGuides={relatedGuides}
+>
+  <Content />
+</GuideLayout>

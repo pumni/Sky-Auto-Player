@@ -1,0 +1,395 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import GuideBreadcrumb from '../components/guide/GuideBreadcrumb.astro';
+import RelatedGuides from '../components/guide/RelatedGuides.astro';
+import { SITE, type Locale } from '../data/site';
+import { withBase } from '../utils/urls';
+import { APP_VERSION } from '../generated/version';
+
+interface RelatedGuide {
+  title: string;
+  slug: string;
+  locale: Locale;
+}
+
+interface Props {
+  locale: Locale;
+  seo: {
+    title: string;
+    description: string;
+    image?: string;
+    imageAlt?: string;
+  };
+  guide: {
+    title: string;
+    summary: string;
+    category: string;
+    published: string;
+    updated: string;
+    lastReviewedVersion: string;
+    evidence: { category: string; label: string; url: string }[];
+    slug: string;
+  };
+  relatedGuides?: RelatedGuide[];
+}
+
+const { locale, seo, guide, relatedGuides = [] } = Astro.props;
+const isVi = locale === 'vi';
+
+const currentPath = Astro.url.pathname;
+const canonicalUrl = new URL(currentPath, SITE.productionOrigin).href;
+const guideBaseUrl = isVi ? '/vi/guides/' : '/guides/';
+
+// Article + BreadcrumbList JSON-LD
+const structuredData = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: guide.title,
+    description: guide.summary,
+    inLanguage: locale,
+    datePublished: guide.published,
+    dateModified: guide.updated,
+    mainEntityOfPage: { '@type': 'WebPage', '@id': canonicalUrl },
+    image: seo.image
+      ? new URL(withBase(seo.image), SITE.productionOrigin).href
+      : new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
+    isPartOf: {
+      '@type': 'WebSite',
+      '@id': new URL(withBase('/'), SITE.productionOrigin).href + '#website',
+    },
+    about: {
+      '@type': 'SoftwareApplication',
+      '@id': new URL(withBase('/'), SITE.productionOrigin).href + '#software',
+    },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      {
+        '@type': 'ListItem',
+        position: 1,
+        name: isVi ? 'Trang chủ' : 'Home',
+        item: new URL(withBase(isVi ? '/vi/' : '/'), SITE.productionOrigin).href,
+      },
+      {
+        '@type': 'ListItem',
+        position: 2,
+        name: isVi ? 'Hướng dẫn' : 'Guides',
+        item: new URL(withBase(guideBaseUrl), SITE.productionOrigin).href,
+      },
+      {
+        '@type': 'ListItem',
+        position: 3,
+        name: guide.title,
+        item: canonicalUrl,
+      },
+    ],
+  },
+];
+---
+
+<BaseLayout
+  locale={locale}
+  seo={{
+    ...seo,
+    ogType: 'article',
+    publishedTime: guide.published,
+    modifiedTime: guide.updated,
+  }}
+  structuredData={structuredData}
+>
+  <article class="guide-page" aria-labelledby="guide-title">
+    <div
+      class="guide-page__header section-shell section-shell--feature section-shell--after-header"
+    >
+      <div class="container">
+        <GuideBreadcrumb locale={locale} guideTitle={guide.title} guideSlug={guide.slug} />
+        <p class="guide-page__category kicker">{guide.category.replace(/-/g, ' ')}</p>
+        <h1 id="guide-title">{guide.title}</h1>
+        <p class="guide-page__summary">{guide.summary}</p>
+        <p class="guide-page__reviewed">
+          {
+            isVi
+              ? `Đã xem xét lần cuối cho Sky Auto Player v${guide.lastReviewedVersion} · Cập nhật: ${guide.updated}`
+              : `Last reviewed for Sky Auto Player v${guide.lastReviewedVersion} · Updated: ${guide.updated}`
+          }
+        </p>
+      </div>
+    </div>
+
+    <div class="container guide-page__body">
+      <div class="guide-page__content">
+        <slot />
+
+        {
+          guide.evidence.length > 0 && (
+            <aside
+              class="guide-page__evidence"
+              aria-label={isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
+            >
+              <h2 class="guide-page__evidence-title">
+                {isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
+              </h2>
+              <ul class="guide-page__evidence-list">
+                {guide.evidence.map((src) => (
+                  <li>
+                    <span class="guide-page__evidence-category">{src.category}</span>
+                    <a href={src.url} class="guide-page__evidence-link">
+                      {src.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          )
+        }
+      </div>
+
+      {relatedGuides.length > 0 && <RelatedGuides locale={locale} guides={relatedGuides} />}
+    </div>
+
+    <section
+      class="guide-page__cta section-shell section-shell--feature"
+      aria-labelledby="guide-cta-title"
+    >
+      <div class="container guide-page__cta-layout">
+        <div>
+          <h2 id="guide-cta-title">
+            {isVi ? 'Sẵn sàng thử chưa?' : 'Ready to try it?'}
+          </h2>
+          <p>
+            {
+              isVi
+                ? `Tải Sky Auto Player v${APP_VERSION} và bắt đầu phát nhạc trên Windows.`
+                : `Download Sky Auto Player v${APP_VERSION} and start playing on Windows.`
+            }
+          </p>
+        </div>
+        <div class="guide-page__cta-actions">
+          <a class="button button--primary" href={SITE.releaseUrl}>
+            {isVi ? 'Tải bản mới nhất' : 'Download latest release'}
+          </a>
+          <a class="button button--secondary" href={withBase(guideBaseUrl)}>
+            {isVi ? 'Tất cả hướng dẫn' : 'All guides'}
+          </a>
+        </div>
+      </div>
+    </section>
+  </article>
+</BaseLayout>
+
+<style>
+  .guide-page__header {
+    border-top: 0;
+  }
+
+  .guide-page__category {
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs, var(--type-small));
+    letter-spacing: 0.1em;
+    margin-bottom: var(--space-2);
+  }
+
+  .guide-page__header h1 {
+    margin-block: var(--space-3) var(--space-4);
+  }
+
+  .guide-page__summary {
+    font-size: var(--type-lead);
+    color: var(--color-text-secondary);
+    max-inline-size: 60ch;
+    margin-block-end: var(--space-4);
+    line-height: var(--leading-lead);
+  }
+
+  .guide-page__reviewed {
+    font-size: var(--type-small);
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+  }
+
+  .guide-page__body {
+    display: grid;
+    gap: var(--space-12);
+    padding-block: var(--space-10);
+  }
+
+  @media (min-width: 64rem) {
+    .guide-page__body {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 280px);
+    }
+  }
+
+  .guide-page__content {
+    min-width: 0;
+  }
+
+  /* Prose styles for guide markdown content */
+  .guide-page__content :global(h2) {
+    margin-block: var(--space-8) var(--space-4);
+    font-size: clamp(1.25rem, 2vw, 1.75rem);
+    color: var(--color-text-primary);
+  }
+
+  .guide-page__content :global(h3) {
+    margin-block: var(--space-6) var(--space-3);
+    font-size: clamp(1.1rem, 1.5vw, 1.35rem);
+    color: var(--color-text-primary);
+  }
+
+  .guide-page__content :global(p) {
+    margin-block-end: var(--space-4);
+    color: var(--color-text-secondary);
+    line-height: var(--leading-body, 1.7);
+    max-inline-size: 72ch;
+  }
+
+  .guide-page__content :global(ul),
+  .guide-page__content :global(ol) {
+    margin-block-end: var(--space-5);
+    padding-inline-start: var(--space-5);
+    color: var(--color-text-secondary);
+    line-height: var(--leading-body, 1.7);
+    max-inline-size: 72ch;
+  }
+
+  .guide-page__content :global(li) {
+    margin-block-end: var(--space-2);
+  }
+
+  .guide-page__content :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--color-surface-instrument);
+    border: 1px solid var(--line-faint);
+    border-radius: var(--radius-sm);
+    padding: 0.1em 0.35em;
+    color: var(--color-text-primary);
+  }
+
+  .guide-page__content :global(pre) {
+    background: var(--color-surface-instrument);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    padding: var(--space-4);
+    overflow-x: auto;
+    margin-block-end: var(--space-5);
+  }
+
+  .guide-page__content :global(pre code) {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: var(--type-small);
+  }
+
+  .guide-page__content :global(a) {
+    color: var(--color-action);
+    text-underline-offset: 0.2em;
+  }
+
+  .guide-page__content :global(a:hover) {
+    text-decoration: none;
+  }
+
+  .guide-page__content :global(blockquote) {
+    border-inline-start: 3px solid var(--line-accent);
+    padding-inline-start: var(--space-4);
+    margin-inline: 0;
+    color: var(--color-text-tertiary);
+  }
+
+  /* Evidence section */
+  .guide-page__evidence {
+    margin-block-start: var(--space-10);
+    padding: var(--space-5);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-instrument);
+  }
+
+  .guide-page__evidence-title {
+    font-size: var(--type-small);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-tertiary);
+    margin-block-end: var(--space-3);
+  }
+
+  .guide-page__evidence-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .guide-page__evidence-list li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    font-size: var(--type-small);
+  }
+
+  .guide-page__evidence-category {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-tertiary);
+    min-width: 7rem;
+  }
+
+  .guide-page__evidence-link {
+    color: var(--color-text-secondary);
+    text-underline-offset: 0.2em;
+  }
+
+  .guide-page__evidence-link:hover {
+    color: var(--color-text-primary);
+  }
+
+  /* CTA */
+  .guide-page__cta {
+    background: var(--color-surface-1);
+    text-align: center;
+    border-top: 1px solid var(--line-faint);
+    margin-block-start: var(--space-10);
+  }
+
+  .guide-page__cta-layout {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-6);
+  }
+
+  .guide-page__cta h2 {
+    margin-block-end: var(--space-3);
+  }
+
+  .guide-page__cta p {
+    color: var(--color-text-secondary);
+  }
+
+  .guide-page__cta-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-4);
+  }
+
+  @media (max-width: 40rem) {
+    .guide-page__cta-actions {
+      flex-direction: column;
+      align-items: stretch;
+      width: min(100%, 22rem);
+    }
+  }
+</style>

@@ -1,0 +1,160 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import type { Locale } from '../../data/site';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  locale: Locale;
+  guides: CollectionEntry<'guides'>[];
+}
+
+const { locale, guides } = Astro.props;
+const isVi = locale === 'vi';
+const guideBase = isVi ? '/vi/guides/' : '/guides/';
+
+// Category display config
+const categoryConfig = {
+  'getting-started': {
+    label: isVi ? 'Bắt đầu' : 'Getting started',
+    description: isVi
+      ? 'Cài đặt, tải xuống và bước đầu sử dụng'
+      : 'Installation, download and first steps',
+  },
+  'playback-timing': {
+    label: isVi ? 'Phát nhạc & timing' : 'Playback & timing',
+    description: isVi
+      ? 'Cách Sky Auto Player xử lý nhạc và timing'
+      : 'How Sky Auto Player handles music and timing',
+  },
+  'technical-safety': {
+    label: isVi ? 'Kỹ thuật & an toàn' : 'Technical & safety',
+    description: isVi
+      ? 'Ranh giới kỹ thuật, bảo mật và mã nguồn'
+      : 'Technical boundaries, security and source code',
+  },
+  support: {
+    label: isVi ? 'Hỗ trợ' : 'Support',
+    description: isVi ? 'Xử lý sự cố và câu hỏi thường gặp' : 'Troubleshooting and common issues',
+  },
+} as const;
+
+type Category = keyof typeof categoryConfig;
+
+// Group non-draft guides by category in display order
+const categoryOrder: Category[] = [
+  'getting-started',
+  'playback-timing',
+  'technical-safety',
+  'support',
+];
+
+const byCategory = Object.fromEntries(
+  categoryOrder.map((cat) => [
+    cat,
+    guides
+      .filter((g) => g.data.category === cat && !g.data.draft)
+      .sort((a, b) => a.data.order - b.data.order),
+  ]),
+) as Record<Category, CollectionEntry<'guides'>[]>;
+---
+
+<div class="guide-hub">
+  {
+    categoryOrder
+      .filter((cat) => byCategory[cat].length > 0)
+      .map((cat) => (
+        <section class="guide-hub__category" aria-labelledby={`cat-${cat}`}>
+          <div class="guide-hub__category-header">
+            <h2 id={`cat-${cat}`} class="guide-hub__category-title">
+              {categoryConfig[cat].label}
+            </h2>
+            <p class="guide-hub__category-desc">{categoryConfig[cat].description}</p>
+          </div>
+          <ul class="guide-hub__list">
+            {byCategory[cat].map((guide) => (
+              <li class="guide-hub__item">
+                <a class="guide-hub__link" href={withBase(`${guideBase}${guide.data.slug}/`)}>
+                  <span class="guide-hub__link-title">{guide.data.title}</span>
+                  <span class="guide-hub__link-summary">{guide.data.summary}</span>
+                  <span class="guide-hub__link-version" aria-label="Last reviewed version">
+                    v{guide.data.lastReviewedVersion}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))
+  }
+</div>
+
+<style>
+  .guide-hub {
+    display: grid;
+    gap: var(--space-12);
+  }
+
+  .guide-hub__category-header {
+    margin-block-end: var(--space-5);
+  }
+
+  .guide-hub__category-title {
+    font-size: clamp(1.1rem, 1.5vw, 1.4rem);
+    color: var(--color-text-primary);
+    margin-block-end: var(--space-2);
+  }
+
+  .guide-hub__category-desc {
+    font-size: var(--type-small);
+    color: var(--color-text-tertiary);
+  }
+
+  .guide-hub__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  @media (min-width: 48rem) {
+    .guide-hub__list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .guide-hub__link {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-5);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-instrument);
+    transition: border-color var(--duration-fast) var(--ease-standard);
+    text-decoration: none;
+  }
+
+  .guide-hub__link:hover {
+    border-color: var(--line-accent);
+  }
+
+  .guide-hub__link-title {
+    font-weight: 650;
+    font-size: var(--type-body);
+    color: var(--color-text-primary);
+    line-height: 1.3;
+  }
+
+  .guide-hub__link-summary {
+    font-size: var(--type-small);
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+  }
+
+  .guide-hub__link-version {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    color: var(--color-text-tertiary);
+    letter-spacing: 0.04em;
+  }
+</style>

@@ -1,0 +1,70 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import GuideHub from '../../../components/guide/GuideHub.astro';
+import { SITE } from '../../../data/site';
+import { withBase } from '../../../utils/urls';
+
+const guides = await getCollection('guides', (g) => g.data.locale === 'vi' && !g.data.draft);
+
+const canonicalUrl = new URL(withBase('/vi/guides/'), SITE.productionOrigin).href;
+
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: 'Hướng dẫn Sky Auto Player',
+  description:
+    'Hướng dẫn kỹ thuật cho Sky Auto Player: cài đặt, mô hình timing, định dạng sheet, ranh giới bảo mật và xử lý sự cố.',
+  url: canonicalUrl,
+  inLanguage: 'vi',
+  isPartOf: {
+    '@id': new URL(withBase('/'), SITE.productionOrigin).href + '#website',
+  },
+};
+---
+
+<BaseLayout
+  locale="vi"
+  seo={{
+    title: 'Hướng dẫn — Sky Auto Player',
+    description:
+      'Hướng dẫn kỹ thuật cho Sky Auto Player trên Windows: cài đặt, mô hình timing, định dạng sheet nhạc, ranh giới bảo mật và xử lý sự cố.',
+  }}
+  structuredData={structuredData}
+>
+  <div class="guides-hub-page section-shell section-shell--opening section-shell--after-header">
+    <div class="container">
+      <p class="kicker">Tài liệu</p>
+      <h1>Hướng dẫn Sky Auto Player</h1>
+      <p class="guides-hub-page__intro">
+        Hướng dẫn chính thức về cài đặt, mô hình timing, các định dạng sheet được hỗ trợ, ranh giới
+        kỹ thuật và xử lý sự cố — viết dựa trên mã nguồn hiện tại.
+      </p>
+    </div>
+  </div>
+  <div class="container guides-hub-page__body">
+    <GuideHub locale="vi" guides={guides} />
+  </div>
+</BaseLayout>
+
+<style>
+  .guides-hub-page {
+    border-top: 0;
+  }
+
+  .guides-hub-page h1 {
+    margin-block: var(--space-3) var(--space-4);
+  }
+
+  .guides-hub-page__intro {
+    font-size: var(--type-lead);
+    color: var(--color-text-secondary);
+    max-inline-size: 60ch;
+    line-height: var(--leading-lead);
+    margin-block-end: 0;
+  }
+
+  .guides-hub-page__body {
+    padding-block: var(--space-10) var(--space-16);
+  }
+</style>

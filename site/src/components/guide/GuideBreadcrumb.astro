@@ -1,0 +1,66 @@
+---
+import type { Locale } from '../../data/site';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  locale: Locale;
+  guideTitle: string;
+  guideSlug: string;
+}
+
+const { locale, guideTitle } = Astro.props;
+const isVi = locale === 'vi';
+---
+
+<nav class="breadcrumb" aria-label={isVi ? 'Đường dẫn' : 'Breadcrumb'}>
+  <ol class="breadcrumb__list">
+    <li class="breadcrumb__item">
+      <a href={withBase(isVi ? '/vi/' : '/')}>{isVi ? 'Trang chủ' : 'Home'}</a>
+    </li>
+    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">/</li>
+    <li class="breadcrumb__item">
+      <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
+    </li>
+    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">/</li>
+    <li class="breadcrumb__item breadcrumb__item--current" aria-current="page">{guideTitle}</li>
+  </ol>
+</nav>
+
+<style>
+  .breadcrumb {
+    margin-block-end: var(--space-4);
+  }
+
+  .breadcrumb__list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: var(--type-small);
+    color: var(--color-text-tertiary);
+  }
+
+  .breadcrumb__item a {
+    color: var(--color-text-secondary);
+  }
+
+  .breadcrumb__item a:hover {
+    color: var(--color-text-primary);
+  }
+
+  .breadcrumb__item--separator {
+    color: var(--color-text-tertiary);
+    user-select: none;
+  }
+
+  .breadcrumb__item--current {
+    color: var(--color-text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 30ch;
+  }
+</style>

@@ -12,6 +12,8 @@ const requiredFiles = [
   'vi/faq/index.html',
   'faq.html',
   'vi/faq.html',
+  'guides/index.html',
+  'vi/guides/index.html',
   'robots.txt',
   'llms.txt',
   'google40b614dcfbf81da7.html',

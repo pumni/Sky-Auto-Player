@@ -228,7 +228,7 @@ test.describe('accessibility and responsive contracts', () => {
     const table = page.locator('.comparison-table');
     await expect(table.locator('caption')).toHaveCount(1);
     await expect(table.locator('thead th[scope="col"]')).toHaveCount(2);
-    await expect(table.locator('tbody tr')).toHaveCount(4);
+    await expect(table.locator('tbody tr')).toHaveCount(6);
     await expect(page.locator('ol.steps > li')).toHaveCount(3);
   });
 

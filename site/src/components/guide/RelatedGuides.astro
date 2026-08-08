@@ -1,0 +1,81 @@
+---
+import type { Locale } from '../../data/site';
+import { withBase } from '../../utils/urls';
+
+interface RelatedGuide {
+  title: string;
+  slug: string;
+  locale: Locale;
+}
+
+interface Props {
+  locale: Locale;
+  guides: RelatedGuide[];
+}
+
+const { locale, guides } = Astro.props;
+const isVi = locale === 'vi';
+const guideBase = isVi ? '/vi/guides/' : '/guides/';
+---
+
+<aside class="related-guides" aria-label={isVi ? 'Hướng dẫn liên quan' : 'Related guides'}>
+  <h2 class="related-guides__title">{isVi ? 'Hướng dẫn liên quan' : 'Related guides'}</h2>
+  <ul class="related-guides__list">
+    {
+      guides.map((guide) => (
+        <li>
+          <a class="related-guides__link" href={withBase(`${guideBase}${guide.slug}/`)}>
+            {guide.title}
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</aside>
+
+<style>
+  .related-guides {
+    padding: var(--space-5);
+    border: 1px solid var(--line-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-instrument);
+    height: fit-content;
+    position: sticky;
+    top: calc(var(--space-6) + 4rem); /* below sticky header */
+  }
+
+  .related-guides__title {
+    font-size: var(--type-small);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-tertiary);
+    margin-block-end: var(--space-4);
+  }
+
+  .related-guides__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .related-guides__link {
+    display: block;
+    font-size: var(--type-small);
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+    text-underline-offset: 0.2em;
+  }
+
+  .related-guides__link:hover {
+    color: var(--color-text-primary);
+  }
+
+  @media (max-width: 63.99rem) {
+    .related-guides {
+      position: static;
+    }
+  }
+</style>
