@@ -1194,14 +1194,13 @@ mod tests {
         assert!(coordinator.check_invariants().is_ok());
         assert!(coordinator.cancel_live_generations().unwrap().is_empty());
 
-        let (stale_up, _) = coordinator
-            .pop_next_due_authored(100, 0)
-            .expect("cancelled generation's authored up remains in cursor order");
-        assert_eq!(stale_up.intents[0].scan_code, 0x15);
-        let (future_down, _) = coordinator
-            .pop_next_due_authored(200, 0)
-            .expect("future down remains schedulable");
-        assert_eq!(future_down.intents[0].scan_code, 0x16);
+        let err = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+        ));
     }
 
     #[test]
@@ -1847,6 +1846,111 @@ mod tests {
     }
 
     #[test]
+    fn terminal_real_generation_does_not_gain_exemption_and_returns_invariant_error() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let down = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(0))
+            .unwrap();
+        // Mark generation 0 terminal and clear active slot
+        coordinator
+            .transition_generation(0, GenerationStatus::Active, GenerationStatus::Cancelled)
+            .unwrap();
+        coordinator.active_by_slot[0] = None;
+        // Preparing the Up packet for real generation 0 must NOT gain exemption
+        // just because generation 0 is terminal (Cancelled); it MUST return an invariant error.
+        let err = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+        ));
+    }
+
+    #[test]
+    fn invariant_mismatch_prevents_sender_invocation() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid schedule");
+        let mut coordinator =
+            RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+        let down = coordinator
+            .prepare_next_due_authored(TimelineTicks::ZERO, DurationTicks::ZERO)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .commit_packet_success(down, TimelineTicks::ZERO, TimelineTicks::from_raw(0))
+            .unwrap();
+        // Mismatched active generation (generation 999 instead of 0)
+        coordinator.active_by_slot[0] = Some(ActiveGeneration {
+            generation_id: 999,
+            scan_code: 0x15,
+            key_slot: 0,
+            source_action_index: 0,
+            scheduled_down_ticks: TimelineTicks::ZERO,
+            down_dispatch_started_ticks: TimelineTicks::ZERO,
+            down_dispatch_completed_ticks: TimelineTicks::ZERO,
+            release_not_before_ticks: TimelineTicks::ZERO,
+        });
+
+        let mut send_call_count = 0;
+        let prep_res = coordinator
+            .prepare_next_due_authored(TimelineTicks::from_raw(100), DurationTicks::ZERO);
+        if prep_res.is_ok() {
+            send_call_count += 1;
+        }
+        assert_eq!(send_call_count, 0);
+        assert!(matches!(
+            prep_res,
+            Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(_)
+            ))
+        ));
+    }
+
+    #[test]
     fn authored_lead_underflow_uses_explicit_zero_clamp() {
         let schedule = compile_runtime_intents(
             &[KeyActionInput {
@@ -2345,10 +2449,6 @@ impl RuntimeDispatchCoordinator {
             if generation_id == NO_GENERATION_ID {
                 continue;
             }
-            let generation_state = self.generation_states.get(generation_id as usize);
-            if generation_state.is_some_and(|state| state.is_terminal()) {
-                continue;
-            }
             let slot = compact.key_slot();
             let active = self.active_for_slot(slot).ok_or_else(|| {
                 CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
@@ -2358,7 +2458,7 @@ impl RuntimeDispatchCoordinator {
             if active.generation_id != generation_id {
                 return Err(CoordinatorError::Invariant(
                     CoordinatorInvariantError::Accounting(
-                        "physical up generation does not own its key slot".into(),
+                        "packet release generation does not own its key slot".into(),
                     ),
                 ));
             }
