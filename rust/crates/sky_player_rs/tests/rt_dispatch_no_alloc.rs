@@ -15,7 +15,7 @@
 
 use sky_dispatch_core::estimator::LatencyClass;
 use sky_player_rs::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DownObservation, OBSERVATION_QUEUE_CAPACITY,
+    DispatchObservation, DispatchPath, DispatchStep, DownObservation, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, ProductionDispatchTestHarness, UpObservation,
 };
 
@@ -294,13 +294,19 @@ fn production_down_only_hard_path_no_alloc() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
 
     enable_counting();
-    let _step = harness.dispatch_authored_packet_path();
+    let plan = harness.plan_current_dispatch();
+    assert_eq!(
+        plan.authored_path().unwrap(),
+        DispatchPath::DownOnly { down_count: 1 }
+    );
+    let step = harness.dispatch_authored_with_plan(&plan);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
         "production DownOnly hard-path made {allocs} heap allocation(s); expected 0"
     );
+    assert!(matches!(step, DispatchStep::Dispatched));
 }
 
 /// Mixed production dispatch hard-path makes ZERO heap allocations.
@@ -309,28 +315,66 @@ fn production_mixed_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_mixed();
 
+    // Step 1: Dispatch initial Down key A COMPLETELY OUTSIDE allocation measurement.
+    let plan0 = harness.plan_current_dispatch();
+    assert_eq!(
+        plan0.authored_path().unwrap(),
+        DispatchPath::DownOnly { down_count: 1 }
+    );
+    let step0 = harness.dispatch_authored_with_plan(&plan0);
+    assert!(matches!(step0, DispatchStep::Dispatched));
+    assert!(harness.has_active_generation(0x15));
+
+    // Step 2: Advance deterministic effective time to mixed packet deadline
+    harness.advance_playback_time_us(1000);
+
+    // Step 3: Measurement window covering real production plan + prepare + admission + send + commit
     enable_counting();
-    let _step = harness.dispatch_authored_packet_path();
+    let plan = harness.plan_current_dispatch();
+    assert_eq!(
+        plan.authored_path().unwrap(),
+        DispatchPath::Mixed {
+            up_count: 1,
+            down_count: 1,
+        }
+    );
+    let step = harness.dispatch_authored_with_plan(&plan);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
         "production Mixed hard-path made {allocs} heap allocation(s); expected 0"
     );
+    assert!(matches!(step, DispatchStep::Dispatched));
+
+    // Assert coordinator state: old generation A terminal/released, new generation B active
+    assert!(!harness.has_active_generation(0x15));
+    assert!(harness.has_active_generation(0x16));
+    assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
 
 /// UpOnly release production dispatch hard-path makes ZERO heap allocations.
 #[test]
 fn production_uponly_release_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let (mut harness, due_pending) = ProductionDispatchTestHarness::new_uponly_release();
+    let mut harness = ProductionDispatchTestHarness::new_uponly_release();
+
+    // Down A was physically dispatched outside window. Advance time to release deadline.
+    harness.advance_playback_time_us(1000);
 
     enable_counting();
-    let _step = harness.dispatch_pending_releases_path(due_pending);
+    let plan = harness.plan_current_dispatch();
+    assert_eq!(
+        plan.authored_path().unwrap(),
+        DispatchPath::UpOnly { up_count: 1 }
+    );
+    let step = harness.dispatch_authored_with_plan(&plan);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
         "production UpOnly release hard-path made {allocs} heap allocation(s); expected 0"
     );
+    assert!(matches!(step, DispatchStep::Dispatched));
+    assert!(!harness.has_active_generation(0x15));
 }

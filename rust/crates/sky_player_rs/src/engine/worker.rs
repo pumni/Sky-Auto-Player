@@ -53,6 +53,10 @@ pub(crate) use health::{
     HealthWindow, build_dispatch_budget, estimator_path_for_dispatch, focus_gate_matches,
     observe_dispatch_health, observe_wait_health, publish_backend_metrics, record_lateness,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use planning::NextDispatchPlan;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) use planning::NextDispatchPlan;
 pub(crate) use planning::plan_next_dispatch;
 pub(crate) use planning::startup_lead_for_first_packet;
 pub(crate) use startup::WorkerSchedulingGuards;
@@ -93,6 +97,16 @@ pub(crate) struct WorkerRuntime {
     focus_loss_fault_injected: bool,
     allow_pre_epoch_startup_dispatch: bool,
     pending_pre_send_spin_us: u64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl WorkerRuntime {
+    pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
+        Self {
+            verified_target,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Default)]

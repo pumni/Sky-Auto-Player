@@ -40,12 +40,14 @@ pub(crate) use worker::*;
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
-    pub use super::worker::dispatch::ProductionDispatchTestHarness;
+    pub use super::test_support::ProductionDispatchTestHarness;
+    pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observer_drain::{
         DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
         UpObservation,
     };
     pub use super::worker::health::DispatchPath;
+    pub use super::worker::NextDispatchPlan;
 }
 
 /// Test-only hooks for §8.12 slow-observer regression scenarios.

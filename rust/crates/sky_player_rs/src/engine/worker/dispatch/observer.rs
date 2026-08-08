@@ -27,7 +27,7 @@ use smallvec::SmallVec;
 /// accounting, and metric publication are consumed later by
 /// `drain_down_send_outcome` from the dispatch loop's deferred observer.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn publisher_down_send_outcome(
+pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,

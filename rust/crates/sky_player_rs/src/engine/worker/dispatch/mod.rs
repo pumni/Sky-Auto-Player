@@ -17,7 +17,10 @@
 //!   publication.
 
 mod authored;
+#[cfg(not(any(test, feature = "test-support")))]
 mod observer;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod observer;
 #[cfg(not(any(test, feature = "test-support")))]
 mod observer_drain;
 // `pub(crate)` under test/test-support so engine.rs's public §8.11/§8.12
@@ -26,9 +29,13 @@ mod observer_drain;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod observer_drain;
 mod release;
+#[cfg(not(any(test, feature = "test-support")))]
 mod timing;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod timing;
 
 /// Outcome of one dispatch-loop authored or pending-release step.
+#[derive(Debug)]
 pub enum DispatchStep {
     NoWork,
     Dispatched,
@@ -50,6 +57,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
 /// Built once per authored epoch by `timing::prepare_authored_batch_view`;
 /// the send/admission/telemetry helpers consume it without re-querying the
 /// coordinator schedule.
+#[cfg(not(any(test, feature = "test-support")))]
 pub(super) struct AuthoredBatchView {
     pub(super) prepared_batch: PreparedBatch,
     pub(super) batch_source_action_index: u32,
@@ -62,8 +70,25 @@ pub(super) struct AuthoredBatchView {
     pub(super) conflict_mask: u16,
     pub(super) dispatch_path: DispatchPath,
     pub(super) packet_mode: bool,
-    pub(super) packet_masks: Option<sky_dispatch_win32::input::PhysicalPacket>,
+    pub(super) packet_masks: Option<PhysicalPacket>,
     pub(super) scan_batch: ScanCodeBatch,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct AuthoredBatchView {
+    pub(crate) prepared_batch: PreparedBatch,
+    pub(crate) batch_source_action_index: u32,
+    pub(crate) batch_intent_count: usize,
+    pub(crate) batch_kind: ActionKind,
+    pub(crate) batch_scheduled_ticks: TimelineTicks,
+    pub(crate) batch_scheduled_us: u64,
+    pub(crate) authored_batch_scheduled_ticks: TimelineTicks,
+    pub(crate) authored_batch_scheduled_us: u64,
+    pub(crate) conflict_mask: u16,
+    pub(crate) dispatch_path: DispatchPath,
+    pub(crate) packet_mode: bool,
+    pub(crate) packet_masks: Option<PhysicalPacket>,
+    pub(crate) scan_batch: ScanCodeBatch,
 }
 
 /// `Err(None)` indicates an unrecoverable terminal step; `Ok(None)` means the
@@ -82,10 +107,6 @@ pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 // queue primitives + §8.12 hooks are re-exported at crate root under
 // `engine::dispatch_primitives` / `engine::observer_test_hooks` instead.
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod harness;
-#[cfg(any(test, feature = "test-support"))]
-pub use harness::ProductionDispatchTestHarness;
-#[cfg(any(test, feature = "test-support"))]
 pub(super) use observer_drain::observer_initial_budget_override_us;
 
 use super::super::{ActionKind, LatencyClass, QpcTicks, TimelineTicks};
@@ -94,3 +115,4 @@ use super::planning::NextDispatchPlan;
 pub(super) use super::publish_backend_metrics;
 use sky_dispatch_core::coordinator::PreparedBatch;
 use sky_dispatch_core::model::ScanCodeBatch;
+use sky_dispatch_win32::input::PhysicalPacket;

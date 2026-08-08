@@ -2569,10 +2569,165 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
 }
 
 #[test]
+fn invariant_mismatch_prevents_sender_invocation() {
+    use sky_dispatch_win32::input::{PlatformSendResult, TrackedKeyState};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let send_counter = Arc::new(AtomicU64::new(0));
+    let counter_clone = send_counter.clone();
+    let backend = TrackedKeyState::with_emitter(move |codes, _key_up| {
+        counter_clone.fetch_add(1, Ordering::SeqCst);
+        PlatformSendResult {
+            requested: codes.len() as u8,
+            inserted: codes.len() as u8,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+
+    let target = AtomicIsize::new(456);
+    let generation = AtomicU64::new(2);
+    let focus_active = AtomicBool::new(false);
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 1,
+    };
+
+    let admission = final_down_admission(
+        expected,
+        false,
+        &focus_active,
+        &target,
+        &generation,
+        &quit_requested,
+        &skip_requested,
+        &panic_requested,
+        &desired_pause,
+    );
+
+    assert_eq!(admission, DownAdmission::TargetChanged);
+    assert_eq!(
+        send_counter.load(Ordering::SeqCst),
+        0,
+        "sender seam must not be invoked on target stamp mismatch"
+    );
+    let _ = backend;
+}
+
+#[test]
 fn test_qpc_ordering_failure_is_terminal() {
-    // Construct dispatch_ready_qpc < sender_completed_qpc ordering failure
-    let sender_completed_qpc = QpcTicks::from_raw(200);
-    let dispatch_ready_qpc = QpcTicks::from_raw(100);
-    let ordering_res = dispatch_ready_qpc.checked_duration_since(sender_completed_qpc);
-    assert!(ordering_res.is_err());
+    use crate::engine::telemetry::WorkerMetricsLocal;
+    use crate::engine::worker::dispatch::observer::publisher_down_send_outcome;
+    use crate::engine::worker::dispatch::timing::DownSendTiming;
+    use crate::engine::worker::dispatch::{
+        AuthoredBatchView, DispatchStep, PendingObservationQueue,
+    };
+    use crate::engine::worker::health::{DispatchPath, FrozenDispatchBudget};
+    use crate::engine::worker::WorkerRuntime;
+    use sky_dispatch_core::coordinator::PreparedBatch;
+    use sky_dispatch_core::estimator::LatencyClass;
+    use sky_dispatch_core::model::{ActionKind, ScanCodeBatch};
+    use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
+    use sky_dispatch_win32::input::PacketRetryReason;
+    use smallvec::SmallVec;
+
+    let qpc_clock = QpcClock::initialize().expect("QPC");
+    let mut runtime = WorkerRuntime::default();
+    let mut local_metrics = WorkerMetricsLocal::default();
+    let mut telemetry = crate::engine::telemetry::TelemetryCollector::new(
+        crate::engine::telemetry::TelemetryMode::Off,
+        16,
+    );
+    let mut observer = PendingObservationQueue::default();
+    let frozen_budget = FrozenDispatchBudget {
+        path: DispatchPath::DownOnly { down_count: 1 },
+        observed_polyphony: 1,
+        send_warn_us: 300,
+        core_post_send_warn_us: 300,
+    };
+
+    let view = AuthoredBatchView {
+        prepared_batch: PreparedBatch {
+            index: 0,
+            effective_scheduled_ticks: TimelineTicks::ZERO,
+            effective_lead_ticks: DurationTicks::ZERO,
+            packet_kind: None,
+            packet_batch_count: 1,
+            packet_index: 0,
+        },
+        batch_source_action_index: 0,
+        batch_intent_count: 1,
+        batch_kind: ActionKind::Down,
+        batch_scheduled_ticks: TimelineTicks::ZERO,
+        batch_scheduled_us: 0,
+        authored_batch_scheduled_ticks: TimelineTicks::ZERO,
+        authored_batch_scheduled_us: 0,
+        conflict_mask: 0,
+        dispatch_path: DispatchPath::DownOnly { down_count: 1 },
+        packet_mode: false,
+        packet_masks: None,
+        scan_batch: ScanCodeBatch::new_empty(),
+    };
+
+    // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)
+    // so dispatch_ready_qpc < sender_completed_qpc ordering fails inside publisher_down_send_outcome.
+    let timing_proof = DownSendTiming {
+        sender_completed_qpc: QpcTicks::from_raw(u64::MAX),
+        sender_started_effective_ticks: TimelineTicks::ZERO,
+        completed_effective_ticks: TimelineTicks::ZERO,
+        completed_effective: 0,
+        sender_duration_us: 0,
+        requested_count: 1,
+        delivered_count: 1,
+        completion_error_ticks_value: 0,
+        authored_completion_error_ticks_value: 0,
+        completion_error_us: 0,
+        clean_directional_sample: true,
+        recovered_partial_up: false,
+        recovered_retry_late: false,
+        strict_completion_late: false,
+        retry_late_abort: false,
+        saturation_abort: false,
+    };
+
+    let step = publisher_down_send_outcome(
+        &view,
+        &mut runtime,
+        &mut local_metrics,
+        qpc_clock,
+        &mut telemetry,
+        TimelineTicks::ZERO,
+        0,
+        false,
+        DurationTicks::ZERO,
+        LatencyClass::Hot,
+        &frozen_budget,
+        1,
+        true,
+        &SmallVec::new(),
+        &SmallVec::new(),
+        1,
+        PacketRetryReason::None,
+        false,
+        None,
+        &mut observer,
+        &timing_proof,
+    );
+
+    match step {
+        DispatchStep::Terminate(msg) => {
+            assert!(
+                msg.contains("dispatch-ready QPC ordering failure"),
+                "expected ordering failure message, got: {msg}"
+            );
+        }
+        other => panic!("expected DispatchStep::Terminate, got {other:?}"),
+    }
 }

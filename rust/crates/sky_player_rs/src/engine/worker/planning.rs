@@ -33,8 +33,18 @@ pub(crate) struct AuthoredDispatchPlan {
 /// Does not borrow the coordinator. Callers must discard the plan after any
 /// interrupt, command, focus/pause transition, backend call, release recovery
 /// change, or wait wake — never cache across loop iterations.
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NextDispatchPlan {
+    pub(crate) latency_class: LatencyClass,
+    pub(crate) authored: Option<AuthoredDispatchPlan>,
+    pub(crate) pending: Option<PendingDispatchPlan>,
+    pub(crate) deadline_ticks: Option<TimelineTicks>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextDispatchPlan {
     pub(crate) latency_class: LatencyClass,
     pub(crate) authored: Option<AuthoredDispatchPlan>,
     pub(crate) pending: Option<PendingDispatchPlan>,
@@ -49,6 +59,28 @@ impl Default for NextDispatchPlan {
             pending: None,
             deadline_ticks: None,
         }
+    }
+}
+
+impl NextDispatchPlan {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn authored_path(&self) -> Option<DispatchPath> {
+        self.authored.as_ref().map(|a| a.path)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending(&self) -> Option<&PendingDispatchPlan> {
+        self.pending.as_ref()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn latency_class(&self) -> LatencyClass {
+        self.latency_class
     }
 }
 
