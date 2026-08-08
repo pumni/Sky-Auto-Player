@@ -11,7 +11,7 @@ def _compact_output(
     *,
     completion_error_ticks: int = 250,
     authored_completion_error_ticks: int = 250,
-    schema_version: int = 7,
+    schema_version: int = 9,
     requested_count: int = 1,
     sent_count: int = 1,
     skipped_count: int = 0,

@@ -18,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 8
+NATIVE_TELEMETRY_SCHEMA_VERSION = 9
 
 
 def _optional_int(value: Any) -> int | None:
@@ -527,9 +527,9 @@ def materialize_native_trace(
     values; callers must not expect them in the native JSON envelope.
     """
 
-    # Schema 7 remains readable for one compatibility release; Rust emits
-    # only the current schema 8.
-    if output.get("schema_version") not in (7, NATIVE_TELEMETRY_SCHEMA_VERSION):
+    # Schemas 7 and 8 remain readable for historical native artifacts; Rust
+    # emits only the current schema 9.
+    if output.get("schema_version") not in (7, 8, NATIVE_TELEMETRY_SCHEMA_VERSION):
         raise ValueError("unsupported native telemetry schema version")
     records = output.get("records")
     if not isinstance(records, list):
