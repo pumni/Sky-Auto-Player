@@ -376,6 +376,7 @@ def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
     assert "scripts/bench_native_ab.py" in workflow
     assert "fetch-depth: 0" in workflow
     assert "baseline_comparison=unavailable_initial_push" in workflow
+    assert "--budget-seconds 600" in workflow
     assert "adaptive-cold" in workflow
 
 

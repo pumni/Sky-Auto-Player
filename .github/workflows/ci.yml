@@ -225,7 +225,7 @@ jobs:
           foreach ($matrix in $matrices) {
             $matrixDir = Join-Path $artifactRoot $matrix.Name
             New-Item -ItemType Directory -Force -Path $matrixDir | Out-Null
-            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --actions $matrix.Actions --dispatch-repeats $matrix.Repeats --command-samples $matrix.Commands --polyphony 1,2,3,5,8,15 --game-fps $matrix.Fps --lead-mode $matrix.Lead --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode $matrix.Priority --budget-seconds 120 --output-dir $matrixDir
+            uv run --env-file .env python scripts/bench_native_ab.py --baseline-ref $baseline --candidate-ref $env:CURRENT_SHA --actions $matrix.Actions --dispatch-repeats $matrix.Repeats --command-samples $matrix.Commands --polyphony 1,2,3,5,8,15 --game-fps $matrix.Fps --lead-mode $matrix.Lead --fixed-lead-us 0 --gap-profile $matrix.Gap --warmup-cycles 8 --rt-priority-mode $matrix.Priority --budget-seconds 600 --output-dir $matrixDir
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

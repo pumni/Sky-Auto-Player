@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BENCHMARK_BUDGET_SECONDS = 600.0
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -162,7 +163,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gap-profile", choices=("hot", "cold"), required=True)
     parser.add_argument("--warmup-cycles", type=int, required=True)
     parser.add_argument("--rt-priority-mode", default="off")
-    parser.add_argument("--budget-seconds", type=float, default=120.0)
+    parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=DEFAULT_BENCHMARK_BUDGET_SECONDS,
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
 
