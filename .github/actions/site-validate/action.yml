@@ -67,7 +67,7 @@ runs:
 
     - name: Upload Playwright failure artifacts
       if: failure()
-      uses: actions/upload-artifact@4bec8e081f65027303d8ba4f652030f2430349f2 # v4.6.1
+      uses: actions/upload-artifact@v4
       with:
         name: playwright-failure-${{ github.run_id }}
         path: |
