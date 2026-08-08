@@ -30,9 +30,10 @@
 //!
 //! ## State version
 //!
-//! Version 8 publishes the fixed lead lookup table. Timing cache state is
-//! ephemeral diagnostic data, so only the current schema is accepted; older or
-//! newer versions are discarded and the conservative prior is used.
+//! Version 9 publishes six timing channels: DownOnly Hot/Cold, UpOnly
+//! Hot/Cold, and Mixed Hot/Cold. Timing cache state is ephemeral diagnostic
+//! data, so only the current schema is accepted; older or newer versions are
+//! discarded and the conservative prior is used.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -385,7 +386,7 @@ impl SlowTailReserve {
     }
 }
 
-// ─── Residual EMA (4 independent channels) ───────────────────────────────────
+// ─── Residual EMA (6 independent channels) ───────────────────────────────────
 
 /// EMA-based completion-error residual for one (kind × class) channel.
 #[derive(Debug, Clone, Default)]
