@@ -85,9 +85,6 @@ def test_observer_flag_alone_produces_no_misleading_warning() -> None:
     res = ledger.update()
     assert not res.runtime_notices
 
-    # Old code "native-bookkeeping-slow" is never in runtime notices
     core_post_send = ledger.update(core_post_send_degraded=True)
     codes = [notice.code for notice in core_post_send.runtime_notices]
-    assert "native-bookkeeping-slow" not in codes
-    assert "native-core-post-send-slow" in codes
-
+    assert codes.count("native-core-post-send-slow") == 1

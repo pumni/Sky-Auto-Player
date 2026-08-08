@@ -47,7 +47,7 @@ choice, and the terminal transition.
   health-window observation, lateness accounting, and diagnostic metric
   publication are enqueued as an allocation-free `DispatchObservation`
   (tagged `Down`/`Up`) into a fixed-capacity (64) worker-owned ring and
-  consumed later by `observer_drain::drain_one_observer`.
+  consumed later by `observer::drain_one_observer`.
   The dispatch loop applies the §8.7/§8.8 slack rule before admit/dispatch:
   fresh QPC → immutable `NextDispatchPlan` → drain at most one observation
   only when next-deadline slack ≥ `budget_us + margin_us` (or no deadline
@@ -88,13 +88,14 @@ are part of the native contract; Python must not replace a missing field with a
 zero. It has no trace, hash maps, generation ledger, estimator internals, or
 build provenance. Latency degradation is reported as an input-path health
 signal; the typed snapshot separates `sendinput_path_degraded`,
-`bookkeeping_degraded`, and `wait_path_degraded`. The legacy
-`input_path_degraded` value remains the SendInput-or-bookkeeping aggregate.
-SendInput warning thresholds use the estimator's polyphony-aware syscall
-budget plus a fixed margin and a conservative cold prior; bookkeeping and wait
-thresholds remain independent. Each path also publishes its degraded-sample
-count and active threshold. UI text must not infer an OS hook, Filter Keys, or
-game-side cause from any of these sender-side signals.
+`core_post_send_degraded`, `observer_degraded`, and `wait_path_degraded`.
+`input_path_degraded` is the OR of SendInput and core post-send health only;
+observer slowdown is an independent domain. SendInput warning thresholds use
+the estimator's polyphony-aware syscall budget plus a fixed margin; core
+post-send, observer, and wait thresholds remain independent. Each path also
+publishes its degraded-sample count and active threshold. UI text must not
+infer an OS hook, Filter Keys, or game-side cause from any of these sender-side
+signals.
 
 Each performance sample is classified once against the budget frozen before
 dispatch; the rolling windows retain only that boolean classification, not raw
@@ -125,9 +126,9 @@ The native lifecycle/status domain is separate from UI presentation status:
 `panicked`, and `poisoned` are native values. A terminal `is_finished` snapshot
 is accepted before live-status validation; Python then joins once, materializes
 `session_report`, parses telemetry and estimator state, and only then surfaces a
-terminal error. Normal completion never invokes panic cleanup. The legacy
-`input_path_degraded` field is the aggregate of SendInput and bookkeeping
-health; wait-path degradation remains a separate signal.
+terminal error. Normal completion never invokes panic cleanup.
+`input_path_degraded` remains the aggregate of SendInput and core post-send
+health; observer and wait-path degradation remain separate signals.
 
 ## Invariants
 
@@ -138,8 +139,8 @@ health; wait-path degradation remains a separate signal.
 - The native worker anchors the physical hold at the actual Down completion,
   using `max(configured_min_hold_us, frame_period_us + 500us)` as its initial
   frame-safe floor. It never snaps note-on timestamps to a frame grid.
-- A packet late by at least one frame rebases the effective timeline once and
-  preserves later packet spacing; it is not replayed as a catch-up burst.
+- Authored timestamps are immutable; only an actual release-recovery pause may
+  shift the effective epoch, and it preserves later authored spacing.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.

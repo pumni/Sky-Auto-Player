@@ -21,8 +21,8 @@ impl Default for DispatchHealthOptions {
     fn default() -> Self {
         Self {
             sendinput_warn_floor_us: 300,
-            core_post_send_warn_us: 300,
-            observer_warn_us: 5_000,
+            core_post_send_warn_us: 5_000,
+            observer_warn_us: 300,
             wait_warn_us: 300,
             window_capacity: HEALTH_WINDOW_CAPACITY,
             bad_sample_count: 4,
@@ -537,8 +537,8 @@ mod tests {
     #[test]
     fn health_paths_have_independent_default_thresholds() {
         let options = DispatchHealthOptions::default();
-        assert_eq!(options.core_post_send_warn_us, 300);
-        assert_eq!(options.observer_warn_us, 5_000);
+        assert_eq!(options.core_post_send_warn_us, 5_000);
+        assert_eq!(options.observer_warn_us, 300);
         assert_eq!(options.wait_warn_us, 300);
         assert_eq!(options.window_capacity, 64);
         assert_eq!(options.bad_sample_count, 4);

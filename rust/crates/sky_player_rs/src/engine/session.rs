@@ -534,6 +534,7 @@ impl NativeDispatchSession {
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
             rollback_residue_keys: local.rollback_residue_keys,
+            chord_integrity_lost: local.chord_integrity_lost,
             lead_saturation_count_down: local.lead_saturation_count_down.to_vec(),
             lead_saturation_count_up: local.lead_saturation_count_up.to_vec(),
             positive_residual_at_cap: local.positive_residual_at_cap,

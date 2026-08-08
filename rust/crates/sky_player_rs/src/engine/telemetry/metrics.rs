@@ -48,6 +48,7 @@ pub struct WorkerMetricsLocal {
     pub failed_release_count: u64,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
+    pub chord_integrity_lost: u64,
     pub sendinput_partial_events: u64,
     pub sendinput_zero_progress_failures: u64,
     pub chords_rejected: u64,
@@ -101,7 +102,8 @@ pub struct WorkerMetricsLocal {
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_us: u64,
     pub timeline_rebase_max_us: u64,
-    /// 0 = none, 1 = worker_late, 2 = release_floor, 3 = release_recovery.
+    /// 0 = none, 3 = release_recovery. Authored lateness and release-floor
+    /// enforcement never rebase the authored timeline.
     pub timeline_rebase_last_reason: u8,
     pub dispatch_occupancy_max_us: u64,
     pub send_down_degraded_samples: u64,

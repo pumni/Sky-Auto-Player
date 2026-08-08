@@ -28,6 +28,7 @@ pub struct EngineSnapshot {
     pub sendinput_partial_events: u64,
     pub sendinput_zero_progress_failures: u64,
     pub chords_rejected: u64,
+    pub chord_integrity_lost: u64,
     pub authored_conflict_events: u64,
     pub authored_chords_rejected: u64,
     pub authored_keys_rejected: u64,

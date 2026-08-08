@@ -229,6 +229,7 @@ impl NativeDispatchSessionPy {
         dict.set_item("authored_conflict_events", snap.authored_conflict_events)?;
         dict.set_item("authored_chords_rejected", snap.authored_chords_rejected)?;
         dict.set_item("authored_keys_rejected", snap.authored_keys_rejected)?;
+        dict.set_item("chord_integrity_lost", snap.chord_integrity_lost)?;
         dict.set_item(
             "keys_inserted_before_failure",
             snap.keys_inserted_before_failure,
