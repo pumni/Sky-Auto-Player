@@ -402,18 +402,34 @@ impl TrackedKeyState {
 
         let to_send_mask = mask_for_scan_codes(&to_send).unwrap_or(0);
 
-        if matches!(emitted.status, SendTransactionStatus::IntegrityLost) {
-            for &sc in &to_send {
-                let bit = key_mask(sc).unwrap_or(0);
-                self.active_mask &= !bit;
-                self.possibly_active_mask |= bit;
+        match emitted.status {
+            SendTransactionStatus::Complete => {
+                self.active_mask |= to_send_mask;
+                self.possibly_active_mask &= !to_send_mask;
             }
-            self.chord_split_events += 1;
-        } else if emitted.is_success() {
-            self.active_mask |= to_send_mask;
-            self.possibly_active_mask &= !to_send_mask;
-        } else {
-            self.possibly_active_mask &= !to_send_mask;
+            SendTransactionStatus::IntegrityLost => {
+                self.active_mask &= !to_send_mask;
+                self.possibly_active_mask |= to_send_mask;
+                self.chord_split_events = self.chord_split_events.saturating_add(1);
+            }
+            SendTransactionStatus::ClockFailureAfterSend => {
+                // SendInput may have inserted one or more keys, but the
+                // completion boundary is unknown.  Keep ownership uncertain
+                // so cleanup/recovery can include every requested key.
+                self.active_mask &= !to_send_mask;
+                self.possibly_active_mask |= to_send_mask;
+            }
+            SendTransactionStatus::ZeroProgress | SendTransactionStatus::ClockFailureBeforeSend => {
+                self.possibly_active_mask &= !to_send_mask;
+            }
+            SendTransactionStatus::PartialProgress => {
+                // The current Down primitive classifies an inserted partial
+                // packet as IntegrityLost.  Keep this arm explicit so a
+                // future transport classification cannot silently confirm it.
+                self.active_mask &= !to_send_mask;
+                self.possibly_active_mask |= to_send_mask;
+                self.chord_split_events = self.chord_split_events.saturating_add(1);
+            }
         }
 
         if !emitted.is_success() {

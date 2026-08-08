@@ -10,12 +10,13 @@ use super::scan_code::{
     valid_instrument_scan_code,
 };
 use super::tracked::TEST_RELEASE_SLEEP_COUNT;
-use crate::clock::QpcTicks;
+use crate::clock::{QpcError, QpcTicks};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod cleanup;
+mod recovery;
 
 fn scripted_result(requested: usize, inserted: u8, _completed_us: u64) -> PlatformSendResult {
     PlatformSendResult {
@@ -273,6 +274,32 @@ fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
     assert_eq!(state.sendinput_partial_events, 0);
     assert_eq!(state.sendinput_zero_progress_failures, 1);
     assert_eq!(state.chord_split_events, 0);
+}
+
+#[test]
+fn post_send_clock_failure_keeps_down_keys_uncertain_for_cleanup() {
+    let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
+        assert!(!key_up);
+        PlatformSendResult {
+            requested: codes.len() as u8,
+            inserted: codes.len() as u8,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+
+    let outcome = state.key_down(&[0x15, 0x16]);
+
+    assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+    assert_eq!(state.active_mask & 0b11, 0);
+    assert_eq!(state.possibly_active_mask & 0b11, 0b11);
+    assert_eq!(
+        state.active_mask | state.possibly_active_mask | state.failed_release_mask,
+        0b11,
+        "cleanup must see every key whose post-send state is uncertain"
+    );
 }
 
 #[test]
@@ -792,53 +819,6 @@ fn cleanup_clears_resolved_keys_before_final_outcome() {
 }
 
 #[test]
-fn custom_emitter_without_probe_never_synthesizes_all_up() {
-    // A simulated transport emitter that fully confirms every key must NOT be
-    // allowed to invent physical all-up evidence. Without an explicit probe the
-    // cleanup FSM resolves Inconclusive and fails closed.
-    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: codes.len() as u8,
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: Some(QpcTicks::ZERO),
-        win32_error: 0,
-        timing_error: None,
-    });
-    state.active_mask = 0x0003;
-
-    let outcome = state.release_all(0);
-    assert!(
-        !outcome.released_successfully,
-        "emitter alone must not confirm all-up"
-    );
-    assert!(outcome.verification_inconclusive);
-    // Transport confirmed every key, but without a probe the physical verdict
-    // is Inconclusive: no key is left stuck, yet all-up is not provable.
-    assert!(outcome.stuck_keys().is_empty());
-}
-
-#[test]
-fn custom_emitter_without_probe_never_synthesizes_held() {
-    // A transport emitter reporting failure must not synthesize a Held verdict
-    // either; without a probe the result is Inconclusive (fail-closed).
-    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: 0,
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: Some(QpcTicks::ZERO),
-        win32_error: 5,
-        timing_error: None,
-    });
-    state.active_mask = 0x0001;
-
-    let outcome = state.release_all(0);
-    assert!(!outcome.released_successfully);
-    assert!(outcome.verification_inconclusive);
-    assert_eq!(outcome.stuck_keys(), vec![0x15]);
-    assert_eq!(state.failed_release_mask, 0x0001);
-}
-
-#[test]
 fn cleanup_transport_anomaly_never_forces_verification_inconclusive() {
     // Even when the transport path saw an anomaly, a conclusive Held verdict
     // from the probe must NOT be reported as inconclusive: the two dimensions
@@ -888,28 +868,6 @@ fn cleanup_transport_anomaly_is_aggregated_independently_of_physical_all_up() {
     assert!(outcome.stuck_keys().is_empty());
     assert_eq!(outcome.attempts, 1);
     assert!(outcome.transport_anomaly);
-}
-
-#[test]
-fn test_send_transaction_status_exhaustive_match() {
-    let statuses = [
-        SendTransactionStatus::Complete,
-        SendTransactionStatus::ZeroProgress,
-        SendTransactionStatus::PartialProgress,
-        SendTransactionStatus::IntegrityLost,
-        SendTransactionStatus::ClockFailureBeforeSend,
-        SendTransactionStatus::ClockFailureAfterSend,
-    ];
-    for status in statuses {
-        match status {
-            SendTransactionStatus::Complete => {}
-            SendTransactionStatus::ZeroProgress => {}
-            SendTransactionStatus::PartialProgress => {}
-            SendTransactionStatus::IntegrityLost => {}
-            SendTransactionStatus::ClockFailureBeforeSend => {}
-            SendTransactionStatus::ClockFailureAfterSend => {}
-        }
-    }
 }
 
 fn test_send_result(requested: u8, inserted: u8, err: u32) -> PlatformSendResult {
