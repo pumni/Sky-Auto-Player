@@ -171,6 +171,30 @@ pub(crate) fn observer_has_safe_slack(
 static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_INITIAL_BUDGET_OVERRIDE_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_TEST_HOOK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Test-only RAII guard that serializes observer timing hook access and resets
+/// hooks on acquire and drop.
+#[cfg(any(test, feature = "test-support"))]
+pub struct ObserverTestHookGuard {
+    _lock: parking_lot::MutexGuard<'static, ()>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for ObserverTestHookGuard {
+    fn drop(&mut self) {
+        reset_observer_test_hooks();
+    }
+}
+
+/// Acquire exclusive access to observer test timing hooks.
+#[cfg(any(test, feature = "test-support"))]
+pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
+    let lock = OBSERVER_TEST_HOOK_LOCK.lock();
+    reset_observer_test_hooks();
+    ObserverTestHookGuard { _lock: lock }
+}
 
 /// Test-only: force every observer drain to sleep this many microseconds so
 /// §8.12 can prove a slow observer cannot shift authored dispatch.

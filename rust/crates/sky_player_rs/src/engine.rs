@@ -57,6 +57,13 @@ pub mod dispatch_primitives {
 /// into the public API (E0364).
 #[cfg(any(test, feature = "test-support"))]
 pub mod observer_test_hooks {
+    pub use super::worker::dispatch::observer_drain::ObserverTestHookGuard;
+
+    /// Acquire exclusive access to observer test timing hooks.
+    pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
+        super::worker::dispatch::observer_drain::observer_test_hook_guard()
+    }
+
     /// Force every observer drain to sleep this many microseconds.
     pub fn set_observer_artificial_cost_us(us: u64) {
         super::worker::dispatch::observer_drain::set_observer_artificial_cost_us(us);

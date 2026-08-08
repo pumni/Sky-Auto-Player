@@ -2349,10 +2349,11 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
 #[test]
 fn slow_observer_defers_when_slack_is_insufficient() {
     use crate::engine::observer_test_hooks::{
-        reset_observer_test_hooks, set_observer_artificial_cost_us,
+        observer_test_hook_guard, set_observer_artificial_cost_us,
         set_observer_initial_budget_override_us,
     };
 
+    let _observer_hooks = observer_test_hook_guard();
     set_observer_artificial_cost_us(20_000);
     // Force budget so 10 ms slack < budget + margin (15_000 + 500).
     set_observer_initial_budget_override_us(15_000);
@@ -2411,7 +2412,6 @@ fn slow_observer_defers_when_slack_is_insufficient() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(session.join(Duration::from_secs(5)).expect("join"));
-    reset_observer_test_hooks();
 
     let snapshot = session.snapshot();
     assert_eq!(
@@ -2468,10 +2468,11 @@ fn slow_observer_defers_when_slack_is_insufficient() {
 #[test]
 fn slow_observer_drains_in_ample_slack_without_rebase() {
     use crate::engine::observer_test_hooks::{
-        reset_observer_test_hooks, set_observer_artificial_cost_us,
+        observer_test_hook_guard, set_observer_artificial_cost_us,
         set_observer_initial_budget_override_us,
     };
 
+    let _observer_hooks = observer_test_hook_guard();
     // 2 ms artificial cost with default 5 ms budget; 50 ms gap is ample.
     set_observer_artificial_cost_us(2_000);
     set_observer_initial_budget_override_us(0);
@@ -2530,7 +2531,6 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(session.join(Duration::from_secs(5)).expect("join"));
-    reset_observer_test_hooks();
 
     let snapshot = session.snapshot();
     assert_eq!(
@@ -2546,6 +2546,7 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
         "expected observer drain under ample slack, got observer_duration_max_us={}",
         snapshot.observer_duration_max_us
     );
+    assert_eq!(snapshot.observer_dropped_samples, 0);
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
