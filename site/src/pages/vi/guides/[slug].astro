@@ -39,7 +39,11 @@ const relatedGuides = guide.data.related.map((relKey) => {
       `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) references missing or draft target key: "${relKey}"`,
     );
   }
-  return { title: target.data.title, slug: target.data.slug, locale: target.data.locale as 'en' | 'vi' };
+  return {
+    title: target.data.title,
+    slug: target.data.slug,
+    locale: target.data.locale as 'en' | 'vi',
+  };
 });
 ---
 

@@ -400,7 +400,9 @@ for (const slug of GUIDE_SLUGS) {
     const uniqueSlugs = new Set(relatedSlugs);
 
     if (uniqueSlugs.size < 2 || uniqueSlugs.size > 3) {
-      fail(`Guide page ${pageRoute} has ${uniqueSlugs.size} valid related guide links, expected 2–3`);
+      fail(
+        `Guide page ${pageRoute} has ${uniqueSlugs.size} valid related guide links, expected 2–3`,
+      );
     } else {
       pass(`${pageRoute} has ${uniqueSlugs.size} valid related guide links`);
     }
