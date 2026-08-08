@@ -88,7 +88,17 @@ const byCategory = Object.fromEntries(
 <style>
   .guide-hub {
     display: grid;
-    gap: var(--space-12);
+    gap: var(--space-8);
+  }
+
+  .guide-hub__category {
+    padding-block-start: var(--space-6);
+    border-block-start: 1px solid var(--line-faint);
+  }
+
+  .guide-hub__category:first-child {
+    padding-block-start: 0;
+    border-block-start: none;
   }
 
   .guide-hub__category-header {
