@@ -20,6 +20,9 @@ async function prepare(page: Page, route: string, width: number, height: number)
         transition: none !important;
         caret-color: transparent !important;
       }
+      .site-header {
+        position: relative !important;
+      }
     `,
   });
 }
