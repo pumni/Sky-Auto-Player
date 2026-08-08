@@ -29,7 +29,7 @@ mod release;
 mod timing;
 
 /// Outcome of one dispatch-loop authored or pending-release step.
-pub(crate) enum DispatchStep {
+pub enum DispatchStep {
     NoWork,
     Dispatched,
     Continue,
@@ -82,10 +82,15 @@ pub(crate) use release::{PendingReleaseContext, dispatch_due_pending_releases};
 // queue primitives + §8.12 hooks are re-exported at crate root under
 // `engine::dispatch_primitives` / `engine::observer_test_hooks` instead.
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) mod harness;
+#[cfg(any(test, feature = "test-support"))]
+pub use harness::ProductionDispatchTestHarness;
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use observer_drain::observer_initial_budget_override_us;
 
 use super::super::{ActionKind, LatencyClass, QpcTicks, TimelineTicks};
+use super::DispatchPath;
+use super::planning::NextDispatchPlan;
 pub(super) use super::publish_backend_metrics;
-use super::{DispatchPath, planning::NextDispatchPlan};
 use sky_dispatch_core::coordinator::PreparedBatch;
 use sky_dispatch_core::model::ScanCodeBatch;

@@ -277,12 +277,18 @@ impl NativeDispatchSessionPy {
         dict.set_item("core_post_send_degraded", snap.core_post_send_degraded)?;
         dict.set_item("observer_degraded", snap.observer_degraded)?;
         dict.set_item("wait_path_degraded", snap.wait_path_degraded)?;
-        dict.set_item("sendinput_warn_threshold_us", snap.sendinput_warn_threshold_us)?;
+        dict.set_item(
+            "sendinput_warn_threshold_us",
+            snap.sendinput_warn_threshold_us,
+        )?;
         dict.set_item(
             "core_post_send_warn_threshold_us",
             snap.core_post_send_warn_threshold_us,
         )?;
-        dict.set_item("observer_warn_threshold_us", snap.observer_warn_threshold_us)?;
+        dict.set_item(
+            "observer_warn_threshold_us",
+            snap.observer_warn_threshold_us,
+        )?;
         dict.set_item("wait_warn_threshold_us", snap.wait_warn_threshold_us)?;
         dict.set_item(
             "sendinput_degraded_samples",
@@ -297,19 +303,28 @@ impl NativeDispatchSessionPy {
         dict.set_item("wait_backend_failures", snap.wait_backend_failures)?;
         dict.set_item("wait_clock_failures", snap.wait_clock_failures)?;
         dict.set_item("wait_interrupted_count", snap.wait_interrupted_count)?;
-        dict.set_item("sendinput_window_bad_count", snap.sendinput_window_bad_count)?;
+        dict.set_item(
+            "sendinput_window_bad_count",
+            snap.sendinput_window_bad_count,
+        )?;
         dict.set_item(
             "core_post_send_window_bad_count",
             snap.core_post_send_window_bad_count,
         )?;
         dict.set_item("observer_window_bad_count", snap.observer_window_bad_count)?;
         dict.set_item("wait_window_bad_count", snap.wait_window_bad_count)?;
-        dict.set_item("sendinput_window_sample_count", snap.sendinput_window_sample_count)?;
+        dict.set_item(
+            "sendinput_window_sample_count",
+            snap.sendinput_window_sample_count,
+        )?;
         dict.set_item(
             "core_post_send_window_sample_count",
             snap.core_post_send_window_sample_count,
         )?;
-        dict.set_item("observer_window_sample_count", snap.observer_window_sample_count)?;
+        dict.set_item(
+            "observer_window_sample_count",
+            snap.observer_window_sample_count,
+        )?;
         dict.set_item("wait_window_sample_count", snap.wait_window_sample_count)?;
         dict.set_item("timeline_rebase_count", snap.timeline_rebase_count)?;
         dict.set_item("timeline_rebase_total_us", snap.timeline_rebase_total_us)?;
@@ -321,7 +336,10 @@ impl NativeDispatchSessionPy {
         dict.set_item("core_post_send_max_us", snap.core_post_send_max_us)?;
         dict.set_item("observer_duration_max_us", snap.observer_duration_max_us)?;
         dict.set_item("observer_dropped_samples", snap.observer_dropped_samples)?;
-        dict.set_item("observer_queue_high_watermark", snap.observer_queue_high_watermark)?;
+        dict.set_item(
+            "observer_queue_high_watermark",
+            snap.observer_queue_high_watermark,
+        )?;
         dict.set_item("dispatch_occupancy_max_us", snap.dispatch_occupancy_max_us)?;
         dict.set_item(
             "send_down_degraded_samples",

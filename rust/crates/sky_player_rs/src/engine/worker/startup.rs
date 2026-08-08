@@ -32,6 +32,17 @@ impl WorkerSchedulingGuards {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+impl WorkerSchedulingGuards {
+    pub(crate) fn create_test_guards() -> Self {
+        Self {
+            priority: MmcssGuard::acquire(PriorityMode::Off),
+            power: PowerThrottlingGuard::disable_current_thread(),
+            drop_probe: None,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for WorkerSchedulingGuards {
     fn drop(&mut self) {
         if let Some(probe) = &self.drop_probe {

@@ -41,6 +41,17 @@ pub(crate) struct NextDispatchPlan {
     pub(crate) deadline_ticks: Option<TimelineTicks>,
 }
 
+impl Default for NextDispatchPlan {
+    fn default() -> Self {
+        Self {
+            latency_class: LatencyClass::Hot,
+            authored: None,
+            pending: None,
+            deadline_ticks: None,
+        }
+    }
+}
+
 /// Planning failure. Materialized only on the terminal path; success never
 /// formats strings or allocates.
 #[derive(Debug)]

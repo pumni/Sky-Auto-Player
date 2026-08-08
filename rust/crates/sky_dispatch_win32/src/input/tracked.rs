@@ -142,6 +142,39 @@ impl TrackedKeyState {
         self.custom_packet_emitter = Some(Box::new(emitter));
     }
 
+    /// Install deterministic success test emitters for both single scan code and packet paths.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_test_emitters(&mut self) {
+        let clock = self.qpc_clock;
+        self.custom_emitter = Some(Box::new(move |scan_codes, _key_up| PlatformSendResult {
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks: clock
+                .and_then(|c| c.now().ok())
+                .unwrap_or(crate::clock::QpcTicks::ZERO),
+            completed_ticks: clock.and_then(|c| c.now().ok()),
+            win32_error: 0,
+            timing_error: None,
+        }));
+        self.custom_packet_emitter = Some(Box::new(move |packet| SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: clock.and_then(|c| c.now().ok()),
+                completed_ticks: clock.and_then(|c| c.now().ok()),
+                timing_error: None,
+            },
+        }));
+    }
+
     /// Install a deterministic physical probe for the cleanup FSM.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_probe<F>(&mut self, probe: F)

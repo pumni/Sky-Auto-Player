@@ -227,11 +227,11 @@ impl NativeTelemetryOutput {
             schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
             qpc_frequency_hz: 0,
             records: if matches!(mode, TelemetryMode::Ring) {
-                // Reserve the complete bounded buffer before the worker
-                // epoch. Telemetry is an opt-in diagnostic mode; once it is
-                // enabled, a later VecDeque growth/copy on the dispatch thread is
-                // a worse failure mode than its predictable memory cost.
-                VecDeque::with_capacity(capacity)
+                // Reserve the complete bounded buffer at construction time so no
+                // heap allocation occurs on the first push_back during dispatch.
+                let mut records = VecDeque::with_capacity(capacity);
+                records.reserve_exact(capacity);
+                records
             } else {
                 VecDeque::new()
             },

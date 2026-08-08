@@ -96,7 +96,9 @@ impl DispatchPath {
     }
 }
 
-pub(crate) fn estimator_path_for_dispatch(path: DispatchPath) -> sky_dispatch_core::estimator::SendPath {
+pub(crate) fn estimator_path_for_dispatch(
+    path: DispatchPath,
+) -> sky_dispatch_core::estimator::SendPath {
     match path {
         DispatchPath::DownOnly { .. } => sky_dispatch_core::estimator::SendPath::DownOnly,
         DispatchPath::UpOnly { .. } => sky_dispatch_core::estimator::SendPath::UpOnly,
@@ -127,7 +129,12 @@ pub(crate) fn estimate_dispatch_path_lead(
 ) -> DispatchLeadEstimate {
     let send_path = estimator_path_for_dispatch(path);
     let count = path.event_count();
-    let value = estimator.estimate_lead_with_class_and_policy(send_path, count, latency_class, strict_timing);
+    let value = estimator.estimate_lead_with_class_and_policy(
+        send_path,
+        count,
+        latency_class,
+        strict_timing,
+    );
     DispatchLeadEstimate {
         applied_us: value.applied_us.min(max_lead_us),
         saturated: value.saturated,
@@ -143,7 +150,12 @@ pub(crate) fn build_dispatch_budget(
 ) -> FrozenDispatchBudget {
     let send_path = estimator_path_for_dispatch(path);
     let count = path.event_count();
-    let estimate = estimator.estimate_lead_with_class_and_policy(send_path, count, latency_class, strict_timing);
+    let estimate = estimator.estimate_lead_with_class_and_policy(
+        send_path,
+        count,
+        latency_class,
+        strict_timing,
+    );
     let cold = estimator
         .estimate_lead_with_class_and_policy(send_path, count, LatencyClass::Cold, strict_timing)
         .components
@@ -382,9 +394,12 @@ pub(crate) fn observe_dispatch_health(
     local_metrics.core_post_send_window_bad_count = core_post_send_window.bad_count() as u64;
     local_metrics.sendinput_window_sample_count = sendinput_window.sample_count() as u64;
     local_metrics.core_post_send_window_sample_count = core_post_send_window.sample_count() as u64;
-    local_metrics.input_path_degraded =
-        local_metrics.sendinput_path_degraded || local_metrics.core_post_send_degraded || local_metrics.wait_path_degraded;
-    local_metrics.core_post_send_max_us = local_metrics.core_post_send_max_us.max(post_send_duration_us);
+    local_metrics.input_path_degraded = local_metrics.sendinput_path_degraded
+        || local_metrics.core_post_send_degraded
+        || local_metrics.wait_path_degraded;
+    local_metrics.core_post_send_max_us = local_metrics
+        .core_post_send_max_us
+        .max(post_send_duration_us);
     local_metrics.dispatch_occupancy_max_us = local_metrics
         .dispatch_occupancy_max_us
         .max(send_duration_us.saturating_add(post_send_duration_us));
@@ -437,8 +452,9 @@ pub(crate) fn observe_observer_health(
     local_metrics.observer_degraded = observer_window.is_degraded();
     local_metrics.observer_window_bad_count = observer_window.bad_count() as u64;
     local_metrics.observer_window_sample_count = observer_window.sample_count() as u64;
-    local_metrics.observer_duration_max_us =
-        local_metrics.observer_duration_max_us.max(observer_duration_us);
+    local_metrics.observer_duration_max_us = local_metrics
+        .observer_duration_max_us
+        .max(observer_duration_us);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

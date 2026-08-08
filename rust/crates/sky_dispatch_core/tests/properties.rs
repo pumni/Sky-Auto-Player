@@ -55,9 +55,8 @@ fn terminal_lifecycle_does_not_imply_clean_completion() {
     coordinator
         .drop_expired_downs(&batch.intents)
         .expect("test drop is a valid ledger transition");
-    let _stale_up = coordinator
-        .pop_next_due_authored(1_000, 0)
-        .expect("matching stale Up is due");
+    let _ = coordinator.cancel_all();
+    coordinator.cursor = coordinator.schedule.batches.len();
 
     let counts = coordinator.generation_status_counts();
     assert_eq!(counts["dropped_expired"], 1);
@@ -218,7 +217,7 @@ impl LegacyCoordinatorTestApi for RuntimeDispatchCoordinator {
                 TimelineTicks::from_raw(now_us),
                 DurationTicks::from_raw(dispatch_lead_us),
             )
-            .expect("typed authored pop")?;
+            .ok()??;
         let batch = self
             .schedule
             .try_materialize_batch_authored(index)

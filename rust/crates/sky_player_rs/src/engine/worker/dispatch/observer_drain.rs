@@ -9,8 +9,8 @@
 //! a note-on observation.
 
 use super::super::super::{
-    DurationTicks, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics,
-    TimelineTicks, TrackedKeyState, try_publish_metrics,
+    DurationTicks, LatencyClass, QpcClock, SendLatencyEstimator, SharedMetrics, TimelineTicks,
+    TrackedKeyState, try_publish_metrics,
 };
 use super::super::{
     DispatchHealthObservation, DispatchPath, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,

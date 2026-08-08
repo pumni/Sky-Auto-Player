@@ -121,6 +121,29 @@ pub(crate) struct WorkerTimingState {
     pub(super) last_cpu_metrics_sample_us: u64,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl WorkerTimingState {
+    pub(crate) fn create_test_timing() -> Self {
+        Self {
+            hard_late_abort_threshold_ticks: DurationTicks::ZERO,
+            retry_late_threshold_ticks: DurationTicks::ZERO,
+            strict_down_completion_late_ticks: DurationTicks::ZERO,
+            strict_up_completion_late_ticks: DurationTicks::ZERO,
+            focus_restore_grace_ticks: DurationTicks::ZERO,
+            paused_poll_ticks: DurationTicks::ZERO,
+            cold_threshold_ticks: DurationTicks::ZERO,
+            core_warmup_ticks: DurationTicks::ZERO,
+            lease_timeout_ticks: DurationTicks::ZERO,
+            retry_backoff_ticks: [DurationTicks::ZERO; RELEASE_RETRY_BACKOFF_US.len()],
+            effective_spin_threshold_ticks: DurationTicks::ZERO,
+            start_wall_time_us: 0,
+            start_thread_cpu_us: 0,
+            start_process_cpu_us: 0,
+            last_cpu_metrics_sample_us: 0,
+        }
+    }
+}
+
 pub(crate) struct WorkerHealthState {
     pub(super) down_saturation_positive_streak: u8,
     pub(super) up_saturation_positive_streak: u8,
@@ -129,6 +152,21 @@ pub(crate) struct WorkerHealthState {
     pub(super) core_post_send_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
     pub(super) observer_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
     pub(super) wait_window: HealthWindow<HEALTH_WINDOW_CAPACITY>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl WorkerHealthState {
+    pub(crate) fn new(options: DispatchHealthOptions) -> Self {
+        Self {
+            down_saturation_positive_streak: 0,
+            up_saturation_positive_streak: 0,
+            options,
+            sendinput_window: HealthWindow::default(),
+            core_post_send_window: HealthWindow::default(),
+            observer_window: HealthWindow::default(),
+            wait_window: HealthWindow::default(),
+        }
+    }
 }
 
 pub(crate) struct WorkerResources {

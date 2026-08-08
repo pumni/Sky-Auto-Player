@@ -107,15 +107,7 @@ pub enum LatencyClass {
     Cold,
 }
 
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SendPath {
     DownOnly,
@@ -927,7 +919,8 @@ impl SendLatencyEstimator {
         let local = buckets.raw_estimate_us(n, class, strict_upper_tail);
 
         let lower_bucket = (1..n).rev().find_map(|bucket| {
-            buckets.raw_estimate_us(bucket, class, strict_upper_tail)
+            buckets
+                .raw_estimate_us(bucket, class, strict_upper_tail)
                 .map(|est| {
                     est.saturating_add(
                         PER_KEY_COLD_PRIOR_US.saturating_mul(n.saturating_sub(bucket) as u64),
@@ -1437,7 +1430,12 @@ mod tests {
         assert_eq!(hot_after, hot_before);
         assert!(
             estimator
-                .estimate_lead_with_class_and_policy(SendPath::DownOnly, 2, LatencyClass::Cold, true)
+                .estimate_lead_with_class_and_policy(
+                    SendPath::DownOnly,
+                    2,
+                    LatencyClass::Cold,
+                    true
+                )
                 .applied_us
                 >= 3_000
         );
@@ -1572,7 +1570,8 @@ mod tests {
     #[test]
     fn cold_prior_is_added_once_when_bucket_is_unwarmed() {
         let estimator = SendLatencyEstimator::new(0.2, 10_000, 3);
-        let estimate = estimator.estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Cold);
+        let estimate =
+            estimator.estimate_lead_with_class(SendPath::DownOnly, 1, LatencyClass::Cold);
         assert_eq!(estimate.components.syscall_us, 0);
         assert_eq!(estimate.components.cold_reserve_us, BASE_COLD_PRIOR_US);
         assert_eq!(
@@ -1618,7 +1617,11 @@ mod tests {
         let mut estimator = SendLatencyEstimator::new(0.2, 10_000, 2);
         for _ in 0..SEED_SAMPLES {
             estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Hot);
-            estimator.update_completion_error_with_class(SendPath::DownOnly, 300, LatencyClass::Hot);
+            estimator.update_completion_error_with_class(
+                SendPath::DownOnly,
+                300,
+                LatencyClass::Hot,
+            );
 
             estimator.update_with_class(SendPath::DownOnly, 100, 1, LatencyClass::Cold);
             estimator.update_completion_error_with_class(
@@ -1711,7 +1714,10 @@ mod tests {
         let json = serde_json::to_string(&estimator.export_state()).unwrap();
         let mut restored = SendLatencyEstimator::new(0.2, 5_000, 8);
         restored.import_state(&json).unwrap();
-        assert_eq!(restored.get_lead_us(SendPath::Mixed, 8), estimator.get_lead_us(SendPath::Mixed, 8));
+        assert_eq!(
+            restored.get_lead_us(SendPath::Mixed, 8),
+            estimator.get_lead_us(SendPath::Mixed, 8)
+        );
     }
 
     #[test]
@@ -1771,19 +1777,33 @@ mod tests {
     #[test]
     fn five_clean_mixed_samples_transition_confidence_to_learned() {
         let mut estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
-        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::PriorOnly);
+        assert_eq!(
+            estimator.estimate_lead(SendPath::Mixed, 8).confidence,
+            LeadConfidence::PriorOnly
+        );
         for _ in 0..4 {
             estimator.update(SendPath::Mixed, 300, 8).unwrap();
         }
-        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::Warming);
+        assert_eq!(
+            estimator.estimate_lead(SendPath::Mixed, 8).confidence,
+            LeadConfidence::Warming
+        );
         estimator.update(SendPath::Mixed, 300, 8).unwrap();
-        assert_eq!(estimator.estimate_lead(SendPath::Mixed, 8).confidence, LeadConfidence::Learned);
+        assert_eq!(
+            estimator.estimate_lead(SendPath::Mixed, 8).confidence,
+            LeadConfidence::Learned
+        );
     }
 
     #[test]
     fn query_path_performs_no_allocation() {
         let estimator = SendLatencyEstimator::new(0.2, 5_000, 8);
-        let lead = estimator.estimate_lead_with_class_and_policy(SendPath::Mixed, 8, LatencyClass::Hot, true);
+        let lead = estimator.estimate_lead_with_class_and_policy(
+            SendPath::Mixed,
+            8,
+            LatencyClass::Hot,
+            true,
+        );
         assert!(lead.applied_us > 0);
     }
 }

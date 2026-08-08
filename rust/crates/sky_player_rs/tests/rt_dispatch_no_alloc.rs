@@ -16,7 +16,7 @@
 use sky_dispatch_core::estimator::LatencyClass;
 use sky_player_rs::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DownObservation, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, UpObservation,
+    PendingObservationQueue, ProductionDispatchTestHarness, UpObservation,
 };
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -31,10 +31,27 @@ struct CountingAllocator;
 
 static ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static COUNTING_ENABLED: AtomicU64 = AtomicU64::new(0);
+static CURRENT_THREAD_ID: AtomicU64 = AtomicU64::new(0);
+
+fn current_thread_id_u64() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    hasher.finish()
+}
+
+#[inline]
+fn is_counting_active() -> bool {
+    if COUNTING_ENABLED.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    CURRENT_THREAD_ID.load(Ordering::Relaxed) == current_thread_id_u64()
+}
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING_ENABLED.load(Ordering::Relaxed) != 0 {
+        if is_counting_active() {
             ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: delegates directly to the system allocator.
@@ -47,7 +64,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNTING_ENABLED.load(Ordering::Relaxed) != 0 {
+        if is_counting_active() {
             ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: delegates directly to the system allocator.
@@ -55,10 +72,10 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNTING_ENABLED.load(Ordering::Relaxed) != 0 {
+        if is_counting_active() {
             ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
         }
-        // SAFETY: ptr came from System.alloc; new_size satisfies GlobalAlloc contract.
+        // SAFETY: delegates directly to the system allocator.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -70,13 +87,17 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 // Helpers
 // ---------------------------------------------------------------------------
 
+static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 fn enable_counting() {
     ALLOC_COUNT.store(0, Ordering::SeqCst);
+    CURRENT_THREAD_ID.store(current_thread_id_u64(), Ordering::SeqCst);
     COUNTING_ENABLED.store(1, Ordering::SeqCst);
 }
 
 fn disable_counting() -> u64 {
     COUNTING_ENABLED.store(0, Ordering::SeqCst);
+    CURRENT_THREAD_ID.store(0, Ordering::SeqCst);
     ALLOC_COUNT.load(Ordering::SeqCst)
 }
 
@@ -110,7 +131,7 @@ fn up_observation(n: u64) -> DispatchObservation {
         lead_up: n,
         lead_up_saturated: false,
         completed_effective: n,
-        scheduled_us: n,
+        scheduled_us: 0,
         deferred_by_us: 0,
         up_completion_error_us: 0,
         clean_up_sample: true,
@@ -128,6 +149,7 @@ fn up_observation(n: u64) -> DispatchObservation {
 /// Single push into an empty queue does not allocate.
 #[test]
 fn push_single_down_observation_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     let mut queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
@@ -147,6 +169,7 @@ fn push_single_down_observation_no_alloc() {
 /// push + pop_front cycle does not allocate.
 #[test]
 fn push_pop_cycle_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     let mut queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
@@ -170,6 +193,7 @@ fn push_pop_cycle_no_alloc() {
 /// Up-observation enqueue does not allocate.
 #[test]
 fn push_up_observation_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     let mut queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
@@ -189,6 +213,7 @@ fn push_up_observation_no_alloc() {
 /// does not allocate.
 #[test]
 fn push_at_capacity_eviction_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     let mut queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
     let mut high = 0u64;
@@ -220,6 +245,7 @@ fn push_at_capacity_eviction_no_alloc() {
 /// Burst of N pushes followed by a full drain — no allocations throughout.
 #[test]
 fn burst_push_and_drain_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     const BURST: usize = 16;
     let mut queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
@@ -247,6 +273,7 @@ fn burst_push_and_drain_no_alloc() {
 /// pop_front on an empty queue does not allocate.
 #[test]
 fn pop_empty_no_alloc() {
+    let _lock = TEST_LOCK.lock();
     let mut queue = PendingObservationQueue::default();
 
     enable_counting();
@@ -258,4 +285,52 @@ fn pop_empty_no_alloc() {
         "pop_front on empty queue made {allocs} heap allocation(s); expected 0"
     );
     assert!(result.is_none());
+}
+
+/// DownOnly production dispatch hard-path makes ZERO heap allocations.
+#[test]
+fn production_down_only_hard_path_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+
+    enable_counting();
+    let _step = harness.dispatch_authored_packet_path();
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "production DownOnly hard-path made {allocs} heap allocation(s); expected 0"
+    );
+}
+
+/// Mixed production dispatch hard-path makes ZERO heap allocations.
+#[test]
+fn production_mixed_hard_path_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+
+    enable_counting();
+    let _step = harness.dispatch_authored_packet_path();
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "production Mixed hard-path made {allocs} heap allocation(s); expected 0"
+    );
+}
+
+/// UpOnly release production dispatch hard-path makes ZERO heap allocations.
+#[test]
+fn production_uponly_release_hard_path_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let (mut harness, due_pending) = ProductionDispatchTestHarness::new_uponly_release();
+
+    enable_counting();
+    let _step = harness.dispatch_pending_releases_path(due_pending);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "production UpOnly release hard-path made {allocs} heap allocation(s); expected 0"
+    );
 }
