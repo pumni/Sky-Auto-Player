@@ -49,6 +49,17 @@ def test_clean_matching_sha_returns_head(monkeypatch: pytest.MonkeyPatch) -> Non
     assert BUILD.expected_build_commit(Path(".")) == "head-commit"
 
 
+def test_explicit_expected_commit_overrides_synthetic_github_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
+    monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")
+    monkeypatch.setenv("GITHUB_SHA", "synthetic-merge-commit")
+    monkeypatch.setenv("SKY_EXPECTED_BUILD_COMMIT", "head-commit")
+
+    assert BUILD.expected_build_commit(Path(".")) == "head-commit"
+
+
 def test_clean_without_reported_sha_returns_head(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(BUILD, "git_head", lambda repo_root: "head-commit")
     monkeypatch.setattr(BUILD, "git_status", lambda repo_root: "")

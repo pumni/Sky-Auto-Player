@@ -170,6 +170,8 @@ jobs:
         run: cargo test --manifest-path rust/Cargo.toml --workspace --all-features
 
       - name: Rust — build wheel
+        env:
+          SKY_EXPECTED_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run --env-file .env python scripts/build_rust_wheel.py --test-support
 
 
