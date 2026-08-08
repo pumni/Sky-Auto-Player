@@ -258,7 +258,6 @@ def test_unified_workflow_integration(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.orchestration.telemetry import TelemetryLogger
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -303,10 +302,6 @@ def test_unified_workflow_integration(monkeypatch) -> None:
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
         active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
-        active_sleep_policy = SleepPolicy(
-            spin_threshold_us=1000,
-            poll_s=0.025,
-        )
         risk_report = ScheduleRiskReport(
             severity="low",
             impossible_repeats=0,
@@ -323,7 +318,6 @@ def test_unified_workflow_integration(monkeypatch) -> None:
             sched_meta=sched_meta,
             session=session,
             active_policy=active_policy,
-            active_sleep_policy=active_sleep_policy,
             song=song,
             risk_report=risk_report,
             cfg=cfg,
@@ -374,7 +368,6 @@ def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
@@ -421,7 +414,6 @@ def test_unified_playback_quit_does_not_rearm_metadata(monkeypatch) -> None:
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=song,
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -482,7 +474,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -527,7 +518,6 @@ def test_unified_workflow_focuses_sky_before_non_dry_playback(monkeypatch) -> No
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=song,
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -596,7 +586,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -641,7 +630,6 @@ def test_in_place_playback_locks_picker_until_finish(monkeypatch) -> None:
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=song,
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -722,7 +710,6 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -767,7 +754,6 @@ def test_card_anchored_after_countdown_grows(monkeypatch) -> None:
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=Song(name="Mock Song", notes=()),
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -847,7 +833,6 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -892,7 +877,6 @@ def test_card_anchored_after_debug_toggle_grows(monkeypatch) -> None:
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=Song(name="Mock Song", notes=()),
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -1001,7 +985,6 @@ def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> Non
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -1053,7 +1036,6 @@ def test_no_unframed_auto_or_na_in_default_header_and_timing(monkeypatch) -> Non
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=Song(name="Mock Song", notes=()),
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -1133,7 +1115,6 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
     from sky_music.infrastructure.background import WorkerSnapshot
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app import playback_app as playback_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -1186,7 +1167,6 @@ def test_header_fps_matches_policy_fps(monkeypatch) -> None:
             sched_meta=ScheduleMetadata(actions=(), source_duration_us=5_000_000, playback_duration_us=5_000_000),  # type: ignore[arg-type]
             session=session,
             active_policy=policy,
-            active_sleep_policy=SleepPolicy(spin_threshold_us=1000, poll_s=0.025),
             song=Song(name="Mock Song", notes=()),
             risk_report=ScheduleRiskReport(
                 severity="low",
@@ -1251,7 +1231,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
     from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.orchestration.telemetry import TelemetryLogger
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
@@ -1301,10 +1280,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
         active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
-        active_sleep_policy = SleepPolicy(
-            spin_threshold_us=1000,
-            poll_s=0.025,
-        )
         risk_report = ScheduleRiskReport(
             severity="low",
             impossible_repeats=0,
@@ -1321,7 +1296,6 @@ def test_unified_workflow_quiesce_failure(monkeypatch) -> None:
             sched_meta=sched_meta,
             session=session,
             active_policy=active_policy,
-            active_sleep_policy=active_sleep_policy,
             song=song,
             risk_report=risk_report,
             cfg=cfg,
@@ -1451,7 +1425,6 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
     from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app import app as app_module
     from sky_music.ui.textual_app.app import SkyPickerApp
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
@@ -1496,10 +1469,6 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
         active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
-        active_sleep_policy = SleepPolicy(
-            spin_threshold_us=1000,
-            poll_s=0.025,
-        )
         risk_report = ScheduleRiskReport(
             severity="high",
             impossible_repeats=0,
@@ -1518,7 +1487,6 @@ def test_unified_workflow_risk_decisions(monkeypatch) -> None:
             sched_meta=sched_meta,
             session=session,
             active_policy=active_policy,
-            active_sleep_policy=active_sleep_policy,
             song=song,
             risk_report=risk_report,
             cfg=cfg,
@@ -1685,7 +1653,6 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
     from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
@@ -1696,10 +1663,6 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
         active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
-        active_sleep_policy = SleepPolicy(
-            spin_threshold_us=1000,
-            poll_s=0.025,
-        )
         risk_report = ScheduleRiskReport(
             severity="low",
             impossible_repeats=0,
@@ -1716,7 +1679,6 @@ def test_playback_screen_toggle_debug(monkeypatch) -> None:
             sched_meta=sched_meta,
             session=session,
             active_policy=active_policy,
-            active_sleep_policy=active_sleep_policy,
             song=song,
             risk_report=risk_report,
             cfg=cfg,
@@ -1863,7 +1825,6 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
     from sky_music.domain.analyzer import ScheduleRiskReport
     from sky_music.domain.scheduler import ScheduleMetadata
     from sky_music.domain.scheduler_types import FrameTimingPolicy
-    from sky_music.infrastructure.timing import SleepPolicy
     from sky_music.ui.textual_app.playback_controller import PlaybackPlan
 
     def mock_prepare_playback(song_path, session, cfg, is_dry_run=False):
@@ -1874,10 +1835,6 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             playback_duration_us=5_000_000,  # type: ignore[arg-type]
         )
         active_policy = FrameTimingPolicy.from_hold_frames(1.0, 60)
-        active_sleep_policy = SleepPolicy(
-            spin_threshold_us=1000,
-            poll_s=0.025,
-        )
         risk_report = ScheduleRiskReport(
             severity="low",
             impossible_repeats=0,
@@ -1894,7 +1851,6 @@ def test_playback_screen_debug_mode_initial_state(monkeypatch) -> None:
             sched_meta=sched_meta,
             session=session,
             active_policy=active_policy,
-            active_sleep_policy=active_sleep_policy,
             song=song,
             risk_report=risk_report,
             cfg=cfg,

@@ -60,7 +60,6 @@ def test_effective_policy_uses_one_hold_source_and_margin_metadata() -> None:
     assert policy.min_hold_margin_us == 800
     assert policy.min_hold_margin_source == "device_cache"
     assert policy.focus_restore_grace_us == 100_000
-    assert session.resolve_sleep_policy(AppConfig()) == (800, 0.025)
 
 
 def test_cli_exposes_hold_frames_and_rejects_removed_absolute_flags() -> None:

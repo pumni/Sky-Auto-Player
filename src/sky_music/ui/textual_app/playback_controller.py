@@ -15,7 +15,6 @@ from sky_music.domain.scheduler_types import FrameTimingPolicy, KeyAction
 from sky_music.domain.session_context import PlaybackSessionContext
 from sky_music.domain.song_repository import get_shared_song_repository
 from sky_music.domain.validation import ScheduleInvariantViolation, validate_key_actions
-from sky_music.infrastructure.timing import SleepPolicy
 from sky_music.orchestration.calibrated_policy import resolve_calibrated_policy
 
 
@@ -25,7 +24,6 @@ class PlaybackPlan:
     sched_meta: ScheduleMetadata
     session: PlaybackSessionContext
     active_policy: FrameTimingPolicy
-    active_sleep_policy: SleepPolicy
     song: Song
     risk_report: ScheduleRiskReport
     cfg: AppConfig
@@ -54,8 +52,6 @@ def prepare_playback(
 
     current_tempo = session.tempo_scale
     active_policy = resolve_calibrated_policy(session, cfg)
-    _spin_us, _poll_s = session.resolve_sleep_policy(cfg)
-    active_sleep_policy = SleepPolicy(spin_threshold_us=_spin_us, poll_s=_poll_s)
 
     try:
         sched_meta = build_key_actions(
@@ -94,7 +90,6 @@ def prepare_playback(
         sched_meta=sched_meta,
         session=session,
         active_policy=active_policy,
-        active_sleep_policy=active_sleep_policy,
         song=song,
         risk_report=report,
         cfg=cfg,

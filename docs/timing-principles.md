@@ -226,6 +226,9 @@ native precision window; the legacy compatibility option is ignored by that work
 oracle may retain its diagnostic-only path for rollback tests, but it is not part of the Rust
 production timing contract.
 
+Python does not own native sleep, wait, or spin tuning. Supervisor polling is an application-side
+control concern; the Rust worker owns its precision wait policy and its effective spin threshold.
+
 ---
 
 ## 8. Appendix: Retired Knobs

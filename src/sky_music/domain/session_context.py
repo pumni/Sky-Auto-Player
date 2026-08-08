@@ -124,15 +124,6 @@ class PlaybackSessionContext:
         )
         return FrameTimingPolicy.from_timing_policy(policy, fps=self.fps)
 
-    def resolve_sleep_policy(
-        self,
-        cfg: AppConfig | None = None,
-        spin_threshold_us: int | None = None,
-    ) -> tuple[int, float]:
-        del cfg, spin_threshold_us
-        return 800, 0.025
-
-
 def merge_session_with_overrides(
     base: PlaybackSessionContext,
     *,
