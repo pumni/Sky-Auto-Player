@@ -27,7 +27,7 @@ sends standard keystrokes through the public Windows `SendInput` API — the sam
 keyboard macro uses — and never reads game memory, injects code, hooks the process, attaches a
 debugger, or touches game files.
 
-**Current source release:** `v3.0.0`.
+**Current source release:** `v3.1.0`.
 
 ## Why it sounds right
 

@@ -20,7 +20,7 @@ These files represent the current system state and contracts:
 * [architecture.md](architecture.md) — Explains the 4-layer DDD codebase and the Python application / Rust native dispatch boundary.
 * [hold-frame-model.md](hold-frame-model.md) — Explicit hold-frame choices, FPS selection, and materialization formulas.
 * [perf-baselines/2026-06-baseline.md](perf-baselines/2026-06-baseline.md) — Pipeline CPU baselines and post-optimization gate numbers.
-* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Auto Player (tracks the `pyproject.toml` `[project].version`, currently 3.0.0).
+* [distribution-and-update.md](distribution-and-update.md) — Distribution model, update architecture, and release contracts for Sky Auto Player (tracks the `pyproject.toml` `[project].version`, currently 3.1.0).
 * [releases/v3.0.0-acceptance.md](releases/v3.0.0-acceptance.md) — Exact-SHA acceptance evidence for the v3.0.0 release candidate.
 
 ---

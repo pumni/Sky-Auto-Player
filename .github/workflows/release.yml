@@ -140,7 +140,8 @@ jobs:
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip
             ${{ runner.temp }}/Sky-Auto-Player-v${{ steps.stage.outputs.version }}.zip.sha256
             ${{ runner.temp }}/MANIFEST.json
-          generate_release_notes: true
+          body_path: docs/releases/v${{ steps.stage.outputs.version }}-release-notes.md
+          generate_release_notes: false
           draft: false
           prerelease: ${{ steps.verlock.outputs.is_prerelease == 'true' }}
         env:

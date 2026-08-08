@@ -14,7 +14,7 @@ category: technical-safety
 order: 1
 published: '2026-08-08'
 updated: '2026-08-08'
-lastReviewedVersion: '3.0.0'
+lastReviewedVersion: '3.1.0'
 draft: false
 related:
   - how-it-works
@@ -97,7 +97,7 @@ Mỗi bản phát hành tạo ra ba file:
 Xác minh archive trước khi giải nén:
 
 ```powershell
-(Get-FileHash "Sky-Auto-Player-v3.0.0.zip" -Algorithm SHA256).Hash
+(Get-FileHash "Sky-Auto-Player-v3.1.0.zip" -Algorithm SHA256).Hash
 # So sánh với nội dung file .sha256
 ```
 
