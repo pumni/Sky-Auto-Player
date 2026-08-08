@@ -1,6 +1,8 @@
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod command_timing;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) mod dispatch_harness;
+#[cfg(any(test, feature = "test-support"))]
 mod fault_injection;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod mock_sender;
@@ -14,3 +16,5 @@ pub use command_timing::CommandTimingResult;
 pub(crate) use command_timing::{
     CommandTimingCleanup, CommandTimingLookup as PauseTimingLookup, CommandTimingState,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use dispatch_harness::ProductionDispatchTestHarness;

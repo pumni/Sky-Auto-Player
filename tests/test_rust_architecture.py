@@ -15,6 +15,64 @@ def _checker():
     return module
 
 
+def _dispatch_fixture(tmp_path: Path, files: set[str]) -> Path:
+    dispatch = (
+        tmp_path
+        / "rust"
+        / "crates"
+        / "sky_player_rs"
+        / "src"
+        / "engine"
+        / "worker"
+        / "dispatch"
+    )
+    dispatch.mkdir(parents=True)
+    for name in files:
+        (dispatch / name).write_text("\n", encoding="utf-8")
+    return dispatch
+
+
+CANONICAL_DISPATCH_FILES = {
+    "authored.rs",
+    "mod.rs",
+    "observer.rs",
+    "release.rs",
+    "timing.rs",
+}
+
+
+def test_checker_accepts_exact_canonical_dispatch_set(tmp_path):
+    _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES)
+    report = _checker().check_repository(tmp_path)
+    assert not report.errors
+
+
+def test_checker_rejects_unexpected_observer_drain_module(tmp_path):
+    _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES | {"observer_" + "drain.rs"})
+    report = _checker().check_repository(tmp_path)
+    assert any(item.rule == "unexpected_dispatch_module" for item in report.errors)
+
+
+def test_checker_rejects_unexpected_harness_module(tmp_path):
+    _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES | {"harness.rs"})
+    report = _checker().check_repository(tmp_path)
+    assert any(item.rule == "unexpected_dispatch_module" for item in report.errors)
+
+
+def test_checker_rejects_missing_observer_module(tmp_path):
+    _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES - {"observer.rs"})
+    report = _checker().check_repository(tmp_path)
+    assert any(item.rule == "missing_dispatch_module" for item in report.errors)
+
+
+def test_checker_rejects_legacy_downs_path(tmp_path):
+    _dispatch_fixture(tmp_path, CANONICAL_DISPATCH_FILES)
+    legacy = tmp_path / "rust" / "crates" / "sky_player_rs" / "src" / "engine" / "worker"
+    (legacy / "downs.rs").write_text("\n", encoding="utf-8")
+    report = _checker().check_repository(tmp_path)
+    assert any(item.rule == "legacy_dispatch_path" for item in report.errors)
+
+
 def test_checker_enforces_new_unsafe_boundary(tmp_path):
     source = tmp_path / "rust" / "crates" / "sky_dispatch_core" / "src"
     source.mkdir(parents=True)

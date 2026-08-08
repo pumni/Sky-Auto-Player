@@ -40,12 +40,57 @@ def test_real_backend_without_mock_options_uses_zero_mock_latency() -> None:
     ) == (0, 0)
 
 
+def test_real_backend_requires_explicit_physical_probe_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SKY_NATIVE_TARGET_HWND", raising=False)
+    with pytest.raises(RuntimeError, match="SKY_NATIVE_TARGET_HWND"):
+        ACCEPTANCE._real_input_target_hwnd()
+
+    monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0x1234")
+    assert ACCEPTANCE._real_input_target_hwnd() == 0x1234
+
+    monkeypatch.setenv("SKY_NATIVE_TARGET_HWND", "0")
+    with pytest.raises(RuntimeError, match="positive integer"):
+        ACCEPTANCE._real_input_target_hwnd()
+
+
 def test_mock_backend_defaults_preserve_latency_model() -> None:
     assert ACCEPTANCE._resolve_mock_latency_values(
         backend="mock",
         mock_base_latency_us=None,
         mock_per_key_latency_us=None,
     ) == (80, 40)
+
+
+def test_known_schema_eight_baseline_projects_legacy_post_send_field() -> None:
+    output: dict[str, Any] = {
+        "schema_version": 8,
+        "records": [{"bookkeeping_duration_us": 4}],
+    }
+
+    normalized = ACCEPTANCE._normalize_historical_native_trace(
+        output,
+        native_build_commit=ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+    )
+
+    assert normalized["records"][0]["core_post_send_duration_us"] == 4
+    assert "core_post_send_duration_us" not in output["records"][0]
+
+
+def test_unknown_schema_eight_does_not_project_legacy_post_send_field() -> None:
+    output: dict[str, Any] = {
+        "schema_version": 8,
+        "records": [{"bookkeeping_duration_us": 4}],
+    }
+
+    normalized = ACCEPTANCE._normalize_historical_native_trace(
+        output,
+        native_build_commit="unknown-sha",
+    )
+
+    assert normalized is output
+    assert "core_post_send_duration_us" not in output["records"][0]
 
 
 def test_mock_latency_overrides_are_preserved_for_mock_backend() -> None:
@@ -84,7 +129,7 @@ def test_repeats_alias_cannot_be_combined_with_dispatch_repeats() -> None:
         ACCEPTANCE._resolve_repeat_counts(args)
 
 
-def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> None:
+def test_schema_five_baseline_requires_matching_timing_domain_and_config() -> None:
     config = {
         "backend": "mock",
         "game_fps": 60,
@@ -102,7 +147,11 @@ def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> No
         "warmup_cycles": 8,
     }
     report = {
-        "benchmark_schema_version": 4,
+        "benchmark_schema_version": 5,
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
+        "timeline_semantics_version": 2,
         "command_timing_domain": "native_qpc_v1",
         "latency_segment_domain": "native_trace_v1",
         "benchmark_config": config,
@@ -116,16 +165,127 @@ def test_schema_four_baseline_requires_matching_timing_domain_and_config() -> No
         "spin_cpu_ratio_ppm": {"p50": 1},
         "peak_rss_bytes": {"max": 1},
     }
-    ACCEPTANCE._assert_baseline_compatible(report, dict(report))
+    baseline = {
+        **report,
+        "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+    }
+    ACCEPTANCE._assert_baseline_compatible(report, baseline)
 
     legacy = {"command_timing_domain": "native_qpc"}
     with pytest.raises(SystemExit, match="legacy baseline"):
         ACCEPTANCE._assert_baseline_compatible(report, legacy)
 
-    mismatched = dict(report)
+    mismatched = dict(baseline)
     mismatched["benchmark_config"] = {**config, "rt_priority_mode": "auto"}
     with pytest.raises(SystemExit, match="fingerprint mismatch"):
         ACCEPTANCE._assert_baseline_compatible(report, mismatched)
+
+
+def test_timeline_semantics_contract_rejects_cross_version_same_semantics() -> None:
+    candidate = {
+        "benchmark_schema_version": 5,
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.SAME_SEMANTICS,
+        "timeline_semantics_version": 2,
+    }
+    baseline = {
+        "benchmark_schema_version": 5,
+        "candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA,
+        "timeline_semantics_version": 1,
+    }
+    with pytest.raises(SystemExit, match="SAME_SEMANTICS"):
+        ACCEPTANCE._assert_comparison_contract(candidate, baseline)
+
+
+def test_transport_reference_allows_v2_candidate_against_known_v1() -> None:
+    candidate = {
+        "candidate_sha": "candidate-sha",
+        "reference_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA,
+        "comparison_role": ACCEPTANCE.TRANSPORT_REFERENCE,
+        "timeline_semantics_version": 2,
+    }
+    baseline = {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
+    ACCEPTANCE._assert_comparison_contract(candidate, baseline)
+
+
+def test_unknown_missing_timeline_semantics_is_rejected() -> None:
+    with pytest.raises(SystemExit, match="unknown SHA"):
+        ACCEPTANCE._timeline_semantics_version({"candidate_sha": "unknown-sha"})
+
+
+def test_known_historical_sha_maps_missing_timeline_semantics() -> None:
+    assert ACCEPTANCE._timeline_semantics_version(
+        {"candidate_sha": ACCEPTANCE.TRANSPORT_REFERENCE_SHA}
+    ) == 1
+    assert ACCEPTANCE._timeline_semantics_version(
+        {"candidate_sha": ACCEPTANCE.SAME_SEMANTICS_REFERENCE_SHA}
+    ) == 2
+
+
+def test_absolute_fixed_hot_wake_slo_is_exact() -> None:
+    config = {"game_fps": 60, "gap_profile": "hot", "lead_mode": "fixed"}
+    for value in (300,):
+        ACCEPTANCE._assert_absolute_wake_slo(
+            {
+                "benchmark_config": config,
+                "wake_error_us": {"absolute": {"p99": value}},
+            }
+        )
+    with pytest.raises(SystemExit, match="absolute wake SLO"):
+        ACCEPTANCE._assert_absolute_wake_slo(
+            {
+                "benchmark_config": config,
+                "wake_error_us": {"absolute": {"p99": 301}},
+            }
+        )
+
+
+def test_correctness_is_checked_before_percentiles() -> None:
+    with pytest.raises(SystemExit, match="correctness failure"):
+        ACCEPTANCE._assert_report_correctness(
+            {"correctness": {"chord_integrity_lost": 1}}
+        )
+
+
+def test_transport_reference_compares_only_raw_sendinput_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    report = {
+        "comparison_role": ACCEPTANCE.TRANSPORT_REFERENCE,
+        "benchmark_config": {"polyphony": [1]},
+        "sendinput_call_duration_us": {"p99": 10, "p999": 12},
+        "by_polyphony": {"1": {"sendinput_call_duration_us": {"p99": 10, "p999": 12}}},
+    }
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps({"by_polyphony": {"1": report["by_polyphony"]["1"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ACCEPTANCE, "_assert_baseline_compatible", lambda *_: None)
+    monkeypatch.setattr(ACCEPTANCE, "_assert_report_correctness", lambda *_: None)
+    monkeypatch.setattr(ACCEPTANCE, "_assert_absolute_wake_slo", lambda *_: None)
+    paths: list[tuple[str, ...]] = []
+
+    def record_path(
+        _report: dict[str, Any],
+        _baseline: dict[str, Any],
+        path: tuple[str, ...],
+        **_kwargs: Any,
+    ) -> None:
+        paths.append(path)
+
+    monkeypatch.setattr(ACCEPTANCE, "_assert_metric_threshold", record_path)
+    ACCEPTANCE._assert_baseline(report, baseline_path)
+
+    assert paths == [
+        ("sendinput_call_duration_us", "p99"),
+        ("sendinput_call_duration_us", "p999"),
+        ("sendinput_call_duration_us", "p99"),
+        ("sendinput_call_duration_us", "p999"),
+    ]
 
 
 def test_p999_uses_nearest_rank() -> None:
@@ -152,7 +312,7 @@ def _trace_fixture(**overrides: object) -> SimpleNamespace:
         "sender_started_us": 110,
         "sender_completed_us": 130,
         "sendinput_call_duration_us": 20,
-        "bookkeeping_duration_us": 4,
+        "core_post_send_duration_us": 4,
         "sender_completion_error_us": 3,
         "native_polyphony": 1,
     }
@@ -270,7 +430,11 @@ def test_workflow_dispatch_marks_validation_relevant_before_path_diff() -> None:
     assert "scripts/bench_native_ab.py" in workflow
     assert "fetch-depth: 0" in workflow
     assert "baseline_comparison=unavailable_initial_push" in workflow
+    assert "--budget-seconds 600" in workflow
     assert "adaptive-cold" in workflow
+    assert "--backend sendinput --allow-real-input" in workflow
+    assert "SKY_NATIVE_TARGET_HWND" in workflow
+    assert "native-sendinput-${{ github.run_id }}" in workflow
 
 
 @pytest.mark.windows

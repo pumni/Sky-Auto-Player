@@ -38,11 +38,24 @@ choice, and the terminal transition.
   mutates the coordinator, allocates, or formats strings on the success path.
   The same `AuthoredDispatchPlan` lead feeds both the prepare-due boundary and
   the wait deadline, so prepare and wait cannot disagree on lead selection.
-- `dispatch.rs` owns the pending-release and authored-packet backend
-  transactions, transaction-outcome interpretation, coordinator commit,
-  estimator update, dispatch telemetry record, and dispatch health observation.
-  It returns a closed four-variant `DispatchStep` (`NoWork`, `Dispatched`,
-  `Continue`, `Terminate`) instead of scalar tuples.
+- `dispatch/` owns the pending-release and authored-packet backend
+  transactions, transaction-outcome interpretation, coordinator commit, and the
+  dispatch telemetry record.  Both the note-on and note-off observers are
+  two-phase: the mandatory telemetry trace, the coordinator commit, the
+  mandatory terminal SLO decision (note-off path), and the `dispatch_ready`
+  QPC sample stay on the hard scheduler path; the estimator update,
+  health-window observation, lateness accounting, and diagnostic metric
+  publication are enqueued as an allocation-free `DispatchObservation`
+  (tagged `Down`/`Up`) into a fixed-capacity (64) worker-owned ring and
+  consumed later by `observer::drain_one_observer`.
+  The dispatch loop applies the §8.7/§8.8 slack rule before admit/dispatch:
+  fresh QPC → immutable `NextDispatchPlan` → drain at most one observation
+  only when next-deadline slack ≥ `budget_us + margin_us` (or no deadline
+  remains) → if drained, discard the plan and rebuild from a fresh QPC
+  sample before wait/admit/dispatch.  Adaptive budget (§8.9) is
+  `clamp(2 × observed_us, 5_000..20_000)`.  Observer work is droppable and
+  never terminal.  It returns a closed four-variant `DispatchStep`
+  (`NoWork`, `Dispatched`, `Continue`, `Terminate`) instead of scalar tuples.
 - `cleanup.rs` owns suspension/terminal cleanup, clean-completion proof, and
   terminal-error aggregation.
 - `control.rs`, `admission.rs`, `wait.rs`, `health.rs`, `timing.rs`, `startup.rs`
@@ -75,13 +88,14 @@ are part of the native contract; Python must not replace a missing field with a
 zero. It has no trace, hash maps, generation ledger, estimator internals, or
 build provenance. Latency degradation is reported as an input-path health
 signal; the typed snapshot separates `sendinput_path_degraded`,
-`bookkeeping_degraded`, and `wait_path_degraded`. The legacy
-`input_path_degraded` value remains the SendInput-or-bookkeeping aggregate.
-SendInput warning thresholds use the estimator's polyphony-aware syscall
-budget plus a fixed margin and a conservative cold prior; bookkeeping and wait
-thresholds remain independent. Each path also publishes its degraded-sample
-count and active threshold. UI text must not infer an OS hook, Filter Keys, or
-game-side cause from any of these sender-side signals.
+`core_post_send_degraded`, `observer_degraded`, and `wait_path_degraded`.
+`input_path_degraded` is the OR of SendInput and core post-send health only;
+observer slowdown is an independent domain. SendInput warning thresholds use
+the estimator's polyphony-aware syscall budget plus a fixed margin; core
+post-send, observer, and wait thresholds remain independent. Each path also
+publishes its degraded-sample count and active threshold. UI text must not
+infer an OS hook, Filter Keys, or game-side cause from any of these sender-side
+signals.
 
 Each performance sample is classified once against the budget frozen before
 dispatch; the rolling windows retain only that boolean classification, not raw
@@ -93,7 +107,11 @@ uncertain key state remain immediate session-latched correctness failures.
 
 The native final snapshot also reports `post_send_max_us`,
 `dispatch_occupancy_max_us`, directional Down/Up/Mixed SendInput counters,
-wait failure counters, and timeline-rebase count/duration/reason. Authored
+wait failure counters, and timeline-rebase count/duration/reason.  The
+deferred dispatch observer additionally reports
+`core_post_send_max_us` (a typed `dispatch_ready - sender_completed` QPC
+sample), `observer_duration_max_us`, `observer_dropped_samples`, and
+`observer_queue_high_watermark`.  Authored
 lateness is measured before any recovery rebase. These fields are diagnostic
 evidence owned by the sender; none establishes that the game observed or
 played a note.
@@ -108,9 +126,9 @@ The native lifecycle/status domain is separate from UI presentation status:
 `panicked`, and `poisoned` are native values. A terminal `is_finished` snapshot
 is accepted before live-status validation; Python then joins once, materializes
 `session_report`, parses telemetry and estimator state, and only then surfaces a
-terminal error. Normal completion never invokes panic cleanup. The legacy
-`input_path_degraded` field is the aggregate of SendInput and bookkeeping
-health; wait-path degradation remains a separate signal.
+terminal error. Normal completion never invokes panic cleanup.
+`input_path_degraded` remains the aggregate of SendInput and core post-send
+health; observer and wait-path degradation remain separate signals.
 
 ## Invariants
 
@@ -121,8 +139,8 @@ health; wait-path degradation remains a separate signal.
 - The native worker anchors the physical hold at the actual Down completion,
   using `max(configured_min_hold_us, frame_period_us + 500us)` as its initial
   frame-safe floor. It never snaps note-on timestamps to a frame grid.
-- A packet late by at least one frame rebases the effective timeline once and
-  preserves later packet spacing; it is not replayed as a catch-up burst.
+- Authored timestamps are immutable; only an actual release-recovery pause may
+  shift the effective epoch, and it preserves later authored spacing.
 - Pause and focus loss release physical keys before resumable cancellation.
 - Quit, skip, panic, worker error, lease expiry, and join timeout use bounded
   cleanup. Uncertain cleanup is an error, never a successful finish.
@@ -134,7 +152,10 @@ health; wait-path degradation remains a separate signal.
   all 15 allowlisted keys; tracked cleanup and stuck-key retries use only their
   bounded masks. A zero/invalid target window, unavailable layout, or failed
   scan-code mapping is inconclusive, never equivalent to “key is up”. Mock
-  emitters remain exempt from host physical-state verification.
+  emitters remain exempt from host physical-state verification but never invent
+  a physical verdict on their own: without an explicit test-only probe the
+  cleanup FSM resolves Inconclusive and fails closed rather than synthesizing
+  `AllUp`/`Held` from transport confirmation.
 - Cleanup is a single bounded state machine (`TrackedKeyState::release_scope`),
   never nested cleanup: `release_all_full_instrument` does not call
   `release_all`. One invocation resolves an unresolved mask, sends key-up,
@@ -145,7 +166,9 @@ health; wait-path degradation remains a separate signal.
   preceding `SendInput` reported partial or zero progress; transport anomalies
   stay visible in counters but do not fabricate a stuck-key set.
   `ReconciledRelease::Held` reports only the held subset and `Inconclusive`
-  fails closed to the transport-unconfirmed subset. Normal clean-up never
+  fails closed to the transport-unconfirmed subset. Transport and physical
+  verification stay independent: `verification_inconclusive` is probe-derived
+  only and is never OR-ed with the transport-anomaly flag. Normal clean-up never
   sleeps.
 - No Python callback runs in the native real-time worker.
 - A successful terminal result requires no active, pending, possibly-active, or

@@ -53,7 +53,7 @@ pub(crate) struct NativeSessionOptions {
     pub(crate) estimator: EstimatorOptions,
 }
 
-pub(super) struct WorkerConfig {
+pub(crate) struct WorkerConfig {
     pub(super) backend: BackendConfig,
     pub(super) allowed_count: usize,
     pub(super) timing: TimingOptions,
@@ -62,6 +62,50 @@ pub(super) struct WorkerConfig {
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
     pub(super) estimator: EstimatorOptions,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            backend: BackendConfig::Production,
+            allowed_count: 15,
+            timing: TimingOptions {
+                game_fps: 60,
+                min_hold_us: 10_000,
+                max_lead_us: 5_000,
+                dispatch_lead_us: 0,
+                strict_timing: false,
+                strict_down_completion_late_us: 2_000,
+                strict_up_completion_late_us: 2_000,
+                input_path_warn_us: 300,
+                spin_threshold_us: 150,
+                core_warmup_budget_us: 0,
+                spin_floor_us: 700,
+            },
+            focus: FocusOptions {
+                require_focus: false,
+                focus_restore_grace_us: 100_000,
+            },
+            wait: WaitOptions {
+                enable_waitable_timer: true,
+                enable_event_wait: true,
+                enable_adaptive_spin: false,
+                supervisor_lease_timeout_us: 0,
+            },
+            telemetry: TelemetryOptions {
+                mode: TelemetryMode::Ring,
+                capacity: 64,
+            },
+            priority: PriorityOptions {
+                mode: PriorityMode::Off,
+            },
+            estimator: EstimatorOptions {
+                state_json: None,
+                enable_adaptive_lead: false,
+            },
+        }
+    }
 }
 
 pub(crate) struct TimingOptions {

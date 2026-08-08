@@ -49,29 +49,36 @@ class ProgressSnapshot:
     is_paused: bool
     input_path_degraded: bool
     sendinput_path_degraded: bool
-    bookkeeping_degraded: bool
+    core_post_send_degraded: bool
+    observer_degraded: bool
     wait_path_degraded: bool
-    send_warn_threshold_us: int
-    bookkeeping_warn_threshold_us: int
+    sendinput_warn_threshold_us: int
+    core_post_send_warn_threshold_us: int
+    observer_warn_threshold_us: int
     wait_warn_threshold_us: int
     sendinput_degraded_samples: int
-    bookkeeping_degraded_samples: int
+    core_post_send_degraded_samples: int
+    observer_degraded_samples: int
     wait_degraded_samples: int
     wait_backend_failures: int
     wait_clock_failures: int
     wait_interrupted_count: int
-    send_window_bad_count: int
-    bookkeeping_window_bad_count: int
+    sendinput_window_bad_count: int
+    core_post_send_window_bad_count: int
+    observer_window_bad_count: int
     wait_window_bad_count: int
-    send_window_sample_count: int
-    bookkeeping_window_sample_count: int
+    sendinput_window_sample_count: int
+    core_post_send_window_sample_count: int
+    observer_window_sample_count: int
     wait_window_sample_count: int
     timeline_rebase_count: int
     timeline_rebase_total_us: int
     timeline_rebase_max_us: int
-    post_send_max_us: int
+    core_post_send_max_us: int
+    observer_duration_max_us: int
+    observer_dropped_samples: int
+    observer_queue_high_watermark: int
     dispatch_occupancy_max_us: int
-    post_send_degraded_samples: int
     recovered_zero_progress_but_late: int
     recovered_zero_progress_retries: int
     recovered_partial_up_retries: int

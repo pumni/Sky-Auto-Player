@@ -70,9 +70,9 @@ def diagnose_native_playback(
     send = bool(snapshot.get("sendinput_path_degraded", False)) or positive(
         "sendinput_degraded_samples"
     )
-    post_send = bool(snapshot.get("bookkeeping_degraded", False)) or positive(
-        "post_send_degraded_samples"
-    ) or positive("bookkeeping_degraded_samples")
+    post_send = bool(snapshot.get("core_post_send_degraded", False)) or positive(
+        "core_post_send_degraded_samples"
+    )
     lead = positive("positive_residual_at_cap") or positive(
         "lead_saturation_count_down"
     ) or positive("lead_saturation_count_up")

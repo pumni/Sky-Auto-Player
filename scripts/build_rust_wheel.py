@@ -54,7 +54,10 @@ def git_status(repo_root: Path) -> str:
 
 def expected_build_commit(repo_root: Path, *, allow_dirty: bool = False) -> str:
     head = git_head(repo_root)
-    reported = os.environ.get("GITHUB_SHA", "").strip()
+    reported = (
+        os.environ.get("SKY_EXPECTED_BUILD_COMMIT", "").strip()
+        or os.environ.get("GITHUB_SHA", "").strip()
+    )
     dirty = bool(git_status(repo_root))
 
     if reported and reported != head:

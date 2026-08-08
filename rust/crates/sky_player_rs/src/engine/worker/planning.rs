@@ -5,41 +5,74 @@
 //! release lead, and the earliest wait deadline so prepare-due and wait-until
 //! cannot disagree on lead selection.
 
-use super::health::{DispatchLeadEstimate, DispatchPath, estimate_dispatch_path_lead};
+pub(crate) use super::dispatch::timing::{
+    AuthoredDispatchPlan, next_authored_path, pending_lead_for_polyphony, resolve_authored_lead,
+    startup_lead_for_first_packet,
+};
+use super::health::DispatchPath;
 use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{
-    CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator, physical_packet_kind,
+    CoordinatorError, PendingDispatchPlan, RuntimeDispatchCoordinator,
 };
 use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
-use sky_dispatch_core::model::ActionKind;
-use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcClock;
 use std::fmt;
-
-/// Snapshot of the next authored packet's dispatch path and lead.
-///
-/// Built once per worker loop epoch and reused for both
-/// `prepare_next_due_authored` and `next_deadline_ticks`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuthoredDispatchPlan {
-    pub(crate) path: DispatchPath,
-    pub(crate) lead_us: u64,
-    pub(crate) lead_ticks: DurationTicks,
-    pub(crate) lead_saturated: bool,
-}
 
 /// Immutable plan for one worker loop epoch.
 ///
 /// Does not borrow the coordinator. Callers must discard the plan after any
 /// interrupt, command, focus/pause transition, backend call, release recovery
 /// change, or wait wake — never cache across loop iterations.
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NextDispatchPlan {
     pub(crate) latency_class: LatencyClass,
     pub(crate) authored: Option<AuthoredDispatchPlan>,
     pub(crate) pending: Option<PendingDispatchPlan>,
     pub(crate) deadline_ticks: Option<TimelineTicks>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextDispatchPlan {
+    pub(crate) latency_class: LatencyClass,
+    pub(crate) authored: Option<AuthoredDispatchPlan>,
+    pub(crate) pending: Option<PendingDispatchPlan>,
+    pub(crate) deadline_ticks: Option<TimelineTicks>,
+}
+
+impl Default for NextDispatchPlan {
+    fn default() -> Self {
+        Self {
+            latency_class: LatencyClass::Hot,
+            authored: None,
+            pending: None,
+            deadline_ticks: None,
+        }
+    }
+}
+
+impl NextDispatchPlan {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn authored_path(&self) -> Option<DispatchPath> {
+        self.authored.as_ref().map(|a| a.path)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending(&self) -> Option<&PendingDispatchPlan> {
+        self.pending.as_ref()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn latency_class(&self) -> LatencyClass {
+        self.latency_class
+    }
 }
 
 /// Planning failure. Materialized only on the terminal path; success never
@@ -63,86 +96,6 @@ impl From<CoordinatorError> for PlanningError {
     fn from(error: CoordinatorError) -> Self {
         Self::Coordinator(error)
     }
-}
-
-/// Resolve the path-aware lead for one authored packet without reading QPC.
-fn resolve_authored_lead(
-    estimator: &SendLatencyEstimator,
-    path: DispatchPath,
-    latency_class: LatencyClass,
-    timing: &TimingOptions,
-    enable_adaptive_lead: bool,
-) -> DispatchLeadEstimate {
-    if timing.dispatch_lead_us > 0 {
-        return DispatchLeadEstimate {
-            applied_us: timing.dispatch_lead_us,
-            saturated: false,
-        };
-    }
-    if !enable_adaptive_lead {
-        return DispatchLeadEstimate {
-            applied_us: 0,
-            saturated: false,
-        };
-    }
-    estimate_dispatch_path_lead(
-        estimator,
-        path,
-        latency_class,
-        timing.strict_timing,
-        timing.max_lead_us,
-    )
-}
-
-/// Classify the next authored packet into a [`DispatchPath`].
-///
-/// Empty physical masks (stale Up suppression metadata) keep the historical
-/// Down-polyphony fallback so wait/prepare stay consistent with prior behavior.
-fn next_authored_path(coordinator: &RuntimeDispatchCoordinator) -> Option<DispatchPath> {
-    let (up_mask, down_mask) = coordinator.next_authored_packet_masks()?;
-    let up_count = up_mask.count_ones() as usize;
-    let down_count = down_mask.count_ones() as usize;
-    match physical_packet_kind(up_mask, down_mask) {
-        Ok(PhysicalPacketKind::UpOnly) => Some(DispatchPath::UpOnly { up_count }),
-        Ok(PhysicalPacketKind::DownOnly) => Some(DispatchPath::DownOnly { down_count }),
-        Ok(PhysicalPacketKind::Mixed) => Some(DispatchPath::Mixed {
-            up_count,
-            down_count,
-        }),
-        Err(_) => {
-            let polyphony = coordinator.next_authored_polyphony().max(1);
-            Some(DispatchPath::DownOnly {
-                down_count: polyphony,
-            })
-        }
-    }
-}
-
-fn pending_lead_for_polyphony(
-    estimator: &SendLatencyEstimator,
-    qpc_clock: QpcClock,
-    polyphony: usize,
-    latency_class: LatencyClass,
-    timing: &TimingOptions,
-    enable_adaptive_lead: bool,
-) -> Result<(DurationTicks, bool), PlanningError> {
-    let (lead_us, saturated) = if timing.dispatch_lead_us > 0 {
-        (timing.dispatch_lead_us, false)
-    } else if enable_adaptive_lead {
-        let estimate = estimator.estimate_lead_with_class_and_policy(
-            ActionKind::Up,
-            polyphony,
-            latency_class,
-            timing.strict_timing,
-        );
-        (estimate.applied_us, estimate.saturated)
-    } else {
-        (0, false)
-    };
-    qpc_clock
-        .duration_from_us(lead_us)
-        .map(|ticks| (ticks, saturated))
-        .map_err(|error| PlanningError::TimeConversion(format!("{error:?}")))
 }
 
 /// Build the single immutable dispatch plan for the current worker loop epoch.
@@ -189,10 +142,7 @@ pub(crate) fn plan_next_dispatch(
             timing,
             enable_adaptive_lead,
         )
-        .map_err(|error| match error {
-            PlanningError::TimeConversion(message) => CoordinatorError::TimeConversion(message),
-            PlanningError::Coordinator(inner) => inner,
-        })
+        .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
     })?;
 
     let authored_lead_ticks = authored
@@ -208,26 +158,6 @@ pub(crate) fn plan_next_dispatch(
     })
 }
 
-/// Resolve the path-aware lead used to anchor the startup wait before the
-/// first main-loop `NextDispatchPlan` is built.
-///
-/// The normal loop derives lead from the next authored packet's path; startup
-/// must use the same policy instead of a hard-coded Down lead, otherwise a
-/// first authored `UpOnly`/`Mixed` packet anchors its physical boundary with
-/// the wrong directional lead.
-pub(crate) fn startup_lead_for_first_packet(
-    coordinator: &RuntimeDispatchCoordinator,
-    estimator: &SendLatencyEstimator,
-    latency_class: LatencyClass,
-    timing: &TimingOptions,
-    enable_adaptive_lead: bool,
-) -> u64 {
-    let path = next_authored_path(coordinator).unwrap_or_else(|| DispatchPath::DownOnly {
-        down_count: coordinator.next_authored_polyphony().max(1),
-    });
-    resolve_authored_lead(estimator, path, latency_class, timing, enable_adaptive_lead).applied_us
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -238,7 +168,7 @@ mod tests {
     use crate::engine::worker::health::{DispatchPath, estimate_dispatch_path_lead};
     use sky_dispatch_core::compile::compile_runtime_intents;
     use sky_dispatch_core::coordinator::{PendingDispatchPlan, RuntimeDispatchCoordinator};
-    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+    use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::QpcClock;
@@ -293,26 +223,24 @@ mod tests {
         // is added by the estimator on top of the syscall component.
         for _ in 0..32 {
             estimator
-                .update_with_class(ActionKind::Down, down_syscall_us, 1, LatencyClass::Hot)
+                .update_with_class(SendPath::DownOnly, down_syscall_us, 1, LatencyClass::Hot)
                 .expect("down seed");
             estimator
-                .update_with_class(ActionKind::Up, up_syscall_us, 1, LatencyClass::Hot)
+                .update_with_class(SendPath::UpOnly, up_syscall_us, 1, LatencyClass::Hot)
                 .expect("up seed");
         }
     }
 
     #[test]
     fn up_only_lead_is_consistent_for_prepare_and_wait() {
-        // Plan 4.1.1: Up-only must use the Up lead for both prepare and wait.
         let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
-        // Target: Down ≈ 100 µs, Up ≈ 700 µs (syscall + 50 µs wake reserve).
         seed_directional_leads(&mut estimator, 50, 650);
 
         let down_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         let up_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Up, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::UpOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         assert!(
             up_lead > down_lead,
@@ -499,7 +427,7 @@ mod tests {
         let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 15).expect("estimator");
         seed_directional_leads(&mut estimator, 50, 650);
         let down_lead = estimator
-            .estimate_lead_with_class_and_policy(ActionKind::Down, 1, LatencyClass::Hot, false)
+            .estimate_lead_with_class_and_policy(SendPath::DownOnly, 1, LatencyClass::Hot, false)
             .applied_us;
         let coordinator = coordinator_from_actions(&[KeyActionInput {
             source_action_index: 0,

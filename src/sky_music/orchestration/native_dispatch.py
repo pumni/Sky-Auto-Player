@@ -79,7 +79,7 @@ class NativeProgressSnapshotProtocol(Protocol):
     is_paused: bool
     input_path_degraded: bool
     sendinput_path_degraded: bool
-    bookkeeping_degraded: bool
+    core_post_send_degraded: bool
     wait_path_degraded: bool
     recovered_zero_progress_but_late: int
     recovered_zero_progress_retries: int
@@ -342,7 +342,7 @@ class RustDispatchRuntime:
                         status=status,
                         input_path_degraded=live.input_path_degraded,
                         sendinput_path_degraded=live.sendinput_path_degraded,
-                        bookkeeping_degraded=live.bookkeeping_degraded,
+                        core_post_send_degraded=live.core_post_send_degraded,
                         wait_path_degraded=live.wait_path_degraded,
                         wait_backend_failures=live.wait_backend_failures,
                         wait_clock_failures=live.wait_clock_failures,

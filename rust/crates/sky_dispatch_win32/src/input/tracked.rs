@@ -7,8 +7,8 @@ use super::outcome::{
 };
 use super::packet::send_physical_packet_with_clock;
 use super::physical::{
-    InstrumentPhysicalState, ReconciledRelease, instrument_physical_state_for_mask,
-    mask_for_scan_codes, reconcile_release_observation,
+    CleanupVerification, InstrumentPhysicalState, ReconciledRelease,
+    instrument_physical_state_for_mask, mask_for_scan_codes, reconcile_release_observation,
 };
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock};
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask, scan_codes_from_mask};
@@ -24,6 +24,15 @@ pub type CustomEmitterFn = Box<dyn Fn(&[u16], bool) -> PlatformSendResult + Send
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomPacketEmitterFn =
     Box<dyn Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync>;
+
+/// Test-only deterministic physical probe used by the cleanup FSM.
+///
+/// The signature receives the still-unresolved mask and the transport-confirmed
+/// mask so a test can model transport progress across retry attempts. When no
+/// probe is installed, a custom emitter must never synthesize a physical
+/// verdict; the probe resolves to Inconclusive (fail-closed).
+#[cfg(any(test, feature = "test-support"))]
+pub type CustomProbeFn = Box<dyn Fn(u16, u16) -> InstrumentPhysicalState + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReleaseScope {
@@ -66,7 +75,9 @@ pub struct TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) custom_probe: Option<InstrumentPhysicalState>,
+    pub(crate) custom_probe: Option<CustomProbeFn>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub full_instrument_release_calls: u64,
     qpc_clock: Option<QpcClock>,
 }
 
@@ -126,11 +137,61 @@ impl TrackedKeyState {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn set_emitter<F>(&mut self, emitter: F)
+    where
+        F: Fn(&[u16], bool) -> PlatformSendResult + Send + Sync + 'static,
+    {
+        self.custom_emitter = Some(Box::new(emitter));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_packet_emitter<F>(&mut self, emitter: F)
     where
         F: Fn(PhysicalPacket) -> SendTransactionOutcome + Send + Sync + 'static,
     {
         self.custom_packet_emitter = Some(Box::new(emitter));
+    }
+
+    /// Install deterministic success test emitters for both single scan code and packet paths.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_test_emitters(&mut self) {
+        let clock = self.qpc_clock;
+        self.custom_emitter = Some(Box::new(move |scan_codes, _key_up| PlatformSendResult {
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks: clock
+                .and_then(|c| c.now().ok())
+                .unwrap_or(crate::clock::QpcTicks::ZERO),
+            completed_ticks: clock.and_then(|c| c.now().ok()),
+            win32_error: 0,
+            timing_error: None,
+        }));
+        self.custom_packet_emitter = Some(Box::new(move |packet| SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: clock.and_then(|c| c.now().ok()),
+                completed_ticks: clock.and_then(|c| c.now().ok()),
+                timing_error: None,
+            },
+        }));
+    }
+
+    /// Install a deterministic physical probe for the cleanup FSM.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_probe<F>(&mut self, probe: F)
+    where
+        F: Fn(u16, u16) -> InstrumentPhysicalState + Send + Sync + 'static,
+    {
+        self.custom_probe = Some(Box::new(probe));
     }
 
     pub fn with_qpc_clock(clock: QpcClock) -> Self {
@@ -216,9 +277,15 @@ impl TrackedKeyState {
         }
     }
 
-    /// Resolve the physical probe for the cleanup FSM. A test-only
-    /// `custom_probe` override provides deterministic evidence; otherwise the
-    /// custom-emitter simulation maps full transport confirmation to AllUp.
+    /// Resolve the physical probe for the cleanup FSM.
+    ///
+    /// A test-only `custom_probe` closure provides deterministic evidence keyed
+    /// on the unresolved and transport-confirmed masks. When no probe is
+    /// installed, a simulated transport emitter must NOT be allowed to
+    /// synthesize an AllUp/Held verdict from transport confirmation alone — the
+    /// physical probe and transport evidence are independent dimensions.
+    /// Without a probe the result is deliberately Inconclusive so a custom
+    /// emitter can never invent all-up evidence.
     #[cfg(any(test, feature = "test-support"))]
     #[inline]
     fn resolve_release_probe(
@@ -228,17 +295,20 @@ impl TrackedKeyState {
         transport_confirmed_mask: u16,
     ) -> InstrumentPhysicalState {
         if let Some(probe) = &self.custom_probe {
-            probe.clone()
+            probe(unresolved_mask, transport_confirmed_mask)
         } else if self.uses_custom_emitter() {
-            if transport_confirmed_mask == unresolved_mask {
-                InstrumentPhysicalState::AllUp
-            } else {
-                InstrumentPhysicalState::Held(scan_codes_from_mask(
-                    unresolved_mask & !transport_confirmed_mask,
-                ))
-            }
+            InstrumentPhysicalState::Inconclusive
         } else {
-            instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
+            #[cfg(windows)]
+            {
+                let _ = target_hwnd;
+                instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (target_hwnd, unresolved_mask);
+                InstrumentPhysicalState::Inconclusive
+            }
         }
     }
 
@@ -609,11 +679,11 @@ impl TrackedKeyState {
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
         // Independent evidence dimensions: `transport_anomaly` records that the
-        // release path saw any non-clean transport outcome, while
-        // `verification_uncertain` records a physical probe that could not
-        // confirm all-up (fail-closed). `released_successfully` is only true
+        // release path saw any non-clean transport outcome, while the typed
+        // `verification` verdict records what the physical probe could decide.
+        // `released_successfully` is only true when the probe verified AllUp.
         let mut transport_anomaly = false;
-        let mut verification_inconclusive = false;
+        let mut final_verification: Option<CleanupVerification> = None;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
@@ -643,6 +713,17 @@ impl TrackedKeyState {
                 transport_confirmed_mask,
                 physical_state,
             );
+
+            // The typed verdict for this transition. The final outcome derives
+            // exclusively from the last observation so the two evidence
+            // dimensions never bleed into each other.
+            final_verification = Some(match reconciled {
+                ReconciledRelease::VerifiedAllUp => CleanupVerification::AllUp,
+                ReconciledRelease::Held(held_mask) => CleanupVerification::Held(held_mask),
+                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
+                    CleanupVerification::Inconclusive(unconfirmed_mask)
+                }
+            });
 
             // Transport-confirmed keys are released at the physical layer
             // regardless of what physical probing later determines. Clear them
@@ -677,7 +758,6 @@ impl TrackedKeyState {
                     unresolved_mask = held_mask;
                 }
                 ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                    verification_inconclusive = true;
                     unresolved_mask = unconfirmed_mask;
                     if unconfirmed_mask == 0 {
                         self.last_error = Some(match scope {
@@ -699,6 +779,18 @@ impl TrackedKeyState {
             }
         }
 
+        // Final verdict: exactly one of the independent dimensions decides the
+        // outcome. `verification_inconclusive` is probe-derived only and is
+        // never OR-ed with `transport_anomaly`.
+        let verification = final_verification.unwrap_or(CleanupVerification::Held(unresolved_mask));
+        let released_successfully = verification.is_success();
+        let verification_inconclusive = verification.is_inconclusive();
+        let stuck_mask = if released_successfully {
+            0
+        } else {
+            unresolved_mask
+        };
+
         let error_msg = match scope {
             ReleaseScope::Tracked => "tracked release incomplete".to_string(),
             ReleaseScope::FullInstrument => format!(
@@ -707,15 +799,17 @@ impl TrackedKeyState {
                 scan_codes_from_mask(requested_mask).len()
             ),
         };
-        self.last_error = Some(error_msg);
-        self.failed_release_mask |= unresolved_mask;
+        if !released_successfully {
+            self.last_error = Some(error_msg);
+            self.failed_release_mask |= stuck_mask;
+        }
 
         ReleaseAllOutcome {
             attempted_mask: requested_mask,
             transport_anomaly,
-            released_successfully: false,
-            stuck_mask: unresolved_mask,
-            verification_inconclusive: transport_anomaly || verification_inconclusive,
+            released_successfully,
+            stuck_mask,
+            verification_inconclusive,
             attempts: 4,
         }
     }
@@ -725,6 +819,11 @@ impl TrackedKeyState {
     }
 
     pub fn release_all_full_instrument(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.full_instrument_release_calls =
+                self.full_instrument_release_calls.saturating_add(1);
+        }
         self.release_scope(ReleaseScope::FullInstrument, target_hwnd)
     }
 }

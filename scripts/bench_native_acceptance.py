@@ -42,13 +42,62 @@ from sky_music.orchestration.telemetry import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIN_BENCHMARK_BUDGET_SECONDS = 1.0
 MAX_BENCHMARK_BUDGET_SECONDS = 600.0
-BENCHMARK_SCHEMA_VERSION = 4
+BENCHMARK_SCHEMA_VERSION = 5
+TIMELINE_SEMANTICS_VERSION = 2
+KNOWN_TIMELINE_SEMANTICS = {
+    "109f1c33d5410e92bbb9669632ebed7037852a16": 1,
+    "9ef9e5785c746ff45678a8a4cc5b9b6d66ede466": 2,
+}
+SAME_SEMANTICS_REFERENCE_SHA = "9ef9e5785c746ff45678a8a4cc5b9b6d66ede466"
+TRANSPORT_REFERENCE_SHA = "109f1c33d5410e92bbb9669632ebed7037852a16"
+SAME_SEMANTICS = "SAME_SEMANTICS"
+TRANSPORT_REFERENCE = "TRANSPORT_REFERENCE"
+ABSOLUTE_WAKE_P99_LIMIT_US = 300
 COMMAND_TIMING_DOMAIN = "native_qpc_v1"
 LATENCY_SEGMENT_DOMAIN = "native_trace_v1"
 SEND_COLD_THRESHOLD_US = 20_000
 HOT_CYCLE_US = 10_000
 COLD_CYCLE_US = 60_000
 BENCHMARK_HOLD_GUARD_US = 2_500
+
+
+def _normalize_historical_native_trace(
+    output: dict[str, Any], *, native_build_commit: str
+) -> dict[str, Any]:
+    """Project the known schema-8 baseline field into the canonical metric.
+
+    The same-semantics reference predates the ``core_post_send`` name but has
+    the same authored timeline semantics. Keep this compatibility projection
+    scoped to that exact SHA and schema; current candidate telemetry remains
+    strict and the raw envelope is retained separately for diagnostics.
+    """
+
+    if (
+        native_build_commit != SAME_SEMANTICS_REFERENCE_SHA
+        or output.get("schema_version") != 8
+    ):
+        return output
+    records = output.get("records")
+    if not isinstance(records, list):
+        return output
+    normalized_records: list[dict[str, Any]] = []
+    changed = False
+    for record in records:
+        if not isinstance(record, dict):
+            return output
+        normalized = dict(record)
+        if (
+            "core_post_send_duration_us" not in normalized
+            and "bookkeeping_duration_us" in normalized
+        ):
+            normalized["core_post_send_duration_us"] = normalized[
+                "bookkeeping_duration_us"
+            ]
+            changed = True
+        normalized_records.append(normalized)
+    if not changed:
+        return output
+    return {**output, "records": normalized_records}
 
 
 def _cycle_us(*, game_fps: int, gap_profile: str) -> int:
@@ -286,6 +335,69 @@ def _validate_telemetry_integrity(
     return diagnostics
 
 
+def _correctness_counters(
+    snapshot: dict[str, Any], diagnostics: dict[str, Any]
+) -> dict[str, int]:
+    statuses = snapshot.get("generation_status_counts", {})
+    release_pending = (
+        int(statuses.get("release_pending", 0))
+        if isinstance(statuses, dict)
+        else 0
+    )
+    release_outcome = snapshot.get("release_outcome")
+    if not isinstance(release_outcome, dict):
+        release_outcome = {}
+    stuck_keys = release_outcome.get("stuck_keys", [])
+    unexpected_held = (
+        len(stuck_keys)
+        if isinstance(stuck_keys, (list, tuple))
+        else int(release_outcome.get("stuck_mask", 0) != 0)
+    )
+    trace_errors = sum(
+        len(diagnostics.get(name, []))
+        for name in (
+            "missing_indices",
+            "duplicate_indices",
+            "unexpected_indices",
+            "kind_mismatches",
+        )
+    )
+    chord_integrity_lost = int(
+        snapshot.get("chord_integrity_lost", snapshot.get("chord_split_events", 0))
+    )
+    partial = int(snapshot.get("sendinput_partial_events", 0))
+    zero_progress = int(snapshot.get("sendinput_zero_progress_failures", 0))
+    return {
+        "chord_integrity_lost": chord_integrity_lost,
+        "unexpected_held": unexpected_held,
+        "pending_unresolved": release_pending,
+        "cleanup_uncertainty": int(
+            bool(release_outcome.get("verification_inconclusive", False))
+        ),
+        "telemetry_integrity_failures": 0,
+        "sender_integrity_failures": partial + zero_progress,
+        "unexpected_transport_failures": partial + zero_progress,
+        "authored_trace_missing_duplicate_mismatch": trace_errors,
+    }
+
+
+def _aggregate_correctness(runs: list[dict[str, Any]]) -> dict[str, int]:
+    names = (
+        "chord_integrity_lost",
+        "unexpected_held",
+        "pending_unresolved",
+        "cleanup_uncertainty",
+        "telemetry_integrity_failures",
+        "sender_integrity_failures",
+        "unexpected_transport_failures",
+        "authored_trace_missing_duplicate_mismatch",
+    )
+    return {
+        name: sum(int(run["correctness"].get(name, 0)) for run in runs)
+        for name in names
+    }
+
+
 def _failed_run_artifact_path(output: Path | None, run_index: int) -> Path:
     """Choose a unique diagnostic path without overwriting an earlier failure."""
 
@@ -482,8 +594,8 @@ def _trace_metric_rows(records: list[TelemetryRecord]) -> dict[str, list[tuple[s
         rows["sendinput_call_duration_us"].append(
             (kind, _required_int(record.sendinput_call_duration_us, "sendinput_call_duration_us"))
         )
-        rows["bookkeeping_duration_us"].append(
-            (kind, _required_int(record.bookkeeping_duration_us, "bookkeeping_duration_us"))
+        rows["core_post_send_duration_us"].append(
+            (kind, _required_int(record.core_post_send_duration_us, "core_post_send_duration_us"))
         )
         rows["sender_completion_error_us"].append(
             (
@@ -603,6 +715,7 @@ def _new_session(
             enable_adaptive_lead=lead_mode == "adaptive",
             fault_mode=fault_mode,
         )
+    target_hwnd = _real_input_target_hwnd() if backend == "sendinput" else 0
     return sky_player_rs.DispatchSession(  # type: ignore[attr-defined]
         actions,
         list(SKY_15_SCAN_CODES),
@@ -610,10 +723,26 @@ def _new_session(
             game_fps=game_fps,
             min_hold_us=100,
             require_focus=False,
+            target_hwnd=target_hwnd,
             telemetry=True,
             profile="production",
         ),
     )
+
+
+def _real_input_target_hwnd() -> int:
+    raw = os.environ.get("SKY_NATIVE_TARGET_HWND")
+    if raw is None or not raw.strip():
+        raise RuntimeError(
+            "real SendInput qualification requires SKY_NATIVE_TARGET_HWND from the isolated host"
+        )
+    try:
+        hwnd = int(raw, 0)
+    except ValueError as exc:
+        raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer") from exc
+    if hwnd <= 0 or hwnd > (1 << 63) - 1:
+        raise RuntimeError("SKY_NATIVE_TARGET_HWND must be a positive integer in the platform handle range")
+    return hwnd
 
 
 def _run_dispatch(
@@ -631,6 +760,7 @@ def _run_dispatch(
     warmup_cycles: int = 0,
     timeout_ms: int = 60_000,
     fault_mode: str = "none",
+    native_build_commit: str | None = None,
 ) -> dict[str, Any]:
     session = _new_session(
         actions,
@@ -684,7 +814,12 @@ def _run_dispatch(
         telemetry = json.loads(session.take_telemetry_json())
         if not isinstance(telemetry, dict):
             raise RuntimeError("native telemetry envelope must be an object")
-        records = materialize_native_trace(telemetry)
+        records = materialize_native_trace(
+            _normalize_historical_native_trace(
+                telemetry,
+                native_build_commit=native_build_commit or "",
+            )
+        )
         diagnostics = _validate_telemetry_integrity(
             actions=actions,
             telemetry=telemetry,
@@ -724,6 +859,7 @@ def _run_dispatch(
             "_snapshot": snapshot,
             "_telemetry": telemetry,
             "_telemetry_integrity": diagnostics,
+            "correctness": _correctness_counters(snapshot, diagnostics),
             "sender_completion_error_us": _required_stats(sender_errors, "sender_completion_error_us"),
             "completion_error_us": _completion_error_report_pairs(completion_error_rows),
             "spin_cpu_time_us": int(snapshot.get("spin_time_us", 0)),
@@ -742,18 +878,19 @@ def _run_dispatch(
                 snapshot.get("sendinput_zero_progress_failures", 0)
             ),
             "sendinput_path_degraded": bool(snapshot.get("sendinput_path_degraded", False)),
-            "bookkeeping_degraded": bool(snapshot.get("bookkeeping_degraded", False)),
+            "core_post_send_degraded": bool(snapshot.get("core_post_send_degraded", False)),
+            "observer_duration_max_us": int(snapshot.get("observer_duration_max_us", 0)),
             "wait_path_degraded": bool(snapshot.get("wait_path_degraded", False)),
-            "send_warn_threshold_us": int(snapshot.get("send_warn_threshold_us", 0)),
-            "bookkeeping_warn_threshold_us": int(
-                snapshot.get("bookkeeping_warn_threshold_us", 0)
+            "sendinput_warn_threshold_us": int(snapshot.get("sendinput_warn_threshold_us", 0)),
+            "core_post_send_warn_threshold_us": int(
+                snapshot.get("core_post_send_warn_threshold_us", 0)
             ),
             "wait_warn_threshold_us": int(snapshot.get("wait_warn_threshold_us", 0)),
             "sendinput_degraded_samples": int(
                 snapshot.get("sendinput_degraded_samples", 0)
             ),
-            "bookkeeping_degraded_samples": int(
-                snapshot.get("bookkeeping_degraded_samples", 0)
+            "core_post_send_degraded_samples": int(
+                snapshot.get("core_post_send_degraded_samples", 0)
             ),
             "wait_degraded_samples": int(snapshot.get("wait_degraded_samples", 0)),
             "lead_saturation_count_down": list(
@@ -1021,8 +1158,16 @@ def _assert_correctness(run: dict[str, Any]) -> None:
             f"failed_release_count={run['failed_release_count']} "
             f"chord_split_events={run['chord_split_events']}"
         )
+    correctness = run.get("correctness")
+    if isinstance(correctness, dict) and any(correctness.values()):
+        raise RuntimeError(
+            "native acceptance correctness counters are non-zero: "
+            + json.dumps(correctness, sort_keys=True)
+        )
     statuses = run["generation_status_counts"]
-    nonterminal = sum(int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending"))
+    nonterminal = sum(
+        int(statuses.get(name, 0)) for name in ("scheduled", "active", "release_pending")
+    )
     if nonterminal:
         raise RuntimeError(
             f"native acceptance left {nonterminal} nonterminal generations "
@@ -1030,6 +1175,119 @@ def _assert_correctness(run: dict[str, Any]) -> None:
         )
 
 
+def _report_sha(report: dict[str, Any]) -> str:
+    for field in ("candidate_sha", "native_build_commit", "git_sha"):
+        value = report.get(field)
+        if isinstance(value, str) and value:
+            return value
+    raise SystemExit("benchmark report is missing an exact candidate SHA")
+
+
+def _timeline_semantics_version(report: dict[str, Any]) -> int:
+    sha = _report_sha(report)
+    value = report.get("timeline_semantics_version")
+    if value is None:
+        value = KNOWN_TIMELINE_SEMANTICS.get(sha)
+        if value is None:
+            raise SystemExit(
+                "benchmark report is missing timeline semantics for an unknown SHA"
+            )
+    if value not in (1, 2):
+        raise SystemExit("benchmark timeline semantics version is invalid")
+    return int(value)
+
+
+def _assert_comparison_contract(
+    report: dict[str, Any], baseline: dict[str, Any]
+) -> None:
+    role = report.get("comparison_role")
+    if role not in {SAME_SEMANTICS, TRANSPORT_REFERENCE}:
+        raise SystemExit("benchmark comparison_role is invalid")
+    candidate_sha = _report_sha(report)
+    baseline_sha = _report_sha(baseline)
+    reference_sha = report.get("reference_sha")
+    if reference_sha != baseline_sha:
+        raise SystemExit("benchmark reference_sha does not match the baseline SHA")
+    candidate_semantics = _timeline_semantics_version(report)
+    baseline_semantics = _timeline_semantics_version(baseline)
+    if role == SAME_SEMANTICS:
+        if baseline_sha != SAME_SEMANTICS_REFERENCE_SHA:
+            raise SystemExit("SAME_SEMANTICS requires the canonical 9ef9e578 reference")
+        if candidate_sha == baseline_sha:
+            raise SystemExit("candidate and SAME_SEMANTICS reference must differ")
+        if candidate_semantics != baseline_semantics or candidate_semantics != 2:
+            raise SystemExit("SAME_SEMANTICS requires timeline semantics version 2")
+    else:
+        if baseline_sha != TRANSPORT_REFERENCE_SHA:
+            raise SystemExit("TRANSPORT_REFERENCE requires the canonical 109f1c33 reference")
+        if candidate_semantics != 2 or baseline_semantics != 1:
+            raise SystemExit("TRANSPORT_REFERENCE requires candidate v2 and reference v1")
+
+
+def _assert_report_correctness(report: dict[str, Any]) -> None:
+    correctness = report.get("correctness")
+    if not isinstance(correctness, dict):
+        raise SystemExit("benchmark correctness counters are missing")
+    required_zero = (
+        "chord_integrity_lost",
+        "unexpected_held",
+        "pending_unresolved",
+        "cleanup_uncertainty",
+        "telemetry_integrity_failures",
+        "sender_integrity_failures",
+        "unexpected_transport_failures",
+        "authored_trace_missing_duplicate_mismatch",
+    )
+    nonzero = {
+        name: correctness.get(name)
+        for name in required_zero
+        if correctness.get(name) != 0
+    }
+    if nonzero:
+        raise SystemExit(
+            "native benchmark correctness failure before percentile comparison: "
+            + json.dumps(nonzero, sort_keys=True)
+        )
+
+
+def _assert_absolute_wake_slo(report: dict[str, Any]) -> None:
+    config = report.get("benchmark_config")
+    if not isinstance(config, dict):
+        raise SystemExit("benchmark_config is required for the wake SLO")
+    if (
+        config.get("game_fps") == 60
+        and config.get("gap_profile") == "hot"
+        and config.get("lead_mode") == "fixed"
+    ):
+        observed = _metric_at(report, ("wake_error_us", "absolute", "p99"))
+        if observed > ABSOLUTE_WAKE_P99_LIMIT_US:
+            raise SystemExit(
+                "fixed-hot 60 FPS absolute wake SLO failed: "
+                f"p99={observed:g}us limit={ABSOLUTE_WAKE_P99_LIMIT_US}us"
+            )
+
+
+def _comparison_metadata(
+    candidate_sha: str, baseline_path: Path | None
+) -> dict[str, Any]:
+    reference_sha = SAME_SEMANTICS_REFERENCE_SHA
+    comparison_role = SAME_SEMANTICS
+    if baseline_path is not None:
+        try:
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"cannot read benchmark baseline provenance: {exc}") from exc
+        if not isinstance(baseline, dict):
+            raise SystemExit("benchmark baseline provenance must be an object")
+        reference_sha = _report_sha(baseline)
+        if reference_sha == TRANSPORT_REFERENCE_SHA:
+            comparison_role = TRANSPORT_REFERENCE
+    return {
+        "candidate_sha": candidate_sha,
+        "reference_sha": reference_sha,
+        "comparison_role": comparison_role,
+        "timeline_semantics_version": TIMELINE_SEMANTICS_VERSION,
+    }
 def _resolve_repeat_counts(args: argparse.Namespace) -> tuple[int, int]:
     if args.repeats is not None and args.dispatch_repeats is not None:
         raise SystemExit(
@@ -1057,7 +1315,7 @@ def _assert_baseline_compatible(
 ) -> None:
     if baseline.get("benchmark_schema_version") != BENCHMARK_SCHEMA_VERSION:
         raise SystemExit(
-            "legacy baseline is incompatible; regenerate with benchmark schema version 3"
+            "legacy baseline is incompatible; regenerate with benchmark schema version 5"
         )
     if baseline.get("command_timing_domain") != COMMAND_TIMING_DOMAIN:
         raise SystemExit(
@@ -1073,6 +1331,9 @@ def _assert_baseline_compatible(
         raise SystemExit("candidate command timing domain is invalid")
     if report.get("latency_segment_domain") != LATENCY_SEGMENT_DOMAIN:
         raise SystemExit("candidate latency segment domain is invalid")
+    _assert_comparison_contract(report, baseline)
+    if report.get("candidate_sha") != _report_sha(report):
+        raise SystemExit("candidate_sha must identify the candidate artifact")
     required_config = (
         "backend",
         "rt_priority_mode",
@@ -1160,6 +1421,9 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         raise SystemExit(f"cannot read benchmark baseline {baseline_path}: {exc}") from exc
 
     _assert_baseline_compatible(report, baseline)
+    _assert_report_correctness(report)
+    _assert_absolute_wake_slo(report)
+    comparison_role = report["comparison_role"]
     signed_metrics = (
         ("wake_error_us", "absolute", "p99", 0.05, 5),
         ("wake_error_us", "absolute", "p999", 0.10, 10),
@@ -1172,9 +1436,15 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
         ("pre_send_software_latency_us", "p999", 0.10, 10),
         ("sendinput_call_duration_us", "p99", 0.05, 5),
         ("sendinput_call_duration_us", "p999", 0.10, 10),
-        ("bookkeeping_duration_us", "p99", 0.05, 5),
-        ("bookkeeping_duration_us", "p999", 0.10, 10),
+        ("core_post_send_duration_us", "p99", 0.05, 5),
+        ("core_post_send_duration_us", "p999", 0.10, 10),
     )
+    if comparison_role == TRANSPORT_REFERENCE:
+        signed_metrics = ()
+        nonnegative_metrics = (
+            ("sendinput_call_duration_us", "p99", 0.05, 5),
+            ("sendinput_call_duration_us", "p999", 0.10, 10),
+        )
     for section, dimension, field, relative, floor in signed_metrics:
         _assert_metric_threshold(
             report,
@@ -1191,6 +1461,24 @@ def _assert_baseline(report: dict[str, Any], baseline_path: Path) -> None:
             relative_fraction=relative,
             absolute_floor=floor,
         )
+
+    if comparison_role == TRANSPORT_REFERENCE:
+        # v1/v2 timeline semantics are not comparable. The transport role is
+        # deliberately limited to raw SendInput call duration; command
+        # lifecycle, CPU/RSS/startup, wake, pre-send, and core-tail metrics
+        # belong to SAME_SEMANTICS only.
+        for polyphony in report["benchmark_config"]["polyphony"]:
+            observed_poly = report["by_polyphony"][str(polyphony)]
+            baseline_poly = baseline["by_polyphony"][str(polyphony)]
+            for section, field, relative, floor in nonnegative_metrics:
+                _assert_metric_threshold(
+                    observed_poly,
+                    baseline_poly,
+                    (section, field),
+                    relative_fraction=relative,
+                    absolute_floor=floor,
+                )
+        return
 
     for section, relative, floor in (
         ("command_observation_latency_us", 0.05, 10),
@@ -1303,6 +1591,7 @@ def main() -> int:
             f"native={native_info['native_build_commit']} expected={expected_native_commit}"
         )
     host_info = _host_fingerprint(native_info)
+    comparison_metadata = _comparison_metadata(expected_native_commit, args.baseline)
 
     polyphonies = _parse_polyphony(args.polyphony)
     run_deadline = time.monotonic() + args.budget_seconds
@@ -1347,6 +1636,7 @@ def main() -> int:
                     game_fps=args.game_fps,
                     warmup_cycles=args.warmup_cycles,
                     timeout_ms=next_timeout_ms(),
+                    native_build_commit=expected_native_commit,
                 )
                 _assert_correctness(run)
                 run.pop("_snapshot", None)
@@ -1457,6 +1747,7 @@ def main() -> int:
     if failures or command_failures:
         invalid_report: dict[str, Any] = {
             "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
+            **comparison_metadata,
             "command_timing_domain": COMMAND_TIMING_DOMAIN,
             "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
             "label": args.label,
@@ -1496,7 +1787,7 @@ def main() -> int:
             "harness_git_sha": git_info["git_sha"],
             "candidate_or_baseline_role": args.label,
             "rustc_version": native_info["rustc_version"],
-            "schema_version": native_info["schema_version"],
+            "native_schema_version": native_info["schema_version"],
             "host_fingerprint": host_info,
             "dirty_worktree": git_info["dirty_worktree"],
             "command_line": list(sys.argv),
@@ -1523,6 +1814,15 @@ def main() -> int:
         runs = [suite["dispatch"][str(polyphony)] for suite in successful_suites]
         poly_report = {
             "polyphony": polyphony,
+            "schema_version": BENCHMARK_SCHEMA_VERSION,
+            "timeline_semantics_version": TIMELINE_SEMANTICS_VERSION,
+            "candidate_sha": comparison_metadata["candidate_sha"],
+            "reference_sha": comparison_metadata["reference_sha"],
+            "comparison_role": comparison_metadata["comparison_role"],
+            "fps": args.game_fps,
+            "latency_class": args.gap_profile,
+            "priority_mode": args.rt_priority_mode,
+            "lead_mode": lead_mode,
             "actions": len(actions),
             "warmup_cycles": args.warmup_cycles,
             "warmup_records": args.warmup_cycles * 2,
@@ -1534,8 +1834,16 @@ def main() -> int:
             "sendinput_call_duration_us": _aggregate_metric(
                 runs, "sendinput_call_duration_us"
             ),
-            "bookkeeping_duration_us": _aggregate_metric(runs, "bookkeeping_duration_us"),
+            "core_post_send_duration_us": _aggregate_metric(runs, "core_post_send_duration_us"),
             "sender_completion_error_us": _aggregate_metric(
+                runs, "sender_completion_error_us"
+            ),
+            "wake_error": _aggregate_metric(runs, "wake_error_us"),
+            "pre_send": _aggregate_metric(runs, "pre_send_software_latency_us"),
+            "sendinput": _aggregate_metric(runs, "sendinput_call_duration_us"),
+            "core_post_send": _aggregate_metric(runs, "core_post_send_duration_us"),
+            "observer": _stats([run["observer_duration_max_us"] for run in runs]),
+            "sender_completion_error": _aggregate_metric(
                 runs, "sender_completion_error_us"
             ),
             "startup_latency_us": _stats([run["startup_latency_us"] for run in runs]),
@@ -1563,13 +1871,13 @@ def main() -> int:
                 run["sendinput_zero_progress_failures"] for run in runs
             ),
             "sendinput_path_degraded": any(run["sendinput_path_degraded"] for run in runs),
-            "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in runs),
+            "core_post_send_degraded": any(run["core_post_send_degraded"] for run in runs),
             "wait_path_degraded": any(run["wait_path_degraded"] for run in runs),
-            "send_warn_threshold_us": _stats(
-                [run["send_warn_threshold_us"] for run in runs]
+            "sendinput_warn_threshold_us": _stats(
+                [run["sendinput_warn_threshold_us"] for run in runs]
             ),
-            "bookkeeping_warn_threshold_us": _stats(
-                [run["bookkeeping_warn_threshold_us"] for run in runs]
+            "core_post_send_warn_threshold_us": _stats(
+                [run["core_post_send_warn_threshold_us"] for run in runs]
             ),
             "wait_warn_threshold_us": _stats(
                 [run["wait_warn_threshold_us"] for run in runs]
@@ -1577,8 +1885,8 @@ def main() -> int:
             "sendinput_degraded_samples": sum(
                 run["sendinput_degraded_samples"] for run in runs
             ),
-            "bookkeeping_degraded_samples": sum(
-                run["bookkeeping_degraded_samples"] for run in runs
+            "core_post_send_degraded_samples": sum(
+                run["core_post_send_degraded_samples"] for run in runs
             ),
             "wait_degraded_samples": sum(run["wait_degraded_samples"] for run in runs),
             "positive_residual_at_cap": sum(
@@ -1589,10 +1897,19 @@ def main() -> int:
                 for key in {str(polyphony)}
             },
             "outcomes": sorted({run["outcome"] for run in runs}),
+            "correctness": _aggregate_correctness(runs),
+            "guards": {
+                "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
+                "rt_priority_mode": args.rt_priority_mode,
+                "waitable_timer": True,
+                "event_wait": True,
+                "correctness_checked_before_percentiles": True,
+            },
         }
         by_polyphony[str(polyphony)] = poly_report
     report: dict[str, Any] = {
         "label": args.label,
+        "schema_version": BENCHMARK_SCHEMA_VERSION,
         "backend": args.backend,
         "actions_per_polyphony": args.actions * 2,
         "polyphony": polyphonies,
@@ -1600,6 +1917,7 @@ def main() -> int:
         "command_samples": command_samples,
         "budget_seconds": args.budget_seconds,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
+        **comparison_metadata,
         "command_timing_domain": COMMAND_TIMING_DOMAIN,
         "latency_segment_domain": LATENCY_SEGMENT_DOMAIN,
         "benchmark_config": _benchmark_config(
@@ -1628,12 +1946,34 @@ def main() -> int:
         "sendinput_call_duration_us": _aggregate_metric(
             dispatch_runs, "sendinput_call_duration_us"
         ),
-        "bookkeeping_duration_us": _aggregate_metric(
-            dispatch_runs, "bookkeeping_duration_us"
+        "core_post_send_duration_us": _aggregate_metric(
+            dispatch_runs, "core_post_send_duration_us"
         ),
         "sender_completion_error_us": _aggregate_metric(
             dispatch_runs, "sender_completion_error_us"
         ),
+        "wake_error": _aggregate_metric(dispatch_runs, "wake_error_us"),
+        "pre_send": _aggregate_metric(
+            dispatch_runs, "pre_send_software_latency_us"
+        ),
+        "sendinput": _aggregate_metric(dispatch_runs, "sendinput_call_duration_us"),
+        "core_post_send": _aggregate_metric(
+            dispatch_runs, "core_post_send_duration_us"
+        ),
+        "observer": _stats(
+            [run["observer_duration_max_us"] for run in dispatch_runs]
+        ),
+        "sender_completion_error": _aggregate_metric(
+            dispatch_runs, "sender_completion_error_us"
+        ),
+        "correctness": _aggregate_correctness(dispatch_runs),
+        "guards": {
+            "fixed_hot_60_wake_p99_us": ABSOLUTE_WAKE_P99_LIMIT_US,
+            "rt_priority_mode": args.rt_priority_mode,
+            "waitable_timer": True,
+            "event_wait": True,
+            "correctness_checked_before_percentiles": True,
+        },
         "startup_latency_us": _stats(
             [run["startup_latency_us"] for run in dispatch_runs]
         ),
@@ -1676,13 +2016,13 @@ def main() -> int:
         "sendinput_path_degraded": any(
             run["sendinput_path_degraded"] for run in dispatch_runs
         ),
-        "bookkeeping_degraded": any(run["bookkeeping_degraded"] for run in dispatch_runs),
+        "core_post_send_degraded": any(run["core_post_send_degraded"] for run in dispatch_runs),
         "wait_path_degraded": any(run["wait_path_degraded"] for run in dispatch_runs),
-        "send_warn_threshold_us": _stats(
-            [run["send_warn_threshold_us"] for run in dispatch_runs]
+        "sendinput_warn_threshold_us": _stats(
+            [run["sendinput_warn_threshold_us"] for run in dispatch_runs]
         ),
-        "bookkeeping_warn_threshold_us": _stats(
-            [run["bookkeeping_warn_threshold_us"] for run in dispatch_runs]
+        "core_post_send_warn_threshold_us": _stats(
+            [run["core_post_send_warn_threshold_us"] for run in dispatch_runs]
         ),
         "wait_warn_threshold_us": _stats(
             [run["wait_warn_threshold_us"] for run in dispatch_runs]
@@ -1690,8 +2030,8 @@ def main() -> int:
         "sendinput_degraded_samples": sum(
             run["sendinput_degraded_samples"] for run in dispatch_runs
         ),
-        "bookkeeping_degraded_samples": sum(
-            run["bookkeeping_degraded_samples"] for run in dispatch_runs
+        "core_post_send_degraded_samples": sum(
+            run["core_post_send_degraded_samples"] for run in dispatch_runs
         ),
         "wait_degraded_samples": sum(
             run["wait_degraded_samples"] for run in dispatch_runs
@@ -1714,7 +2054,7 @@ def main() -> int:
         "harness_git_sha": git_info["git_sha"],
         "candidate_or_baseline_role": args.label,
         "rustc_version": native_info["rustc_version"],
-        "schema_version": native_info["schema_version"],
+        "native_schema_version": native_info["schema_version"],
         "backend_evidence": "real_sendinput_sender_completion"
         if args.backend == "sendinput"
         else "deterministic_coordinator_delivery_simulation",
@@ -1722,6 +2062,8 @@ def main() -> int:
         "dirty_worktree": git_info["dirty_worktree"],
         "command_line": list(sys.argv),
     }
+    _assert_report_correctness(report)
+    _assert_absolute_wake_slo(report)
     if args.baseline is not None:
         _assert_baseline(report, args.baseline)
     encoded = json.dumps(report, indent=2)

@@ -74,7 +74,7 @@ class PlaybackSnapshot:
     status: str = "playing"
     input_path_degraded: bool = False
     sendinput_path_degraded: bool = False
-    bookkeeping_degraded: bool = False
+    core_post_send_degraded: bool = False
     wait_path_degraded: bool = False
     wait_backend_failures: int = 0
     wait_clock_failures: int = 0
@@ -132,7 +132,7 @@ class SnapshotRenderer:
         force: bool = False,  # noqa: ARG002
         input_path_degraded: bool = False,
         sendinput_path_degraded: bool = False,
-        bookkeeping_degraded: bool = False,
+        core_post_send_degraded: bool = False,
         wait_path_degraded: bool = False,
         wait_backend_failures: int = 0,
         wait_clock_failures: int = 0,
@@ -148,7 +148,7 @@ class SnapshotRenderer:
                 status=status,
                 input_path_degraded=input_path_degraded,
                 sendinput_path_degraded=sendinput_path_degraded,
-                bookkeeping_degraded=bookkeeping_degraded,
+                core_post_send_degraded=core_post_send_degraded,
                 wait_path_degraded=wait_path_degraded,
                 wait_backend_failures=wait_backend_failures,
                 wait_clock_failures=wait_clock_failures,
@@ -662,13 +662,13 @@ class PlaybackCard(Static):
         status = snap.status if snap else "playing"
         degraded = snap.input_path_degraded if snap else False
         sendinput_degraded = snap.sendinput_path_degraded if snap else False
-        bookkeeping_degraded = snap.bookkeeping_degraded if snap else False
+        core_post_send_degraded = snap.core_post_send_degraded if snap else False
         wait_degraded = snap.wait_path_degraded if snap else False
         backend_health = snap.backend_health if snap else None
         notice_state = self._notice_ledger.update(
             input_path_degraded=degraded,
             sendinput_path_degraded=sendinput_degraded,
-            bookkeeping_degraded=bookkeeping_degraded,
+            core_post_send_degraded=core_post_send_degraded,
             wait_path_degraded=wait_degraded,
             keys_dropped=int(getattr(backend_health, "keys_dropped", 0) or 0),
             chord_split_events=int(getattr(backend_health, "chord_split_events", 0) or 0),
@@ -707,7 +707,7 @@ class PlaybackCard(Static):
             status=status,
             input_path_degraded=degraded,
             sendinput_path_degraded=sendinput_degraded,
-            bookkeeping_degraded=bookkeeping_degraded,
+            core_post_send_degraded=core_post_send_degraded,
             wait_path_degraded=wait_degraded,
             backend_health=backend_health,
             late_2ms=stats.late_2ms,

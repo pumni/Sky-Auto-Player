@@ -45,7 +45,7 @@ pub(crate) fn valid_instrument_scan_code(scan_code: u16) -> bool {
     key_mask(scan_code).is_some()
 }
 
-pub(crate) fn scan_codes_from_mask(mask: u16) -> SmallVec<[u16; 15]> {
+pub fn scan_codes_from_mask(mask: u16) -> SmallVec<[u16; 15]> {
     PHYSICAL_INSTRUMENT_SCAN_CODES
         .iter()
         .enumerate()

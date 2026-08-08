@@ -67,19 +67,25 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) sendinput_path_degraded: bool,
     #[pyo3(get)]
-    pub(super) bookkeeping_degraded: bool,
+    pub(super) core_post_send_degraded: bool,
+    #[pyo3(get)]
+    pub(super) observer_degraded: bool,
     #[pyo3(get)]
     pub(super) wait_path_degraded: bool,
     #[pyo3(get)]
-    pub(super) send_warn_threshold_us: u64,
+    pub(super) sendinput_warn_threshold_us: u64,
     #[pyo3(get)]
-    pub(super) bookkeeping_warn_threshold_us: u64,
+    pub(super) core_post_send_warn_threshold_us: u64,
+    #[pyo3(get)]
+    pub(super) observer_warn_threshold_us: u64,
     #[pyo3(get)]
     pub(super) wait_warn_threshold_us: u64,
     #[pyo3(get)]
     pub(super) sendinput_degraded_samples: u64,
     #[pyo3(get)]
-    pub(super) bookkeeping_degraded_samples: u64,
+    pub(super) core_post_send_degraded_samples: u64,
+    #[pyo3(get)]
+    pub(super) observer_degraded_samples: u64,
     #[pyo3(get)]
     pub(super) wait_degraded_samples: u64,
     #[pyo3(get)]
@@ -89,15 +95,19 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) wait_interrupted_count: u64,
     #[pyo3(get)]
-    pub(super) send_window_bad_count: u64,
+    pub(super) sendinput_window_bad_count: u64,
     #[pyo3(get)]
-    pub(super) bookkeeping_window_bad_count: u64,
+    pub(super) core_post_send_window_bad_count: u64,
+    #[pyo3(get)]
+    pub(super) observer_window_bad_count: u64,
     #[pyo3(get)]
     pub(super) wait_window_bad_count: u64,
     #[pyo3(get)]
-    pub(super) send_window_sample_count: u64,
+    pub(super) sendinput_window_sample_count: u64,
     #[pyo3(get)]
-    pub(super) bookkeeping_window_sample_count: u64,
+    pub(super) core_post_send_window_sample_count: u64,
+    #[pyo3(get)]
+    pub(super) observer_window_sample_count: u64,
     #[pyo3(get)]
     pub(super) wait_window_sample_count: u64,
     #[pyo3(get)]
@@ -107,11 +117,15 @@ pub(super) struct ProgressSnapshotPy {
     #[pyo3(get)]
     pub(super) timeline_rebase_max_us: u64,
     #[pyo3(get)]
-    pub(super) post_send_max_us: u64,
+    pub(super) core_post_send_max_us: u64,
+    #[pyo3(get)]
+    pub(super) observer_duration_max_us: u64,
+    #[pyo3(get)]
+    pub(super) observer_dropped_samples: u64,
+    #[pyo3(get)]
+    pub(super) observer_queue_high_watermark: u64,
     #[pyo3(get)]
     pub(super) dispatch_occupancy_max_us: u64,
-    #[pyo3(get)]
-    pub(super) post_send_degraded_samples: u64,
     #[pyo3(get)]
     pub(super) recovered_zero_progress_but_late: u64,
     #[pyo3(get)]
@@ -150,29 +164,36 @@ impl ProgressSnapshotPy {
             is_paused: snapshot.is_paused,
             input_path_degraded: snapshot.input_path_degraded,
             sendinput_path_degraded: snapshot.sendinput_path_degraded,
-            bookkeeping_degraded: snapshot.bookkeeping_degraded,
+            core_post_send_degraded: snapshot.core_post_send_degraded,
+            observer_degraded: snapshot.observer_degraded,
             wait_path_degraded: snapshot.wait_path_degraded,
-            send_warn_threshold_us: snapshot.send_warn_threshold_us,
-            bookkeeping_warn_threshold_us: snapshot.bookkeeping_warn_threshold_us,
+            sendinput_warn_threshold_us: snapshot.sendinput_warn_threshold_us,
+            core_post_send_warn_threshold_us: snapshot.core_post_send_warn_threshold_us,
+            observer_warn_threshold_us: snapshot.observer_warn_threshold_us,
             wait_warn_threshold_us: snapshot.wait_warn_threshold_us,
             sendinput_degraded_samples: snapshot.sendinput_degraded_samples,
-            bookkeeping_degraded_samples: snapshot.bookkeeping_degraded_samples,
+            core_post_send_degraded_samples: snapshot.core_post_send_degraded_samples,
+            observer_degraded_samples: snapshot.observer_degraded_samples,
             wait_degraded_samples: snapshot.wait_degraded_samples,
             wait_backend_failures: snapshot.wait_backend_failures,
             wait_clock_failures: snapshot.wait_clock_failures,
             wait_interrupted_count: snapshot.wait_interrupted_count,
-            send_window_bad_count: snapshot.send_window_bad_count,
-            bookkeeping_window_bad_count: snapshot.bookkeeping_window_bad_count,
+            sendinput_window_bad_count: snapshot.sendinput_window_bad_count,
+            core_post_send_window_bad_count: snapshot.core_post_send_window_bad_count,
+            observer_window_bad_count: snapshot.observer_window_bad_count,
             wait_window_bad_count: snapshot.wait_window_bad_count,
-            send_window_sample_count: snapshot.send_window_sample_count,
-            bookkeeping_window_sample_count: snapshot.bookkeeping_window_sample_count,
+            sendinput_window_sample_count: snapshot.sendinput_window_sample_count,
+            core_post_send_window_sample_count: snapshot.core_post_send_window_sample_count,
+            observer_window_sample_count: snapshot.observer_window_sample_count,
             wait_window_sample_count: snapshot.wait_window_sample_count,
             timeline_rebase_count: snapshot.timeline_rebase_count,
             timeline_rebase_total_us: snapshot.timeline_rebase_total_us,
             timeline_rebase_max_us: snapshot.timeline_rebase_max_us,
-            post_send_max_us: snapshot.post_send_max_us,
+            core_post_send_max_us: snapshot.core_post_send_max_us,
+            observer_duration_max_us: snapshot.observer_duration_max_us,
+            observer_dropped_samples: snapshot.observer_dropped_samples,
+            observer_queue_high_watermark: snapshot.observer_queue_high_watermark,
             dispatch_occupancy_max_us: snapshot.dispatch_occupancy_max_us,
-            post_send_degraded_samples: snapshot.post_send_degraded_samples,
             recovered_zero_progress_but_late: snapshot.recovered_zero_progress_but_late,
             recovered_zero_progress_retries: snapshot.recovered_zero_progress_retries,
             recovered_partial_up_retries: snapshot.recovered_partial_up_retries,

@@ -50,7 +50,7 @@ class PlaybackHudViewModel:
     progress_fraction: float
     input_path_degraded: bool
     sendinput_path_degraded: bool
-    bookkeeping_degraded: bool
+    core_post_send_degraded: bool
     wait_path_degraded: bool
     backend: PlaybackBackendView
     timing: PlaybackTimingView
@@ -89,7 +89,7 @@ def build_playback_hud_view(
     status: str,
     input_path_degraded: bool = False,
     sendinput_path_degraded: bool = False,
-    bookkeeping_degraded: bool = False,
+    core_post_send_degraded: bool = False,
     wait_path_degraded: bool = False,
     backend_health: BackendHealth | None = None,
     late_2ms: int = 0,
@@ -115,7 +115,7 @@ def build_playback_hud_view(
         progress_fraction=min(1.0, current_safe / total_safe),
         input_path_degraded=input_path_degraded,
         sendinput_path_degraded=sendinput_path_degraded,
-        bookkeeping_degraded=bookkeeping_degraded,
+        core_post_send_degraded=core_post_send_degraded,
         wait_path_degraded=wait_path_degraded,
         backend=backend_view(backend_health),
         timing=PlaybackTimingView(

@@ -48,6 +48,7 @@ pub struct WorkerMetricsLocal {
     pub failed_release_count: u64,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
+    pub chord_integrity_lost: u64,
     pub sendinput_partial_events: u64,
     pub sendinput_zero_progress_failures: u64,
     pub chords_rejected: u64,
@@ -76,31 +77,35 @@ pub struct WorkerMetricsLocal {
     pub power_throttling_disabled: bool,
     pub input_path_degraded: bool,
     pub sendinput_path_degraded: bool,
-    pub bookkeeping_degraded: bool,
+    pub core_post_send_degraded: bool,
+    pub observer_degraded: bool,
     pub wait_path_degraded: bool,
-    pub send_warn_threshold_us: u64,
-    pub bookkeeping_warn_threshold_us: u64,
+    pub sendinput_warn_threshold_us: u64,
+    pub core_post_send_warn_threshold_us: u64,
+    pub observer_warn_threshold_us: u64,
     pub wait_warn_threshold_us: u64,
     pub sendinput_degraded_samples: u64,
-    pub bookkeeping_degraded_samples: u64,
+    pub core_post_send_degraded_samples: u64,
+    pub observer_degraded_samples: u64,
     pub wait_degraded_samples: u64,
     pub wait_backend_failures: u64,
     pub wait_clock_failures: u64,
     pub wait_interrupted_count: u64,
-    pub send_window_bad_count: u64,
-    pub bookkeeping_window_bad_count: u64,
+    pub sendinput_window_bad_count: u64,
+    pub core_post_send_window_bad_count: u64,
+    pub observer_window_bad_count: u64,
     pub wait_window_bad_count: u64,
-    pub send_window_sample_count: u64,
-    pub bookkeeping_window_sample_count: u64,
+    pub sendinput_window_sample_count: u64,
+    pub core_post_send_window_sample_count: u64,
+    pub observer_window_sample_count: u64,
     pub wait_window_sample_count: u64,
     pub timeline_rebase_count: u64,
     pub timeline_rebase_total_us: u64,
     pub timeline_rebase_max_us: u64,
-    /// 0 = none, 1 = worker_late, 2 = release_floor, 3 = release_recovery.
+    /// 0 = none, 3 = release_recovery. Authored lateness and release-floor
+    /// enforcement never rebase the authored timeline.
     pub timeline_rebase_last_reason: u8,
-    pub post_send_max_us: u64,
     pub dispatch_occupancy_max_us: u64,
-    pub post_send_degraded_samples: u64,
     pub send_down_degraded_samples: u64,
     pub send_up_degraded_samples: u64,
     pub send_mixed_degraded_samples: u64,
@@ -109,6 +114,16 @@ pub struct WorkerMetricsLocal {
     pub send_mixed_warn_threshold_us: u64,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    /// Time between `sender_completed` and `dispatch_ready` on the hard
+    /// critical path (typed QPC derivation), in microseconds.
+    pub core_post_send_max_us: u64,
+    /// Peak wall-clock duration of a single deferred observer drain step.
+    pub observer_duration_max_us: u64,
+    /// How many `DispatchObservation` samples were dropped because the fixed
+    /// observer queue was full (drop-oldest policy).
+    pub observer_dropped_samples: u64,
+    /// Largest number of entries ever held by the fixed observer queue.
+    pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,
 }
 

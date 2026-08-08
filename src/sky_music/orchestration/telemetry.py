@@ -18,7 +18,7 @@ _TELEMETRY_FLUSH_CHUNK = 10_000
 # Hard cap for the retain-first policy. Once full, record() performs only O(1)
 # counter updates and stops accepting detail records.
 _TELEMETRY_MAX_BUFFER = 1_024
-NATIVE_TELEMETRY_SCHEMA_VERSION = 8
+NATIVE_TELEMETRY_SCHEMA_VERSION = 9
 
 
 def _optional_int(value: Any) -> int | None:
@@ -103,7 +103,7 @@ _CSV_FIELDS: list[str] = [
     "sender_started_us",
     "sender_completed_us",
     "sendinput_call_duration_us",
-    "bookkeeping_duration_us",
+    "core_post_send_duration_us",
     "delivery_first_us",
     "delivery_last_us",
     "delivery_last_error_us",
@@ -160,7 +160,7 @@ _CSV_INT_FIELDS: frozenset[str] = frozenset(
         "sender_started_us",
         "sender_completed_us",
         "sendinput_call_duration_us",
-        "bookkeeping_duration_us",
+        "core_post_send_duration_us",
         "delivery_first_us",
         "delivery_last_us",
         "delivery_last_error_us",
@@ -178,9 +178,9 @@ class TelemetryRecord:
         "authored_completion_error_ticks",
         "authored_ticks",
         "authored_us",
-        "bookkeeping_duration_us",
         "bookkeeping_us",
         "completion_error_ticks",
+        "core_post_send_duration_us",
         "deferred_by_us",
         "delivery_first_us",
         "delivery_last_error_us",
@@ -286,7 +286,7 @@ class TelemetryRecord:
         sender_started_us: int | None = None,
         sender_completed_us: int | None = None,
         sendinput_call_duration_us: int | None = None,
-        bookkeeping_duration_us: int | None = None,
+        core_post_send_duration_us: int | None = None,
         send_operation_duration_us: int | None = None,
         authored_ticks: int = 0,
         effective_deadline_ticks: int = 0,
@@ -374,10 +374,10 @@ class TelemetryRecord:
             if sendinput_call_duration_us is None
             else sendinput_call_duration_us
         )
-        self.bookkeeping_duration_us = (
+        self.core_post_send_duration_us = (
             bookkeeping_us
-            if bookkeeping_duration_us is None
-            else bookkeeping_duration_us
+            if core_post_send_duration_us is None
+            else core_post_send_duration_us
         )
         self.send_operation_duration_us = send_operation_duration_us
         self.delivery_first_us = delivery_first_us
@@ -470,7 +470,7 @@ class TelemetryRecord:
                 "sender_started_us": self.sender_started_us,
                 "sender_completed_us": self.sender_completed_us,
                 "sendinput_call_duration_us": self.sendinput_call_duration_us,
-                "bookkeeping_duration_us": self.bookkeeping_duration_us,
+                "core_post_send_duration_us": self.core_post_send_duration_us,
                 "delivery_first_us": self.delivery_first_us,
                 "delivery_last_us": self.delivery_last_us,
                 "delivery_last_error_us": self.delivery_last_error_us,
@@ -527,9 +527,9 @@ def materialize_native_trace(
     values; callers must not expect them in the native JSON envelope.
     """
 
-    # Schema 7 remains readable for one compatibility release; Rust emits
-    # only the current schema 8.
-    if output.get("schema_version") not in (7, NATIVE_TELEMETRY_SCHEMA_VERSION):
+    # Schemas 7 and 8 remain readable for historical native artifacts; Rust
+    # emits only the current schema 9.
+    if output.get("schema_version") not in (7, 8, NATIVE_TELEMETRY_SCHEMA_VERSION):
         raise ValueError("unsupported native telemetry schema version")
     records = output.get("records")
     if not isinstance(records, list):
@@ -574,8 +574,8 @@ def materialize_native_trace(
         completed_ticks = _required_nonnegative_int(
             row.get("send_completed_ticks"), "send_completed_ticks"
         )
-        bookkeeping_duration_us = _required_nonnegative_int(
-            row.get("bookkeeping_duration_us"), "bookkeeping_duration_us"
+        core_post_send_duration_us = _required_nonnegative_int(
+            row.get("core_post_send_duration_us"), "core_post_send_duration_us"
         )
         completion_error_ticks = _required_signed_int64(
             row.get("completion_error_ticks"), "completion_error_ticks"
@@ -658,8 +658,8 @@ def materialize_native_trace(
                 sender_completion_error_us=sender_completion_error_us,
                 send_operation_duration_us=send_duration_us,
                 sendinput_call_duration_us=send_duration_us,
-                bookkeeping_us=bookkeeping_duration_us,
-                bookkeeping_duration_us=bookkeeping_duration_us,
+                bookkeeping_us=core_post_send_duration_us,
+                core_post_send_duration_us=core_post_send_duration_us,
                 authored_ticks=authored_ticks,
                 effective_deadline_ticks=effective_ticks,
                 wake_ticks=wake_ticks,

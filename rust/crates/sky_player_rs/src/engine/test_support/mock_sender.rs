@@ -4,8 +4,8 @@ use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::{
-    PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TrackedKeyState,
+    InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, TrackedKeyState, scan_codes_from_mask,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -137,6 +137,19 @@ pub(crate) fn create_mock_backend(
             latency_base_us,
             latency_per_key_us,
         )
+    });
+    // The mock has no real keyboard, so a deterministic physical probe mirrors
+    // transport confirmation: keys the transport confirmed as released read as
+    // AllUp; anything still unconfirmed reads Held. This keeps the cleanup FSM
+    // synthesized-verification semantics while retaining the V3-1 guarantee
+    // that a bespoke test probe must be explicit rather than invented by the
+    // emitter itself.
+    backend.set_probe(|unresolved_mask, confirmed_mask| {
+        if confirmed_mask == unresolved_mask {
+            InstrumentPhysicalState::AllUp
+        } else {
+            InstrumentPhysicalState::Held(scan_codes_from_mask(unresolved_mask & !confirmed_mask))
+        }
     });
     backend
 }

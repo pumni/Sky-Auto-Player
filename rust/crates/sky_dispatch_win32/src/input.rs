@@ -18,11 +18,16 @@ pub use outcome::{
 pub use packet::{MAX_PACKET_EVENTS, send_physical_packet_with_clock};
 pub use physical::is_scan_code_physically_down;
 pub use raw::{send_input_raw, send_input_raw_with_clock};
-pub use scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE};
+pub use scan_code::{
+    FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
+    scan_codes_from_mask,
+};
 pub use tracked::{ReleaseScope, TrackedKeyState};
 
 #[cfg(any(test, feature = "test-support"))]
-pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn};
+pub use physical::InstrumentPhysicalState;
+#[cfg(any(test, feature = "test-support"))]
+pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn, CustomProbeFn};
 pub use up_transaction::{emit_up, emit_up_with};
 
 #[cfg(test)]

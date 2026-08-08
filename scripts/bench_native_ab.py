@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BENCHMARK_BUDGET_SECONDS = 600.0
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -37,6 +38,8 @@ def _run(
         env=env,
         capture_output=capture,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
@@ -109,6 +112,8 @@ def _benchmark_command(
         [
             "python",
             "scripts/bench_native_acceptance.py",
+            "--backend",
+            args.backend,
             "--actions",
             str(args.actions),
             "--dispatch-repeats",
@@ -141,6 +146,8 @@ def _benchmark_command(
     )
     if args.command_samples == 0:
         command.append("--skip-command-samples")
+    if args.allow_real_input:
+        command.append("--allow-real-input")
     if baseline is not None:
         command.extend(["--baseline", str(baseline)])
     return command
@@ -154,13 +161,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dispatch-repeats", type=int, required=True)
     parser.add_argument("--command-samples", type=int, required=True)
     parser.add_argument("--polyphony", default="1,2,3,5,8,15")
+    parser.add_argument(
+        "--backend",
+        choices=("mock", "sendinput"),
+        default="mock",
+        help="backend used by both A/B legs (default: mock)",
+    )
+    parser.add_argument(
+        "--allow-real-input",
+        action="store_true",
+        help="required with --backend sendinput; use only on an isolated Windows host",
+    )
     parser.add_argument("--game-fps", type=int, default=60)
     parser.add_argument("--lead-mode", choices=("fixed", "adaptive"), required=True)
     parser.add_argument("--fixed-lead-us", type=int, default=0)
     parser.add_argument("--gap-profile", choices=("hot", "cold"), required=True)
     parser.add_argument("--warmup-cycles", type=int, required=True)
     parser.add_argument("--rt-priority-mode", default="off")
-    parser.add_argument("--budget-seconds", type=float, default=120.0)
+    parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=DEFAULT_BENCHMARK_BUDGET_SECONDS,
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
 
@@ -202,6 +224,8 @@ def _benchmark_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "dispatch_repeats": args.dispatch_repeats,
         "command_samples": args.command_samples,
         "polyphony": args.polyphony,
+        "backend": args.backend,
+        "allow_real_input": args.allow_real_input,
         "game_fps": args.game_fps,
         "lead_mode": args.lead_mode,
         "fixed_lead_us": args.fixed_lead_us,
@@ -228,6 +252,8 @@ def _ab_provenance(
         "host_fingerprint": _host_fingerprint(),
         "command_line": list(sys.argv),
         "benchmark_matrix": _benchmark_matrix(args),
+        "backend": args.backend,
+        "real_input_qualification": args.backend == "sendinput" and args.allow_real_input,
     }
 
 
@@ -259,6 +285,8 @@ def main() -> int:
         raise SystemExit("native A/B benchmark requires Windows")
     if args.lead_mode == "adaptive" and args.fixed_lead_us != 0:
         raise SystemExit("--fixed-lead-us must be 0 in adaptive mode")
+    if args.backend == "sendinput" and not args.allow_real_input:
+        raise SystemExit("--backend sendinput requires --allow-real-input")
 
     baseline_sha = _full_sha(args.baseline_ref, cwd=ROOT)
     candidate_sha = _full_sha(args.candidate_ref, cwd=ROOT)

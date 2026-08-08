@@ -6,7 +6,11 @@ rust-version.workspace = true
 
 [lib]
 name = "sky_player_rs"
-crate-type = ["cdylib"]
+# `rlib` is included alongside `cdylib` so that integration tests under
+# `tests/` can link to the crate.  The rlib target is unused in the release
+# build (PyInstaller only picks up the cdylib); adding it here does not affect
+# the production ABI in any way.
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []

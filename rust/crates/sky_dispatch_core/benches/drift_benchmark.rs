@@ -212,7 +212,7 @@ fn run_simulation(
         if !due.is_empty() {
             let sc: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             coordinator
-                .complete_releases(&due, &sc, &[])
+                .complete_releases(&due, &sc)
                 .map_err(|error| format!("coordinator completion failed: {error}"))?;
             now_us = now_us
                 .checked_add(SEND_LATENCY_US)
@@ -312,7 +312,6 @@ fn run_simulation(
                                 .requeue_failed_releases_ticks(
                                     &due,
                                     &[],
-                                    &[],
                                     TimelineTicks::from_raw(now_us),
                                     TimelineTicks::from_raw(retry_base),
                                     &retry_backoff,
@@ -341,7 +340,7 @@ fn run_simulation(
                                     })?;
                                 if !retry.is_empty() {
                                     let sc: Vec<u16> = retry.iter().map(|p| p.scan_code).collect();
-                                    coordinator.complete_releases(&retry, &sc, &[]).map_err(
+                                    coordinator.complete_releases(&retry, &sc).map_err(
                                         |error| format!("coordinator completion failed: {error}"),
                                     )?;
                                     coordinator

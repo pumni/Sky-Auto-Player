@@ -36,6 +36,72 @@ pub(crate) use test_support::{CommandTimingCleanup, CommandTimingState, PauseTim
 pub use test_support::{FaultInjectionScript, InjectedSendOutcome};
 #[cfg(test)]
 pub(crate) use worker::*;
+#[cfg(feature = "test-support")]
+pub mod dispatch_primitives {
+    //! Queue primitive types exported for the §8.11 no-alloc integration test only.
+    //! Do not use in production code.
+    pub use super::test_support::ProductionDispatchTestHarness;
+    pub use super::worker::NextDispatchPlan;
+    pub use super::worker::dispatch::DispatchStep;
+    pub use super::worker::dispatch::observer::{
+        DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
+        UpObservation,
+    };
+    pub use super::worker::dispatch::timing::{
+        EstimatorObservationEvidence, is_clean_estimator_observation,
+    };
+    pub use super::worker::health::DispatchPath;
+}
+
+/// Test-only hooks for §8.12 slow-observer regression scenarios.
+///
+/// Functions are hand-written wrappers (not `pub use` re-exports) so the
+/// public path via `sky_player_rs::engine::observer_test_hooks::*` is stable
+/// for both crate-internal unit tests and the external `tests/` integration
+/// test binary, without leaking the crate-internal `worker::dispatch` module
+/// into the public API (E0364).
+#[cfg(any(test, feature = "test-support"))]
+pub mod observer_test_hooks {
+    pub use super::worker::dispatch::observer::ObserverTestHookGuard;
+
+    /// Acquire exclusive access to observer test timing hooks.
+    pub fn observer_test_hook_guard() -> ObserverTestHookGuard {
+        super::worker::dispatch::observer::observer_test_hook_guard()
+    }
+
+    /// Force every observer drain to sleep this many microseconds.
+    pub fn set_observer_artificial_cost_us(us: u64) {
+        super::worker::dispatch::observer::set_observer_artificial_cost_us(us);
+    }
+
+    /// Override the worker's initial observer budget in microseconds (0 disables).
+    pub fn set_observer_initial_budget_override_us(us: u64) {
+        super::worker::dispatch::observer::set_observer_initial_budget_override_us(us);
+    }
+
+    /// Clear artificial cost and budget override after a scenario.
+    pub fn reset_observer_test_hooks() {
+        super::worker::dispatch::observer::reset_observer_test_hooks();
+    }
+
+    /// Inject a post-send telemetry error only when release recovery is
+    /// exhausted. Test-only: production never enables this hook.
+    pub fn set_release_telemetry_failure_on_recovery(enabled: bool) {
+        super::worker::dispatch::set_release_telemetry_failure_on_recovery(enabled);
+    }
+
+    /// Inject a post-send observer error only when release recovery is
+    /// exhausted. Test-only: production never enables this hook.
+    pub fn set_release_observer_failure_on_recovery(enabled: bool) {
+        super::worker::dispatch::set_release_observer_failure_on_recovery(enabled);
+    }
+
+    /// Return whether exhausted release recovery completed before the ready
+    /// boundary was sampled in the current test scenario.
+    pub fn release_recovery_completed_before_ready() -> bool {
+        super::worker::dispatch::release_recovery_completed_before_ready()
+    }
+}
 
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;

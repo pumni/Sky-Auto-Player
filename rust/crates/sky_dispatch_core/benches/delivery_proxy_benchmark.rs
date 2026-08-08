@@ -211,7 +211,7 @@ fn run_chord_simulation(
             let scan_codes: Vec<u16> = due.iter().map(|p| p.scan_code).collect();
             let sc_copy = scan_codes.clone();
             coordinator
-                .complete_releases(&due, &sc_copy, &[])
+                .complete_releases(&due, &sc_copy)
                 .map_err(|error| format!("coordinator completion failed: {error}"))?;
 
             receipts.push(DispatchReceipt {

@@ -25,7 +25,7 @@ pub struct RtTraceRecord {
     pub wake_ticks: u64,
     pub send_started_ticks: u64,
     pub send_completed_ticks: u64,
-    pub bookkeeping_duration_us: u64,
+    pub core_post_send_duration_us: u64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
     pub applied_lead_ticks: u32,
@@ -36,7 +36,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 8;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 9;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -53,7 +53,7 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: TimelineTicks,
     pub(crate) send_started_ticks: Option<TimelineTicks>,
     pub(crate) send_completed_ticks: Option<TimelineTicks>,
-    pub(crate) bookkeeping_duration_us: u64,
+    pub(crate) core_post_send_duration_us: u64,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
     pub(crate) applied_lead_ticks: DurationTicks,
@@ -113,7 +113,7 @@ impl RtTraceRecord {
             wake_ticks: timing.wake_ticks.as_u64(),
             send_started_ticks: timing.send_started_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: timing.send_completed_ticks.map_or(0, TimelineTicks::as_u64),
-            bookkeeping_duration_us: timing.bookkeeping_duration_us,
+            core_post_send_duration_us: timing.core_post_send_duration_us,
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks,
@@ -227,11 +227,11 @@ impl NativeTelemetryOutput {
             schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
             qpc_frequency_hz: 0,
             records: if matches!(mode, TelemetryMode::Ring) {
-                // Reserve the complete bounded buffer before the worker
-                // epoch. Telemetry is an opt-in diagnostic mode; once it is
-                // enabled, a later VecDeque growth/copy on the dispatch thread is
-                // a worse failure mode than its predictable memory cost.
-                VecDeque::with_capacity(capacity)
+                // Reserve the complete bounded buffer at construction time so no
+                // heap allocation occurs on the first push_back during dispatch.
+                let mut records = VecDeque::with_capacity(capacity);
+                records.reserve_exact(capacity);
+                records
             } else {
                 VecDeque::new()
             },
@@ -325,7 +325,7 @@ mod tests {
                 wake_ticks: TimelineTicks::ZERO,
                 send_started_ticks: Some(TimelineTicks::from_raw(1)),
                 send_completed_ticks: Some(TimelineTicks::from_raw(2)),
-                bookkeeping_duration_us: 0,
+                core_post_send_duration_us: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: DurationTicks::ZERO,

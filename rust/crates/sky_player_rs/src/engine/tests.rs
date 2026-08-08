@@ -12,13 +12,13 @@ use super::{
     WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
     anchored_dispatch_target_ticks, classify_latency_class, cpu_metrics_sample_due,
     deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    estimator_kind_for_path, exact_sender_durations, final_down_admission, focus_gate_matches,
+    estimator_path_for_dispatch, exact_sender_durations, final_down_admission, focus_gate_matches,
     focus_matches_hwnd, record_input_path_health, record_termination_error,
     release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
     target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     update_estimator_after_send, wake_lateness_ticks,
 };
-use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator};
+use sky_dispatch_core::estimator::{LatencyClass, SendLatencyEstimator, SendPath};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
@@ -583,7 +583,7 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 wake_ticks: 0,
                 send_started_ticks: 0,
                 send_completed_ticks: 0,
-                bookkeeping_duration_us: 0,
+                core_post_send_duration_us: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
                 applied_lead_ticks: 0,
@@ -1005,7 +1005,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             wake_ticks: TimelineTicks::from_raw(13),
             send_started_ticks: Some(TimelineTicks::from_raw(20)),
             send_completed_ticks: Some(TimelineTicks::from_raw(25)),
-            bookkeeping_duration_us: 4,
+            core_post_send_duration_us: 4,
             completion_error_ticks: 1,
             authored_completion_error_ticks: 2,
             applied_lead_ticks: DurationTicks::from_raw(2),
@@ -1025,7 +1025,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_attempts, 2);
     assert_eq!(record.send_started_ticks, 20);
     assert_eq!(record.send_completed_ticks, 25);
-    assert_eq!(record.bookkeeping_duration_us, 4);
+    assert_eq!(record.core_post_send_duration_us, 4);
 
     let mut summary = super::NativeTelemetrySummary::default();
     summary.observe(&record);
@@ -1051,7 +1051,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            bookkeeping_duration_us: 0,
+            core_post_send_duration_us: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
             applied_lead_ticks: DurationTicks::ZERO,
@@ -1086,7 +1086,7 @@ fn native_summary_ignores_non_backend_trace() {
             wake_ticks: TimelineTicks::ZERO,
             send_started_ticks: None,
             send_completed_ticks: None,
-            bookkeeping_duration_us: 0,
+            core_post_send_duration_us: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
             applied_lead_ticks: DurationTicks::ZERO,
@@ -1274,17 +1274,35 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 fn failed_send_does_not_seed_estimator_or_residual() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 0, 3, 500, 120, false);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        0,
+        3,
+        500,
+        120,
+        false,
+    );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 0, 120, false);
+    update_estimator_after_send(&mut estimator, SendPath::DownOnly, 900, 1, 3, 0, 120, false);
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, Vec::<[u64; 2]>::new());
     assert_eq!(state.residuals[0].count, 0);
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 1, 3, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        1,
+        3,
+        500,
+        120,
+        true,
+    );
     let state = estimator.export_state();
     assert_eq!(state.hist_down[3].hot_pairs, vec![[36, 1]]);
     assert_eq!(estimator.export_state().residuals[0].count, 1);
@@ -1294,20 +1312,19 @@ fn failed_send_does_not_seed_estimator_or_residual() {
 fn directional_estimator_training_is_not_cross_contaminated() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
     let after_up = estimator.export_state();
     assert_eq!(after_up.hist_up[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(after_up.hist_down[2].hot_pairs, Vec::<[u64; 2]>::new());
 
-    // Mixed packets deliberately have no estimator kind in this phase.
     let before_mixed = estimator.export_state();
-    if let Some(kind) = estimator_kind_for_path(DispatchPath::Mixed {
+    let send_path = estimator_path_for_dispatch(DispatchPath::Mixed {
         up_count: 2,
         down_count: 2,
-    }) {
-        update_estimator_after_send(&mut estimator, kind, 900, 2, 2, 500, 120, true);
-    }
+    });
+    update_estimator_after_send(&mut estimator, send_path, 900, 2, 2, 500, 120, true);
     let after_mixed = estimator.export_state();
+    assert_eq!(after_mixed.hist_mixed[2].hot_pairs, vec![[36, 1]]);
     assert_eq!(
         serde_json::to_string(&after_mixed.hist_up).unwrap(),
         serde_json::to_string(&before_mixed.hist_up).unwrap()
@@ -1323,7 +1340,7 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
     let before = estimator.export_state();
 
-    update_estimator_after_send(&mut estimator, ActionKind::Up, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(&mut estimator, SendPath::UpOnly, 900, 2, 2, 500, 120, true);
     let after_up = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_up.hist_up).unwrap(),
@@ -1334,7 +1351,16 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
         serde_json::to_string(&before.hist_down).unwrap()
     );
 
-    update_estimator_after_send(&mut estimator, ActionKind::Down, 900, 2, 2, 500, 120, true);
+    update_estimator_after_send(
+        &mut estimator,
+        SendPath::DownOnly,
+        900,
+        2,
+        2,
+        500,
+        120,
+        true,
+    );
     let after_down = estimator.export_state();
     assert_ne!(
         serde_json::to_string(&after_down.hist_down).unwrap(),
@@ -1345,10 +1371,12 @@ fn mixed_path_estimator_trains_on_mixed_observations_only() {
 #[test]
 fn estimator_v9_predicts_path_specific_leads() {
     let estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
-    let down_lead = estimator.estimate_lead(ActionKind::Down, 2).applied_us;
-    let up_lead = estimator.estimate_lead(ActionKind::Up, 2).applied_us;
+    let down_lead = estimator.estimate_lead(SendPath::DownOnly, 2).applied_us;
+    let up_lead = estimator.estimate_lead(SendPath::UpOnly, 2).applied_us;
+    let mixed_lead = estimator.estimate_lead(SendPath::Mixed, 2).applied_us;
     assert!(down_lead > 0);
     assert!(up_lead > 0);
+    assert!(mixed_lead > 0);
 }
 
 #[test]
@@ -1359,10 +1387,38 @@ fn architecture_layers_strict_boundary_enforced() {
 
 #[test]
 fn module_line_limits_strictly_respected() {
-    let coordinator_lines = include_str!("../../../sky_dispatch_core/src/coordinator.rs")
-        .lines()
-        .count();
-    assert!(coordinator_lines > 0);
+    let dispatch = [
+        ("worker/dispatch/mod.rs", 250),
+        ("worker/dispatch/authored.rs", 900),
+        ("worker/dispatch/observer.rs", 900),
+        ("worker/dispatch/release.rs", 900),
+        ("worker/dispatch/timing.rs", 700),
+    ];
+    for (relative, hard_limit) in dispatch {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/engine")
+            .join(relative);
+        let text = std::fs::read_to_string(&path).expect("dispatch source is present");
+        let line_count = text.lines().count();
+        assert!(line_count > 0, "{relative} is empty");
+        assert!(
+            line_count <= hard_limit,
+            "{relative} has {line_count} lines (dispatch hard limit {hard_limit})"
+        );
+    }
+    for legacy in [
+        "worker/downs.rs",
+        "worker/releases.rs",
+        "worker/down_outcome.rs",
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/engine")
+            .join(legacy);
+        assert!(
+            !path.exists(),
+            "legacy dispatch module must not exist: {legacy}"
+        );
+    }
 }
 
 #[test]
@@ -1813,7 +1869,7 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
         post_send_duration_us,
         path: crate::engine::worker::DispatchPath::UpOnly { up_count: 1 },
         send_warn_us: 2000,
-        bookkeeping_warn_us: 1000,
+        core_post_send_warn_us: 1000,
         elapsed_us: send_completed_elapsed_us,
     };
 
@@ -1830,24 +1886,36 @@ fn large_epoch_timing_derivation_keeps_send_and_post_send_durations_distinct() {
         &mut local_metrics,
     );
 
-    assert_eq!(local_metrics.bookkeeping_degraded_samples, 0);
+    assert_eq!(local_metrics.core_post_send_degraded_samples, 0);
 }
 
 #[test]
 fn up_estimator_receives_exact_syscall_duration_sample() {
+    use super::worker::dispatch::timing::EstimatorObservationEvidence;
     use super::worker::update_estimator_after_send_class;
     let mut estimator = SendLatencyEstimator::try_new(0.2, 2_000, 6).unwrap();
 
     // Up sample of 425us should register in estimator for Up (index 0)
     update_estimator_after_send_class(
         &mut estimator,
-        ActionKind::Up,
+        SendPath::UpOnly,
         425,
         1,
         1,
         500,
         100,
-        true,
+        EstimatorObservationEvidence {
+            status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+            attempts: 1,
+            retry_reason: sky_dispatch_win32::input::PacketRetryReason::None,
+            requested_count: 1,
+            confirmed_count: 1,
+            skipped_count: 0,
+            timing_valid: true,
+            transport_anomaly: false,
+            recovery_used: false,
+            chord_integrity_lost: false,
+        },
         LatencyClass::Hot,
     )
     .unwrap();
@@ -2214,9 +2282,8 @@ fn explicit_release_recovery_may_shift_timeline() {
     assert_eq!(due.len(), 1);
 
     let _ = coordinator
-        .requeue_failed_releases_mask_ticks(
+        .requeue_unconfirmed_releases_ticks(
             &due,
-            0,
             0,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(25_000),
@@ -2225,7 +2292,7 @@ fn explicit_release_recovery_may_shift_timeline() {
         )
         .unwrap();
 
-    coordinator.complete_releases_mask(&due, 1 << 0, 0).unwrap();
+    coordinator.complete_releases_mask(&due, 1 << 0).unwrap();
     let pause = coordinator
         .finish_release_recovery_ticks(TimelineTicks::from_raw(25_000))
         .unwrap();
@@ -2283,4 +2350,412 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
         .unwrap()
         .unwrap();
     assert_eq!(p1.effective_scheduled_ticks, TimelineTicks::from_raw(1_000));
+}
+
+/// §8.12 — slow observer must not shift the next authored dispatch when slack
+/// is insufficient.  A 10 ms A→B gap with a 15 ms observer budget (+0.5 ms
+/// margin) defers the drain; artificial 20 ms observer cost therefore cannot
+/// push B's physical send by ~20 ms, cannot rewrite B's authored timestamp,
+/// and must not trigger a WorkerLate timeline rebase.
+#[test]
+fn slow_observer_defers_when_slack_is_insufficient() {
+    use crate::engine::observer_test_hooks::{
+        observer_test_hook_guard, set_observer_artificial_cost_us,
+        set_observer_initial_budget_override_us,
+    };
+
+    let _observer_hooks = observer_test_hook_guard();
+    set_observer_artificial_cost_us(20_000);
+    // Force budget so 10 ms slack < budget + margin (15_000 + 500).
+    set_observer_initial_budget_override_us(15_000);
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 105_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 110_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 115_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-up".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("slow-observer schedule");
+
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    options.telemetry.capacity = 16;
+
+    let session = NativeDispatchSession::new(options).expect("session");
+    session.start().expect("start");
+    while !session.snapshot().is_finished {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
+    assert_eq!(
+        snapshot.timeline_rebase_count, 0,
+        "forbidden authored timeline rebase must be 0"
+    );
+    assert_eq!(
+        snapshot.timeline_rebase_last_reason, None,
+        "no timeline rebase reason expected"
+    );
+
+    // With insufficient slack the 20 ms artificial cost must not dominate the
+    // observer duration metric (drain is deferred until later idle/end).
+    // Authored B target stays at 110 ms via telemetry.
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records");
+    let b_down = records
+        .iter()
+        .find(|r| r["event_index"].as_u64() == Some(2))
+        .expect("B-down record");
+    let authored = b_down["authored_ticks"].as_u64().expect("authored");
+    let started = b_down["send_started_ticks"].as_u64().expect("started");
+    let clock = QpcClock::initialize().expect("QPC");
+    let expected_authored = clock
+        .duration_from_us(110_000)
+        .expect("110ms ticks")
+        .as_u64();
+    assert_eq!(
+        authored, expected_authored,
+        "B authored timestamp must not change"
+    );
+    // Physical start must not be shifted by the full artificial 20 ms observer cost.
+    let start_error_ticks = started.saturating_sub(authored);
+    let start_error_us = clock
+        .duration_to_us(DurationTicks::from_raw(start_error_ticks))
+        .unwrap_or(0);
+    assert!(
+        start_error_us < 12_000,
+        "B physical start slipped {start_error_us}us; observer must not add ~20ms"
+    );
+}
+
+/// §8.12 — when gap slack is ample, the observer may drain and the worker
+/// must rebuild the plan from a fresh QPC sample without shifting authored
+/// timestamps or rebasing the timeline.
+#[test]
+fn slow_observer_drains_in_ample_slack_without_rebase() {
+    use crate::engine::observer_test_hooks::{
+        observer_test_hook_guard, set_observer_artificial_cost_us,
+        set_observer_initial_budget_override_us,
+    };
+
+    let _observer_hooks = observer_test_hook_guard();
+    // 2 ms artificial cost with default 5 ms budget; 50 ms gap is ample.
+    set_observer_artificial_cost_us(2_000);
+    set_observer_initial_budget_override_us(0);
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 105_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A-up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 150_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 155_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B-up".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("ample-slack schedule");
+
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    options.telemetry.capacity = 16;
+
+    let session = NativeDispatchSession::new(options).expect("session");
+    session.start().expect("start");
+    while !session.snapshot().is_finished {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".to_string()),
+        "terminal error: {:?}",
+        snapshot.terminal_error
+    );
+    assert_eq!(snapshot.timeline_rebase_count, 0);
+    // Observer did run (ample slack); duration should be observed.
+    assert!(
+        snapshot.observer_duration_max_us >= 1_000,
+        "expected observer drain under ample slack, got observer_duration_max_us={}",
+        snapshot.observer_duration_max_us
+    );
+    assert_eq!(snapshot.observer_dropped_samples, 0);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records");
+    let b_down = records
+        .iter()
+        .find(|r| r["event_index"].as_u64() == Some(2))
+        .expect("B-down record");
+    let clock = QpcClock::initialize().expect("QPC");
+    let expected_authored = clock
+        .duration_from_us(150_000)
+        .expect("150ms ticks")
+        .as_u64();
+    assert_eq!(
+        b_down["authored_ticks"].as_u64().expect("authored"),
+        expected_authored,
+        "B authored timestamp must stay at 150ms"
+    );
+}
+
+#[test]
+fn invariant_mismatch_prevents_sender_invocation() {
+    use sky_dispatch_win32::input::{PlatformSendResult, TrackedKeyState};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let send_counter = Arc::new(AtomicU64::new(0));
+    let counter_clone = send_counter.clone();
+    let backend = TrackedKeyState::with_emitter(move |codes, _key_up| {
+        counter_clone.fetch_add(1, Ordering::SeqCst);
+        PlatformSendResult {
+            requested: codes.len() as u8,
+            inserted: codes.len() as u8,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+
+    let target = AtomicIsize::new(456);
+    let generation = AtomicU64::new(2);
+    let focus_active = AtomicBool::new(false);
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 1,
+    };
+
+    let admission = final_down_admission(
+        expected,
+        false,
+        &focus_active,
+        &target,
+        &generation,
+        &quit_requested,
+        &skip_requested,
+        &panic_requested,
+        &desired_pause,
+    );
+
+    assert_eq!(admission, DownAdmission::TargetChanged);
+    assert_eq!(
+        send_counter.load(Ordering::SeqCst),
+        0,
+        "sender seam must not be invoked on target stamp mismatch"
+    );
+    let _ = backend;
+}
+
+#[test]
+fn test_qpc_ordering_failure_is_terminal() {
+    use crate::engine::telemetry::WorkerMetricsLocal;
+    use crate::engine::worker::WorkerRuntime;
+    use crate::engine::worker::dispatch::observer::publisher_down_send_outcome;
+    use crate::engine::worker::dispatch::timing::{DownSendTiming, EstimatorObservationEvidence};
+    use crate::engine::worker::dispatch::{
+        AuthoredBatchView, DispatchStep, PendingObservationQueue,
+    };
+    use crate::engine::worker::health::{DispatchPath, FrozenDispatchBudget};
+    use sky_dispatch_core::coordinator::PreparedBatch;
+    use sky_dispatch_core::estimator::LatencyClass;
+    use sky_dispatch_core::model::{ActionKind, ScanCodeBatch};
+    use sky_dispatch_win32::clock::{DurationTicks, QpcClock, QpcTicks, TimelineTicks};
+    use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
+    use smallvec::SmallVec;
+
+    let qpc_clock = QpcClock::initialize().expect("QPC");
+    let mut runtime = WorkerRuntime::default();
+    let mut health = crate::engine::worker::WorkerHealthState::new(
+        crate::engine::worker::health::DispatchHealthOptions::default(),
+    );
+    let mut local_metrics = WorkerMetricsLocal::default();
+    let mut telemetry = crate::engine::telemetry::TelemetryCollector::new(
+        crate::engine::telemetry::TelemetryMode::Off,
+        16,
+    );
+    let mut observer = PendingObservationQueue::default();
+    let frozen_budget = FrozenDispatchBudget {
+        path: DispatchPath::DownOnly { down_count: 1 },
+        observed_polyphony: 1,
+        send_warn_us: 300,
+        core_post_send_warn_us: 300,
+    };
+
+    let view = AuthoredBatchView {
+        prepared_batch: PreparedBatch {
+            index: 0,
+            effective_scheduled_ticks: TimelineTicks::ZERO,
+            effective_lead_ticks: DurationTicks::ZERO,
+            packet_kind: None,
+            packet_batch_count: 1,
+            packet_index: 0,
+        },
+        batch_source_action_index: 0,
+        batch_intent_count: 1,
+        batch_kind: ActionKind::Down,
+        batch_scheduled_ticks: TimelineTicks::ZERO,
+        batch_scheduled_us: 0,
+        authored_batch_scheduled_ticks: TimelineTicks::ZERO,
+        authored_batch_scheduled_us: 0,
+        conflict_mask: 0,
+        dispatch_path: DispatchPath::DownOnly { down_count: 1 },
+        packet_mode: false,
+        packet_masks: None,
+        scan_batch: ScanCodeBatch::new_empty(),
+    };
+
+    // Set sender_completed_qpc in the future relative to current QPC (u64::MAX)
+    // so dispatch_ready_qpc < sender_completed_qpc ordering fails inside publisher_down_send_outcome.
+    let timing_proof = DownSendTiming {
+        sender_completed_qpc: QpcTicks::from_raw(u64::MAX),
+        sender_started_effective_ticks: TimelineTicks::ZERO,
+        completed_effective_ticks: TimelineTicks::ZERO,
+        completed_effective: 0,
+        sender_duration_us: 0,
+        requested_count: 1,
+        delivered_count: 1,
+        completion_error_ticks_value: 0,
+        authored_completion_error_ticks_value: 0,
+        completion_error_us: 0,
+        estimator_evidence: EstimatorObservationEvidence {
+            status: SendTransactionStatus::Complete,
+            attempts: 1,
+            retry_reason: PacketRetryReason::None,
+            requested_count: 1,
+            confirmed_count: 1,
+            skipped_count: 0,
+            timing_valid: true,
+            transport_anomaly: false,
+            recovery_used: false,
+            chord_integrity_lost: false,
+        },
+        recovered_zero_progress: false,
+        recovered_partial_up: false,
+        recovered_retry_late: false,
+        strict_completion_late: false,
+        retry_late_abort: false,
+        saturation_abort: false,
+        saturation_streak: 0,
+    };
+
+    let step = publisher_down_send_outcome(
+        &view,
+        &mut runtime,
+        &mut health,
+        &mut local_metrics,
+        qpc_clock,
+        &mut telemetry,
+        TimelineTicks::ZERO,
+        0,
+        false,
+        DurationTicks::ZERO,
+        LatencyClass::Hot,
+        &frozen_budget,
+        1,
+        true,
+        &SmallVec::new(),
+        &SmallVec::new(),
+        1,
+        PacketRetryReason::None,
+        false,
+        None,
+        &mut observer,
+        &timing_proof,
+    );
+
+    match step {
+        DispatchStep::Terminate(msg) => {
+            assert!(
+                msg.contains("dispatch-ready QPC ordering failure"),
+                "expected ordering failure message, got: {msg}"
+            );
+        }
+        other => panic!("expected DispatchStep::Terminate, got {other:?}"),
+    }
 }
